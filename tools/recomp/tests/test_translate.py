@@ -34,7 +34,9 @@ from unicorn.x86_const import (
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
-BINARY = os.path.join(ROOT, "original/gog/D3DPopTB.exe")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import game_config  # noqa: E402
+BINARY = os.path.join(ROOT, game_config.load(os.path.join(ROOT, "games/populous"))["game"]["developer_exe"])
 GEN = os.path.join(ROOT, "build/recomp/gen")
 LIB_A = os.path.join(ROOT, "build/recomp/librecomp_gen.a")
 DYLIB = os.path.join(ROOT, "build/recomp/librecomp_test.dylib")

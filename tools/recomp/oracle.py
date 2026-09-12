@@ -42,8 +42,11 @@ from unicorn.x86_const import (
     UC_X86_REG_EIP, UC_X86_REG_EFLAGS)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_EXE = os.path.join(ROOT, "original/gog/D3DPopTB.exe")
-DEFAULT_DATA = os.path.join(ROOT, "original/gog")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import game_config  # noqa: E402
+DEFAULT_GAME_DIR = os.path.join(ROOT, "games/populous")
+DEFAULT_EXE = os.path.join(ROOT, game_config.load(DEFAULT_GAME_DIR)["game"]["developer_exe"])
+DEFAULT_DATA = os.path.dirname(DEFAULT_EXE)
 
 REG_NAMES = ["EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"]
 UC_REGS = [UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBX,
@@ -703,12 +706,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--frames", type=int, default=32)
     ap.add_argument("--out", default=os.path.join(ROOT, "build/recomp/parity/oracle"))
-    ap.add_argument("--exe", default=DEFAULT_EXE)
-    ap.add_argument("--data", default=DEFAULT_DATA)
+    ap.add_argument("--game", default=DEFAULT_GAME_DIR, help="games/<id> directory")
+    ap.add_argument("--exe", default=None, help="defaults to the game's developer_exe")
+    ap.add_argument("--data", default=None, help="defaults to the directory of --exe")
     ap.add_argument("--stub", action="append", default=[], metavar="ADDR",
                     help="hex guest address to answer like recomp_unknown_call "
                          "(EAX = 0, return address left on the stack)")
     args = ap.parse_args()
+    if args.exe is None:
+        args.exe = os.path.join(ROOT, game_config.load(args.game)["game"]["developer_exe"])
+    if args.data is None:
+        args.data = os.path.dirname(args.exe)
     m = run(args.out, args.frames, args.exe, args.data,
             stub_targets=[int(a, 16) for a in args.stub])
     return 0 if m["frames_completed"] == args.frames else 1

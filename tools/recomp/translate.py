@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Static x86 -> C recompiler for the supported Populous executable.
+"""Static x86 -> C recompiler driven by games/<id>/game.toml.
 
-Reads the Ghidra listings in analysis/decompiled/D3DPopTB.exe/functions/*.asm
+Reads the game's Ghidra listings (game.toml [translate].listings/functions/*.asm)
 plus the PE itself and emits one C function `void fn_XXXXXXXX(X86 *c)` per
 original function into build/recomp/gen/chunk_NNN.c, together with funcs.h
 (prototypes) and table.c (sorted address table + recomp_call dispatch).
@@ -26,24 +26,36 @@ import time
 from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LISTINGS = os.path.join(ROOT, "analysis/decompiled/D3DPopTB.exe/functions")
-FUNCS_TSV = os.path.join(ROOT, "analysis/decompiled/D3DPopTB.exe/functions.tsv")
-BINARY = os.path.join(ROOT, "original/gog/D3DPopTB.exe")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import game_config  # noqa: E402
+
+DEFAULT_GAME_DIR = os.path.join(ROOT, "games/populous")
 
 FUNCS_PER_CHUNK = 200
 
-# Reads of sprite_animation_counter that select a visual phase or blink.
-# Do NOT include interpolation, simulation stamps, FPS measurement or input
-# timing. The native host provides a separate elapsed-time animation clock.
-# Each address is an instruction in the pinned D3DPopTB.exe .asm listing.
-VISUAL_ANIMATION_READS = frozenset((
-    0x468f27, 0x4690ad, 0x46922b, 0x469327,  # spell/particle textures
-    0x4758b0, 0x4758c4, 0x4758d4,           # selection pulse
-    0x525c05, 0x525c15,                     # rectangle pulse
-    0x49d2eb, 0x49d386, 0x49d890, 0x4a2581, # UI blinking
-    0x47a76d, 0x47a8f5,                     # palette animation
-    0x50f45c,                              # effect sprite phase
-))
+# Set by configure(): the game's listings, binary and curated symbols, and the
+# audited reads of its animation counter (game.toml [translate].volatile_reads:
+# reads that only select a visual phase or blink, never interpolation,
+# simulation stamps, FPS measurement or input timing). Importing the module
+# configures the default game so existing tools and tests keep their behaviour.
+LISTINGS = FUNCS_TSV = BINARY = CURATED = None
+ANIMATION_COUNTER = 0
+VISUAL_ANIMATION_READS = frozenset()
+
+
+def configure(cfg):
+    """Point the translator at one game's listings, binary and audited reads."""
+    global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
+    listings = os.path.join(ROOT, cfg["translate"]["listings"])
+    LISTINGS = os.path.join(listings, "functions")
+    FUNCS_TSV = os.path.join(listings, "functions.tsv")
+    BINARY = os.path.join(ROOT, cfg["game"]["developer_exe"])
+    CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
+    ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
+    VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
+
+
+configure(game_config.load(DEFAULT_GAME_DIR))
 
 
 def visual_animation_read(addr, body):
@@ -53,9 +65,10 @@ def visual_animation_read(addr, body):
     # yielded guest threads must always see the original frame ID in memory.
     found = 0
     result = []
-    pattern = r"rd(8|32)\(0x897981u\)"
+    pattern = r"rd(8|32)\(0x%xu\)" % ANIMATION_COUNTER
+    replacement = "((uint%%s_t)recomp_visual_animation_tick(rd32(0x%xu)))" % ANIMATION_COUNTER
     def replace(match):
-        return "((uint%s_t)recomp_visual_animation_tick(rd32(0x897981u)))" % match[1]
+        return replacement % match[1]
     for line in body:
         line, count = re.subn(pattern, replace, line)
         found += count
@@ -2346,7 +2359,9 @@ def main():
     ap.add_argument("--allow-table-gaps", metavar="REASON", default=None,
                     help="accept jump-table entries that dispatch nowhere, "
                          "recording the reason in the report")
+    ap.add_argument("--game", default=DEFAULT_GAME_DIR, help="games/<id> directory")
     args = ap.parse_args()
+    configure(game_config.load(args.game))
 
     t0 = time.time()
     entries = load_functions(set(args.only) if args.only else None)
@@ -2359,7 +2374,7 @@ def main():
                 all_addrs.add(a)
 
     image = Image(BINARY)
-    curated = read_curated(os.path.join(ROOT, "games/populous/globals.toml"))
+    curated = read_curated(CURATED)
     # Addresses named by a dword the loader relocates: a vtable slot, a
     # function-pointer table, a stored callback.  Read once, before discovery,
     # so the evidence does not depend on which pass reaches an address first.

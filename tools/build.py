@@ -96,8 +96,9 @@ def publish_generated(root, translate):
 
 
 
-def run_translator(stage):
+def run_translator(stage, game="populous"):
     subprocess.run([sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
+                    "--game", str(ROOT / "games" / game),
                     "--report", str(ROOT / "build/recomp/translate-report.json")], cwd=ROOT, check=True)
 
 
@@ -148,7 +149,7 @@ def main():
             if args.target in NEEDS_GEN and args.regenerate:
                 if not (ROOT / cfg["translate"]["listings"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
-                publish_generated(ROOT, run_translator)
+                publish_generated(ROOT, lambda stage: run_translator(stage, args.game))
             if args.target == "app":
                 texture_pack(args.game)
             configure(preset, ["-DRECOMP_GAME=" + args.game])
