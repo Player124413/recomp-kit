@@ -38,9 +38,14 @@ def main():
     probes = ROOT / "tools/recomp/baseline/classic-modes.json"
     if probes.is_file():
         shutil.copy(probes, resources / "classic-modes.json")
-    # The translation index the mod loader reads: a regenerated one, else the tracked one.
+    # The translation index the mod loader reads, when this build has one.
     fresh = ROOT / "build/recomp/symbols.json"
-    shutil.copy(fresh if fresh.is_file() else ROOT / "translation/symbols.json", resources / "symbols.json")
+    if fresh.is_file():
+        shutil.copy(fresh, resources / "symbols.json")
+    else:
+        # A stub build has no translation and therefore no symbol table; the
+        # kit never tracks one (spec section 11).
+        print("finish_bundle: no symbols.json in this build; mods get no symbol table")
     subprocess.run([sys.executable, str(ROOT / "tools/recomp/build_core.py"),
                     "--dest", str(resources / "mods/core"), "--cc", args.cc], check=True, cwd=ROOT)
     if (args.pack / "manifest.json").is_file():

@@ -49,6 +49,9 @@ int collect_name(const char *name, void *user) {
 std::string scratch_dir() {
     const char *base = getenv("POP_TEST_DIR");
     std::string dir = std::string(base && *base ? base : "build/recomp") + "/platform-test";
+    // A stub-only checkout has no build/recomp yet: create every component.
+    for (size_t i = dir.find('/'); i != std::string::npos; i = dir.find('/', i + 1))
+        os_mkdir(dir.substr(0, i).c_str());
     os_mkdir(dir.c_str());
     return dir;
 }
