@@ -1449,12 +1449,13 @@ static uint32_t native_frame_clock(X86 *c) {
     static FrameDeadline deadline;
     static int active = 0;
     const uint32_t caller = rd32(c->r[R_ESP]);
-    if (caller != 0x4a45a3 && caller != 0x4a47c1 && caller != 0x4a47a4)
+    if (caller != RECOMP_HOOK_FRAME_CLOCK_BEGIN && caller != RECOMP_HOOK_FRAME_CLOCK_WAIT &&
+        caller != RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP)
         return 0;
     if (getenv("POP_RECOMP_PIN_CLOCK") || getenv("POPM_PIN_CLOCK"))
         return 0;
     const int requested = mods_display_fps();
-    if (caller == 0x4a45a3) { // before 1000 / DrawFrameRateLimit
+    if (caller == RECOMP_HOOK_FRAME_CLOCK_BEGIN) { // before 1000 / DrawFrameRateLimit
         // Keep DrawFrameRateLimit as the legacy animation cadence. Retiring
         // the old wait below already replaces its deadline; changing this
         // byte would make visual animation inherit the presentation cap.
@@ -1462,21 +1463,22 @@ static uint32_t native_frame_clock(X86 *c) {
                                       Clock::now().time_since_epoch())
                                       .count());
         active = requested;
-    } else if (active && (caller == 0x4a47c1 || caller == 0x4a47a4)) {
+    } else if (active && (caller == RECOMP_HOOK_FRAME_CLOCK_WAIT ||
+                          caller == RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP)) {
         const auto ms = deadline.wait_ms(
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch())
                 .count());
         // A bounded cooperative sleep also services input/audio.
         if (ms)
             sched_sleep_ms(ms);
-        if (caller == 0x4a47a4) {
+        if (caller == RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP) {
             // The instructions after this wait clamp the measured rendering
             // rate (005ca850) to EDI. Keeping the original 60 here would also
             // double frame-rate-scaled camera/animation motion at 120 Hz.
             c->r[R_EDI] = uint32_t(active);
-            return 0x98e7cc;
+            return RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE;
         }
-        return 0x98e7e0;
+        return RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE;
     }
     return 0;
 }

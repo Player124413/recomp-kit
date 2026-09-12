@@ -35,3 +35,18 @@ volatile_reads = [
 ]
 
 [hooks]
+# runtime/kernel32.cpp native_frame_clock: the two draw-loop waits in the
+# pinned executable, identified by the return address of their GetTickCount.
+frame_clock_begin = 0x004a45a3          # before the 1000 / DrawFrameRateLimit read
+frame_clock_wait = 0x004a47c1           # the wait that only retires the deadline
+frame_clock_wait_clamp = 0x004a47a4     # the wait whose successor clamps the rate into EDI
+frame_clock_clamp_deadline = 0x0098e7cc # deadline value returned after the clamping wait
+frame_clock_wait_deadline = 0x0098e7e0  # deadline value returned after the plain wait
+# dx/ddraw.cpp: globals holding the two 32x32 mouse-pointer surface interfaces
+cursor_surface_ptrs = [0x005d5718, 0x005d571c]
+# host/input_gate.cpp: the game's mouse device object and its vtable
+mouse_vtable = 0x00591b6c
+mouse_device_ptr = 0x00d0595c
+mouse_device_right = 0x00d0599c
+# host/smoke_main.cpp: the camera record the smoke script inspects
+camera = 0x0074a350

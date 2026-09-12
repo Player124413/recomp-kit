@@ -68,6 +68,13 @@ class RenderTests(unittest.TestCase):
         self.assertIn("#define RECOMP_HOOK_PAIR {0x00000010u, 0x00000020u}", header)
         self.assertIn("#define RECOMP_HOOK_ONE 0x00000030u", header)
 
+    def test_populous_hooks_render(self):
+        self.assertIn("#define RECOMP_HOOK_FRAME_CLOCK_BEGIN 0x004a45a3u", self.header)
+        self.assertIn("#define RECOMP_HOOK_CURSOR_SURFACE_PTRS_COUNT 2", self.header)
+        self.assertIn("#define RECOMP_HOOK_CURSOR_SURFACE_PTRS {0x005d5718u, 0x005d571cu}", self.header)
+        self.assertIn("#define RECOMP_HOOK_MOUSE_VTABLE 0x00591b6cu", self.header)
+        self.assertIn("#define RECOMP_HOOK_CAMERA 0x0074a350u", self.header)
+
     def test_cmake_fragment(self):
         self.assertIn('set(RECOMP_APP_NAME "PopRecomp")', self.cmake)
         self.assertIn('set(RECOMP_GAME_NAME "Populous: The Beginning")', self.cmake)

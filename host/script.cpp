@@ -1,5 +1,6 @@
 // script.cpp - see script.h.
 #include "script.h"
+#include "game_config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +11,8 @@ double host_script_counter_metric(const char *name, uint32_t (*guest_u32)(uint32
     const bool is_turn = !strcmp(name, "turn");
     if (!is_turn && strcmp(name, "command_frame"))
         return -1.0;
-    const uint32_t value = guest_u32(is_turn ? 0x0089d188u : 0x0089d184u);
+    const uint32_t value =
+        guest_u32(is_turn ? RECOMP_GLOBAL_SIMULATION_TURN_ADDR : RECOMP_GLOBAL_COMMAND_FRAME_ADDR);
     auto view = is_turn ? view_turn : view_command_frame;
     if (view) {
         const uint32_t observed = view();

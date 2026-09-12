@@ -21,6 +21,7 @@
 // device uploaded textures, that the scene is not black, that a sound had
 // amplitude in it, and it can leave you the frames to look at.
 #include "boot.h"
+#include "game_config.h"
 #include "script.h"
 #include "smoke_dumpat.h"
 #include "landmark.h"
@@ -206,9 +207,9 @@ void write_dump(const char *name) {
 // offsets are the ones games/populous/tests/entity_codec.hpp encodes and decodes: flags at
 // +12, kind at +42, state at +44, owner at +47, and the position at +61 as
 // three 16-bit words, x then z then altitude. A blue brave is owner 0, kind 1.
-const uint32_t kEntityBase = 0x8e0428;
-const uint32_t kEntityStride = 179;
-const uint32_t kEntityCount = 2000; // record 0 is the null entity
+const uint32_t kEntityBase = RECOMP_GLOBAL_ENTITY_BASE_ADDR;
+const uint32_t kEntityStride = RECOMP_GLOBAL_ENTITY_BASE_STRIDE;
+const uint32_t kEntityCount = RECOMP_GLOBAL_ENTITY_BASE_COUNT; // record 0 is the null entity
 const uint32_t kOffFlags = 12;
 const uint32_t kOffKind = 42;
 const uint32_t kOffState = 44;
@@ -859,7 +860,7 @@ bool write_simdump(const char *name) {
          region("turn", "simulation_turn", true), region("command", "command_frame", true)},
         [](FILE *f) {
             bool ok = true;
-            uint32_t camera = rd32(0x74a350);
+            uint32_t camera = rd32(RECOMP_HOOK_CAMERA);
             bool camera_ok = camera && gm_valid(camera, 0x28);
             fprintf(f, "{\"turn\":%u,\"command_frame\":%u,\"frame\":%llu,\"camera\":",
                     (uint32_t)metric("turn"), (uint32_t)metric("command_frame"),

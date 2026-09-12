@@ -1062,7 +1062,8 @@ bool frame_has_content(const Frame &f) {
 // could not tell the pointer from a HUD sprite, which is small and keyed and
 // drawn onto the same chain, so an ordinary sprite could take the cursor's
 // place at any frame.
-const uint32_t kCursorSurfacePtr[2] = {0x005d5718u, 0x005d571cu};
+const uint32_t kCursorSurfacePtr[RECOMP_HOOK_CURSOR_SURFACE_PTRS_COUNT] =
+    RECOMP_HOOK_CURSOR_SURFACE_PTRS;
 
 // Resolved from the guest's globals, and checked: the value has to name a
 // live 32x32 surface, so a build whose data lies elsewhere learns nothing

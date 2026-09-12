@@ -1,5 +1,6 @@
 // input_gate.cpp - see input_gate.h.
 #include "input_gate.h"
+#include "game_config.h"
 #include "../runtime/mods_seam.h"
 #include "../runtime/win32.h"
 #include "../runtime/guest.h"
@@ -454,7 +455,7 @@ HostGuestPointer host_guest_pointer_resolve(const uint8_t *arena, uint32_t size,
     // boot mode, or Classic falls back to position differencing for the run.
     // 0052cbe0 installs this vtable. This is a structural startup guard, not
     // a correctness gate on input attachment or the game's current state.
-    if (p.vtable != 0x00591b6c)
+    if (p.vtable != RECOMP_HOOK_MOUSE_VTABLE)
         return fail(HostGuestPointer::VtableMismatch);
     if (!(p.left >= 0 && p.top >= 0 && p.right > p.left && p.bottom > p.top && p.right < 4096 &&
           p.bottom < 4096))
@@ -678,9 +679,9 @@ void host_gate_release_all() {
 }
 
 void host_gate_reset() {
-    if (g_installed_cursor_right && g_mem && gm_valid(0xd0599c, 4) &&
-        int32_t(rd32(0xd0599c)) == g_installed_cursor_right)
-        wr32(0xd0599c, g_saved_cursor_right);
+    if (g_installed_cursor_right && g_mem && gm_valid(RECOMP_HOOK_MOUSE_DEVICE_RIGHT, 4) &&
+        int32_t(rd32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT)) == g_installed_cursor_right)
+        wr32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT, g_saved_cursor_right);
     g_saved_cursor_right = g_installed_cursor_right = 0;
     memset(g_guest_key, 0, sizeof g_guest_key);
     memset(g_phys_mod, 0, sizeof g_phys_mod);
@@ -901,8 +902,9 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
     // Only extend a recognized full-surface bound, never a game's modal clamp.
     auto &saved_right = g_saved_cursor_right;
     auto &installed_right = g_installed_cursor_right;
-    if (g_mem && gm_valid(0xd0595c, 0x48) && rd32(0xd0595c) == 0x591b6c) {
-        int right = int32_t(rd32(0xd0599c));
+    if (g_mem && gm_valid(RECOMP_HOOK_MOUSE_DEVICE_PTR, 0x48) &&
+        rd32(RECOMP_HOOK_MOUSE_DEVICE_PTR) == RECOMP_HOOK_MOUSE_VTABLE) {
+        int right = int32_t(rd32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT));
         if (installed_right && right != installed_right)
             saved_right = installed_right = 0;
         const int wanted = mods_display_scene_width(g_mode_w, g_mode_h);
@@ -911,10 +913,10 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
             (right == g_mode_w || right == g_mode_w - 1 || installed_right)) {
             if (!installed_right)
                 saved_right = right;
-            wr32(0xd0599c, wanted);
+            wr32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT, wanted);
             installed_right = wanted;
         } else if (installed_right) {
-            wr32(0xd0599c, saved_right);
+            wr32(RECOMP_HOOK_MOUSE_DEVICE_RIGHT, saved_right);
             saved_right = installed_right = 0;
         }
     }
