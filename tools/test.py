@@ -20,7 +20,7 @@ build_py = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_py)
 
 PORTABLE_TESTS = [
-    "tests/test_setup.py", "tests/test_build_py.py",
+    "tests/test_setup.py", "tests/test_build_py.py", "tests/test_game_config.py",
     "tools/recomp/tests/test_mode_probe.py", "tools/recomp/tests/test_texture_pack.py",
     "tools/recomp/tests/test_terrain_detail.py", "tools/recomp/tests/test_buildlock.py",
     "tools/recomp/tests/test_shaders.py",
@@ -121,11 +121,13 @@ def main():
     group.add_argument("--compile-only", action="store_true", help="Build the native test binaries only")
     parser.add_argument("--preset", default=build_py.default_preset())
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
+    parser.add_argument("--game", default="populous", help="Directory under games/")
     args = parser.parse_args()
+    cfg = build_py.game_config.load(ROOT / "games" / args.game)
     game_backed = args.mods or args.gameplay
     if game_backed and platform.system() != "Darwin":
         parser.error("Game-backed suites require macOS")
-    if (game_backed or args.native) and not (ROOT / "original/gog/D3DPopTB.exe").is_file():
+    if (game_backed or args.native) and not (ROOT / cfg["game"]["developer_exe"]).is_file():
         parser.error("This suite needs your game installation; run tools/setup.py first, "
                      "or run `ctest --preset <preset> -L nogame` for the portable suites")
     if game_backed and not build_py.archive_path().is_file():

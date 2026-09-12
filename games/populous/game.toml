@@ -1,0 +1,37 @@
+# games/populous/game.toml - everything the kit needs to know about this game
+# that is not derivable from the binary. Addresses are guest addresses in the
+# pinned executable. Hooks are added as literals leave the kit's code.
+
+[game]
+id = "populous"
+name = "Populous: The Beginning"
+app_name = "PopRecomp"
+bundle_id = "dev.recompkit.populous"
+executable = "D3DPopTB.exe"
+sha256 = "815ba8a550f571c38b602cf3386f65aab942667a4a2d9c7096b3660deac2eacd"
+image_base = 0x00400000
+entry_point = 0x0055d6c0
+guest_root = 'C:\Populous'
+# Where a developer checkout finds the game, relative to the repository root.
+developer_exe = "original/gog/D3DPopTB.exe"
+
+[translate]
+# Ghidra listing directory holding functions.tsv and functions/*.asm,
+# relative to the repository root.
+listings = "analysis/decompiled/D3DPopTB.exe"
+# Curated symbols, relative to this directory.
+globals = "globals.toml"
+# The guest global whose reads select a visual phase (sprite_animation_counter).
+animation_counter = 0x00897981
+# Reads of animation_counter that only pick a visual phase or blink. Do NOT
+# include interpolation, simulation stamps, FPS measurement or input timing.
+volatile_reads = [
+  0x468f27, 0x4690ad, 0x46922b, 0x469327,  # spell/particle textures
+  0x4758b0, 0x4758c4, 0x4758d4,            # selection pulse
+  0x525c05, 0x525c15,                      # rectangle pulse
+  0x49d2eb, 0x49d386, 0x49d890, 0x4a2581,  # UI blinking
+  0x47a76d, 0x47a8f5,                      # palette animation
+  0x50f45c,                                # effect sprite phase
+]
+
+[hooks]

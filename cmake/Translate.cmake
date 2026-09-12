@@ -10,7 +10,7 @@ elseif(EXISTS ${POP_GEN_DIR}/table.c)
 elseif(POP_TRANSLATE STREQUAL "ON")
   message(FATAL_ERROR "POP_TRANSLATE=ON but no translation: run tools/build.py --regenerate")
 else()
-  message(STATUS "No translation found: PopRecomp, pop_headless, pop_smoke, pop_fixture, "
+  message(STATUS "No translation found: recomp_app, pop_headless, pop_smoke, pop_fixture, "
                  "mods_tests, present_events_tests and profile_tests are not defined")
 endif()
 

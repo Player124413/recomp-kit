@@ -44,6 +44,12 @@ class BuildPyTests(unittest.TestCase):
         self.assertEqual(command[command.index("--parallel") + 1], "6")
         self.assertEqual(command[command.index("--target") + 1:], ["pop_smoke"])
 
+    def test_game_defaults_to_populous_and_is_validated(self):
+        args, _ = build_py.parse_args([], system="Darwin")
+        self.assertEqual(args.game, "populous")
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--game", "no-such-game"], system="Darwin")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,11 +11,13 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/recomp"))
+sys.path.insert(0, str(ROOT / "tools"))
+import game_config  # noqa: E402
 import buildlock  # noqa: E402
 
 # What each --target builds. `plugins` is every mod plugin the tree ships.
 TARGETS = {
-    "app": ["PopRecomp"],
+    "app": ["recomp_app"],
     "smoke": ["pop_smoke"],
     "headless": ["pop_headless"],
     "fixture": ["pop_fixture"],
@@ -99,12 +101,15 @@ def run_translator(stage):
                     "--report", str(ROOT / "build/recomp/translate-report.json")], cwd=ROOT, check=True)
 
 
-def texture_pack():
+def texture_pack(game):
     """Compile the redistributable material-detail layer when its inputs are newer.
-    Original-game replacement textures remain optional, locally prepared pack entries."""
+    Original-game replacement textures remain optional, locally prepared pack entries.
+    A game without artwork has no texture pack."""
     detail = ROOT / "build/texture-pack/terrain-detail.popt"
-    artwork = ROOT / "games/populous/assets/terrain/materials-v1.png"
+    artwork = ROOT / "games" / game / "assets/terrain/materials-v1.png"
     compiler = ROOT / "tools/recomp/terrain_detail.py"
+    if not artwork.is_file():
+        return
     if (not detail.is_file() or not (detail.parent / "manifest.json").is_file()
             or detail.stat().st_mtime < max(artwork.stat().st_mtime, compiler.stat().st_mtime)):
         subprocess.run([sys.executable, str(compiler), "--source", str(artwork),
@@ -118,7 +123,10 @@ def parse_args(argv, system=None):
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
     parser.add_argument("--config", choices=("Release", "Debug"), default="Release")
+    parser.add_argument("--game", default="populous", help="Directory under games/ whose game.toml configures the build")
     args = parser.parse_args(argv)
+    if not (ROOT / "games" / args.game / "game.toml").is_file():
+        parser.error("No game config at games/%s/game.toml" % args.game)
     if args.target in MACOS_ONLY and (system or platform.system()) != "Darwin":
         parser.error("The %s host currently builds on macOS; use --target fixture, gen or plugins elsewhere"
                      % args.target)
@@ -130,19 +138,20 @@ def parse_args(argv, system=None):
 def main():
     """Check inputs, translate under the build lock when needed, then configure and build."""
     args, parser = parse_args(sys.argv[1:])
+    cfg = game_config.load(ROOT / "games" / args.game)
     # Regenerating needs the game and its listings.
-    if args.regenerate and not (ROOT / "original/gog/D3DPopTB.exe").is_file():
+    if args.regenerate and not (ROOT / cfg["game"]["developer_exe"]).is_file():
         parser.error("Prepare your own game installation with tools/setup.py first")
     preset = preset_name(args.preset, args.config)
     try:
         with buildlock.BuildLock(ROOT, "tools/build.py"):
             if args.target in NEEDS_GEN and args.regenerate:
-                if not (ROOT / "analysis/decompiled/D3DPopTB.exe/functions.tsv").is_file():
+                if not (ROOT / cfg["translate"]["listings"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
                 publish_generated(ROOT, run_translator)
             if args.target == "app":
-                texture_pack()
-            configure(preset)
+                texture_pack(args.game)
+            configure(preset, ["-DRECOMP_GAME=" + args.game])
             build(preset, TARGETS[args.target], args.jobs)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")

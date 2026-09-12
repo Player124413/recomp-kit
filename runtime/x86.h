@@ -42,7 +42,10 @@ extern uint8_t *g_mem;
  *   0x0fe00000                TEB (FS base)
  *   0x0ff00000 + 16*i         import shim trampoline for import i
  */
+/* The build passes the game's image base; this default serves the test harness. */
+#ifndef GUEST_IMAGE_BASE
 #define GUEST_IMAGE_BASE 0x00400000u
+#endif
 #define GUEST_HEAP_BASE 0x01000000u
 #define GUEST_HEAP_END 0x0e000000u
 #define GUEST_STACK_TOP 0x0f000000u

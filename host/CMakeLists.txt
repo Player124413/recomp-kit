@@ -104,16 +104,17 @@ if(TARGET recomp_gen)
     FRAMEWORKS ${FW_FOUNDATION} ${FW_METAL})
   add_dependencies(pop_smoke core_mods smoke_probe)
 
-  pop_host(PopRecomp GEN UI_LAYER OPT 2
+  pop_host(recomp_app GEN UI_LAYER OPT 2
     SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
             ${HOST}/input.cpp ${HOST}/input_gate.cpp ${POP_AUDIO_SOURCES}
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_METAL})
-  pop_link_sdl(PopRecomp)
+  pop_link_sdl(recomp_app)
+  set_target_properties(recomp_app PROPERTIES OUTPUT_NAME ${RECOMP_APP_NAME})
   if(APPLE)
-    pop_mac_bundle(PopRecomp)
+    pop_mac_bundle(recomp_app)
   endif()
 
   if(APPLE) # Objective-C++ source

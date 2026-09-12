@@ -27,7 +27,38 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${POP_OUT})
 set(POP_TRANSLATE AUTO CACHE STRING "AUTO, ON or OFF: define targets that need build/recomp/gen")
 set_property(CACHE POP_TRANSLATE PROPERTY STRINGS AUTO ON OFF)
 set(POP_TRACE_DIR "" CACHE PATH "Snapshot directory for pop_fixture_trace")
-set(POP_RECOMP_APP_NAME PopRecomp CACHE STRING "macOS bundle name")
+
+# tools/build.py passes its own interpreter; a bare configure finds one.
+if(NOT Python3_EXECUTABLE)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
+
+# The game this build is for. games/<RECOMP_GAME>/game.toml is rendered into
+# generated/game_config.h (C macros) and generated/game_config.cmake (build
+# names) at configure time; editing the toml reconfigures.
+set(RECOMP_GAME "populous" CACHE STRING "Directory under games/ whose game.toml configures this build")
+set(RECOMP_GAME_DIR ${POP_ROOT}/games/${RECOMP_GAME})
+if(NOT EXISTS ${RECOMP_GAME_DIR}/game.toml)
+  message(FATAL_ERROR "No game config at ${RECOMP_GAME_DIR}/game.toml")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${RECOMP_GAME_DIR}/game.toml ${RECOMP_GAME_DIR}/globals.toml
+  ${POP_ROOT}/tools/gen_game_config.py ${POP_ROOT}/tools/game_config.py)
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/gen_game_config.py
+          --game-dir ${RECOMP_GAME_DIR}
+          --header ${CMAKE_BINARY_DIR}/generated/game_config.h
+          --cmake ${CMAKE_BINARY_DIR}/generated/game_config.cmake
+  RESULT_VARIABLE RECOMP_GAME_CONFIG_RESULT)
+if(NOT RECOMP_GAME_CONFIG_RESULT EQUAL 0)
+  message(FATAL_ERROR "tools/gen_game_config.py failed for ${RECOMP_GAME_DIR}")
+endif()
+include(${CMAKE_BINARY_DIR}/generated/game_config.cmake)
+if(NOT RECOMP_APP_NAME MATCHES "^[A-Za-z0-9_-]+$")
+  message(FATAL_ERROR "Invalid app_name in ${RECOMP_GAME_DIR}/game.toml: ${RECOMP_APP_NAME}")
+endif()
+include_directories(${CMAKE_BINARY_DIR}/generated)
+add_compile_definitions(GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE})
 
 # The version is the git description of the commit being built; a tree
 # without git history gets "unknown". The release workflow passes it in.
@@ -42,14 +73,7 @@ if(POP_RECOMP_VERSION STREQUAL "unknown" AND GIT_FOUND)
   endif()
 endif()
 configure_file(${POP_ROOT}/host/version.h.in ${CMAKE_BINARY_DIR}/generated/version.h @ONLY)
-if(NOT POP_RECOMP_APP_NAME MATCHES "^[A-Za-z0-9_-]+$")
-  message(FATAL_ERROR "Invalid POP_RECOMP_APP_NAME: ${POP_RECOMP_APP_NAME}")
-endif()
 
-# tools/build.py passes its own interpreter; a bare configure finds one.
-if(NOT Python3_EXECUTABLE)
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
-endif()
 
 enable_testing()
 add_custom_target(check_binaries)
