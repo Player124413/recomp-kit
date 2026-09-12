@@ -84,11 +84,18 @@ recomp-kit/
   dx/         ddraw, d3d up to 7, dsound, dinput; d3d8/9 fixed function later
   host/       SDL3 platform layer, GPU seam with metal, vulkan and fake
               backends, audio mixer, input mapping, packaging per target
+  platform/   os.h seam with POSIX and Win32 implementations; runtime/ links it
   verify/     unicorn oracle, snapshot and differential tests, smoke runner
   games/      one directory per game: game.toml, symbols, stubs, input map,
               patches; no game bytes
   docs/
 ```
+
+M0 note: `win32/` and the `lift/`/`verify/` split of the Python tooling are
+deferred to M2, when the auto-stub generator and the `recomp` CLI are written.
+`mods/` is carried as an opaque component because every host links it.
+`tools/setup.py`, the smoke scripts, `tools/recomp/package.py` and the
+texture-pack tooling remain Populous-specific until M2 and M4 respectively.
 
 Rule: nothing above `host/` includes a platform header, nothing in `runtime/`,
 `win32/` or `dx/` knows a specific game, and generated code depends only on

@@ -1,91 +1,54 @@
-# Populous Recomp
+# recomp-kit
 
-[Build & contribute](CONTRIBUTING.md) · [How it works](docs/architecture.md) ·
-[Display settings](docs/DISPLAY.md) · [Modding](docs/MODDING.md) · [Changelog](CHANGELOG.md)
+A static recompilation kit: 32-bit x86 Windows games become native
+applications for macOS, iOS, Android, Linux and Windows, with no JIT and no
+emulator at run time. The design is in
+`docs/superpowers/specs/2026-09-13-recomp-kit-design.md`; this milestone
+(M0) consolidates the Populous: The Beginning recompilation as the first
+supported game.
 
-A native macOS recompilation of **Populous: The Beginning**, with Metal rendering,
-native audio and input, persistent game settings, and a C/Lua mod API. Original
-game instructions are translated to C ahead of time and compiled with the native host.
+## Layout
 
-**You need your own copy of the game.** This repository contains the runtime,
-translator, tools and documentation. Game executables, original artwork, sound,
-levels, generated game code and replacement packs are prepared locally and are
-not included. See [NOTICE](NOTICE) for ownership and dependency credits.
+| Directory | What it holds |
+|---|---|
+| `runtime/` | x86 semantics (`x86.h`), guest memory, PE loader, scheduler, kernel32/user32 shims |
+| `dx/` | DirectDraw, Direct3D 2, DirectSound, DirectInput, QMixer shims |
+| `host/` | SDL3 host, Metal/Vulkan/fake GPU backends, audio mixer, presentation |
+| `platform/` | `os.h`, the only place that talks to the operating system |
+| `mods/` | the mod foundation (Lua 5.4) and its native capture instruments |
+| `games/<id>/` | one game: `game.toml`, `globals.toml`, plugins, artwork. No game bytes |
+| `tools/` | translator, oracle, build and test scripts |
+| `third_party/` | vendored Lua, TinySoundFont, volk, Vulkan headers |
 
-## Play on macOS
+## Build Populous on macOS
 
-The current port targets Apple Silicon Macs. Intel macOS, Windows, Linux and iOS
-are not validated game ports. The runtime, adapter and mod layers compile and
-test on Linux and Windows; a playable host for them is future work.
+You need your own DRM-free `D3DPopTB.exe` with its data, Ghidra for the
+listings, and Python 3.9 or later.
 
 ```sh
-git clone https://github.com/veritr1x/populous-recomp.git
-cd populous-recomp
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
-```
-
-Players: download the archive for your platform from the
-[Releases page](https://github.com/veritr1x/populous-recomp/releases) and follow
-the README.txt inside; the app asks for your GOG `D3DPopTB.exe` on first run.
-
-To build from source, follow the [one-time game setup](CONTRIBUTING.md#prepare-your-game-installation), then:
-
-```sh
-.venv/bin/python tools/build.py
+.venv/bin/python tools/setup.py --game-dir /path/to/your/populous --ghidra-home /path/to/ghidra
+.venv/bin/python tools/build.py --regenerate
 open build/PopRecomp.app
 ```
 
-Generated code is never tracked; `tools/build.py --regenerate` produces it from your own game files.
+Generated code is never tracked. A build without game files links the hosts
+against a stub translation: `.venv/bin/python tools/build.py --stub`. Its
+outputs live under `build/stub/` so they never replace a real build.
 
-The app stays inside the checkout so it can find your local game-data link.
-F10 and **Populous → Settings…** open the game's Options screen; Command-Q exits.
-Resolution has one control under **Options → Graphics → Screen Resolution**.
-Enhanced, window mode, frame limit, filtering and overlay settings apply during play.
-
-## Make your first change
-
-You can improve docs and run tooling tests without owning game files or installing
-Ghidra. Start with:
+## Check a change
 
 ```sh
-.venv/bin/python tools/test.py
+.venv/bin/python tools/test.py                  # portable Python suites
+.venv/bin/python tools/format.py                # handwritten native code style
+.venv/bin/python tools/check_repo.py            # nothing private is tracked
+.venv/bin/python tools/check_game_literals.py   # kit code names no game
+.venv/bin/python tools/test.py --native         # native suites (needs the game)
 ```
 
-For native changes, build the app and use the [testing guide](docs/testing.md).
-The [code guide](docs/code-guide.md) maps common tasks to the relevant functions
-and explains the thread and memory rules. Handwritten source is formatted with
-the checked-in `.clang-format`; generated code remains a local build product.
+Every game-specific value lives in `games/<id>/`; the kit's own directories
+must not name a game. `tests/test_game_literals.py` enforces that.
 
-## Find your way around
-
-| Path | Purpose |
-| --- | --- |
-| `host/` | SDL3 window, the GPU interface and its Metal backend, audio, input and presentation |
-| `runtime/` | Guest memory, executable loading, imports and cooperative scheduling |
-| `dx/` | Original graphics, input and sound interfaces adapted to the native host |
-| `mods/` | Mod loading, hooks, settings, native Options controls and C/Lua API |
-| `mods/native/` | Capture/replay helpers for validating native function replacements |
-| `tools/recomp/` | Translator, instruction helpers, builders and gameplay smoke scripts |
-| `mods/examples/` | Small C, Lua and asset-overlay examples |
-| `games/populous/assets/terrain/` | Project-created material-detail artwork and its provenance |
-| `third_party/lua/` | Unmodified Lua source and upstream license |
-| `third_party/volk/` | volk 1.4.304, the Vulkan meta-loader, unmodified |
-| `third_party/vulkan-headers/` | Vulkan-Headers v1.4.304, the subset the backend includes, unmodified |
-| `CMakeLists.txt`, `cmake/` | The build: targets per directory, presets for macOS, Linux and Windows |
-| `build/recomp/gen/` | Locally generated game functions; edit the translator, not these files |
-
-## Status
-
-Native menu navigation, level entry, unit selection and movement, resolution
-cycling through 4K, settings persistence, audio playback and clean exit have been
-exercised locally. A frame limit of 120 FPS is available; sustained **4K at 120 FPS**
-is an optimization target, not a guaranteed performance result.
-
-Long campaign completion and multiplayer still need validation. Linux and Windows
-hosts do not exist yet; their portable layers are compiled and tested in CI. The HD path supports full-color replacements and material detail;
-enlarging original art does not create a complete newly painted remaster.
-
-GitHub Actions checks contributor tooling, formatting and native host compilation
-without game files. Full translation and gameplay checks use a contributor's local
-installation; CI does not claim to have run the original game.
+The Populous-specific documents carried over from the original project are
+in `docs/` and in each directory's `README.md`.

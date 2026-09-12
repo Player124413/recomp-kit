@@ -1,8 +1,8 @@
-name: Contributor checks
+name: Checks
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -30,23 +30,24 @@ jobs:
         run: .venv/bin/python tools/check_repo.py
 
   native-compile:
-    # The game files are not available in public CI; the tracked translation
-    # lets every platform build the hosts. Each platform builds every test
-    # binary it has and runs the suites that need no game files; macOS (Metal)
-    # and Linux (lavapipe) also run the GPU suites. No original assets,
-    # bundles, profiles or diagnostics are uploaded.
+    # Game files and generated code are never available in CI. The *-stub
+    # presets link every host against tools/gen_stub_translation.py's link-only
+    # translation, so a broken host still fails the build. Each platform builds
+    # every test binary it has and runs the suites that need no game files;
+    # macOS (Metal) and Linux (lavapipe) also run the GPU suites. Nothing is
+    # uploaded.
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-15
-            preset: macos
+            preset: macos-stub
             labels: "nogame|gpu"
           - os: ubuntu-24.04
-            preset: linux
+            preset: linux-stub
             labels: "nogame|gpu" # lavapipe supplies the Vulkan device
           - os: windows-2025
-            preset: windows
+            preset: windows-stub
             labels: nogame
     runs-on: ${{ matrix.os }}
     steps:
@@ -89,19 +90,7 @@ jobs:
         run: cmake --preset ${{ matrix.preset }}
       - name: Build every test binary this platform has
         run: cmake --build --preset ${{ matrix.preset }} --target check_binaries
-      - name: Build the hosts from the tracked translation
-        run: cmake --build --preset ${{ matrix.preset }} --target PopRecomp pop_headless pop_smoke
+      - name: Link every host against the stub translation
+        run: cmake --build --preset ${{ matrix.preset }} --target recomp_app pop_headless pop_smoke
       - name: Run the suites that need no game files
         run: ctest --preset ${{ matrix.preset }} -L "${{ matrix.labels }}" --output-on-failure
-      - name: Package the hosts as a downloadable archive
-        shell: bash
-        run: |
-          cmake --build --preset ${{ matrix.preset }} --target core_mods
-          python3 tools/recomp/package.py --preset ${{ matrix.preset }} --version "$(git describe --tags --always)" --out dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: PopRecomp-${{ matrix.preset }}
-          path: |
-            dist/PopRecomp-*
-            build/recomp/PopRecomp.map
-          retention-days: 7

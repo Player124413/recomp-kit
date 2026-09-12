@@ -1,4 +1,4 @@
-# Working on Populous Recomp
+# Working on recomp-kit
 
 Read README.md, CONTRIBUTING.md and docs/code-guide.md before a broad change.
 This repository contains the native runtime and translator. Game files and
@@ -16,6 +16,8 @@ translations are private local inputs under ignored original/, analysis/ and bui
   Platform calls go through platform/os.h; no `#ifdef` on the platform
   outside os_posix.cpp and os_win32.cpp. Report exactly which checks ran;
   compilation and offscreen counters do not establish playable performance.
+- Every game-specific literal belongs in `games/<id>/`; run `tools/check_game_literals.py`
+  before committing native code.
 - Do not commit game assets, generated code, binaries, credentials, personal saves
   or run logs. Run `.venv/bin/python tools/check_repo.py` on staged source changes.
 - Keep setup/build instructions reproducible from a clean checkout. Update the

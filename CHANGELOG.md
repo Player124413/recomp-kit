@@ -5,6 +5,11 @@
 - Imported the Populous recompilation from populous-recomp-checkout at
   b450dfa8bae7fe568192ef61028ed82489cba394 as the base of recomp-kit. The
   translation is no longer tracked; regenerate it with tools/build.py --regenerate.
+- Kit layout: runtime/, dx/, host/, platform/, mods/ at the top level; games/populous/
+  holds the game config, curated globals, plugins and artwork.
+- games/<id>/game.toml drives identity, addresses and translator inputs through a
+  generated game_config.h; tools/check_game_literals.py keeps game literals out of kit code.
+- tools/build.py --stub and the *-stub CMake presets link the hosts without game code.
 
 - Build with CMake presets for macOS, Linux and Windows through the unchanged
   `tools/build.py` and `tools/test.py`; the xcrun shell scripts are gone.

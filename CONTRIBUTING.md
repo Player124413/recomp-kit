@@ -75,6 +75,13 @@ path under `build/`. Build outputs and your default writable profile stay in
 `build/`. `POPM_PROFILE_DIR` selects a separate profile for an interactive run.
 Keep the app in the checkout; moving it requires explicitly configuring its game path.
 
+## Add a game
+
+Create `games/<id>/game.toml` and `games/<id>/globals.toml` following
+`games/populous/`. Build with `tools/build.py --game <id>`. Nothing under
+`runtime/`, `dx/`, `host/` or `platform/` may name your game; put addresses
+under `[hooks]` and use the generated `RECOMP_HOOK_*` macros.
+
 ## Check your change
 
 ```sh
