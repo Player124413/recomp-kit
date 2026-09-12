@@ -1,7 +1,7 @@
 # recomp-kit design
 
 Date: 2026-09-13
-Status: draft for review
+Status: approved 2026-09-13
 
 ## 1. Goal
 
@@ -363,10 +363,12 @@ carried over from the Populous work keep their notices.
 - Populous on iOS is proven before any new game is lifted.
 - Majesty's first target is the DirectDraw-only build, not the HD build.
 
-## 13. Open questions
+## 13. Decisions locked on 2026-09-13
 
-- Repository name and public visibility: `recomp-kit` is the working name.
-- Whether `pop-metal`'s Lua mod runtime (about 19k lines) moves into the kit
-  at M0 or waits until a second game needs it. Recommendation: wait.
-- Minimum iOS and Android versions. Recommendation: iOS 17 and Android 10 with
-  Vulkan 1.1, matching what SDL3 and the existing Metal backend already assume.
+- Repository name is `recomp-kit`. It stays private until the consolidation
+  milestone and the iOS proof are done; per-game configs are contributed
+  by pull request once it goes public.
+- The Lua mod runtime from `pop-metal` stays out of the kit until a second
+  game needs it. Populous builds without mods in the kit until then.
+- Minimum platforms: iOS 17, Android 10 with Vulkan 1.1, macOS 14, and the
+  current Linux and Windows releases that SDL3 supports.
