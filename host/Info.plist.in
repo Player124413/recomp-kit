@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>PopRecomp</string>
+    <string>@RECOMP_APP_NAME@</string>
     <key>CFBundleDisplayName</key>
-    <string>Populous: The Beginning</string>
+    <string>@RECOMP_GAME_NAME@</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.veritr1x.populousrecomp</string>
+    <string>@RECOMP_BUNDLE_ID@</string>
     <key>CFBundleExecutable</key>
-    <string>PopRecomp</string>
+    <string>@RECOMP_APP_NAME@</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

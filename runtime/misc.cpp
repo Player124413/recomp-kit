@@ -3,6 +3,7 @@
 // clock, multimedia timers and mmio file access). MIDI and aux output are
 // logging-only here; real audio belongs to the audio task.
 #include "imports.h"
+#include "game_config.h"
 #include "layout.h"
 #include "memory.h"
 #include "win32.h"
@@ -741,7 +742,7 @@ void w_WSACleanup(X86 *c) {
 void w_gethostname(X86 *c) {
     uint32_t buf = arg(c, 0), len = arg(c, 1);
     if (buf && len)
-        gm_put_str(buf, "populous", len);
+        gm_put_str(buf, RECOMP_GAME_ID, len);
     set_eax(c, 0);
 }
 void w_gethostbyname(X86 *c) {

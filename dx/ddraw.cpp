@@ -1,4 +1,5 @@
 #include "passes.h"
+#include "game_config.h"
 // ddraw.cpp - DirectDraw: the object, display modes, surfaces, palettes and
 // clippers.
 //
@@ -4062,7 +4063,7 @@ void DD_GetDeviceIdentifier(X86 *c) {
     }
     gm_zero(out, DDDEVID_SIZE);
     gm_put_str(out + DDDEVID_OFF_szDriver, "popm.dll", 512);
-    gm_put_str(out + DDDEVID_OFF_szDescription, "Populous recompilation device", 512);
+    gm_put_str(out + DDDEVID_OFF_szDescription, RECOMP_APP_NAME " recompilation device", 512);
     // Version 1.0.0.0.
     wr32(out + DDDEVID_OFF_liDriverVersion + 0, 0);
     wr32(out + DDDEVID_OFF_liDriverVersion + 4, 0x00010000u);

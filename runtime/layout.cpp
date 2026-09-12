@@ -1,4 +1,5 @@
 #include "layout.h"
+#include "game_config.h"
 
 #include "../platform/os.h"
 
@@ -62,7 +63,7 @@ HostLayout compute() {
         l.profile_dir = l.checkout_root + "/build/recomp/profile";
     else {
         char buf[4096];
-        if (os_user_data_dir("PopRecomp", buf, sizeof buf) == 0)
+        if (os_user_data_dir(RECOMP_APP_NAME, buf, sizeof buf) == 0)
             l.profile_dir = buf;
         else
             l.profile_dir = "profile"; // no home at all: beside the cwd

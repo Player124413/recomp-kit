@@ -1,5 +1,6 @@
 // loader.h - maps the original PE into the guest arena and starts it.
 #pragma once
+#include "game_config.h"
 #include "guest.h"
 #include <string>
 #include <vector>
@@ -14,7 +15,7 @@ struct SectionInfo {
 };
 
 // Default image and its expected content hash.
-extern const char *const LOADER_DEFAULT_EXE; // "original/gog/D3DPopTB.exe"
+extern const char *const LOADER_DEFAULT_EXE; // RECOMP_DEVELOPER_EXE from game.toml
 extern const char *const LOADER_EXPECTED_SHA256;
 // The SHA-256 of the image loader_load actually mapped, as lowercase hex, or
 // "" before a load. Equal to LOADER_EXPECTED_SHA256 on a successful load; kept
@@ -22,7 +23,7 @@ extern const char *const LOADER_EXPECTED_SHA256;
 const char *loader_exe_sha256();
 // The SHA-256 of the file at `path` as lowercase hex, or "" when unreadable.
 std::string loader_hash_file(const char *path);
-static const uint32_t LOADER_EXPECTED_ENTRY = 0x0055d6c0u;
+static const uint32_t LOADER_EXPECTED_ENTRY = RECOMP_ENTRY_POINT;
 
 // Maps the PE at `exe_path` (nullptr => LOADER_DEFAULT_EXE) into a freshly
 // initialised guest arena: sections at their virtual addresses, tail of each

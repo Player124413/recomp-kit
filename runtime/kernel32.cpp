@@ -1,4 +1,5 @@
 #include "profile.h"
+#include "game_config.h"
 // kernel32.cpp - KERNEL32 shims: heap, files, modules, TLS, sync objects,
 // time and the string/locale helpers the CRT startup calls.
 //
@@ -56,8 +57,10 @@ namespace {
 // ---------------------------------------------------------------------------
 // Process-wide state
 // ---------------------------------------------------------------------------
-std::string g_game_dir = "original/gog";
-std::string g_cur_dir = "C:\\Populous";
+// The developer checkout's game directory: RECOMP_DEVELOPER_EXE without its file name.
+std::string g_game_dir =
+    std::string(RECOMP_DEVELOPER_EXE).substr(0, std::string(RECOMP_DEVELOPER_EXE).rfind('/'));
+std::string g_cur_dir = RECOMP_GUEST_ROOT;
 uint32_t g_last_error = 0;
 jmp_buf g_exit_jmp;
 bool g_exit_jmp_valid = false;
@@ -289,7 +292,7 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
         }
         norm.push_back(c);
     }
-    if (!norm.empty() && lower(norm[0]) == "populous")
+    if (!norm.empty() && lower(norm[0]) == lower(win32_guest_root_name()))
         norm.erase(norm.begin());
     return norm;
 }
@@ -367,7 +370,7 @@ std::string win32_guest_path(const std::string &host_path) {
     std::string rel = host_path;
     if (rel.compare(0, g_game_dir.size(), g_game_dir) == 0)
         rel = rel.substr(g_game_dir.size());
-    std::string out = "C:\\Populous";
+    std::string out = RECOMP_GUEST_ROOT;
     for (const std::string &c : split_path(rel)) {
         out += "\\";
         out += c;
@@ -403,7 +406,7 @@ bool win32_signal_event(uint32_t handle, bool pulse) {
 
 void win32_init(const std::string &game_dir) {
     g_game_dir = game_dir.empty() ? std::string(".") : game_dir;
-    g_cur_dir = "C:\\Populous";
+    g_cur_dir = RECOMP_GUEST_ROOT;
     g_last_error = 0;
     g_exited = false;
     g_exit_code = 0;
@@ -417,7 +420,7 @@ void win32_init(const std::string &game_dir) {
     vm_regions().clear();
     dir_cache().clear();
     g_next_handle = 0x00010004;
-    modules()[lower(std::string("D3DPopTB.exe"))] = IMAGE_BASE;
+    modules()[lower(std::string(RECOMP_EXECUTABLE))] = IMAGE_BASE;
     g_process_heap = handle_new(H_HEAP);
     // Standard handles exist from the start.
     for (int i = 0; i < 3; ++i) {
@@ -1065,11 +1068,11 @@ void k_SetCurrentDirectoryA(X86 *c) {
 
 void k_GetModuleFileNameA(X86 *c) {
     uint32_t hmod = arg(c, 0), buf = arg(c, 1), size = arg(c, 2);
-    std::string path = "C:\\Populous\\D3DPopTB.exe";
+    std::string path = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
             if (kv.second == hmod) {
-                path = "C:\\Populous\\" + kv.first;
+                path = RECOMP_GUEST_ROOT "\\" + kv.first;
                 break;
             }
     }
@@ -1216,13 +1219,14 @@ void k_UnmapViewOfFile(X86 *c) {
 // -------------------------------------------------------------------------
 void k_GetCommandLineA(X86 *c) {
     if (!g_cmdline_addr)
-        g_cmdline_addr = guest_strdup("C:\\Populous\\D3DPopTB.exe");
+        g_cmdline_addr = guest_strdup(RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE);
     set_eax(c, g_cmdline_addr);
 }
 
 // The environment block is a run of NUL-terminated strings ended by an extra
 // NUL. GetEnvironmentStringsW must hand back UTF-16, not the ANSI bytes.
-static const char *const k_environment[] = {"PATH=C:\\Populous", "windir=C:\\WINDOWS", nullptr};
+static const char *const k_environment[] = {"PATH=" RECOMP_GUEST_ROOT, "windir=C:\\WINDOWS",
+                                            nullptr};
 
 void k_GetEnvironmentStrings(X86 *c) {
     if (!g_envblock_addr || !heap_owns(g_envblock_addr)) {

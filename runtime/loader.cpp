@@ -9,12 +9,11 @@
 #include <vector>
 #include <string>
 
-const char *const LOADER_DEFAULT_EXE = "original/gog/D3DPopTB.exe";
+const char *const LOADER_DEFAULT_EXE = RECOMP_DEVELOPER_EXE;
 // The digest of the image actually mapped, recorded by loader_load.
 static std::string g_exe_sha;
 
-const char *const LOADER_EXPECTED_SHA256 =
-    "815ba8a550f571c38b602cf3386f65aab942667a4a2d9c7096b3660deac2eacd";
+const char *const LOADER_EXPECTED_SHA256 = RECOMP_EXE_SHA256;
 
 namespace {
 

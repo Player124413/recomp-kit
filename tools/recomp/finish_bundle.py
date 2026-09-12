@@ -13,11 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def rename_identity(plist_path, name, version):
-    """A bundle built under another name gets its own identity; every bundle its version."""
+    """Stamp the version; the bundle's identity comes from generated/Info.plist."""
     data = plistlib.loads(plist_path.read_bytes())
-    if name != "PopRecomp":
-        data.update(CFBundleName=name, CFBundleDisplayName=name, CFBundleExecutable=name,
-                    CFBundleIdentifier="io.github.veritr1x.populousrecomp." + name.lower())
     if version:
         data.update(CFBundleShortVersionString=version.lstrip("v"), CFBundleVersion=version.lstrip("v"))
     plist_path.write_bytes(plistlib.dumps(data))

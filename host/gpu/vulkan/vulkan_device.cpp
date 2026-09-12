@@ -2,6 +2,7 @@
 // pipelines, passes and bindings live in vulkan_pipeline.cpp, the swapchain in
 // vulkan_swapchain.cpp.
 #include "vulkan_device.h"
+#include "game_config.h"
 
 #include "../../../platform/os.h"
 
@@ -64,7 +65,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     if (vkEnumerateInstanceVersion)
         vkEnumerateInstanceVersion(&loader_version);
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "PopRecomp";
+    app.pApplicationName = RECOMP_APP_NAME;
     app.apiVersion = loader_version >= VK_API_VERSION_1_3 ? VK_API_VERSION_1_3 : VK_API_VERSION_1_1;
 
     uint32_t n = 0;

@@ -2,9 +2,19 @@
 // surface the host application (Task 7) and the DirectX shims (later task)
 // use to drive the guest.
 #pragma once
+#include "game_config.h"
 #include "guest.h"
+#include <string.h>
 #include <string>
 #include <vector>
+
+// The guest root's own directory name ("Populous" for C:\Populous), so
+// C:\<root>\data\x and \data\x resolve to the same host file.
+static inline const char *win32_guest_root_name() {
+    const char *root = RECOMP_GUEST_ROOT;
+    const char *slash = strrchr(root, '\\');
+    return slash ? slash + 1 : root;
+}
 
 // ---------------------------------------------------------------------------
 // Process-wide state

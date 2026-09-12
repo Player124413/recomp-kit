@@ -2,11 +2,12 @@
 # RECOMP_APP_NAME, with Info.plist copied verbatim and the resources,
 # core mods, texture pack and ad-hoc signature applied after the link.
 function(pop_mac_bundle target)
+  configure_file(${POP_ROOT}/host/Info.plist.in ${CMAKE_BINARY_DIR}/generated/Info.plist @ONLY)
   set_target_properties(${target} PROPERTIES
     MACOSX_BUNDLE ON
     OUTPUT_NAME ${RECOMP_APP_NAME}
     RUNTIME_OUTPUT_DIRECTORY ${POP_ROOT}/build
-    MACOSX_BUNDLE_INFO_PLIST ${POP_ROOT}/host/Info.plist)
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/generated/Info.plist)
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/recomp/finish_bundle.py
             --bundle ${POP_ROOT}/build/${RECOMP_APP_NAME}.app

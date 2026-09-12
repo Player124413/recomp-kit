@@ -1,4 +1,5 @@
 #include "game_path.h"
+#include "game_config.h"
 
 #include "../runtime/layout.h"
 #include "../platform/os.h"
@@ -54,7 +55,7 @@ GamePath game_path_resolve(const char *flag) {
     }
     const HostLayout &l = host_layout();
     if (l.developer) {
-        std::string candidate = l.checkout_root + "/original/gog/D3DPopTB.exe";
+        std::string candidate = l.checkout_root + "/" + RECOMP_DEVELOPER_EXE;
         OsStat st;
         if (os_stat(candidate.c_str(), &st) == 0) {
             g.exe = candidate;

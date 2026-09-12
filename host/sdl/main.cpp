@@ -18,6 +18,7 @@
 // and d3d_render.cpp owns the Direct3D scene; this file owns the window, the
 // events and the lifetime.
 #include "../../mods/display_settings.h"
+#include "game_config.h"
 #include "../../runtime/layout.h"
 #include "../../platform/os.h"
 #include "../audio.h"
@@ -962,7 +963,7 @@ void SDLCALL on_dialog(void *userdata, const char *const *files, int) {
     if (files && files[0])
         r->path = files[0];
     else if (!files)
-        fprintf(stderr, "PopRecomp: file dialog failed: %s\n", SDL_GetError());
+        fprintf(stderr, RECOMP_APP_NAME ": file dialog failed: %s\n", SDL_GetError());
     r->done = true;
 }
 
@@ -971,7 +972,8 @@ void SDLCALL on_dialog(void *userdata, const char *const *files, int) {
 bool pick_game_exe(std::string *out) {
     for (;;) {
         DialogResult r;
-        const SDL_DialogFileFilter filters[] = {{"Populous executable (D3DPopTB.exe)", "exe"}};
+        const SDL_DialogFileFilter filters[] = {
+            {RECOMP_GAME_NAME " executable (" RECOMP_EXECUTABLE ")", "exe"}};
         SDL_ShowOpenFileDialog(on_dialog, &r, g_window, filters, 1, nullptr, false);
         while (!r.done) {
             SDL_Event e;
@@ -981,31 +983,27 @@ bool pick_game_exe(std::string *out) {
             SDL_Delay(10);
         }
         if (r.path.empty()) {
-            fprintf(stderr, "PopRecomp: no game selected. Pass --exe <path to D3DPopTB.exe> "
-                            "to skip the dialog.\n");
+            fprintf(stderr, RECOMP_APP_NAME
+                    ": no game selected. Pass --exe <path to " RECOMP_EXECUTABLE "> "
+                    "to skip the dialog.\n");
             return false;
         }
         std::string digest;
         if (game_path_is_supported(r.path, &digest)) {
             if (!game_path_save(r.path))
-                fprintf(stderr, "PopRecomp: could not remember the game path\n");
+                fprintf(stderr, RECOMP_APP_NAME ": could not remember the game path\n");
             *out = r.path;
             return true;
         }
         const SDL_MessageBoxButtonData buttons[] = {
             {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Choose again"},
             {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit"}};
-        std::string text = "This is not the supported GOG build of D3DPopTB.exe.\n\nExpected "
+        std::string text = "This is not the supported build of " RECOMP_EXECUTABLE ".\n\nExpected "
                            "SHA-256:\n" +
                            std::string(LOADER_EXPECTED_SHA256) + "\n\nThis file:\n" +
                            (digest.empty() ? std::string("(unreadable)") : digest);
-        SDL_MessageBoxData box{SDL_MESSAGEBOX_ERROR,
-                               g_window,
-                               "Populous: The Beginning",
-                               text.c_str(),
-                               2,
-                               buttons,
-                               nullptr};
+        SDL_MessageBoxData box{
+            SDL_MESSAGEBOX_ERROR, g_window, RECOMP_GAME_NAME, text.c_str(), 2, buttons, nullptr};
         int choice = 0;
         if (!SDL_ShowMessageBox(&box, &choice) || choice == 0)
             return false;
@@ -1034,7 +1032,7 @@ int main(int argc, char **argv) {
     const char *exe_flag = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--version") == 0) {
-            printf("PopRecomp %s (%s)\n", POP_RECOMP_VERSION, gpu::default_backend_name());
+            printf(RECOMP_APP_NAME " %s (%s)\n", POP_RECOMP_VERSION, gpu::default_backend_name());
             return 0;
         }
         if (strcmp(argv[i], "--probe-layout") == 0) {
@@ -1048,8 +1046,8 @@ int main(int argc, char **argv) {
         else if (strncmp(argv[i], "--exe=", 6) == 0)
             exe_flag = argv[i] + 6;
         else {
-            fprintf(stderr,
-                    "usage: PopRecomp [--exe <D3DPopTB.exe>] [--version] [--probe-layout]\n");
+            fprintf(stderr, "usage: " RECOMP_APP_NAME " [--exe <" RECOMP_EXECUTABLE
+                            ">] [--version] [--probe-layout]\n");
             return 2;
         }
     }
@@ -1063,13 +1061,13 @@ int main(int argc, char **argv) {
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-        fprintf(stderr, "PopRecomp: SDL_Init failed: %s\n", SDL_GetError());
+        fprintf(stderr, RECOMP_APP_NAME ": SDL_Init failed: %s\n", SDL_GetError());
         return 3;
     }
 
     g_gpu = gpu::create_default_device();
     if (!g_gpu) {
-        fprintf(stderr, "PopRecomp: no GPU device is available (%s)\n",
+        fprintf(stderr, RECOMP_APP_NAME ": no GPU device is available (%s)\n",
                 gpu::default_backend_name());
         return 3;
     }
@@ -1077,20 +1075,20 @@ int main(int argc, char **argv) {
     int scale = window_scale_for(g_mode_w, g_mode_h);
     const bool vulkan = strcmp(gpu::default_backend_name(), "vulkan") == 0;
     if (vulkan && !SDL_Vulkan_LoadLibrary(gpu::vulkan_loader_path()))
-        fprintf(stderr, "PopRecomp: SDL_Vulkan_LoadLibrary: %s\n", SDL_GetError());
+        fprintf(stderr, RECOMP_APP_NAME ": SDL_Vulkan_LoadLibrary: %s\n", SDL_GetError());
     const SDL_WindowFlags surface_flag = vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_METAL;
-    g_window = SDL_CreateWindow("Populous: The Beginning", g_mode_w * scale, g_mode_h * scale,
+    g_window = SDL_CreateWindow(RECOMP_GAME_NAME, g_mode_w * scale, g_mode_h * scale,
                                 surface_flag | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                     SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
     if (!g_window) {
-        fprintf(stderr, "PopRecomp: SDL_CreateWindow failed: %s\n", SDL_GetError());
+        fprintf(stderr, RECOMP_APP_NAME ": SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 3;
     }
     SDL_SetWindowMinimumSize(g_window, g_mode_w, g_mode_h);
     SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     g_surface = gpu::native_surface_for_window(g_window);
     if (!g_surface) {
-        fprintf(stderr, "PopRecomp: no %s surface for the window: %s\n",
+        fprintf(stderr, RECOMP_APP_NAME ": no %s surface for the window: %s\n",
                 gpu::default_backend_name(), SDL_GetError());
         return 3;
     }
@@ -1123,13 +1121,13 @@ int main(int argc, char **argv) {
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
     if (dw <= 0 || dh <= 0) {
-        fprintf(stderr, "PopRecomp: the window has no drawable size\n");
+        fprintf(stderr, RECOMP_APP_NAME ": the window has no drawable size\n");
         return 3;
     }
     host_present_start(g_surface, dw, dh);
     // Said out loud, because "the keyboard does nothing" and "the window
     // never gained focus" look identical from the outside.
-    printf("PopRecomp: window %dx%d points, %dx%d pixels, focus %s\n", bw, bh, dw, dh,
+    printf(RECOMP_APP_NAME ": window %dx%d points, %dx%d pixels, focus %s\n", bw, bh, dw, dh,
            window_focused() ? "yes" : "no");
     fflush(stdout);
 
@@ -1155,10 +1153,10 @@ int main(int argc, char **argv) {
 
     if (!boot_load(options)) {
         host_present_stop();
-        fprintf(stderr, "PopRecomp: %s\n", loader_error());
+        fprintf(stderr, RECOMP_APP_NAME ": %s\n", loader_error());
         return 2;
     }
-    printf("PopRecomp: %s, entry %08x\n", loader_exe_path().c_str(), loader_entry_point());
+    printf(RECOMP_APP_NAME ": %s, entry %08x\n", loader_exe_path().c_str(), loader_entry_point());
     fflush(stdout);
 
     // The music's synth, built here and not later. midiOutOpen arrives on a
