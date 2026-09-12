@@ -50,6 +50,12 @@ class BuildPyTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             build_py.parse_args(["--game", "no-such-game"], system="Darwin")
 
+    def test_stub_selects_the_stub_preset_and_rejects_debug(self):
+        args, _ = build_py.parse_args(["--stub"], system="Linux")
+        self.assertEqual(build_py.preset_name(args.preset, args.config, stub=args.stub), "linux-stub")
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--stub", "--config", "Debug"], system="Linux")
+
 
 if __name__ == "__main__":
     unittest.main()

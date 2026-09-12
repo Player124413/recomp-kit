@@ -70,6 +70,9 @@ add_test(NAME layout_tests COMMAND layout_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(layout_tests PROPERTIES LABELS nogame)
 
 # The roots resolver, run from a relocated app-shaped directory by roots_tests.py.
+# The test asserts the player layout under build/; a stub build under
+# build/stub/ is not a player layout, so it is not registered there.
+if(NOT POP_TRANSLATE STREQUAL "STUB")
 add_executable(roots_probe roots.cpp ${POP_ROOT}/runtime/layout.cpp ${POP_ROOT}/games/populous/mods/core/tests/roots_probe.cpp)
 target_include_directories(roots_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(roots_probe PRIVATE recomp_platform)
@@ -79,6 +82,7 @@ add_test(NAME roots_tests
   COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/games/populous/mods/core/tests/roots_tests.py $<TARGET_FILE:roots_probe>
   WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(roots_tests PROPERTIES LABELS nogame)
+endif()
 
 if(TARGET recomp_gen)
   add_library(mods_api_header_test OBJECT tests/api_header_test.c)

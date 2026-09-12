@@ -21,6 +21,7 @@ spec.loader.exec_module(build_py)
 
 PORTABLE_TESTS = [
     "tests/test_setup.py", "tests/test_build_py.py", "tests/test_game_config.py", "tests/test_game_literals.py",
+    "tests/test_gen_stub_translation.py",
     "tools/recomp/tests/test_mode_probe.py", "tools/recomp/tests/test_texture_pack.py",
     "tools/recomp/tests/test_terrain_detail.py", "tools/recomp/tests/test_buildlock.py",
     "tools/recomp/tests/test_shaders.py", "tools/recomp/tests/test_translate_config.py",

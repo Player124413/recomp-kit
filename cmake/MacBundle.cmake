@@ -6,11 +6,11 @@ function(pop_mac_bundle target)
   set_target_properties(${target} PROPERTIES
     MACOSX_BUNDLE ON
     OUTPUT_NAME ${RECOMP_APP_NAME}
-    RUNTIME_OUTPUT_DIRECTORY ${POP_ROOT}/build
+    RUNTIME_OUTPUT_DIRECTORY ${POP_BUILD_DIR}
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/generated/Info.plist)
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/recomp/finish_bundle.py
-            --bundle ${POP_ROOT}/build/${RECOMP_APP_NAME}.app
+            --bundle ${POP_BUILD_DIR}/${RECOMP_APP_NAME}.app
             --name ${RECOMP_APP_NAME} --cc ${CMAKE_C_COMPILER} --version ${POP_RECOMP_VERSION}
     WORKING_DIRECTORY ${POP_ROOT}
     COMMENT "Finishing ${RECOMP_APP_NAME}.app"

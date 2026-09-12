@@ -21,11 +21,17 @@ foreach(lang C CXX OBJCXX)
 endforeach()
 
 set(POP_ROOT ${CMAKE_SOURCE_DIR})
-set(POP_OUT ${POP_ROOT}/build/recomp)
+set(POP_TRANSLATE AUTO CACHE STRING "AUTO, ON, OFF or STUB: how targets that need generated code get it")
+set_property(CACHE POP_TRANSLATE PROPERTY STRINGS AUTO ON OFF STUB)
+# A stub build (no game code) keeps its outputs apart from a real build so it
+# can never overwrite the archive or the bundle a player runs.
+if(POP_TRANSLATE STREQUAL "STUB")
+  set(POP_BUILD_DIR ${POP_ROOT}/build/stub)
+else()
+  set(POP_BUILD_DIR ${POP_ROOT}/build)
+endif()
+set(POP_OUT ${POP_BUILD_DIR}/recomp)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${POP_OUT})
-
-set(POP_TRANSLATE AUTO CACHE STRING "AUTO, ON or OFF: define targets that need build/recomp/gen")
-set_property(CACHE POP_TRANSLATE PROPERTY STRINGS AUTO ON OFF)
 set(POP_TRACE_DIR "" CACHE PATH "Snapshot directory for pop_fixture_trace")
 
 # tools/build.py passes its own interpreter; a bare configure finds one.

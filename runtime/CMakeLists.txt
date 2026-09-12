@@ -34,7 +34,7 @@ pop_test_binary(runtime_tests)
 add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(runtime_tests PROPERTIES LABELS game)
 
-if(TARGET recomp_gen)
+if(POP_REAL_GEN)
   # The headless parity fixture: null host, real generated code, core mods installed.
   add_executable(pop_fixture fixture.cpp)
   target_link_libraries(pop_fixture PRIVATE recomp_platform recomp_runtime recomp_snapshot recomp_dx_null recomp_mods lua)

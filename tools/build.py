@@ -33,8 +33,10 @@ def default_preset(system=None):
     return {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}[system or platform.system()]
 
 
-def preset_name(preset, config):
-    """Debug builds live in their own binary directory, so they are their own preset."""
+def preset_name(preset, config, stub=False):
+    """Debug and stub builds live in their own binary directories, so they are their own presets."""
+    if stub:
+        return preset + "-stub"
     return preset if config == "Release" else preset + "-debug"
 
 
@@ -125,10 +127,14 @@ def parse_args(argv, system=None):
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
     parser.add_argument("--config", choices=("Release", "Debug"), default="Release")
     parser.add_argument("--game", default="populous", help="Directory under games/ whose game.toml configures the build")
+    parser.add_argument("--stub", action="store_true",
+                        help="Link the hosts against a stub translation (no game code; CI's build)")
     args = parser.parse_args(argv)
+    if args.stub and (args.config == "Debug" or args.regenerate):
+        parser.error("--stub cannot be combined with --config Debug or --regenerate")
     if not (ROOT / "games" / args.game / "game.toml").is_file():
         parser.error("No game config at games/%s/game.toml" % args.game)
-    if args.target in MACOS_ONLY and (system or platform.system()) != "Darwin":
+    if args.target in MACOS_ONLY and not args.stub and (system or platform.system()) != "Darwin":
         parser.error("The %s host currently builds on macOS; use --target fixture, gen or plugins elsewhere"
                      % args.target)
     if args.jobs < 1:
@@ -143,7 +149,7 @@ def main():
     # Regenerating needs the game and its listings.
     if args.regenerate and not (ROOT / cfg["game"]["developer_exe"]).is_file():
         parser.error("Prepare your own game installation with tools/setup.py first")
-    preset = preset_name(args.preset, args.config)
+    preset = preset_name(args.preset, args.config, stub=args.stub)
     try:
         with buildlock.BuildLock(ROOT, "tools/build.py"):
             if args.target in NEEDS_GEN and args.regenerate:
