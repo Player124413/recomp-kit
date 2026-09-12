@@ -1,5 +1,5 @@
 /* Test-only host for the generated code: owns g_mem, stubs the runtime
- * call-outs that src/recomp/runtime/ will provide for real, and exposes
+ * call-outs that runtime/ will provide for real, and exposes
  * run(addr, X86*) plus the memory base so a ctypes driver can drive one
  * translated function at a time.  Nothing here is used by the game build. */
 
@@ -53,7 +53,7 @@ void recomp_cpuid(X86 *c)
 }
 
 /* setjmp/longjmp intrinsics: the tests never exercise a guest longjmp, so
- * these only have to link.  src/recomp/runtime/ has the real ones. */
+ * these only have to link.  runtime/ has the real ones. */
 static jmp_buf harness_jb;
 jmp_buf *recomp_setjmp_prepare(X86 *c) { c->r[R_ESP] += 4; return &harness_jb; }
 void recomp_setjmp_return(X86 *c, int value) { c->r[R_EAX] = (uint32_t)value; }

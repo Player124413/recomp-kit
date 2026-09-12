@@ -112,7 +112,7 @@ check "the run record captured the input stream by content" \
 echo "== the documentation =="
 grep -o 'api->[a-z_0-9]*' docs/MODDING.md | sed 's/^api->//' | sort -u \
     > build/recomp/mods/doc-calls.txt
-grep -o '(\*[a-z_0-9]*)' src/recomp/mods/pop_mod_api.h | tr -d '(*)' | sort -u \
+grep -o '(\*[a-z_0-9]*)' mods/pop_mod_api.h | tr -d '(*)' | sort -u \
     > build/recomp/mods/api-calls.txt
 check "every api call the documentation names exists" \
       "[ -z \"\$(comm -23 build/recomp/mods/doc-calls.txt build/recomp/mods/api-calls.txt)\" ]"

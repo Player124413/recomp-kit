@@ -21,7 +21,7 @@ if(POP_HAVE_GEN)
     ARCHIVE_OUTPUT_DIRECTORY ${POP_OUT} OUTPUT_NAME recomp_gen)
   # -I<gen> for x86.h beside the sources, -I<root> for the canonical copy,
   # -I<runtime> for intrinsics.h: the same three the shell script passed.
-  target_include_directories(recomp_gen PRIVATE ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/src/recomp/runtime)
+  target_include_directories(recomp_gen PRIVATE ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/runtime)
   target_include_directories(recomp_gen INTERFACE ${POP_GEN_DIR})
   target_compile_options(recomp_gen PRIVATE ${POP_WARN_GEN})
   pop_optimize(recomp_gen 2)

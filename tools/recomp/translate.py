@@ -11,7 +11,7 @@ Usage:
     .venv/bin/python tools/recomp/translate.py --only 00401000 00586000
     .venv/bin/python tools/recomp/translate.py --check-flags   # liveness study
 
-The semantics live in tools/recomp/runtime/x86.h, which the generated code
+The semantics live in runtime/x86.h, which the generated code
 includes. Instructions use general translations. The explicitly audited visual
 clock reads below expose an identity-by-default runtime seam; timing changes
 are enabled by the native host, never by the baseline/differential build.
@@ -182,7 +182,7 @@ GUEST_SHIM_BASE = 0x0FF00000
 GUEST_SHIM_END = 0x10000000
 
 # Runtime intrinsics: guest addresses whose translated body is replaced by a
-# call into src/recomp/runtime/intrinsics.h.
+# call into runtime/intrinsics.h.
 INTRINSIC_LONGJMP = 0x0055DB78          # _longjmp
 INTRINSIC_SETJMP  = 0x0055DAFC          # __setjmp3, buffer at ESP+4
 INTRINSIC_BODY = {
@@ -1930,7 +1930,7 @@ class Translator(object):
                 if t == INTRINSIC_SETJMP:
                     # The host jmp_buf has to belong to a frame that is still
                     # live when _longjmp fires, so setjmp is taken here rather
-                    # than inside the runtime (src/recomp/runtime/intrinsics.h).
+                    # than inside the runtime (runtime/intrinsics.h).
                     self.stats["_intrinsic_setjmp"] += 1
                     # C11 7.13.2.1 allows setjmp only as a whole controlling
                     # expression, or compared against an integer constant in
@@ -2359,7 +2359,7 @@ def main():
                 all_addrs.add(a)
 
     image = Image(BINARY)
-    curated = read_curated(os.path.join(ROOT, "tools/recomp/symbols/globals.toml"))
+    curated = read_curated(os.path.join(ROOT, "games/populous/globals.toml"))
     # Addresses named by a dword the loader relocates: a vtable slot, a
     # function-pointer table, a stored callback.  Read once, before discovery,
     # so the evidence does not depend on which pass reaches an address first.

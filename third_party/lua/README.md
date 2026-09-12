@@ -36,7 +36,7 @@ own `main`. What remains is the library: the core, the standard libraries and
 
 **These sources are never edited.** Not to silence a warning, not to add a
 binding, not to change a default. Everything this project needs from Lua is
-done from `src/recomp/mods/lua/`, which is ours; a local edit here would be
+done from `mods/lua/`, which is ours; a local edit here would be
 invisible to anyone reading upstream's 5.4.6 and would be lost the moment the
 version is bumped. If something genuinely cannot be done from outside, the
 change belongs upstream or in a patch file recorded here with its reason.

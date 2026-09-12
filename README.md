@@ -61,14 +61,14 @@ the checked-in `.clang-format`; generated code remains a local build product.
 
 | Path | Purpose |
 | --- | --- |
-| `src/recomp/host/` | SDL3 window, the GPU interface and its Metal backend, audio, input and presentation |
-| `src/recomp/runtime/` | Guest memory, executable loading, imports and cooperative scheduling |
-| `src/recomp/dx/` | Original graphics, input and sound interfaces adapted to the native host |
-| `src/recomp/mods/` | Mod loading, hooks, settings, native Options controls and C/Lua API |
-| `src/recomp/native/` | Capture/replay helpers for validating native function replacements |
+| `host/` | SDL3 window, the GPU interface and its Metal backend, audio, input and presentation |
+| `runtime/` | Guest memory, executable loading, imports and cooperative scheduling |
+| `dx/` | Original graphics, input and sound interfaces adapted to the native host |
+| `mods/` | Mod loading, hooks, settings, native Options controls and C/Lua API |
+| `mods/native/` | Capture/replay helpers for validating native function replacements |
 | `tools/recomp/` | Translator, instruction helpers, builders and gameplay smoke scripts |
 | `mods/examples/` | Small C, Lua and asset-overlay examples |
-| `assets/terrain/` | Project-created material-detail artwork and its provenance |
+| `games/populous/assets/terrain/` | Project-created material-detail artwork and its provenance |
 | `third_party/lua/` | Unmodified Lua source and upstream license |
 | `third_party/volk/` | volk 1.4.304, the Vulkan meta-loader, unmodified |
 | `third_party/vulkan-headers/` | Vulkan-Headers v1.4.304, the subset the backend includes, unmodified |

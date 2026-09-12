@@ -8,21 +8,21 @@ translated locally into `build/recomp/gen/` and are never edited in place.
 
 | Change | Start here | Major entry points |
 | --- | --- | --- |
-| Options controls or labels | [options_menu.cpp](../src/recomp/mods/options_menu.cpp) | `attach`, `action`, `update`, `draw`, `mods_options_frame` |
-| Live display settings | [display_settings.cpp](../src/recomp/mods/display_settings.cpp) | `mods_display_init`, `mods_display_set`, `apply_transition` |
-| Saved graphics choices, new resolutions | [game_settings.cpp](../src/recomp/mods/game_settings.cpp) | `flush_changed`, `enumerate_modes`, `enumerate_display_mode`, `scale_camera_for_resolution` |
-| Mouse edges, coordinate mapping | [input_gate.cpp](../src/recomp/host/input_gate.cpp) | `take_layout`, `host_gate_pointer_event`, `pointer_correction` |
-| Window, focus, quit (SDL3) | [sdl/main.cpp](../src/recomp/host/sdl/main.cpp) | `handle_event`, `apply_focus`, `apply_window_mode`, `pump`, `applicationShouldTerminate` |
-| Frame lifetime and pacing | [present_thread.cpp](../src/recomp/host/present_thread.cpp) | `acquire`, `host_frame_seal`, `sweep` |
-| World rendering, materials | [d3d_render.cpp](../src/recomp/host/d3d_render.cpp) | `host_d3d_expand`, `uploadTexture`, `drawSnapshot`, `d3d_fragment` |
-| UI separation and final composition | [ui_layer.cpp](../src/recomp/host/ui_layer.cpp), [compositor.cpp](../src/recomp/host/compositor.cpp) | `ui_layer_extract`, `replay`, `compositor_compose` |
-| Audio streaming or gaps | [audio/mixer.cpp](../src/recomp/host/audio/mixer.cpp) | `ensure_engine`, `host_audio_stream`, `host_audio_queue`, `host_audio_queued_bytes` |
-| Sound evidence | [audio_capture.cpp](../src/recomp/host/audio_capture.cpp) | `host_capture_write`, `host_capture_stats` |
-| Original graphics API behavior | [DirectX adapters](../src/recomp/dx/README.md) | `Surface_Lock`, `Surface_Unlock`, `Surface_Blt`, `Surface_Flip`, `d3d_upload_texture` |
-| Imports, startup, memory | [Guest runtime](../src/recomp/runtime/README.md) | `loader_load`, `patch_iat`, `imports_dispatch`, `heap_realloc` |
-| Mod lifecycle and hooks | [loader.cpp](../src/recomp/mods/loader.cpp), [hooks.cpp](../src/recomp/mods/hooks.cpp) | `mods_load_all`, `build_api`, `mods_hook_dispatch`, `mods_call_next` |
-| Instruction translation | [translate.py](../tools/recomp/translate.py), [x86.h](../tools/recomp/runtime/x86.h) | Instruction emitters and register/flag helpers |
-| Native replacement validation | [replay.cpp](../src/recomp/native/replay.cpp), [page_track.cpp](../src/recomp/native/page_track.cpp) | `load`, `run`, `translated`, `begin`, `end` |
+| Options controls or labels | [options_menu.cpp](../mods/options_menu.cpp) | `attach`, `action`, `update`, `draw`, `mods_options_frame` |
+| Live display settings | [display_settings.cpp](../mods/display_settings.cpp) | `mods_display_init`, `mods_display_set`, `apply_transition` |
+| Saved graphics choices, new resolutions | [game_settings.cpp](../mods/game_settings.cpp) | `flush_changed`, `enumerate_modes`, `enumerate_display_mode`, `scale_camera_for_resolution` |
+| Mouse edges, coordinate mapping | [input_gate.cpp](../host/input_gate.cpp) | `take_layout`, `host_gate_pointer_event`, `pointer_correction` |
+| Window, focus, quit (SDL3) | [sdl/main.cpp](../host/sdl/main.cpp) | `handle_event`, `apply_focus`, `apply_window_mode`, `pump`, `applicationShouldTerminate` |
+| Frame lifetime and pacing | [present_thread.cpp](../host/present_thread.cpp) | `acquire`, `host_frame_seal`, `sweep` |
+| World rendering, materials | [d3d_render.cpp](../host/d3d_render.cpp) | `host_d3d_expand`, `uploadTexture`, `drawSnapshot`, `d3d_fragment` |
+| UI separation and final composition | [ui_layer.cpp](../host/ui_layer.cpp), [compositor.cpp](../host/compositor.cpp) | `ui_layer_extract`, `replay`, `compositor_compose` |
+| Audio streaming or gaps | [audio/mixer.cpp](../host/audio/mixer.cpp) | `ensure_engine`, `host_audio_stream`, `host_audio_queue`, `host_audio_queued_bytes` |
+| Sound evidence | [audio_capture.cpp](../host/audio_capture.cpp) | `host_capture_write`, `host_capture_stats` |
+| Original graphics API behavior | [DirectX adapters](../dx/README.md) | `Surface_Lock`, `Surface_Unlock`, `Surface_Blt`, `Surface_Flip`, `d3d_upload_texture` |
+| Imports, startup, memory | [Guest runtime](../runtime/README.md) | `loader_load`, `patch_iat`, `imports_dispatch`, `heap_realloc` |
+| Mod lifecycle and hooks | [loader.cpp](../mods/loader.cpp), [hooks.cpp](../mods/hooks.cpp) | `mods_load_all`, `build_api`, `mods_hook_dispatch`, `mods_call_next` |
+| Instruction translation | [translate.py](../tools/recomp/translate.py), [x86.h](../runtime/x86.h) | Instruction emitters and register/flag helpers |
+| Native replacement validation | [replay.cpp](../mods/native/replay.cpp), [page_track.cpp](../mods/native/page_track.cpp) | `load`, `run`, `translated`, `begin`, `end` |
 
 ## Follow one live setting
 

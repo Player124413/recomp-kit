@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def source_files():
     """List only first-party native source roots, independent of private build inputs."""
     suffixes = {".c", ".cpp", ".h", ".hpp", ".m", ".mm"}
-    return sorted(path for directory in ("src", "mods", "tests", "tools/recomp/runtime")
+    return sorted(path for directory in ("runtime", "dx", "host", "platform", "mods", "games", "tests")
                   for path in (ROOT / directory).rglob("*")
                   if path.is_file() and path.suffix in suffixes)
 

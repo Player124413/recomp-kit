@@ -9,7 +9,7 @@ the original binary for local differential tests and capture tools.
 `ProbeOracle` provides a deterministic reference run: Level 2001 scripted
 startup, then N accepted outer frames of the offline driver 004a5590, with
 every non-deterministic input pinned to the same value the recompiled fixture
-`src/recomp/runtime/fixture.cpp` uses:
+`runtime/fixture.cpp` uses:
 
   clock          timeGetTime and the indirect timer slot 00d0c784 answer
                  100 ms before frame 1 and +50 ms per frame after it
@@ -286,7 +286,7 @@ class ProbeOracle(Oracle):
         return out
 
     def _rdtsc_adapter(self, u, a, n, _):
-        # Mirrors recomp_rdtsc in src/recomp/runtime/cpu.cpp exactly.
+        # Mirrors recomp_rdtsc in runtime/cpu.cpp exactly.
         self.rdtsc_seen += 1
         from_ms = self.clock_ms * 1000000
         if from_ms > self.rdtsc_value:
@@ -302,7 +302,7 @@ class ProbeOracle(Oracle):
 
         `stub_mode='clean'` pops the return address, which is what a cdecl
         function that does nothing would do. `stub_mode='leak'` leaves it on the
-        stack, which is what src/recomp/runtime/cpu.cpp's recomp_unknown_call
+        stack, which is what runtime/cpu.cpp's recomp_unknown_call
         does today; that leaves the caller 4 bytes out of step and is a runtime
         bug in its own right, so it is not the default."""
         self.stubbed[a] = self.stubbed.get(a, 0) + 1

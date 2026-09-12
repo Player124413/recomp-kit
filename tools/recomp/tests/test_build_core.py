@@ -40,7 +40,7 @@ class BuildCoreTests(unittest.TestCase):
         self.dest = self.tmp / "build/recomp/mods/core"
 
     def install(self):
-        return build_core.install(self.source, self.dest, CC, ROOT / "src/recomp/mods")
+        return build_core.install(self.source, self.dest, CC, ROOT / "mods")
 
     def plugin(self):
         return self.dest / "probe" / ("probe" + build_core.plugin_extension())

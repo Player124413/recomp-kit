@@ -128,9 +128,9 @@ def install(source, dest, cc, api_include, system=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", type=Path, default=ROOT / "build/recomp/mods/core")
-    parser.add_argument("--source", type=Path, default=ROOT / "mods/core")
+    parser.add_argument("--source", type=Path, default=ROOT / "games/populous/mods/core")
     parser.add_argument("--cc", required=True, help="C compiler driver (clang)")
-    parser.add_argument("--api-include", type=Path, default=ROOT / "src/recomp/mods")
+    parser.add_argument("--api-include", type=Path, default=ROOT / "mods")
     args = parser.parse_args()
     dest = args.dest.resolve()
     # Only build and packaging trees are install roots: the source tree stays clean.

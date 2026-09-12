@@ -144,7 +144,7 @@ await turn>=1 within 120000
 # The level opens in a camera flyby, and while it runs every frame differs from
 # the last whatever the player does - so "the picture changed" cannot tell a
 # selected brave from an ignored click. The entity table can. It is 2000
-# records of 179 bytes at 0x8e0428, laid out as tests/entity_codec.hpp encodes
+# records of 179 bytes at 0x8e0428, laid out as games/populous/tests/entity_codec.hpp encodes
 # it: flags at +12, kind at +42, state at +44, owner at +47, position at +61 as
 # x, z and altitude words. A blue brave is owner 0, kind 1.
 #

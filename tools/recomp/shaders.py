@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the Vulkan GLSL under src/recomp/host/gpu/vulkan/shaders/ into
+"""Compile the Vulkan GLSL under host/gpu/vulkan/shaders/ into
 shaders_spv.h (`compile`), or recompile into a scratch file and fail on any
 difference from the committed header (`check`)."""
 import argparse
@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SHADERS = ROOT / "src/recomp/host/gpu/vulkan/shaders"
-HEADER = ROOT / "src/recomp/host/gpu/vulkan/shaders_spv.h"
+SHADERS = ROOT / "host/gpu/vulkan/shaders"
+HEADER = ROOT / "host/gpu/vulkan/shaders_spv.h"
 GLSLC_ARGS = ["-O", "--target-env=vulkan1.1", "-Werror"]
 
 

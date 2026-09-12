@@ -1,28 +1,106 @@
-# The plugins the tree ships: bundled core mods through the installer, the
-# examples beside their manifests, and the smoke probe.
-add_custom_target(core_mods
-  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/recomp/build_core.py
-          --dest ${POP_OUT}/mods/core --cc ${CMAKE_C_COMPILER}
-  WORKING_DIRECTORY ${POP_ROOT}
-  COMMENT "Installing core mods into build/recomp/mods/core"
-  VERBATIM)
+# Vendored Lua 5.4: the library only, lua.c and luac.c are not vendored.
+file(GLOB POP_LUA_SOURCES CONFIGURE_DEPENDS ${POP_ROOT}/third_party/lua/*.c)
+add_library(lua STATIC ${POP_LUA_SOURCES})
+set_target_properties(lua PROPERTIES
+  C_STANDARD 99 C_EXTENSIONS OFF
+  ARCHIVE_OUTPUT_DIRECTORY ${POP_OUT} OUTPUT_NAME lua)
+target_include_directories(lua PUBLIC ${POP_ROOT}/third_party/lua)
+target_compile_options(lua PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_definitions(lua PRIVATE
+  $<$<PLATFORM_ID:Darwin>:LUA_USE_MACOSX>
+  $<$<PLATFORM_ID:Linux>:LUA_USE_LINUX>)
+pop_optimize(lua 2)
 
-file(GLOB POP_EXAMPLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/examples/*/*.c)
-add_custom_target(example_mods)
-foreach(src ${POP_EXAMPLE_SOURCES})
+# The mod foundation. Globbed as the scripts globbed, so a new module is
+# picked up by the next configure.
+file(GLOB POP_MODS_SOURCES CONFIGURE_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/lua/*.cpp)
+# The capture seam includes the page-tracking harness from native,
+# which is mprotect and signal handlers. Windows gets the stub that says so.
+list(REMOVE_ITEM POP_MODS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/capture_seam_win32.cpp)
+if(WIN32)
+  list(REMOVE_ITEM POP_MODS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/capture_seam.cpp)
+  list(APPEND POP_MODS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/capture_seam_win32.cpp)
+endif()
+
+add_library(recomp_mods OBJECT ${POP_MODS_SOURCES})
+target_include_directories(recomp_mods PUBLIC ${POP_ROOT} ${POP_ROOT}/runtime)
+target_link_libraries(recomp_mods PUBLIC lua recomp_runtime)
+target_compile_options(recomp_mods PRIVATE ${POP_WARN_HOST})
+pop_optimize(recomp_mods 2)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # std::atomic::is_lock_free in the page tracker needs libatomic with clang + libstdc++.
+  target_link_libraries(recomp_mods PUBLIC atomic)
+endif()
+
+add_library(recomp_mods_testing OBJECT ${POP_MODS_SOURCES})
+target_include_directories(recomp_mods_testing PUBLIC ${POP_ROOT} ${POP_ROOT}/runtime)
+target_link_libraries(recomp_mods_testing PUBLIC lua recomp_runtime_testing)
+target_compile_definitions(recomp_mods_testing PUBLIC POPM_TESTING=1)
+target_compile_options(recomp_mods_testing PRIVATE ${POP_WARN_HOST})
+pop_optimize(recomp_mods_testing 1)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(recomp_mods_testing PUBLIC atomic)
+endif()
+
+# Plugin fixtures the loader tests load. Every .c becomes a module of the same
+# name; old_cpu is built with the older header AHEAD of the real one so its
+# sizeof(pop_cpu_v1) really is the older value.
+file(GLOB POP_FIXTURE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/*.c)
+add_custom_target(mod_fixtures)
+foreach(src ${POP_FIXTURE_SOURCES})
   get_filename_component(stem ${src} NAME_WE)
-  get_filename_component(dir ${src} DIRECTORY)
-  pop_add_plugin(example_${stem} SOURCE ${src} OUTPUT_DIR ${dir} OUTPUT_NAME ${stem}
-    WARNINGS ${POP_WARN_STRICT} OPTIONS -g)
-  add_dependencies(example_mods example_${stem})
+  set(first "")
+  if(stem STREQUAL "old_cpu")
+    set(first INCLUDE_FIRST ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/old_header)
+  endif()
+  pop_add_plugin(fixture_${stem} SOURCE ${src} OUTPUT_DIR ${POP_OUT}/mods-fixtures
+    OUTPUT_NAME ${stem} ${first} OPTIONS -g)
+  add_dependencies(mod_fixtures fixture_${stem})
 endforeach()
 
-pop_add_plugin(smoke_probe SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/smoke/probe.c
-  OUTPUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/smoke OUTPUT_NAME probe OPTIONS -g)
+# Where resources and the profile live, for every layout an executable can have.
+add_executable(layout_tests ${POP_ROOT}/runtime/layout.cpp tests/layout_tests.cpp)
+target_include_directories(layout_tests PRIVATE ${POP_ROOT})
+target_link_libraries(layout_tests PRIVATE recomp_platform)
+target_compile_options(layout_tests PRIVATE ${POP_WARN_STRICT})
+pop_optimize(layout_tests 1)
+pop_test_binary(layout_tests)
+add_test(NAME layout_tests COMMAND layout_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(layout_tests PROPERTIES LABELS nogame)
 
-add_custom_target(plugins DEPENDS core_mods example_mods smoke_probe mod_fixtures)
-
-add_test(NAME test_build_core
-  COMMAND ${Python3_EXECUTABLE} -m unittest ${POP_ROOT}/tools/recomp/tests/test_build_core.py
+# The roots resolver, run from a relocated app-shaped directory by roots_tests.py.
+add_executable(roots_probe roots.cpp ${POP_ROOT}/runtime/layout.cpp ${POP_ROOT}/games/populous/mods/core/tests/roots_probe.cpp)
+target_include_directories(roots_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(roots_probe PRIVATE recomp_platform)
+pop_optimize(roots_probe 1)
+pop_test_binary(roots_probe)
+add_test(NAME roots_tests
+  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/games/populous/mods/core/tests/roots_tests.py $<TARGET_FILE:roots_probe>
   WORKING_DIRECTORY ${POP_ROOT})
-set_tests_properties(test_build_core PROPERTIES LABELS nogame ENVIRONMENT "POP_CC=${CMAKE_C_COMPILER}")
+set_tests_properties(roots_tests PROPERTIES LABELS nogame)
+
+if(TARGET recomp_gen)
+  add_library(mods_api_header_test OBJECT tests/api_header_test.c)
+  target_compile_definitions(mods_api_header_test PRIVATE POPM_TESTING=1)
+  target_include_directories(mods_api_header_test PRIVATE ${POP_ROOT} ${POP_ROOT}/runtime ${POP_GEN_DIR})
+  target_compile_options(mods_api_header_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+  pop_optimize(mods_api_header_test 1)
+
+  file(GLOB POP_MODS_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
+  # layout_tests is its own nogame executable with its own main.
+  list(REMOVE_ITEM POP_MODS_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/layout_tests.cpp)
+  if(WIN32)
+    # The replay bridge includes the native page tracker (mprotect, signal
+    # handlers); Windows has the capture seam stub instead.
+    list(REMOVE_ITEM POP_MODS_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/replay_tests_bridge.cpp)
+  endif()
+  add_executable(mods_tests ${POP_MODS_TEST_SOURCES} $<TARGET_OBJECTS:mods_api_header_test>)
+  target_link_libraries(mods_tests PRIVATE recomp_platform recomp_runtime_testing recomp_snapshot recomp_mods_testing lua)
+  target_compile_options(mods_tests PRIVATE ${POP_WARN_HOST})
+  pop_optimize(mods_tests 1)
+  pop_link_gen(mods_tests)
+  add_dependencies(mods_tests mod_fixtures core_mods)
+  add_test(NAME mods_tests COMMAND mods_tests WORKING_DIRECTORY ${POP_ROOT})
+  set_tests_properties(mods_tests PROPERTIES LABELS mods)
+endif()

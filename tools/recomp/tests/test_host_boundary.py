@@ -1,12 +1,12 @@
 """The host's platform boundary: Objective-C++ and Apple frameworks live only
-under src/recomp/host/gpu/metal/. Everything else in the host is portable C++
+under host/gpu/metal/. Everything else in the host is portable C++
 over gpu/gpu.h, SDL3 and the platform layer."""
 import re
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-HOST = ROOT / "src" / "recomp" / "host"
+HOST = ROOT / "host"
 APPLE = re.compile(r"#import\b|<Metal/|<AppKit/|<Cocoa/|<AVFoundation/|<AudioToolbox/|<CoreText/|<CoreVideo/|<QuartzCore/")
 
 

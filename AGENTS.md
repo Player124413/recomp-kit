@@ -13,7 +13,7 @@ translations are private local inputs under ignored original/, analysis/ and bui
   Preserve vendored code and its notices.
 - Run relevant suites from docs/testing.md; native code builds only through
   tools/build.py and tools/test.py, never by invoking compilers directly.
-  Platform calls go through src/recomp/platform/os.h; no `#ifdef` on the platform
+  Platform calls go through platform/os.h; no `#ifdef` on the platform
   outside os_posix.cpp and os_win32.cpp. Report exactly which checks ran;
   compilation and offscreen counters do not establish playable performance.
 - Do not commit game assets, generated code, binaries, credentials, personal saves

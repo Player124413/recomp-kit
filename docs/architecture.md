@@ -24,7 +24,7 @@ remain 32-bit offsets even in a 64-bit process. `loader.cpp` maps PE sections,
 zero-fills data tails and replaces import-table entries with runtime trampolines.
 `imports.cpp` decodes calls and dispatches the original calling conventions.
 
-`tools/recomp/runtime/x86.h` defines the register file, flags, x87 state and
+`runtime/x86.h` defines the register file, flags, x87 state and
 instruction helpers used by generated functions. Functions retain stable guest
 addresses for dispatch, hooks and diagnostics. Those addresses are identifiers,
 not host pointers and not evidence of human-recovered intent.
@@ -77,8 +77,8 @@ provenance; change the translator or a reviewed replacement, then regenerate.
 
 The native app currently targets macOS. `src/core/` contains only shared type
 headers used by the retained tests; it is not a second game engine. Capture/replay
-under `src/recomp/native/` validates prospective native replacements locally.
+under `mods/native/` validates prospective native replacements locally.
 
 Platform services (threads, virtual memory, plugins, files, clocks) go through
-`src/recomp/platform/os.h`, with POSIX and Win32 implementations; the build is
+`platform/os.h`, with POSIX and Win32 implementations; the build is
 CMake with presets per platform (`CMakePresets.json`).

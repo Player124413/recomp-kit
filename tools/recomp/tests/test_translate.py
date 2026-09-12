@@ -210,7 +210,7 @@ def build(verbose=True):
     subprocess.check_call([
         "xcrun", "clang", "-O1", "-g", "-std=c11", "-Wall", "-Wextra",
         "-Wno-unused", "-I", GEN, "-I", ROOT,
-        "-I", os.path.join(ROOT, "src/recomp/runtime"), "-dynamiclib",
+        "-I", os.path.join(ROOT, "runtime"), "-dynamiclib",
         os.path.join(ROOT, "tools/recomp/tests/harness.c"), synth,
         "-Wl,-force_load," + LIB_A, "-o", DYLIB])
 
@@ -233,7 +233,7 @@ class Native(object):
                 "%s is missing. Run without --no-build, or "
                 "tools/build.py --target gen first." % DYLIB)
         built = os.path.getmtime(DYLIB)
-        for src in ("tools/recomp/runtime/x86.h", "tools/recomp/translate.py",
+        for src in ("runtime/x86.h", "tools/recomp/translate.py",
                     "tools/recomp/tests/harness.c"):
             if os.path.getmtime(os.path.join(ROOT, src)) > built:
                 raise SystemExit(
@@ -1362,7 +1362,7 @@ uint32_t probe_dispatch(X86 *c)
     subprocess.check_call([
         "xcrun", "clang", "-O1", "-g", "-std=c11", "-Wall", "-Wextra",
         "-Wno-unused", "-I", GEN, "-I", ROOT,
-        "-I", os.path.join(ROOT, "src/recomp/runtime"), "-dynamiclib",
+        "-I", os.path.join(ROOT, "runtime"), "-dynamiclib",
         "-DRECOMP_OVERRIDE_HEADER=\"%s\"" % hdr,
         os.path.join(ROOT, "tools/recomp/tests/harness.c"), chunk, src,
         "-o", PROBE_DYLIB])

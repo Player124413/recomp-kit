@@ -76,7 +76,7 @@ def publish_generated(root, translate):
     try:
         translate(stage)
         # x86.h sits beside the generated sources so #include "x86.h" resolves.
-        shutil.copy(root / "tools/recomp/runtime/x86.h", stage / "x86.h")
+        shutil.copy(root / "runtime/x86.h", stage / "x86.h")
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
@@ -103,7 +103,7 @@ def texture_pack():
     """Compile the redistributable material-detail layer when its inputs are newer.
     Original-game replacement textures remain optional, locally prepared pack entries."""
     detail = ROOT / "build/texture-pack/terrain-detail.popt"
-    artwork = ROOT / "assets/terrain/materials-v1.png"
+    artwork = ROOT / "games/populous/assets/terrain/materials-v1.png"
     compiler = ROOT / "tools/recomp/terrain_detail.py"
     if (not detail.is_file() or not (detail.parent / "manifest.json").is_file()
             or detail.stat().st_mtime < max(artwork.stat().st_mtime, compiler.stat().st_mtime)):
