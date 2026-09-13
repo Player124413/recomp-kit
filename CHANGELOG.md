@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Split on-screen keypad for touch: two 8x5 halves in the bottom corners, three
+  sizes, Shift/Ctrl/Alt that hold, latch or lock, HIDE/KEYS tabs, settings on the
+  F10 page persisted per game; replaces the eight-key strip. `POPM_KEYPAD=1` forces
+  it on for a desktop check.
 - Builds take `--game-dir`: a game directory anywhere, with outputs under its own
   `build/`; paths in `game.toml` resolve from its directory. The kit ships `games/stub`
   for game-free builds and CI. Populous moves to github.com/veritr1x/populous-recomp,

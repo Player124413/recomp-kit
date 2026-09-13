@@ -79,7 +79,12 @@ the game's `game.toml`), signs it, installs it with `devicectl` and streams
 the console. Touch: tap = left click, long press then lift = right click, long
 press then drag = wheel-button drag, a hold on a screen edge scrolls, drag =
 left drag, two-finger drag pans, two-finger tap = Escape, three-finger tap =
-F10 (Options), four-finger tap toggles the keyboard. `tools/ios_logs.py` pulls
+F10 (Options), four-finger tap toggles the system keyboard. An on-screen split
+keyboard sits in the bottom corners when no hardware keyboard is attached:
+HIDE/KEYS tabs per half, Shift/Ctrl/Alt hold to chord, tap to latch, double
+tap to lock; size and visibility on the F10 page, persisted per game
+(`[touch] keypad = "hidden"` in `game.toml` starts it hidden).
+`tools/ios_logs.py` pulls
 the app's Documents (saves) back to the Mac.
 
 ## Check a change

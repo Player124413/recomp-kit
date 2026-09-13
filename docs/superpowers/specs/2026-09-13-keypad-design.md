@@ -1,8 +1,8 @@
 # Keypad design: a split on-screen keyboard for touch play
 
 Date: 2026-09-13
-Status: approved in conversation 2026-09-13 (layout, key set, modifier
-behaviour and key size); spec pending review
+Status: implemented 2026-09-13; accepted on the iPad (layout, tabs, hold/latch/lock,
+F10 size, relaunch persistence)
 Parent spec: `2026-09-13-recomp-kit-design.md`; replaces the key strip of
 `2026-09-13-m1-ios-design.md` section 5.4
 
