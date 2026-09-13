@@ -17,6 +17,10 @@ struct HostFrameHandle;
 extern "C" {
 #endif
 
+// The last accepted SetDisplayMode. False before a mode is set, leaving the
+// caller's values unchanged. Read under the guest baton, like other DX state.
+bool ddraw_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
+
 // Host lifecycle registration, under the guest baton before/after scheduler life.
 // seal runs before host_frame_current advances, after the palette is pinned.
 void ddraw_set_present_callbacks(void (*first_write)(void), void (*seal)(void));

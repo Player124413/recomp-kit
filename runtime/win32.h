@@ -37,6 +37,10 @@ uint32_t win32_create_event(bool manual_reset, bool signalled);
 bool win32_reset_event(uint32_t handle);
 uint32_t get_last_error();
 
+// DirectDraw supplies the current accepted mode when linked. The runtime-only
+// weak default returns false and leaves the caller's fallback values intact.
+extern "C" bool ddraw_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
+
 // ---------------------------------------------------------------------------
 // File system, and the overlay seam.
 //

@@ -4687,6 +4687,25 @@ static uint32_t g_enum_modes[16][3];
 
 static void test_enum_display_modes() {
     cpu_reset();
+    reset_ddraw_for_test();
+    uint32_t mw = 640, mh = 480, mbpp = 8;
+    CHECK(!ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 640);
+    CHECK_EQ(mh, 480);
+    CHECK_EQ(mbpp, 8);
+    uint32_t caps = tramp("GDI32.dll", "GetDeviceCaps");
+    uint32_t hdc = call_shim(tramp("USER32.dll", "GetDC"), {0});
+    auto check_caps = [&](uint32_t w, uint32_t h, uint32_t bpp) {
+        CHECK_EQ(call_shim(caps, {hdc, 8}), w);
+        CHECK_EQ(call_shim(caps, {hdc, 10}), h);
+        CHECK_EQ(call_shim(caps, {hdc, 12}), bpp);
+        CHECK_EQ(call_shim(caps, {hdc, 14}), 1);
+        CHECK_EQ(call_shim(caps, {hdc, 38}), bpp == 8 ? 0x100u : 0u);
+        CHECK_EQ(call_shim(caps, {hdc, 104}), bpp == 8 ? 256u : 0u);
+        CHECK_EQ(call_shim(caps, {hdc, 24}), bpp == 8 ? 256u : 0xffffffffu);
+        CHECK_EQ(call_shim(caps, {hdc, 0x2000}), 0);
+    };
+    check_caps(640, 480, 8);
     uint32_t create = tramp("DDRAW.dll", "DirectDrawCreate");
     call_shim(create, {0, sc(0), 0});
     uint32_t dd = rd32(sc(0));
@@ -4721,7 +4740,18 @@ static void test_enum_display_modes() {
     CHECK_EQ(g_enum_modes[9][0], 3840);
     CHECK_EQ(g_enum_modes[9][1], 2160);
     CHECK_EQ(g_enum_modes[9][2], 16);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {800, 600, 8}), DD_OK);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 800);
+    CHECK_EQ(mh, 600);
+    CHECK_EQ(mbpp, 8);
+    check_caps(800, 600, 8);
     CHECK_EQ(call_method(dd, DD_SetDisplayMode, {3840, 2160, 16}), DD_OK);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 3840);
+    CHECK_EQ(mh, 2160);
+    CHECK_EQ(mbpp, 16);
+    check_caps(3840, 2160, 16);
 
     // A restricted enumeration returns only the matching modes.
     uint32_t match = sc(0x100);
@@ -4737,6 +4767,12 @@ static void test_enum_display_modes() {
     // An unoffered mode is refused rather than silently accepted.
     hr = call_method(dd, DD_SetDisplayMode, {1600, 1200, 32});
     CHECK_EQ(hr, DDERR_INVALIDPARAMS);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 3840);
+    CHECK_EQ(mh, 2160);
+    CHECK_EQ(mbpp, 16);
+    check_caps(3840, 2160, 16);
+    call_shim(tramp("USER32.dll", "ReleaseDC"), {0, hdc});
 }
 
 // RECOMP_DDRAW_MODES replaces the offered set, and the SAME table decides what

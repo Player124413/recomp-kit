@@ -2164,6 +2164,15 @@ void ddraw_note_mode_impl(uint32_t w, uint32_t h, uint32_t bpp) {
     g_mode_bpp = bpp;
 }
 
+bool ddraw_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
+    if (!g_mode_bpp)
+        return false;
+    *w = g_mode_w;
+    *h = g_mode_h;
+    *bpp = g_mode_bpp;
+    return true;
+}
+
 // The test seam IS the production path: a seam that sealed by another route
 // would let the production one rot.
 extern "C" void pump_present_for_test(void) {
@@ -4223,6 +4232,7 @@ void ddraw_reset() {
     g_scratch = 0;
     g_scratch_size = 0;
     g_primary_dd = 0;
+    g_mode_w = g_mode_h = g_mode_bpp = 0;
     g_next_dc = 0x00050004u;
 }
 

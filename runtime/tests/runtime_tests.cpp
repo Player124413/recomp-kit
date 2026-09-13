@@ -1174,6 +1174,34 @@ static void test_gdi_and_com(X86 *c) {
     uint32_t bits = scratch_block(4);
     wr32(bits, 0);
     uint32_t hdc = call_import(c, "USER32.dll", "GetDC", {0});
+    // Read the same mode hook as GDI. Runtime-only builds use its weak default.
+    uint32_t mw = 640, mh = 480, mbpp = 8;
+    ddraw_display_mode(&mw, &mh, &mbpp);
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 8}) == mw &&
+              call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 10}) == mh,
+          "GetDeviceCaps HORZRES/VERTRES are the mode");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 12}) == mbpp,
+          "BITSPIXEL is the mode's depth");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 14}) == 1, "PLANES");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 38}) == (mbpp == 8 ? 0x100u : 0u),
+          "RASTERCAPS has RC_PALETTE only at 8 bpp");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 104}) == (mbpp == 8 ? 256u : 0u),
+          "SIZEPALETTE is 256 only at 8 bpp");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 24}) ==
+              (mbpp == 8 ? 256u : 0xffffffffu),
+          "NUMCOLORS is 256 at 8 bpp, otherwise -1");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 0x2000}) == 0,
+          "an unknown index is 0");
+    uint32_t sz = scratch_block(8), text = put_str("ABCDEFG");
+    uint32_t tm = scratch_block(56);
+    call_import(c, "GDI32.dll", "GetTextMetricsA", {hdc, tm});
+    check(call_import(c, "GDI32.dll", "GetTextExtentPointA", {hdc, text, 7, sz}) == 1 &&
+              rd32(sz) == 7 * rd32(tm + 20) && rd32(sz + 4) == rd32(tm + 0),
+          "GetTextExtentPointA agrees with GetTextMetricsA (tmAveCharWidth, tmHeight)");
+    check(call_import(c, "GDI32.dll", "SetBkColor", {hdc, 0x00ff0000}) == 0x00ffffff,
+          "SetBkColor returns white first");
+    check(call_import(c, "GDI32.dll", "SetBkColor", {hdc, 0}) == 0x00ff0000,
+          "then the previous colour");
     uint32_t hbm = call_import(c, "GDI32.dll", "CreateDIBSection", {hdc, bmi, 0, bits, 0, 0});
     check(hbm != 0 && rd32(bits) != 0 && heap_owns(rd32(bits)),
           "CreateDIBSection -> %08x with bits at %08x on the guest heap", hbm, rd32(bits));

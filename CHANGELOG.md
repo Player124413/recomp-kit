@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- GDI: `GetDeviceCaps` reports the accepted DirectDraw mode and depth-dependent
+  palette capabilities, falling back to 640x480x8 before a mode is set.
+  `GetTextExtentPointA` shares the fixed 7-pixel width and 16-pixel height of
+  `GetTextMetricsA`; `SetBkColor` stores each DC's background color and returns
+  its previous value, initially white. Text output remains undrawn.
 - Build: define `profile_tests` only when the translation's `funcs.h` defines
   its target function `FN_00500040`, so other translations can build all
   native test binaries without that game-specific suite.
