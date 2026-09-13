@@ -25,8 +25,12 @@ set(POP_TRANSLATE AUTO CACHE STRING "AUTO, ON, OFF or STUB: how targets that nee
 set_property(CACHE POP_TRANSLATE PROPERTY STRINGS AUTO ON OFF STUB)
 # A stub build (no game code) keeps its outputs apart from a real build so it
 # can never overwrite the archive or the bundle a player runs.
-if(POP_TRANSLATE STREQUAL "STUB")
+if(IOS AND POP_TRANSLATE STREQUAL "STUB")
+  set(POP_BUILD_DIR ${POP_ROOT}/build/ios-stub)
+elseif(POP_TRANSLATE STREQUAL "STUB")
   set(POP_BUILD_DIR ${POP_ROOT}/build/stub)
+elseif(IOS)
+  set(POP_BUILD_DIR ${POP_ROOT}/build/ios)
 else()
   set(POP_BUILD_DIR ${POP_ROOT}/build)
 endif()
@@ -66,6 +70,14 @@ endif()
 include_directories(${CMAKE_BINARY_DIR}/generated)
 add_compile_definitions(GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE})
 
+if(IOS)
+  set(RECOMP_IOS_TEAM "$ENV{RECOMP_IOS_TEAM}" CACHE STRING "Apple development team for automatic signing")
+  if(RECOMP_IOS_TEAM STREQUAL "" AND NOT POP_TRANSLATE STREQUAL "STUB")
+    message(FATAL_ERROR "iOS builds need a signing team: set RECOMP_IOS_TEAM or pass tools/build.py --team; "
+                        "`security find-identity -v -p codesigning` lists them")
+  endif()
+endif()
+
 # The version is the git description of the commit being built; a tree
 # without git history gets "unknown". The release workflow passes it in.
 find_package(Git QUIET)
@@ -81,17 +93,22 @@ endif()
 configure_file(${POP_ROOT}/host/version.h.in ${CMAKE_BINARY_DIR}/generated/version.h @ONLY)
 
 
-enable_testing()
+if(NOT IOS)
+  enable_testing()
+endif()
 add_custom_target(check_binaries)
 
 include(cmake/Warnings.cmake)
 include(cmake/Plugins.cmake)
 include(cmake/Translate.cmake)
 include(cmake/MacBundle.cmake)
+include(cmake/IosBundle.cmake)
 include(cmake/Dependencies.cmake)
 add_subdirectory(platform)
 add_subdirectory(runtime)
 add_subdirectory(dx)
 add_subdirectory(mods)
-add_subdirectory(games/populous/mods)
+if(NOT IOS)
+  add_subdirectory(games/populous/mods)
+endif()
 add_subdirectory(host)

@@ -58,6 +58,7 @@ def render_cmake(cfg):
     for key, macro in STRINGS[:5]:
         lines.append('set(%s "%s")' % (macro, game[key]))
     lines.append("set(RECOMP_IMAGE_BASE %s)" % c_hex(game["image_base"]))
+    lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % game["developer_exe"].rsplit("/", 1)[0])
     return "\n".join(lines) + "\n"
 
 

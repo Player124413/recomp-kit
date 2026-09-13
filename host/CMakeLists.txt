@@ -19,6 +19,7 @@ endif()
 # The GPU interface, its test double, the Vulkan backend and (on Apple) Metal.
 add_subdirectory(gpu)
 
+if(NOT IOS)
 # The platform boundary: no Objective-C++ and no Apple framework outside gpu/metal/.
 add_test(NAME host_boundary_check
   COMMAND ${Python3_EXECUTABLE} -m unittest ${POP_ROOT}/tools/recomp/tests/test_host_boundary.py
@@ -57,6 +58,7 @@ pop_optimize(ui_layer_tests 1)
 pop_test_binary(ui_layer_tests)
 add_test(NAME ui_layer_tests COMMAND ui_layer_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(ui_layer_tests PROPERTIES LABELS nogame)
+endif()
 
 # The hosts and the full host suite build on every platform over gpu_backend.
 if(APPLE)
@@ -98,7 +100,16 @@ set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${
                         ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${HOST}/d3d_render.cpp
                         ${HOST}/indexed_frame.cpp)
 
+# The host's platform file: desktop or iPadOS (host/sdl/platform_ui.h).
+if(IOS)
+  set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_ios.mm)
+  list(APPEND FW_METAL "-framework UIKit")
+else()
+  set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp)
+endif()
+
 if(TARGET recomp_gen)
+  if(NOT IOS)
   pop_host(pop_headless GEN
     SOURCES ${HOST}/headless_main.cpp ${HOST}/page_overlay.cpp ${POP_AUDIO_SOURCES}
     LIBS ${POP_CORE_LIBS}
@@ -113,8 +124,10 @@ if(TARGET recomp_gen)
     FRAMEWORKS ${FW_FOUNDATION} ${FW_METAL})
   add_dependencies(pop_smoke core_mods smoke_probe)
 
+  endif()
+
   pop_host(recomp_app GEN UI_LAYER OPT 2
-    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${HOST}/sdl/platform_ui_desktop.cpp
+    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI}
             ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
@@ -123,11 +136,13 @@ if(TARGET recomp_gen)
     FRAMEWORKS ${FW_METAL})
   pop_link_sdl(recomp_app)
   set_target_properties(recomp_app PROPERTIES OUTPUT_NAME ${RECOMP_APP_NAME})
-  if(APPLE)
+  if(IOS)
+    pop_ios_bundle(recomp_app)
+  elseif(APPLE)
     pop_mac_bundle(recomp_app)
   endif()
 
-  if(APPLE) # Objective-C++ source
+  if(APPLE AND NOT IOS) # Objective-C++ source; a desktop test
     # Real loader, hooks and DirectDraw seal/service with fake GPU acks.
     pop_host(present_events_tests GEN UI_LAYER
       SOURCES ${POP_ROOT}/mods/tests/present_events_tests.mm
@@ -143,6 +158,7 @@ endif()
 # no audio device. Labelled `gpu`: the renderer tests need a device.
 # report_lock.cpp is a source here rather than host_common, because the script
 # never linked boot.cpp into this suite.
+if(NOT IOS)
 pop_host(host_tests UI_LAYER
   SOURCES ${HOST}/tests/host_tests.cpp ${HOST}/tests/test_frame_builder.cpp
           ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp
@@ -159,4 +175,5 @@ pop_link_sdl(host_tests)
 pop_test_binary(host_tests)
 add_test(NAME host_tests COMMAND host_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(host_tests PROPERTIES LABELS gpu)
+endif()
 

@@ -4,6 +4,7 @@ target_include_directories(gpu_fake PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DI
 target_compile_options(gpu_fake PRIVATE ${POP_WARN_STRICT})
 pop_optimize(gpu_fake 1)
 
+if(NOT IOS)
 add_executable(gpu_fake_tests fake/tests/gpu_fake_tests.cpp)
 target_link_libraries(gpu_fake_tests PRIVATE gpu_fake)
 target_compile_options(gpu_fake_tests PRIVATE ${POP_WARN_STRICT})
@@ -11,6 +12,7 @@ pop_optimize(gpu_fake_tests 1)
 pop_test_binary(gpu_fake_tests)
 add_test(NAME gpu_fake_tests COMMAND gpu_fake_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(gpu_fake_tests PROPERTIES LABELS nogame)
+endif()
 
 # The Vulkan backend builds everywhere; the loader is found at run time.
 add_library(volk OBJECT ${POP_ROOT}/third_party/volk/volk.c)
@@ -58,6 +60,7 @@ pop_optimize(gpu_backend 1)
 
 # The contract suite, once per backend. `gpu` is the platform's default
 # backend; `moltenvk` is Vulkan on Apple, which needs MoltenVK installed.
+if(NOT IOS)
 function(pop_gpu_contract_test target backend label)
   add_executable(${target} tests/gpu_contract_tests.cpp)
   target_link_libraries(${target} PRIVATE gpu_backend)
@@ -73,4 +76,5 @@ if(APPLE)
   pop_gpu_contract_test(gpu_vulkan_tests vulkan moltenvk)
 else()
   pop_gpu_contract_test(gpu_vulkan_tests vulkan gpu)
+endif()
 endif()

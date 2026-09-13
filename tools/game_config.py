@@ -26,6 +26,7 @@ def load(game_dir):
         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
     translate = cfg.setdefault("translate", {})
     cfg.setdefault("hooks", {})
+    cfg.setdefault("bundle", {}).setdefault("exclude", [])
     globals_path = game_dir / translate.get("globals", "globals.toml")
     with globals_path.open("rb") as fh:
         cfg["globals"] = tomllib.load(fh).get("globals", {})

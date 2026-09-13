@@ -50,3 +50,7 @@ mouse_device_ptr = 0x00d0595c
 mouse_device_right = 0x00d0599c
 # host/smoke_main.cpp: the camera record the smoke script inspects
 camera = 0x0074a350
+
+[bundle]
+# Left out of the iOS bundle: installers, GOG Galaxy, intro movies, Windows DLLs.
+exclude = ["__redist", "commonappdata", "app", "Fmv", "*.dll", "*.cmd", "dxcfg.*"]

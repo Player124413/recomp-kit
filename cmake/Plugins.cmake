@@ -6,6 +6,9 @@
 # symbols are left for load time on Apple because the API arrives as a pointer;
 # ELF modules allow them by default and COFF plugins reference nothing.
 function(pop_add_plugin target)
+  if(IOS)
+    return() # no loadable plugins on a stock device
+  endif()
   cmake_parse_arguments(ARG "" "SOURCE;OUTPUT_DIR;OUTPUT_NAME;INCLUDE_FIRST" "WARNINGS;OPTIONS" ${ARGN})
   add_library(${target} MODULE ${ARG_SOURCE})
   set_target_properties(${target} PROPERTIES

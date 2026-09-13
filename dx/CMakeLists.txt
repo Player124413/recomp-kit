@@ -16,6 +16,7 @@ target_compile_definitions(recomp_dx_null PUBLIC RECOMP_NULL_HOST)
 target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)
 
+if(NOT IOS)
 # host_api.h is a C header too. The C11 consumer is an object the DX tests
 # link; the header is also parsed as C++17 on its own.
 add_library(host_api_header_test OBJECT tests/host_api_header_test.c)
@@ -50,3 +51,4 @@ pop_optimize(null_host_link 1)
 pop_test_binary(null_host_link)
 add_test(NAME null_host_link COMMAND null_host_link WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(null_host_link PROPERTIES LABELS nogame)
+endif()

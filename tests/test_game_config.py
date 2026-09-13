@@ -79,6 +79,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn('set(RECOMP_APP_NAME "PopRecomp")', self.cmake)
         self.assertIn('set(RECOMP_GAME_NAME "Populous: The Beginning")', self.cmake)
         self.assertIn("set(RECOMP_IMAGE_BASE 0x00400000u)", self.cmake)
+        self.assertIn('set(RECOMP_DEVELOPER_GAME_DIR "original/gog")', self.cmake)
 
 
 if __name__ == "__main__":

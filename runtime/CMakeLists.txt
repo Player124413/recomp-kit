@@ -12,12 +12,14 @@ pop_optimize(recomp_runtime 2)
 
 # POPM_TESTING compiles the test-only entry points (loader reset, owner
 # counter seam, scheduler latch reset). None exists in a real build.
+if(NOT IOS)
 add_library(recomp_runtime_testing OBJECT ${POP_RUNTIME_SOURCES})
 target_include_directories(recomp_runtime_testing PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recomp_runtime_testing PUBLIC recomp_platform)
 target_compile_definitions(recomp_runtime_testing PUBLIC POPM_TESTING=1)
 target_compile_options(recomp_runtime_testing PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_runtime_testing 1)
+endif()
 
 # Linked by the hosts, the fixture and the mod tests, not by the unit tests.
 add_library(recomp_snapshot OBJECT snapshot.cpp)
@@ -26,6 +28,7 @@ target_compile_options(recomp_snapshot PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_snapshot 2)
 
 # The suite spawns itself for the abort check; portable since sub-project 3.
+if(NOT IOS)
 add_executable(runtime_tests tests/runtime_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(runtime_tests PRIVATE recomp_platform recomp_runtime)
 target_compile_options(runtime_tests PRIVATE ${POP_WARN_HOST})
@@ -33,8 +36,9 @@ pop_optimize(runtime_tests 1)
 pop_test_binary(runtime_tests)
 add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(runtime_tests PROPERTIES LABELS game)
+endif()
 
-if(POP_REAL_GEN)
+if(POP_REAL_GEN AND NOT IOS)
   # The headless parity fixture: null host, real generated code, core mods installed.
   add_executable(pop_fixture fixture.cpp)
   target_link_libraries(pop_fixture PRIVATE recomp_platform recomp_runtime recomp_snapshot recomp_dx_null recomp_mods lua)
@@ -55,7 +59,7 @@ if(POP_REAL_GEN)
   set_tests_properties(profile_tests_enabled PROPERTIES LABELS game ENVIRONMENT POPM_PROFILE=1)
 endif()
 
-if(POP_TRACE_DIR)
+if(POP_TRACE_DIR AND NOT IOS)
   # Caller-supplied trace wrappers over a snapshot of gen/: the override header
   # is force-included ahead of funcs.h so every FN_<addr> macro is already set.
   file(GLOB POP_TRACE_SOURCES CONFIGURE_DEPENDS ${POP_TRACE_DIR}/gen/chunk_*.c ${POP_TRACE_DIR}/gen/table.c)
