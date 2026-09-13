@@ -50,6 +50,13 @@ void mods_display_live_defaults() {
     desired[DISPLAY_FPS] = 2;
     desired[DISPLAY_OVERLAY] = 2;
 }
+// The overlay a fresh profile starts with, when the host wants something
+// other than the live default: a player build starts without the graph.
+extern "C" void mods_display_default_overlay(int mode) {
+    if (initialized)
+        return;
+    desired[DISPLAY_OVERLAY] = std::clamp(mode, 0, 2);
+}
 // Declare display settings, restore saved values within their supported ranges and publish host state.
 void mods_display_init() {
     if (initialized)

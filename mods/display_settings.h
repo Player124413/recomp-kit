@@ -20,6 +20,7 @@ struct DisplayMode {
 };
 void mods_display_init();
 void mods_display_live_defaults();
+void mods_display_default_overlay(int mode);
 void mods_display_reset();
 int mods_display_value(DisplayRow row);
 PopModStatus mods_display_set(DisplayRow row, int value);

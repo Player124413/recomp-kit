@@ -257,6 +257,8 @@ std::atomic<bool> g_platform_capture_requested{false};
 void update_platform_pointer_capture();
 
 void apply_pointer_capture(bool want) {
+    // No pointer to capture on a touch platform: fingers are placed absolutely.
+    want = want && platform_ui_pointer_capture_supported();
     host_pointer_capture(want);
     // Queue draining can run on a guest worker. All native cursor/window work
     // belongs to the main thread, which observes this at the next pump.
@@ -280,6 +282,8 @@ bool window_fullscreen() {
 // settings page - the page is navigated with a real cursor. It is not tied to
 // what the guest is doing: an FMV reads the mouse exactly as gameplay does.
 bool pointer_capture_wanted() {
+    if (!platform_ui_pointer_capture_supported())
+        return false;
     if (!g_focused || !g_window || !window_focused() || g_escape_held)
         return false;
     if (window_minimized_or_hidden())
@@ -1272,6 +1276,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Mouse capture: click inside to capture; hold Escape to release; drag to "
                     "the window edge to resize.\n");
     mods_display_live_defaults();
+    mods_display_default_overlay(platform_ui_default_overlay());
     mods_display_load_modes(classic_modes_path().c_str());
     host_present_on_mode_change(on_mode_change);
     // Every change to the input state wakes the guest's DirectInput threads,

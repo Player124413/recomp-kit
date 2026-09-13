@@ -33,3 +33,12 @@ bool platform_ui_handle_lifecycle(const SDL_Event &e);
 // Whether the on-screen key bar (host/touch_overlay_layout.h) should show:
 // iOS without a hardware keyboard. Desktop: never.
 bool platform_ui_touch_overlay_wanted();
+
+// Whether this platform has a pointer the host may hide and confine. Desktop:
+// yes. iOS: no; fingers are placed absolutely and a captured host would read
+// the OS pointer, which touch never moves.
+bool platform_ui_pointer_capture_supported();
+
+// The performance overlay mode a fresh profile starts with: 2 (graph) on the
+// developer's desktop, 0 on a player's iPad.
+int platform_ui_default_overlay();
