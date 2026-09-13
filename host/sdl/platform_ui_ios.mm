@@ -136,7 +136,7 @@ bool platform_ui_handle_lifecycle(const SDL_Event &e) {
     }
 }
 
-bool platform_ui_touch_overlay_wanted() {
+bool platform_ui_keypad_wanted() {
     return !SDL_HasKeyboard();
 }
 

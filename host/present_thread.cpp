@@ -5,7 +5,7 @@
 #include "present_frame.h"
 #include "present_test.h"
 #include "performance_overlay.h"
-#include "touch_overlay.h"
+#include "keypad_overlay.h"
 #include "d3d_render.h"
 #include "input_gate.h"
 #include "../dx/passes.h"
@@ -46,7 +46,8 @@ extern "C" __attribute__((weak)) void host_present_mode(int *w, int *h, int *bpp
 }
 
 static std::atomic<bool> g_present_suspended{false};
-static std::atomic<int> g_present_touch_overlay{0};
+static std::mutex g_present_keypad_mutex;
+static KeypadView g_present_keypad; // wanted = false until the host publishes
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -190,7 +191,7 @@ struct Service : std::enable_shared_from_this<Service> {
                 int(f.completion_fallback), int(f.released));
     }
     PerformanceOverlay performance_overlay;
-    TouchOverlay touch_overlay;
+    KeypadOverlay keypad_overlay;
     std::array<LayoutSnapshot, 3> layouts;
     unsigned layout_slot = 0;
     bool layout_valid = false;
@@ -775,9 +776,10 @@ struct Service : std::enable_shared_from_this<Service> {
                 performance_overlay.draw(device, cb, drawable, drawable_desc.width,
                                          drawable_desc.height, snapshot, ts, mods_display_overlay(),
                                          mods_display_fps());
-                if (const int strip = g_present_touch_overlay.load())
-                    touch_overlay.draw(device, cb, drawable, drawable_desc.width,
-                                       drawable_desc.height, strip == 2);
+                const KeypadView keypad = host_present_keypad();
+                if (keypad.wanted)
+                    keypad_overlay.draw(device, cb, drawable, drawable_desc.width,
+                                        drawable_desc.height, keypad);
             }
             host_stats_note_phase(
                 HOST_PHASE_COMPOSITE,
@@ -1592,11 +1594,13 @@ void host_present_suspend(bool suspended) {
     });
 }
 
-void host_present_set_touch_overlay(int mode) {
-    g_present_touch_overlay.store(mode);
+void host_present_set_keypad(const KeypadView &view) {
+    std::lock_guard lock(g_present_keypad_mutex);
+    g_present_keypad = view;
 }
-int host_present_touch_overlay(void) {
-    return g_present_touch_overlay.load();
+KeypadView host_present_keypad(void) {
+    std::lock_guard lock(g_present_keypad_mutex);
+    return g_present_keypad;
 }
 bool host_present_suspended(void) {
     return g_present_suspended.load();

@@ -36,7 +36,7 @@ bool platform_ui_handle_lifecycle(const SDL_Event &) {
     return false;
 }
 
-bool platform_ui_touch_overlay_wanted() {
+bool platform_ui_keypad_wanted() {
     return false;
 }
 

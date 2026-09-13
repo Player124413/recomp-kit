@@ -30,7 +30,9 @@
 #include "../input.h"
 #include "../input_gate.h"
 #include "../input_touch.h"
-#include "../touch_overlay_layout.h"
+#include "../keypad_layout.h"
+#include "../keypad_modifiers.h"
+#include "../../mods/keypad_settings.h"
 
 #include <map>
 #include "../midi.h"
@@ -700,30 +702,78 @@ void push_touch_action_now(const TouchAction &a) {
     }
 }
 
-// Fingers that landed on the key bar hold a key until they lift; they never
-// reach the gesture mapper.
-std::map<int64_t, int> g_overlay_fingers;
-bool g_touch_overlay_on = false;
-bool g_touch_overlay_collapsed = false;
-
-void publish_touch_overlay() {
-    host_present_set_touch_overlay(!g_touch_overlay_on ? 0 : g_touch_overlay_collapsed ? 2 : 1);
-}
-
-int touch_overlay_key_at(const SDL_TouchFingerEvent &f) {
-    if (!g_touch_overlay_on)
-        return 0;
-    int bw, bh, dw, dh;
-    window_sizes(&bw, &bh, &dw, &dh);
-    return touch_overlay_hit(dw, dh, g_touch_overlay_collapsed, f.x * dw, f.y * dh);
-}
-
 void push_touch_key(int scancode, bool down) {
     TouchAction a;
     a.kind = TouchAction::Key;
     a.scancode = scancode;
     a.down = down;
     push_touch_action_now(a);
+}
+
+// Fingers that landed on the keypad hold a key until they lift; they never
+// reach the gesture mapper. Modifiers go through the latch machine.
+std::map<int64_t, int> g_keypad_fingers; // finger -> scancode (0: a gap or a tab)
+bool g_keypad_wanted = false;            // no hardware keyboard attached
+KeypadModifiers g_keypad_modifiers;
+
+KeypadView keypad_view() {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    KeypadView v;
+    v.wanted = g_keypad_wanted;
+    v.left = mods_keypad_value(KEYPAD_LEFT_ROW) != 0;
+    v.right = mods_keypad_value(KEYPAD_RIGHT_ROW) != 0;
+    v.size = mods_keypad_value(KEYPAD_SIZE_ROW);
+    v.lit = g_keypad_modifiers.lit();
+    v.scale = bw > 0 ? double(dw) / bw : 1.0;
+    return v;
+}
+void publish_keypad() {
+    host_present_set_keypad(keypad_view());
+}
+void push_modifier_events(const std::vector<KeypadKeyEvent> &events) {
+    for (const KeypadKeyEvent &e : events)
+        push_touch_key(e.scancode, e.down);
+}
+KeypadHit keypad_hit_at(const SDL_TouchFingerEvent &f) {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    return keypad_hit(keypad_view(), dw, dh, f.x * dw, f.y * dh);
+}
+// A keypad finger is gone (lifted or taken by the system): release what it held.
+void keypad_finger_gone(int64_t finger, bool cancelled) {
+    auto held = g_keypad_fingers.find(finger);
+    if (held == g_keypad_fingers.end())
+        return;
+    const int sc = held->second;
+    g_keypad_fingers.erase(held);
+    std::vector<KeypadKeyEvent> events;
+    if (keypad_is_modifier(sc)) {
+        if (cancelled)
+            g_keypad_modifiers.cancel(sc, &events);
+        else
+            g_keypad_modifiers.release(sc, SDL_GetTicksNS(), &events);
+    } else if (sc) {
+        push_touch_key(sc, false);
+        if (!cancelled)
+            g_keypad_modifiers.key_lifted(SDL_GetTicksNS(), &events);
+    }
+    push_modifier_events(events);
+    publish_keypad();
+}
+// Focus loss or backgrounding: every finger is gone, every key and modifier up.
+void touch_release_all() {
+    std::vector<TouchAction> actions;
+    g_touch.cancel_all(&actions);
+    push_touch_actions(actions);
+    for (const auto &held : g_keypad_fingers)
+        if (held.second && !keypad_is_modifier(held.second))
+            push_touch_key(held.second, false);
+    g_keypad_fingers.clear();
+    std::vector<KeypadKeyEvent> events;
+    g_keypad_modifiers.cancel_all(&events);
+    push_modifier_events(events);
+    publish_keypad();
 }
 
 TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
@@ -781,6 +831,7 @@ void handle_event(const SDL_Event &event) {
         g_platform_capture_requested = false;
         update_platform_pointer_capture();
         g_escape_held = false;
+        touch_release_all();
         note_focus(false);
         break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
@@ -819,28 +870,46 @@ void handle_event(const SDL_Event &event) {
         break;
     case SDL_EVENT_FINGER_DOWN:
     case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED: {
+        // The system took the finger (a gesture, a call): whatever it held lets go.
+        const int64_t finger = (int64_t)event.tfinger.fingerID;
+        if (g_keypad_fingers.count(finger)) {
+            keypad_finger_gone(finger, true);
+            break;
+        }
+        std::vector<TouchAction> actions;
+        g_touch.finger_cancel(finger, &actions);
+        push_touch_actions(actions);
+        break;
+    }
     case SDL_EVENT_FINGER_MOTION: {
         std::vector<TouchAction> actions;
         const uint64_t now = SDL_GetTicksNS();
         const int64_t finger = (int64_t)event.tfinger.fingerID;
-        auto held = g_overlay_fingers.find(finger);
-        if (held != g_overlay_fingers.end()) {
-            // A key-bar finger: release its key when it lifts, ignore its motion.
-            if (event.type == SDL_EVENT_FINGER_UP) {
-                if (held->second != kTouchOverlayToggle)
-                    push_touch_key(held->second, false);
-                g_overlay_fingers.erase(held);
-            }
+        if (g_keypad_fingers.count(finger)) {
+            // A keypad finger: its key releases when it lifts; motion is ignored.
+            if (event.type == SDL_EVENT_FINGER_UP)
+                keypad_finger_gone(finger, false);
             break;
         }
         if (event.type == SDL_EVENT_FINGER_DOWN) {
-            if (const int key = touch_overlay_key_at(event.tfinger)) {
-                g_overlay_fingers[finger] = key;
-                if (key == kTouchOverlayToggle) {
-                    g_touch_overlay_collapsed = !g_touch_overlay_collapsed;
-                    publish_touch_overlay();
-                } else
-                    push_touch_key(key, true);
+            const KeypadHit hit = keypad_hit_at(event.tfinger);
+            if (hit.kind == KeypadHit::Toggle) {
+                const KeypadRow row = hit.side == KEYPAD_LEFT ? KEYPAD_LEFT_ROW : KEYPAD_RIGHT_ROW;
+                mods_keypad_set(row, mods_keypad_value(row) ? 0 : 1);
+                g_keypad_fingers[finger] = 0; // the tab's finger presses nothing more
+                publish_keypad();
+                break;
+            }
+            if (hit.kind == KeypadHit::Key) {
+                g_keypad_fingers[finger] = hit.scancode;
+                std::vector<KeypadKeyEvent> events;
+                if (keypad_is_modifier(hit.scancode))
+                    g_keypad_modifiers.press(hit.scancode, now, &events);
+                else if (hit.scancode)
+                    push_touch_key(hit.scancode, true);
+                push_modifier_events(events);
+                publish_keypad();
                 break;
             }
             g_touch.finger_down(touch_point(event.tfinger), now, &actions);
@@ -914,12 +983,17 @@ void after_events() {
         std::vector<TouchAction> actions;
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
-        // The key bar follows the hardware keyboard: attached, no bar.
-        const bool want_bar = platform_ui_touch_overlay_wanted();
-        if (want_bar != g_touch_overlay_on) {
-            g_touch_overlay_on = want_bar;
-            publish_touch_overlay();
+        // The keypad follows the hardware keyboard: attached, no keypad. It is
+        // republished every pump: the settings page can change its rows and the
+        // view is cheap to compare on the worker side.
+        static const bool force = getenv("POPM_KEYPAD") != nullptr;
+        const bool want = force || platform_ui_keypad_wanted();
+        if (want != g_keypad_wanted) {
+            g_keypad_wanted = want;
+            if (!want)
+                touch_release_all();
         }
+        publish_keypad();
     }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
