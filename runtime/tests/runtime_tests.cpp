@@ -1053,6 +1053,20 @@ static void test_misc_shims(X86 *c) {
     uint32_t out = scratch_block(128);
     call_import(c, "USER32.dll", "wvsprintfA", {out, fmt, va});
     check(gm_str(out) == "blue has 12 units (002a)", "wvsprintfA -> \"%s\"", gm_str(out).c_str());
+
+    uint32_t spc = scratch_block(4), bps = scratch_block(4), fr = scratch_block(4),
+             tot = scratch_block(4);
+    uint32_t root = put_str("C:\\");
+    check(call_import(c, "KERNEL32.dll", "GetDiskFreeSpaceA", {root, spc, bps, fr, tot}) == 1,
+          "GetDiskFreeSpaceA succeeds");
+    check(rd32(spc) == 8 && rd32(bps) == 512 && rd32(fr) == 0x00100000 && rd32(tot) == 0x00200000,
+          "GetDiskFreeSpaceA reports 4 GB free of 8 GB");
+    uint32_t sysdir = scratch_block(64);
+    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 64}) == 17 &&
+              gm_str(sysdir) == "C:\\WINDOWS\\SYSTEM",
+          "GetSystemDirectoryA");
+    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 4}) == 18,
+          "GetSystemDirectoryA reports the size needed when the buffer is short");
 }
 
 // What a C++ throw looks like from the runtime: the MSVC exception record
