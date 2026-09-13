@@ -193,6 +193,33 @@ void test_process_and_strings() {
 
 // The kit's switches are RECOMP_<NAME>; the spellings they had while the kit
 // was one game's port (POPM_<NAME>, POP_RECOMP_<NAME>) are not read.
+// Switches from a file: NAME=VALUE lines, trimmed, comments and junk skipped.
+void test_switch_file() {
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-switches-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string path = std::string(dir) + "/switches.txt";
+    os_unsetenv("RECOMP_SWITCHFILE_PROBE");
+    os_unsetenv("RECOMP_SWITCHFILE_OTHER");
+    CHECK(recomp_env_apply_file(path.c_str()) == 0); // not there yet
+    FILE *f = fopen(path.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    fputs("# the pointer trace\nRECOMP_SWITCHFILE_PROBE=1\n\nno equals here\n"
+          "RECOMP_SWITCHFILE_OTHER = two words \n",
+          f);
+    fclose(f);
+    CHECK(recomp_env_apply_file(path.c_str()) == 2);
+    CHECK(recomp_env("SWITCHFILE_PROBE") && strcmp(recomp_env("SWITCHFILE_PROBE"), "1") == 0);
+    CHECK(recomp_env("SWITCHFILE_OTHER") &&
+          strcmp(recomp_env("SWITCHFILE_OTHER"), "two words") == 0);
+    os_unsetenv("RECOMP_SWITCHFILE_PROBE");
+    os_unsetenv("RECOMP_SWITCHFILE_OTHER");
+    os_unlink(path.c_str());
+    os_rmdir(dir);
+}
+
 void test_switch_names() {
     os_unsetenv("RECOMP_SWITCH_PROBE");
     CHECK(recomp_env("SWITCH_PROBE") == nullptr);
@@ -212,6 +239,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--child-exit-7") == 0)
         return 7;
     test_switch_names();
+    test_switch_file();
     test_threads();
     test_time();
     test_vm();

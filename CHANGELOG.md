@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- Touch: a tap's synthesized click now stays pressed until the game has
+  presented two frames after the press (`TouchMapper::frames_presented`, fed
+  by the SDL host from the present count), as well as for the 90 ms it
+  already held. A game that samples its buttons with `GetKeyState` once per
+  frame and presents at 15 frames a second could miss a clock-timed press and
+  release altogether; on a device that made most taps land nowhere. A game
+  that stops presenting still gets its release after 400 ms.
+- Touch: the edge-snap margin grows by the window's safe-area inset on each
+  edge (`TouchMapper::set_edge_insets`, from `SDL_GetWindowSafeArea`). A
+  finger on a tablet's top bezel arrives no closer than the status bar's far
+  side, some 32 points down, so the 16-point margin never saw it and the
+  game's top-edge scroll never started.
+- Touch: a synthesized click's release carries the press position again. The
+  mapper read the placed point back out of the action vector after pushing the
+  press into it, past a reallocation; on a device the release then landed at
+  0,0, so a tap pressed one button and released on another (nothing happened)
+  and a game that scrolls at its edges flew to its top-left corner.
+  `input_touch_tests` now checks the release position across vector capacities.
+- Touch: a drag the system cancels (an edge gesture it claims) releases its
+  button where the cursor was placed, not at 0,0. The release carried the
+  origin as its position, the host moved the game's cursor there, and a game
+  that scrolls at its edges flew to its top-left corner.
+- A hardware pointer resting against a system strip (a tablet's status bar,
+  which the pointer cannot enter) is placed on the edge behind it
+  (`pointer_behind_strip`, with 16 points of slack for a hand pushing against
+  the strip), and stays there until the pointer has come 64 points away
+  (`PointerStripLatch`): iPadOS glides a pointer that touched the strip some
+  30 points back down on its own, which would have left the edge after an
+  instant. A game's top-edge scroll, which needs the cursor to stay put while
+  it ramps up, works from a mouse on a tablet.
+- The iPad host ends the process when the game exits (`ExitProcess`,
+  `platform_ui_process_exit`); before, the game was gone and the app stayed
+  on screen showing its last frame.
+- Switches from a file: `recomp_env_apply_file` reads NAME=VALUE lines, and
+  the iPad host applies `Documents/switches.txt` at start, so RECOMP_* switches
+  (the pointer trace, a pinned clock) reach a device that has no shell. Put the
+  file there with `xcrun devicectl device copy to ... --domain-type
+  appDataContainer --domain-identifier <bundle id> --destination
+  Documents/switches.txt`.
 - Smoke scripts: `button <left|right|middle> <down|up>` presses or releases a
   mouse button where the pointer is and leaves it, so the moves in between
   are a drag; `click` remains a press and a scheduled release.

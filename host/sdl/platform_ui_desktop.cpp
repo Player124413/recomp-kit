@@ -47,3 +47,7 @@ bool platform_ui_pointer_capture_supported() {
 int platform_ui_default_overlay() {
     return 2;
 }
+
+void platform_ui_process_exit(int) {
+    // main() returns; the process ends the ordinary way.
+}

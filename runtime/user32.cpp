@@ -281,7 +281,8 @@ void u_CreateWindowExA(X86 *c) {
     windows()[hwnd] = win;
     if (!g_main_hwnd)
         g_main_hwnd = hwnd;
-    LOGV("CreateWindowExA(\"%s\", \"%s\", %dx%d) -> %08x", cls.c_str(), title.c_str(), w, h, hwnd);
+    LOGV("CreateWindowExA(\"%s\", \"%s\", %dx%d at %d,%d) -> %08x", cls.c_str(), title.c_str(), w,
+         h, x, y, hwnd);
 
     // Windows sends WM_CREATE (with a CREATESTRUCT) before returning.
     uint32_t cs = heap_alloc(48, true);
@@ -445,6 +446,8 @@ void u_ScreenToClient(X86 *c) {
     Window *w = find_window(arg(c, 0));
     uint32_t p = arg(c, 1);
     if (p && w) {
+        LOGV("ScreenToClient(%08x): (%d,%d) through a window at %d,%d", arg(c, 0), (int32_t)rd32(p),
+             (int32_t)rd32(p + 4), w->x, w->y);
         wr32(p + 0, rd32(p + 0) - (uint32_t)w->x);
         wr32(p + 4, rd32(p + 4) - (uint32_t)w->y);
     }

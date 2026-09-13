@@ -42,3 +42,7 @@ bool platform_ui_pointer_capture_supported();
 // The performance overlay mode a fresh profile starts with: 2 (graph) on the
 // developer's desktop, 0 on a player's iPad.
 int platform_ui_default_overlay();
+
+// The guest has exited and the host has torn down: a desktop process returns
+// from main; an iPad app has no other way off the screen than ending itself.
+void platform_ui_process_exit(int code);

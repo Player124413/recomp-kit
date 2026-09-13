@@ -84,7 +84,9 @@ keyboard sits in the bottom corners when no hardware keyboard is attached:
 HIDE/KEYS tabs per half, Shift/Ctrl/Alt hold to chord, tap to latch, double
 tap to lock; size and visibility on the F10 page, persisted per game
 (`[touch] keypad = "hidden"` in `game.toml` starts it hidden).
-`tools/ios_logs.py` pulls
+RECOMP_* switches reach the device through `Documents/switches.txt` (NAME=VALUE
+lines), copied in with `xcrun devicectl device copy to --domain-type
+appDataContainer --domain-identifier <bundle id>`. `tools/ios_logs.py` pulls
 the app's Documents (saves) back to the Mac.
 
 ## Check a change

@@ -48,6 +48,9 @@ void platform_ui_init_hints() {
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
     SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
+    // RECOMP_* switches for a device with no shell: Documents/switches.txt,
+    // put there with devicectl (see tools/ios_logs.py for the container).
+    recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
 }
 
 GamePath platform_ui_resolve_game(const char *, std::string *error) {
@@ -146,4 +149,12 @@ bool platform_ui_pointer_capture_supported() {
 
 int platform_ui_default_overlay() {
     return 0;
+}
+
+void platform_ui_process_exit(int code) {
+    // UIApplicationMain never returns, so the game's own Exit would leave its
+    // last frame on the screen; the game asked to end, and this ends it.
+    fprintf(stderr, "[ios] the game exited (%d); ending the app\n", code);
+    fflush(stderr);
+    exit(code);
 }

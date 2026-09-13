@@ -146,6 +146,11 @@ int os_unsetenv(const char *name);
 // The kit's switches: `recomp_env("PIN_CLOCK")` reads RECOMP_PIN_CLOCK.  The
 // prefix names the kit, never a game; a switch is unset when NULL.
 const char *recomp_env(const char *name);
+// Switches from a file, for a platform with no shell to set them in (the iPad
+// app reads Documents/switches.txt at start). One NAME=VALUE per line, spaces
+// around either trimmed; blank lines, # comments and lines without '=' are
+// skipped. Returns how many were set; 0 when there is no such file.
+int recomp_env_apply_file(const char *path);
 
 #ifdef __cplusplus
 }

@@ -408,18 +408,40 @@ void sample_captured_pointer() {
     queue_or_apply(e);
 }
 
+// The strips the system keeps along the window's edges (a status bar), in
+// points: a hardware pointer stops at their inner side.
+void system_strip_insets(double *top, double *bottom) {
+    *top = *bottom = 0;
+    int w = 0, h = 0;
+    SDL_Rect safe{};
+    if (!g_window || !SDL_GetWindowSafeArea(g_window, &safe))
+        return;
+    SDL_GetWindowSize(g_window, &w, &h);
+    *top = safe.y > 0 ? safe.y : 0;
+    const int below = h - (safe.y + safe.h);
+    *bottom = below > 0 ? below : 0;
+}
+
 void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
     PendingInput e;
     e.kind = PendingInput::MOTION;
-    view_point_to_drawable(motion.x, motion.y, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
+    // A pointer resting against a system strip means the edge behind it.
+    double strip_top = 0, strip_bottom = 0;
+    system_strip_insets(&strip_top, &strip_bottom);
+    static PointerStripLatch strip_latch;
+    const float y = (float)strip_latch.apply(motion.y, strip_top);
+    view_point_to_drawable(motion.x, y, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
     static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
     static double last_trace = 0;
     const double now = (double(os_monotonic_ns()) / 1e9);
-    if (trace && now - last_trace >= 0.1) {
+    // Every event along the top strip, where an edge scroll is decided; one in
+    // ten elsewhere.
+    if (trace && (now - last_trace >= 0.1 || motion.y < strip_top + 32)) {
         last_trace = now;
-        fprintf(stderr, "[pointer] event %.1f,%.1f drawable %d,%d/%d,%d clip %d delta %.1f,%.1f\n",
+        fprintf(stderr,
+                "[pointer] event %.1f,%.1f drawable %d,%d/%d,%d clip %d delta %.1f,%.1f which %u\n",
                 motion.x, motion.y, e.x, e.y, e.drawable_w, e.drawable_h,
-                !g_pointer_confinement.empty(), motion.xrel, motion.yrel);
+                !g_pointer_confinement.empty(), motion.xrel, motion.yrel, (unsigned)motion.which);
     }
     if (!g_pointer_confinement.empty())
         sample_captured_pointer();
@@ -781,6 +803,20 @@ TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
     if (g_window)
         SDL_GetWindowSize(g_window, &w, &h);
     g_touch.set_bounds(w, h);
+    // The strips the system keeps (a status bar, a gesture zone) never deliver
+    // a finger, so a finger "on" that edge arrives at the strip's inner side.
+    SDL_Rect safe{0, 0, w, h};
+    if (g_window && SDL_GetWindowSafeArea(g_window, &safe)) {
+        const double l = safe.x, t = safe.y;
+        const double r = w - (safe.x + safe.w), b = h - (safe.y + safe.h);
+        g_touch.set_edge_insets(l > 0 ? l : 0, t > 0 ? t : 0, r > 0 ? r : 0, b > 0 ? b : 0);
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            fprintf(stderr, "[touch] window %dx%d points, safe area insets %g,%g,%g,%g\n", w, h, l,
+                    t, r, b);
+        }
+    }
     return {(int64_t)f.fingerID, f.x * w, f.y * h};
 }
 
@@ -795,6 +831,14 @@ void handle_event(const SDL_Event &event) {
         if (event.motion.windowID == ours || !g_pointer_confinement.empty())
             handle_mouse_move(event.motion);
         break;
+    case SDL_EVENT_WINDOW_MOUSE_ENTER:
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
+        static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
+        if (trace)
+            fprintf(stderr, "[pointer] %s the window\n",
+                    event.type == SDL_EVENT_WINDOW_MOUSE_ENTER ? "entered" : "left");
+        break;
+    }
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (event.button.windowID == ours) {
@@ -979,8 +1023,10 @@ int service(double seconds) {
 void after_events() {
     {
         // Time-based gestures (a long press) fire from the clock, not an event,
-        // and deferred clicks go out once the game's cursor has caught up.
+        // and deferred clicks go out once the game's cursor has caught up and
+        // the game has presented frames that sampled the press.
         std::vector<TouchAction> actions;
+        g_touch.frames_presented(host_present_count());
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
         // The keypad follows the hardware keyboard: attached, no keypad. It is
@@ -1449,5 +1495,6 @@ int main(int argc, char **argv) {
     gpu::release_window_surface(g_surface);
     SDL_DestroyWindow(g_window);
     SDL_Quit();
+    platform_ui_process_exit(0);
     return 0;
 }
