@@ -15,6 +15,17 @@ spec.loader.exec_module(translate)
 
 
 class ConfigureTests(unittest.TestCase):
+    def test_entry_points_default_empty(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        translate.configure(cfg)
+        self.assertEqual(translate.EXTRA_ENTRY_POINTS, frozenset())
+
+    def test_entry_points_read(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        cfg["translate"]["entry_points"] = [0x4ab000, 0x4ac000]
+        translate.configure(cfg)
+        self.assertEqual(translate.EXTRA_ENTRY_POINTS, frozenset({0x4ab000, 0x4ac000}))
+
     def test_configure_sets_paths_and_volatile_reads(self):
         stub = (ROOT / "games/stub").resolve()
         cfg = game_config.load(stub)

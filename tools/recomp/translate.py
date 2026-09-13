@@ -39,6 +39,7 @@ FUNCS_PER_CHUNK = 200
 LISTINGS = FUNCS_TSV = BINARY = CURATED = None
 ANIMATION_COUNTER = 0
 VISUAL_ANIMATION_READS = frozenset()
+EXTRA_ENTRY_POINTS = frozenset()
 
 
 def configure(cfg):
@@ -51,6 +52,8 @@ def configure(cfg):
     CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
     ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
+    global EXTRA_ENTRY_POINTS
+    EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
 
 
 def visual_animation_read(addr, body):
@@ -78,7 +81,8 @@ def visual_animation_read(addr, body):
 #: A jump-table slot and an __initterm entry NAME the address: the program
 #: itself will load and call it, so the block is established code and must
 #: never be withdrawn.  If its callee cannot be resolved that is a translator
-#: gap and has to fail the build.
+#: gap and has to fail the build. A configured entry is likewise established
+#: code: its address has been explicitly verified by the port.
 #:
 #: A data pointer and an instruction immediate are guesses.  Any dword that
 #: happens to look like an address is a candidate, and three of the four
@@ -87,11 +91,11 @@ def visual_animation_read(addr, body):
 #: own dispatch goes nowhere may be withdrawn, and every withdrawal is
 #: reported with its provenance and the target that failed, so a real callback
 #: with an unresolvable callee is visible rather than silently dropped.
-STRUCTURAL_PROVENANCE = ("table", "initterm")
+STRUCTURAL_PROVENANCE = ("table", "initterm", "config")
 
 
 def note_structural(provenance, owner, t, why):
-    """Record that a jump table or `__initterm` names `t` outright.
+    """Record that a jump table, `__initterm` or config names `t` outright.
 
     Being named by one of those makes an address code by construction, whatever
     route it arrived by and whether or not it was already known.  That has to be
@@ -107,9 +111,10 @@ def note_structural(provenance, owner, t, why):
     under the table."""
     if t is None or why not in STRUCTURAL_PROVENANCE:
         return
-    provenance[t] = why
+    if provenance.get(t) != "config":
+        provenance[t] = why
     named = owner.get(t)
-    if named is not None:
+    if named is not None and provenance.get(named.addr) != "config":
         provenance[named.addr] = why
 
 
@@ -180,7 +185,7 @@ def hook_kind(addr, listed, alt_owner, provenance, evidence, intrinsics):
 
 def prunable_blocks(recovered_addrs, provenance):
     """The recovered blocks the withdraw pass is allowed to drop: the guesses,
-    never the ones a table or `__initterm` named."""
+    never the ones a table, `__initterm` or config named."""
     return {a for a in recovered_addrs
             if provenance.get(a, "branch") not in STRUCTURAL_PROVENANCE}
 
@@ -2709,11 +2714,15 @@ def main():
         insns = image.recover(t, listed)
         if not insns:
             return False
-        new_fn = Function(t, "recovered_%08x" % t, insns[-1].addr + 1 - t, insns)
+        name = ("FUN_%08x" if why == "config" else "recovered_%08x") % t
+        new_fn = Function(t, name, insns[-1].addr + 1 - t, insns)
         new_fn.measure(image)
         # A block reached from an established one is established too.
-        provenance[t] = why if why != "branch" else provenance.get(
+        inherited = provenance.get(
             home.addr if home is not None else None, "branch")
+        # Config names only its explicit entries, not every branch they reach.
+        provenance[t] = why if why != "branch" else (
+            "branch" if inherited == "config" else inherited)
         if validate and not accepts(new_fn):
             # Decoded into something this compiler never emits, so the address
             # is data.  Dropping it leaves any jump to it aborting at runtime
@@ -2725,6 +2734,14 @@ def main():
         all_addrs.add(t)
         register(new_fn)
         return True
+
+    # Seed before branch recovery can claim fragments of these functions.
+    # The later __initterm pass uses the same resolver, but by then recovery
+    # stops at owned instructions and cannot reconstruct a whole missing body.
+    for addr in sorted(EXTRA_ENTRY_POINTS):
+        if not image.is_exec(addr):
+            raise TranslateError("[translate] entry_points: %08x is not in a code section" % addr)
+        resolve(addr, set(owner), why="config")
 
     scanned_pointers = False
     converged = False
@@ -3134,6 +3151,7 @@ def main():
     # blocks are appended to it as they are found, and a recovered block is not
     # a listed function.  `entries` is the functions.tsv rows themselves.
     listed = {a: n for a, n, _nb, _p in entries}
+    listed.update({a: "FUN_%08x" % a for a in EXTRA_ENTRY_POINTS if a not in listed})
     alt_owner = {t: fn.addr for t, fn in extra.items()}
 
     functions = []
@@ -3375,7 +3393,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
                 "blocks_withdrawn": [["%08x" % a, why, "%08x" % t]
                                      for a, why, t in sorted(withdrawn)],
                 "provenance": {k: sum(1 for v in provenance.values() if v == k)
-                               for k in ("table", "initterm", "data",
+                               for k in ("table", "initterm", "config", "data",
                                          "immediate", "branch")},
                 "table_gaps": [["%08x" % f, "%08x" % a, t,
                                 ["%08x" % m for m in ms]]
