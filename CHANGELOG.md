@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Runtime: optional `[game] heap_base` sets the heap arena start through the
+  generated config and build definitions, so images ending above 16 MB can
+  load. The default remains `0x01000000`; the value must be page aligned,
+  above `0x00400000` and below `0x0e000000`. A rejected image now reports
+  both its end and the heap start, with the setting to raise.
 - Build: `tools/build.py --regenerate --allow-table-gaps "<reason>"` passes
   the waiver and its reason to the translator. Omitting the flag keeps
   jump-table gap checks unchanged.

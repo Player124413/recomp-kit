@@ -16,7 +16,8 @@ import game_config  # noqa: E402
 STRINGS = (("id", "RECOMP_GAME_ID"), ("name", "RECOMP_GAME_NAME"), ("app_name", "RECOMP_APP_NAME"),
            ("bundle_id", "RECOMP_BUNDLE_ID"), ("executable", "RECOMP_EXECUTABLE"),
            ("sha256", "RECOMP_EXE_SHA256"), ("guest_root", "RECOMP_GUEST_ROOT"))
-ADDRESSES = (("image_base", "RECOMP_IMAGE_BASE"), ("entry_point", "RECOMP_ENTRY_POINT"))
+ADDRESSES = (("image_base", "RECOMP_IMAGE_BASE"), ("entry_point", "RECOMP_ENTRY_POINT"),
+             ("heap_base", "RECOMP_HEAP_BASE"))
 
 
 def c_string(value):
@@ -64,6 +65,7 @@ def render_cmake(cfg):
     for key, macro in STRINGS[:5]:
         lines.append('set(%s "%s")' % (macro, game[key]))
     lines.append("set(RECOMP_IMAGE_BASE %s)" % c_hex(game["image_base"]))
+    lines.append("set(RECOMP_HEAP_BASE %s)" % c_hex(game["heap_base"]))
     lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_exe_path"].parent.as_posix())
     lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % cfg["developer_exe_path"].as_posix())
     return "\n".join(lines) + "\n"

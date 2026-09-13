@@ -37,7 +37,7 @@ extern uint8_t *g_mem;
  *   0x00400000 + SizeOfImage  image (preferred base, no relocation).  The end
  *                             is a PE header value, not a constant; ask the
  *                             loader (loader_image_limit()) for it.
- *   0x01000000..0x0e000000    heap arena
+ *   GUEST_HEAP_BASE..0x0e000000  heap arena (default 0x01000000)
  *   0x0f000000                stack top, grows down (1 MB)
  *   0x0fe00000                TEB (FS base)
  *   0x0ff00000 + 16*i         import shim trampoline for import i
@@ -46,7 +46,11 @@ extern uint8_t *g_mem;
 #ifndef GUEST_IMAGE_BASE
 #define GUEST_IMAGE_BASE 0x00400000u
 #endif
+/* The build passes the game's heap start ([game] heap_base); the default
+ * serves the test harness and games whose image ends below 16 MB. */
+#ifndef GUEST_HEAP_BASE
 #define GUEST_HEAP_BASE 0x01000000u
+#endif
 #define GUEST_HEAP_END 0x0e000000u
 #define GUEST_STACK_TOP 0x0f000000u
 #define GUEST_TEB_BASE 0x0fe00000u

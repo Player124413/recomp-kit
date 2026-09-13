@@ -353,7 +353,11 @@ bool loader_load(const char *exe_path) {
         return false;
     }
     if ((uint64_t)image_base + size_image > HEAP_BASE) {
-        g_error = "image does not fit below the heap arena";
+        char buf[128];
+        snprintf(buf, sizeof buf,
+                 "image ends at %08x, above the heap arena start %08x; raise [game] heap_base",
+                 image_base + size_image, HEAP_BASE);
+        g_error = buf;
         return false;
     }
 
