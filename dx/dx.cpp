@@ -569,10 +569,12 @@ void dx_register_shims() {
     // hook that hands out Direct3D, and d3d_register must have defined the
     // Direct3D vtables by the time the guest uses it. Both run here, so any
     // order works; this one reads in the order the game exercises them.
+    com_register_ole32();
     ddraw_register();
     d3d_register();
     dinput_register();
     dsound_register();
+    dshow_register();
     qmixer_register();
     weanetr_register();
     // The audio shims need a tick on the main guest thread: the game drives
@@ -585,6 +587,7 @@ void dx_register_shims() {
     // the audio pump's guest callbacks, the order the direct call used to have.
     host_set_frame_pump(ddraw_frame_pump);
     host_set_frame_pump(qmixer_frame_pump);
+    host_set_frame_pump(dshow_frame_pump);
 }
 
 void dx_reset() {
@@ -595,6 +598,7 @@ void dx_reset() {
     ddraw_reset();
     d3d_reset();
     dsound_reset();
+    dshow_reset();
     dinput_reset();
     audio_channels().clear();
     com_reset();

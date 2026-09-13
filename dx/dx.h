@@ -28,6 +28,7 @@ void dx_reset();
 void ddraw_register();
 void d3d_register();
 void dsound_register();
+void dshow_register();
 void dinput_register();
 void qmixer_register();
 void weanetr_register();
@@ -38,6 +39,7 @@ void weanetr_register();
 void ddraw_reset();
 void d3d_reset();
 void dsound_reset();
+void dshow_reset();
 void dinput_reset();
 
 // The host calls this after feeding new input through host_input_state. It
@@ -76,6 +78,8 @@ void dsound_pump();
 // stops. DirectSound's streaming worker is parked in WaitForMultipleObjects on
 // events nothing else would signal.
 void qmixer_frame_pump(X86 *c);
+// Keeps a DirectShow graph's audio channel fed and posts its completion.
+void dshow_frame_pump(X86 *c);
 // The display's frame boundary in the same shape, registered beside it: the
 // display's frame ends where the guest's message loop pumps, and that fact
 // lives with the display shim rather than inside the audio pump.

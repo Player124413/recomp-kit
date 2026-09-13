@@ -3,7 +3,7 @@
 // kernel32.cpp - KERNEL32 shims: heap, files, modules, TLS, sync objects,
 // time and the string/locale helpers the CRT startup calls.
 //
-// The guest file system is rooted at C:\Populous\, which maps onto the
+// The guest file system is rooted at RECOMP_GUEST_ROOT, which maps onto the
 // directory holding the loaded EXE (original/gog by default). Lookups are
 // case-insensitive and '\' is translated to '/'.
 #include "imports.h"
@@ -260,7 +260,7 @@ void win32_set_file_ops(int (*resolve)(const char *, int, char *, size_t),
 
 // The path a guest gave, reduced to components: drive stripped, the current
 // directory applied when it was relative, "." and ".." resolved, and a leading
-// "Populous" dropped so C:\Populous\data\x and \data\x are the same file.
+// root component dropped so <root>\data\x and \data\x are the same file.
 static std::vector<std::string> normalise_components(const std::string &guest_path) {
     std::string p = guest_path;
     bool absolute = false;
@@ -408,6 +408,21 @@ bool process_exited() {
 }
 uint32_t process_exit_code() {
     return g_exit_code;
+}
+
+uint32_t win32_create_event(bool manual_reset, bool signalled) {
+    uint32_t h = handle_new(H_EVENT);
+    handles()[h].manual_reset = manual_reset;
+    handles()[h].signalled = signalled;
+    return h;
+}
+
+bool win32_reset_event(uint32_t handle) {
+    HObj *o = handle_get(handle, H_EVENT);
+    if (!o)
+        return false;
+    o->signalled = false;
+    return true;
 }
 
 bool win32_signal_event(uint32_t handle, bool pulse) {

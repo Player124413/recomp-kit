@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- DirectShow multimedia streaming, the reading side (`dx/dshow.cpp`): a game
+  that plays its MP3 music through `CoCreateInstance(CLSID_AMMultiMediaStream)`
+  gets IAMMultiMediaStream over the file, decoded with minimp3
+  (`third_party/minimp3`, CC0). Both ways a game drives it are served: pulling
+  samples (IAudioMediaStream, AMAudioData, IAudioStreamSample::Update filling
+  the caller's buffer and signalling its event, MS_S_ENDOFSTREAM, Seek) and
+  driving the filter graph (IGraphBuilder from GetFilterGraph, IMediaControl
+  Run/Pause/Stop, IMediaEventEx with a real completion event and EC_COMPLETE,
+  IMediaSeeking, IMediaPosition, IBasicAudio), where the kit streams the PCM to
+  a host audio channel from the frame pump. `dx_tests` covers both against an
+  MP3 tone kept as a header (`dx/tests/fixtures/tone_mp3.h`).
+- COM classes register: `com_register_class` names a CLSID, a constructor and
+  the interface IID_IUnknown gets, and one `CoCreateInstance` in `com.cpp`
+  serves every registered class (DirectSound moved onto it); an unregistered
+  class is still REGDB_E_CLASSNOTREG. `win32_create_event` and
+  `win32_reset_event` let a shim own a kernel event on the guest's behalf.
 - Split on-screen keypad for touch: two 8x5 halves in the bottom corners, three
   sizes, Shift/Ctrl/Alt that hold, latch or lock, HIDE/KEYS tabs, settings on the
   F10 page persisted per game; replaces the eight-key strip. `RECOMP_KEYPAD=1` forces

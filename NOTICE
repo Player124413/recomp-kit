@@ -20,6 +20,10 @@ TinySoundFont (third_party/tsf/tsf.h) is Copyright (C) 2017-2023 Bernhard Schell
 licensed under the MIT License; see third_party/tsf/LICENSE. It renders a game's
 own SoundFont, which is not included.
 
+minimp3 (third_party/minimp3/minimp3.h) by Lion (lieff) is dedicated to the
+public domain under CC0 1.0; see third_party/minimp3/LICENSE. It decodes a
+game's own MP3 music, which is not included.
+
 SDL3 is fetched at build time from https://github.com/libsdl-org/SDL at a pinned
 release tag and linked statically; it is licensed under the zlib License.
 

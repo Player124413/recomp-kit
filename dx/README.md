@@ -20,6 +20,7 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `ddraw.cpp` | IDirectDraw/2/4, IDirectDrawSurface/2/3/4, palette, clipper |
 | `d3d.cpp` | IDirect3D/2, device, viewport, material, light, texture |
 | `dsound.cpp` | IDirectSound, buffer, 3D buffer, 3D listener, notify |
+| `dshow.cpp` | DirectShow multimedia streaming, the reading side: IAMMultiMediaStream over an MP3 file, IAudioMediaStream, AMAudioData, IAudioStreamSample (minimp3) |
 | `dinput.cpp` | IDirectInputA, mouse and keyboard devices |
 | `qmixer.cpp` | the 28 QMixer `QSWaveMix*` exports |
 | `weanetr.cpp` | the 17 MLDPlay methods, reporting no networking |

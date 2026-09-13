@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-// The guest root's own directory name ("Populous" for C:\Populous), so
+// The guest root's own directory name (the last component of RECOMP_GUEST_ROOT), so
 // C:\<root>\data\x and \data\x resolve to the same host file.
 static inline const char *win32_guest_root_name() {
     const char *root = RECOMP_GUEST_ROOT;
@@ -20,7 +20,7 @@ static inline const char *win32_guest_root_name() {
 // Process-wide state
 // ---------------------------------------------------------------------------
 // Called by the loader once the image is mapped. `game_dir` is the host
-// directory that backs the guest root C:\Populous\ (the directory holding the
+// directory that backs the guest root RECOMP_GUEST_ROOT (the directory holding the
 // loaded EXE).
 void win32_init(const std::string &game_dir);
 const std::string &win32_game_dir();
@@ -30,20 +30,25 @@ void set_last_error(uint32_t code);
 // reset). False when the handle is not an event. Used by WINMM's event-mode
 // multimedia timers.
 bool win32_signal_event(uint32_t handle, bool pulse);
+// A kernel event object made by a shim on the guest's behalf (a DirectShow
+// graph's completion event), handed to the guest as a handle it can wait on
+// and close like one CreateEventA returned.
+uint32_t win32_create_event(bool manual_reset, bool signalled);
+bool win32_reset_event(uint32_t handle);
 uint32_t get_last_error();
 
 // ---------------------------------------------------------------------------
 // File system, and the overlay seam.
 //
 // Guest paths are case-insensitive, use '\' separators and live under
-// C:\Populous\. win32_host_path_op answers a specific OPERATION, because where
+// the guest root. win32_host_path_op answers a specific OPERATION, because where
 // a path resolves depends on what is about to happen to it: a read may come
 // from any overlay tier, while a write, a delete or a rename must only ever
 // reach the writable tier. Classifying every call site is what stops a write
 // from opening an original asset.
 //
 // `relative` reaches the resolver normalised: '/' separators, no drive, no
-// leading "Populous", no "." or ".." components. It returns non-zero having
+// leading root component, no "." or ".." components. It returns non-zero having
 // written a host path, or zero for "no answer", in which case the shim falls
 // back to the game directory exactly as an unmodded build does.
 // ---------------------------------------------------------------------------

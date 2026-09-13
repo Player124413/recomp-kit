@@ -68,6 +68,18 @@ enum ComIface : uint16_t {
     IF_DSNOTIFY,
     IF_DINPUT,
     IF_DINPUTDEVICE,
+    // DirectShow multimedia streaming (dshow.cpp)
+    IF_MMSTREAM,         // IAMMultiMediaStream, and IMultiMediaStream as its prefix
+    IF_MEDIASTREAM,      // IMediaStream
+    IF_AUDIOMEDIASTREAM, // IAudioMediaStream
+    IF_AUDIODATA,        // IAudioData, and IMemoryData as its prefix
+    IF_STREAMSAMPLE,     // IAudioStreamSample, and IStreamSample as its prefix
+    IF_GRAPH,            // IGraphBuilder (IFilterGraph as its prefix) of a stream
+    IF_MEDIACONTROL,     // IMediaControl on that graph
+    IF_MEDIAEVENT,       // IMediaEventEx (IMediaEvent as its prefix)
+    IF_MEDIASEEKING,     // IMediaSeeking
+    IF_BASICAUDIO,       // IBasicAudio
+    IF_MEDIAPOSITION,    // IMediaPosition
     IF_COUNT
 };
 
@@ -89,6 +101,11 @@ enum ComKind : uint16_t {
     K_DSBUFFER,
     K_DINPUT,
     K_DIDEVICE,
+    K_MMSTREAM,     // a multimedia stream over one audio file
+    K_MEDIASTREAM,  // its audio media stream
+    K_AUDIODATA,    // a guest buffer wrapped for sampling
+    K_STREAMSAMPLE, // one sample: fills an audio data object from a stream
+    K_GRAPH,        // the filter graph a multimedia stream plays through
 };
 
 // ---------------------------------------------------------------------------
@@ -205,6 +222,20 @@ struct ComObj {
     uint32_t sequence = 0;
     std::vector<uint32_t> events; // packed dwOfs/dwData pairs
 
+    // --- DirectShow streaming (K_MMSTREAM, K_MEDIASTREAM, K_AUDIODATA, K_STREAMSAMPLE)
+    uint32_t dsh_owner = 0;        // media stream: its multimedia stream; sample: its media stream
+    uint32_t dsh_stream = 0;       // multimedia stream: the audio media stream it carries
+    uint32_t dsh_graph = 0;        // multimedia stream: its filter graph, once asked for
+    uint32_t dsh_notify_flags = 0; // graph: IMediaEventEx::SetNotifyFlags
+    uint32_t dsh_data = 0;         // sample: the audio data object it fills
+    bool dsh_initialised = false;
+    uint32_t dsh_state = 0;                               // STREAMSTATE_STOP 0 / STREAMSTATE_RUN 1
+    uint32_t md_buffer = 0, md_length = 0, md_actual = 0; // audio data: the guest buffer
+    bool md_has_format = false;
+    uint32_t md_rate = 0;
+    uint16_t md_channels = 0, md_bits = 0;
+    uint64_t smp_start = 0, smp_end = 0; // sample: PCM frames covered by the last Update
+
     // IDirectDrawColorControl, per surface. The defaults are the DX6 SDK's.
     uint32_t cc_flags = 0x7f; // every field is valid
     int32_t cc_brightness = 750;
@@ -283,6 +314,20 @@ ComIface com_iface_for_iid(uint32_t guest_guid_addr);
 // false is the normal case.
 typedef ComObj *(*ComQiHook)(ComObj *self, ComIface want);
 void com_set_qi_hook(ComKind kind, ComQiHook hook);
+
+// ---------------------------------------------------------------------------
+// COM classes: what ole32's CoCreateInstance can make. A module registers the
+// CLSID it serves with a constructor and the interface a request for
+// IID_IUnknown gets; CoCreateInstance hands out the requested interface when
+// the class's kind is bound to it and E_NOINTERFACE otherwise. Every other
+// class is REGDB_E_CLASSNOTREG, which the game sees as a missing component.
+// ---------------------------------------------------------------------------
+void com_register_class(const uint8_t clsid[16], const char *name, ComIface primary,
+                        ComObj *(*create)());
+// Registers ole32.dll!CoCreateInstance. Idempotent.
+void com_register_ole32();
+// True when `iface` may be a view of `kind` (com_bind was called for the pair).
+bool com_iface_binds(ComIface iface, ComKind kind);
 
 // ---------------------------------------------------------------------------
 // Small helpers every module needs.

@@ -19,6 +19,7 @@
 #include "../../runtime/memory.h"
 #include "../../runtime/win32.h"
 #include "../../platform/os.h"
+#include "fixtures/tone_mp3.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -2613,6 +2614,350 @@ static void test_cocreate_directsound() {
     }
     wr8(clsid, 0xff);
     CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), 0x80040154u); // REGDB_E_CLASSNOTREG
+}
+
+// ---------------------------------------------------------------------------
+// DirectShow multimedia streaming: the reading side of the API a game uses to
+// pull decoded audio out of a music file and feed its own DirectSound buffer.
+// IAMMultiMediaStream opens the file, IAudioMediaStream describes and samples
+// it, AMAudioData wraps the guest's buffer and IAudioStreamSample::Update fills
+// that buffer with the next stretch of PCM, signalling the event the caller
+// gave it. The fixture is a short MP3 tone; MS_S_ENDOFSTREAM ends it and Seek
+// rewinds it.
+// ---------------------------------------------------------------------------
+static void test_dshow_audio_stream() {
+    static const uint8_t clsid_mmstream[16] = {0xe5, 0x7c, 0xc4, 0x49, 0xa4, 0x9b, 0xd0, 0x11,
+                                               0x82, 0x12, 0x00, 0xc0, 0x4f, 0xc3, 0x2c, 0x45};
+    static const uint8_t iid_ammmstream[16] = {0x5c, 0x59, 0xbe, 0xbe, 0x6f, 0x9a, 0xd0, 0x11,
+                                               0x8f, 0xde, 0x00, 0xc0, 0x4f, 0xd9, 0x18, 0x9d};
+    static const uint8_t mspid_audio[16] = {0x6b, 0xf5, 0x5f, 0xa3, 0xda, 0x9f, 0xd0, 0x11,
+                                            0x8f, 0xdf, 0x00, 0xc0, 0x4f, 0xd9, 0x18, 0x9d};
+    static const uint8_t iid_audiomediastream[16] = {0x60, 0x75, 0x53, 0xf7, 0xbe, 0xa3,
+                                                     0xd0, 0x11, 0x82, 0x12, 0x00, 0xc0,
+                                                     0x4f, 0xc3, 0x2c, 0x45};
+    static const uint8_t clsid_audiodata[16] = {0x80, 0x85, 0x46, 0xf2, 0x8a, 0xaf, 0xd0, 0x11,
+                                                0x82, 0x12, 0x00, 0xc0, 0x4f, 0xc3, 0x2c, 0x45};
+    static const uint8_t iid_audiodata[16] = {0xc0, 0x19, 0xc7, 0x54, 0x60, 0xaf, 0xd0, 0x11,
+                                              0x82, 0x12, 0x00, 0xc0, 0x4f, 0xc3, 0x2c, 0x45};
+    const uint32_t S_OK_ = 0, MS_S_ENDOFSTREAM = 0x40003u;
+
+    // The fixture on disk, under a game directory of its own.
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-dshow-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string file = std::string(dir) + "/tone.mp3";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    fwrite(kToneMp3, 1, sizeof kToneMp3, f);
+    fclose(f);
+    win32_init(dir);
+
+    uint32_t clsid = sc(0x1e00), iid = sc(0x1e10), ppv = sc(0x1e20), mspid = sc(0x1e30),
+             pstream = sc(0x1e40), pams = sc(0x1e50), wfx = sc(0x1e60), pdata = sc(0x1e80),
+             psample = sc(0x1e90), actual = sc(0x1ea0), wpath = sc(0x1f00);
+    uint32_t buf = heap_alloc(4096, true, 16);
+    CHECK(buf != 0);
+    memcpy(g_mem + mspid, mspid_audio, 16);
+    const char *name = "tone.mp3";
+    for (size_t i = 0; i <= strlen(name); ++i)
+        wr16(wpath + 2 * (uint32_t)i, (uint16_t)name[i]);
+
+    uint32_t cocreate = tramp("ole32.dll", "CoCreateInstance");
+    memcpy(g_mem + clsid, clsid_mmstream, 16);
+    memcpy(g_mem + iid, iid_ammmstream, 16);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), S_OK_);
+    uint32_t mm = rd32(ppv);
+    CHECK(mm != 0);
+    if (!mm)
+        return;
+    CHECK_EQ(call_method(mm, 12, {0, 0, 0}), S_OK_);        // Initialize(STREAMTYPE_READ, 0, NULL)
+    CHECK_EQ(call_method(mm, 15, {0, mspid, 0, 0}), S_OK_); // AddMediaStream(NULL, audio, 0, NULL)
+    CHECK_EQ(call_method(mm, 16, {wpath, 8}), S_OK_);       // OpenFile(L"tone.mp3", AMMSF_RUN)
+    CHECK_EQ(call_method(mm, 4, {mspid, pstream}), S_OK_);  // GetMediaStream
+    uint32_t ms = rd32(pstream);
+    CHECK(ms != 0);
+    memcpy(g_mem + iid, iid_audiomediastream, 16);
+    CHECK_EQ(call_method(ms, 0, {iid, pams}), S_OK_); // QueryInterface(IAudioMediaStream)
+    uint32_t ams = rd32(pams);
+    CHECK(ams != 0);
+    if (!ms || !ams)
+        return;
+    // The format is the file's: 44.1 kHz stereo, 16-bit PCM.
+    CHECK_EQ(call_method(ams, 9, {wfx}), S_OK_); // GetFormat
+    CHECK_EQ(rd16(wfx + WFX_OFF_wFormatTag), WAVE_FORMAT_PCM);
+    CHECK_EQ(rd16(wfx + WFX_OFF_nChannels), 2u);
+    CHECK_EQ(rd32(wfx + WFX_OFF_nSamplesPerSec), 44100u);
+    CHECK_EQ(rd16(wfx + WFX_OFF_wBitsPerSample), 16u);
+    CHECK_EQ(rd16(wfx + WFX_OFF_nBlockAlign), 4u);
+    CHECK_EQ(rd32(wfx + WFX_OFF_nAvgBytesPerSec), 176400u);
+
+    memcpy(g_mem + clsid, clsid_audiodata, 16);
+    memcpy(g_mem + iid, iid_audiodata, 16);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, pdata}), S_OK_);
+    uint32_t ad = rd32(pdata);
+    CHECK(ad != 0);
+    if (!ad)
+        return;
+    CHECK_EQ(call_method(ad, 3, {4096, buf, 0}), S_OK_);     // SetBuffer
+    CHECK_EQ(call_method(ad, 7, {wfx}), S_OK_);              // SetFormat
+    CHECK_EQ(call_method(ams, 11, {ad, 0, psample}), S_OK_); // CreateSample
+    uint32_t sp = rd32(psample);
+    CHECK(sp != 0);
+    if (!sp)
+        return;
+
+    // One Update fills the whole buffer with sound and signals the event.
+    uint32_t ev = call_shim(tramp("KERNEL32.dll", "CreateEventA"), {0, 0, 0, 0});
+    CHECK(ev != 0);
+    CHECK_EQ(call_method(sp, 6, {0, ev, 0, 0}), S_OK_); // Update(0, hEvent, NULL, 0)
+    wr32(actual, 0);
+    CHECK_EQ(call_method(ad, 4, {0, 0, actual}), S_OK_); // GetInfo(NULL, NULL, &actual)
+    CHECK_EQ(rd32(actual), 4096u);
+    CHECK_EQ(call_shim(tramp("KERNEL32.dll", "WaitForSingleObject"), {ev, 0}), 0u); // signalled
+    CHECK_EQ(call_method(sp, 7, {6, 0xffffffffu}), S_OK_); // CompletionStatus(WAIT|ABORT, INFINITE)
+
+    // The tone is 6912 stereo frames: 27648 bytes, then the end of the stream.
+    // The encoder's lead-in is silent, so the sound is looked for over the
+    // whole of it.
+    auto loud_in = [&](uint32_t bytes) {
+        for (uint32_t i = 0; i + 1 < bytes; i += 2)
+            if ((int16_t)rd16(buf + i) != 0)
+                return true;
+        return false;
+    };
+    bool loud = loud_in(4096);
+    uint32_t total = 4096;
+    for (int i = 0; i < 32; ++i) {
+        uint32_t hr = call_method(sp, 6, {0, 0, 0, 0});
+        if (hr == MS_S_ENDOFSTREAM)
+            break;
+        CHECK_EQ(hr, S_OK_);
+        wr32(actual, 0);
+        call_method(ad, 4, {0, 0, actual});
+        total += rd32(actual);
+        loud = loud || loud_in(rd32(actual));
+    }
+    CHECK_EQ(total, 27648u);
+    CHECK(loud);
+    CHECK_EQ(call_method(sp, 6, {0, 0, 0, 0}), MS_S_ENDOFSTREAM); // and it stays ended
+    // Seek(0) rewinds: the next Update produces sound again.
+    CHECK_EQ(call_method(mm, 10, {0, 0}), S_OK_); // Seek(STREAM_TIME 0)
+    CHECK_EQ(call_method(sp, 6, {0, 0, 0, 0}), S_OK_);
+    wr32(actual, 0);
+    call_method(ad, 4, {0, 0, actual});
+    CHECK_EQ(rd32(actual), 4096u);
+
+    // Everything releases; nothing is left behind.
+    uint32_t live = com_live_count();
+    call_method(sp, 2);
+    call_method(ad, 2);
+    call_method(ams, 2);
+    call_method(ms, 2);
+    call_method(mm, 2);
+    CHECK_EQ(com_live_count(), live - 4);
+    // A file that is not there is refused, and the object is still usable to release.
+    memcpy(g_mem + clsid, clsid_mmstream, 16);
+    memcpy(g_mem + iid, iid_ammmstream, 16);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), S_OK_);
+    mm = rd32(ppv);
+    const char *missing = "absent.mp3";
+    for (size_t i = 0; i <= strlen(missing); ++i)
+        wr16(wpath + 2 * (uint32_t)i, (uint16_t)missing[i]);
+    CHECK(call_method(mm, 16, {wpath, 8}) != S_OK_);
+    call_method(mm, 2);
+    remove(file.c_str());
+    os_rmdir(dir);
+}
+
+// The other way a game plays a stream: it asks the multimedia stream for its
+// filter graph and drives that through IMediaControl (Run/Stop), watches
+// IMediaEventEx for EC_COMPLETE, seeks with IMediaSeeking and sets the level
+// with IBasicAudio. Nothing pulls samples; the kit decodes and streams the
+// PCM to a host audio channel itself, refilled from the frame pump, and posts
+// EC_COMPLETE when the last of it has played.
+static void test_dshow_graph_playback() {
+    static const uint8_t clsid_mmstream[16] = {0xe5, 0x7c, 0xc4, 0x49, 0xa4, 0x9b, 0xd0, 0x11,
+                                               0x82, 0x12, 0x00, 0xc0, 0x4f, 0xc3, 0x2c, 0x45};
+    static const uint8_t iid_ammmstream[16] = {0x5c, 0x59, 0xbe, 0xbe, 0x6f, 0x9a, 0xd0, 0x11,
+                                               0x8f, 0xde, 0x00, 0xc0, 0x4f, 0xd9, 0x18, 0x9d};
+    static const uint8_t mspid_audio[16] = {0x6b, 0xf5, 0x5f, 0xa3, 0xda, 0x9f, 0xd0, 0x11,
+                                            0x8f, 0xdf, 0x00, 0xc0, 0x4f, 0xd9, 0x18, 0x9d};
+    // {56a868xx-0ad4-11ce-b03a-0020af0ba770}: control b1, event ex c0, basic audio b3,
+    // position b2; IMediaSeeking {36b73880-c2c8-11cf-8b46-00805f6cef60}.
+    auto quartz = [](uint8_t lo) {
+        std::array<uint8_t, 16> g = {lo,   0x68, 0xa8, 0x56, 0xd4, 0x0a, 0xce, 0x11,
+                                     0xb0, 0x3a, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70};
+        return g;
+    };
+    static const uint8_t iid_seeking[16] = {0x80, 0x38, 0xb7, 0x36, 0xc8, 0xc2, 0xcf, 0x11,
+                                            0x8b, 0x46, 0x00, 0x80, 0x5f, 0x6c, 0xef, 0x60};
+    const uint32_t S_OK_ = 0, E_ABORT_ = 0x80004004u, WAIT_TIMEOUT_ = 0x102u, EC_COMPLETE = 1;
+
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-dshow-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string file = std::string(dir) + "/tone.mp3";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    fwrite(kToneMp3, 1, sizeof kToneMp3, f);
+    fclose(f);
+    win32_init(dir);
+    g_plays.clear();
+    g_queues.clear();
+    g_stops.clear();
+    g_queue_enabled = true;
+    g_queued_bytes = 0;
+    g_voice_remaining = 0;
+
+    uint32_t clsid = sc(0x1e00), iid = sc(0x1e10), ppv = sc(0x1e20), mspid = sc(0x1e30),
+             pgraph = sc(0x1e40), pctl = sc(0x1e50), pev = sc(0x1e60), pseek = sc(0x1e70),
+             paud = sc(0x1e80), ppos = sc(0x1e90), out = sc(0x1ea0), zero64 = sc(0x1eb0),
+             wpath = sc(0x1f00);
+    memcpy(g_mem + mspid, mspid_audio, 16);
+    wr32(zero64, 0);
+    wr32(zero64 + 4, 0);
+    const char *name = "tone.mp3";
+    for (size_t i = 0; i <= strlen(name); ++i)
+        wr16(wpath + 2 * (uint32_t)i, (uint16_t)name[i]);
+
+    uint32_t cocreate = tramp("ole32.dll", "CoCreateInstance");
+    memcpy(g_mem + clsid, clsid_mmstream, 16);
+    memcpy(g_mem + iid, iid_ammmstream, 16);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), S_OK_);
+    uint32_t mm = rd32(ppv);
+    CHECK(mm != 0);
+    if (!mm)
+        return;
+    CHECK_EQ(call_method(mm, 12, {0, 0, 0}), S_OK_); // Initialize
+    CHECK_EQ(call_method(mm, 15, {0, mspid, 1, 0}),
+             S_OK_);                                  // AddMediaStream(..., ADDDEFAULTRENDERER)
+    CHECK_EQ(call_method(mm, 16, {wpath, 0}), S_OK_); // OpenFile
+    CHECK_EQ(call_method(mm, 13, {pgraph}), S_OK_);   // GetFilterGraph
+    uint32_t graph = rd32(pgraph);
+    CHECK(graph != 0);
+    if (!graph)
+        return;
+    memcpy(g_mem + iid, quartz(0xb1).data(), 16);
+    CHECK_EQ(call_method(graph, 0, {iid, pctl}), S_OK_);
+    memcpy(g_mem + iid, quartz(0xc0).data(), 16);
+    CHECK_EQ(call_method(graph, 0, {iid, pev}), S_OK_);
+    memcpy(g_mem + iid, iid_seeking, 16);
+    CHECK_EQ(call_method(graph, 0, {iid, pseek}), S_OK_);
+    memcpy(g_mem + iid, quartz(0xb3).data(), 16);
+    CHECK_EQ(call_method(graph, 0, {iid, paud}), S_OK_);
+    memcpy(g_mem + iid, quartz(0xb2).data(), 16);
+    CHECK_EQ(call_method(graph, 0, {iid, ppos}), S_OK_);
+    uint32_t ctl = rd32(pctl), ev = rd32(pev), seek = rd32(pseek), aud = rd32(paud),
+             pos = rd32(ppos);
+    CHECK(ctl && ev && seek && aud && pos);
+    if (!ctl || !ev || !seek || !aud || !pos)
+        return;
+
+    // The completion event: a real handle, not yet signalled.
+    CHECK_EQ(call_method(ev, 14, {0}), S_OK_);  // SetNotifyFlags(0)
+    CHECK_EQ(call_method(ev, 7, {out}), S_OK_); // GetEventHandle
+    uint32_t h = rd32(out);
+    CHECK(h != 0);
+    uint32_t wait = tramp("KERNEL32.dll", "WaitForSingleObject");
+    CHECK_EQ(call_shim(wait, {h, 0}), WAIT_TIMEOUT_);
+    // Duration both ways: 6912 frames at 44.1 kHz is 156.7 ms.
+    CHECK_EQ(call_method(seek, 10, {out}), S_OK_); // IMediaSeeking::GetDuration
+    CHECK_EQ(rd32(out), 1567346u);
+    CHECK_EQ(rd32(out + 4), 0u);
+    CHECK_EQ(call_method(pos, 7, {out}), S_OK_); // IMediaPosition::get_Duration (seconds)
+    double seconds = 0;
+    memcpy(&seconds, g_mem + out, 8);
+    CHECK(seconds > 0.156 && seconds < 0.158);
+    CHECK_EQ(call_method(aud, 7, {(uint32_t)-600}), S_OK_); // put_Volume(-6 dB)
+    CHECK_EQ(call_method(aud, 8, {out}), S_OK_);            // get_Volume
+    CHECK_EQ(rd32(out), (uint32_t)-600);
+    CHECK_EQ(call_method(seek, 14, {zero64, 1, 0, 0}), S_OK_); // SetPositions(0, Absolute, NULL, 0)
+    CHECK_EQ(call_method(ctl, 10, {0, out}), S_OK_);           // GetState
+    CHECK_EQ(rd32(out), 0u);                                   // State_Stopped
+
+    // Run: one host play with the file's format and the level asked for, not
+    // looping, then the pump keeps the channel fed until the file is spent.
+    CHECK_EQ(call_method(ctl, 7, {}), S_OK_); // Run
+    CHECK_EQ(g_plays.size(), 1u);
+    if (g_plays.size() == 1) {
+        CHECK_EQ(g_plays[0].rate, 44100);
+        CHECK_EQ(g_plays[0].channels, 2);
+        CHECK_EQ(g_plays[0].bits, 16);
+        CHECK_EQ(g_plays[0].loop, 0);
+        CHECK_EQ(g_plays[0].volume, -600);
+        CHECK(g_plays[0].bytes > 0 && g_plays[0].bytes % 4 == 0);
+    }
+    CHECK_EQ(call_method(ctl, 10, {0, out}), S_OK_);
+    CHECK_EQ(rd32(out), 2u); // State_Running
+    uint32_t total = g_plays.empty() ? 0 : g_plays[0].bytes;
+    // The channel becomes a stream paced against bytes played: the pump refills
+    // while less than its lead is outstanding, and the test plays out everything
+    // submitted so far between ticks. Nothing here reads the voice's own count,
+    // which the host zeroes whenever its playing flag is down.
+    CHECK(g_ch_streaming);
+    for (int i = 0; i < 64 && !g_plays.empty(); ++i) {
+        size_t before = g_queues.size();
+        dshow_frame_pump(&g_cpu);
+        for (size_t k = before; k < g_queues.size(); ++k)
+            total += g_queues[k].bytes;
+        g_stream_played = total; // everything submitted so far has now played
+    }
+    CHECK_EQ(total, 27648u);
+    dshow_frame_pump(&g_cpu); // notices the played-out stream after the last chunk
+    // The completion is announced: the event is set and GetEvent hands out
+    // EC_COMPLETE once, then E_ABORT with the event reset.
+    CHECK_EQ(call_shim(wait, {h, 0}), 0u);
+    uint32_t code = sc(0x1ec0), p1 = sc(0x1ec4), p2 = sc(0x1ec8);
+    CHECK_EQ(call_method(ev, 8, {code, p1, p2, 0}), S_OK_); // GetEvent
+    CHECK_EQ(rd32(code), EC_COMPLETE);
+    CHECK_EQ(call_method(ev, 12, {rd32(code), rd32(p1), rd32(p2)}), S_OK_); // FreeEventParams
+    CHECK_EQ(call_method(ev, 8, {code, p1, p2, 0}), E_ABORT_);
+    CHECK_EQ(call_shim(wait, {h, 0}), WAIT_TIMEOUT_);
+    CHECK_EQ(call_method(ctl, 10, {0, out}), S_OK_);
+    CHECK_EQ(rd32(out), 0u); // stopped again
+    // The position reads as the end; a seek back to the start and a second
+    // Run play again from the top.
+    CHECK_EQ(call_method(seek, 12, {out}), S_OK_); // GetCurrentPosition
+    CHECK_EQ(rd32(out), 1567346u);
+    CHECK_EQ(call_method(seek, 14, {zero64, 1, 0, 0}), S_OK_);
+    CHECK_EQ(call_method(seek, 12, {out}), S_OK_);
+    CHECK_EQ(rd32(out), 0u);
+    CHECK_EQ(call_method(ctl, 7, {}), S_OK_);
+    CHECK_EQ(g_plays.size(), 2u);
+    // A chunk the host refuses (its channel is not ready for an append yet)
+    // is held and offered again on the next tick, not turned into a fresh
+    // play that would drop what is already sounding.
+    size_t queued_before = g_queues.size();
+    g_queue_retired = true;
+    dshow_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), queued_before);
+    CHECK_EQ(g_plays.size(), 2u);
+    g_queue_retired = false;
+    dshow_frame_pump(&g_cpu);
+    CHECK(g_queues.size() > queued_before);
+    CHECK_EQ(g_plays.size(), 2u);
+    // Stop ends the sound on the host and keeps the position for a later Run.
+    CHECK_EQ(call_method(ctl, 9, {}), S_OK_); // Stop
+    CHECK(!g_stops.empty());
+    CHECK_EQ(call_method(ctl, 10, {0, out}), S_OK_);
+    CHECK_EQ(rd32(out), 0u);
+
+    uint32_t live = com_live_count();
+    call_method(pos, 2);
+    call_method(aud, 2);
+    call_method(seek, 2);
+    call_method(ev, 2);
+    call_method(ctl, 2);
+    call_method(graph, 2);
+    call_method(mm, 2);
+    CHECK_EQ(com_live_count(), live - 3); // the stream, its media stream and the graph
+    g_queue_enabled = false;
+    remove(file.c_str());
+    os_rmdir(dir);
 }
 
 static void test_getdc_releasedc() {
@@ -8754,6 +9099,8 @@ int main() {
         {"lock clusters", test_lock_diff_partial_records_and_payload},
         {"DC write diff", test_getdc_releasedc},
         {"CoCreateInstance DirectSound", test_cocreate_directsound},
+        {"DirectShow audio stream", test_dshow_audio_stream},
+        {"DirectShow graph playback", test_dshow_graph_playback},
         {"palette versions", test_palette_versions},
         {"storage generations", test_storage_generations},
         {"draw snapshot is deep", test_draw_snapshot_is_deep},

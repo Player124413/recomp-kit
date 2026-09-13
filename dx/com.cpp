@@ -144,6 +144,102 @@ uint32_t com_view(ComObj *o, ComIface iface) {
     return a;
 }
 
+// ---------------------------------------------------------------------------
+// COM classes
+// ---------------------------------------------------------------------------
+namespace {
+struct ComClass {
+    uint8_t clsid[16];
+    const char *name;
+    ComIface primary;
+    ComObj *(*create)();
+};
+std::vector<ComClass> &classes() {
+    static auto *v = new std::vector<ComClass>();
+    return *v;
+}
+static const uint8_t kIidUnknown[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46};
+
+// CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv)
+void CoCreateInstance(X86 *c) {
+    uint32_t clsid = arg(c, 0), outer = arg(c, 1), riid = arg(c, 3), out = arg(c, 4);
+    if (!out || !gm_valid(out, 4)) {
+        com_ret(c, E_POINTER);
+        return;
+    }
+    wr32(out, 0);
+    if (!clsid || !gm_valid(clsid, 16) || !riid || !gm_valid(riid, 16)) {
+        com_ret(c, E_INVALIDARG);
+        return;
+    }
+    const ComClass *cls = nullptr;
+    for (const ComClass &k : classes())
+        if (memcmp(gm_ptr(clsid), k.clsid, 16) == 0)
+            cls = &k;
+    if (!cls) {
+        log_once("ole32.cocreate", "CoCreateInstance: class %08x-... is not registered here",
+                 rd32(clsid));
+        com_ret(c, 0x80040154u); // REGDB_E_CLASSNOTREG
+        return;
+    }
+    if (outer) {
+        com_ret(c, CLASS_E_NOAGGREGATION);
+        return;
+    }
+    ComIface want = com_iface_for_iid(riid);
+    if (want == IF_NONE && memcmp(gm_ptr(riid), kIidUnknown, 16) == 0)
+        want = cls->primary;
+    ComObj *o = cls->create();
+    if (!o) {
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    if (want == IF_NONE || !com_iface_binds(want, o->kind)) {
+        com_release(o);
+        com_ret(c, E_NOINTERFACE);
+        return;
+    }
+    uint32_t view = com_view(o, want);
+    if (!view) {
+        com_release(o);
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    wr32(out, view);
+    LOGV("com: CoCreateInstance(%s) -> %08x as %s", cls->name, view, com_iface_name(want));
+    com_ret(c, S_OK);
+}
+} // namespace
+
+void com_register_class(const uint8_t clsid[16], const char *name, ComIface primary,
+                        ComObj *(*create)()) {
+    for (ComClass &k : classes()) {
+        if (memcmp(k.clsid, clsid, 16) == 0) {
+            k.name = name;
+            k.primary = primary;
+            k.create = create;
+            return;
+        }
+    }
+    ComClass k;
+    memcpy(k.clsid, clsid, 16);
+    k.name = name;
+    k.primary = primary;
+    k.create = create;
+    classes().push_back(k);
+}
+
+void com_register_ole32() {
+    static const ImportShim shims[] = {
+        {"ole32.dll", "CoCreateInstance", 5, CoCreateInstance},
+    };
+    imports_register(shims, std::size(shims));
+}
+
+bool com_iface_binds(ComIface iface, ComKind kind) {
+    return (size_t)iface < IF_COUNT && (g_kind_mask[iface] & (1u << (unsigned)kind)) != 0;
+}
+
 void com_set_destructor(ComKind kind, void (*fn)(ComObj *)) {
     if ((size_t)kind < 64)
         g_dtor[kind] = fn;
