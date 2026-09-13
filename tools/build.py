@@ -261,7 +261,8 @@ def main():
                     device = args.device or pick_device(devicectl_list())
                     install_and_launch(app, cfg["game"]["bundle_id"], device, args.console)
             else:
-                if args.target == "app":
+                # A link-only build ships no texture pack, and its CI has no numpy.
+                if args.target == "app" and not args.stub:
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
                 build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
