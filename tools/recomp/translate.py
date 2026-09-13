@@ -628,6 +628,12 @@ class Image(object):
         # relocation table and .rsrc is resource blobs; neither is data the
         # program dereferences, and both produce nothing but false matches.
         self.recover_errors = []
+        #: Callees that never return, as the listings show them: a function
+        #: whose listing ends on `CALL x` was cut there by Ghidra because x
+        #: does not come back (`__CxxThrowException`, `exit`).  Recovery ends a
+        #: block at such a call instead of decoding the padding and jump table
+        #: that follow it.  Filled in by the driver once the listings are read.
+        self.noreturn_callees = set()
         self.string_candidates = set()
         self.thunk_candidates = set()
         self.weak_candidates = set()
@@ -890,12 +896,17 @@ class Image(object):
                 if interior_bytes is not None and interior_bytes[va - self.base]:
                     self.interior_candidates.add(va)
                     continue                  # inside an instruction, not a start
+                # Every signal of a function start - aligned, after padding,
+                # decoding - outranks the text test: `PUSH 0x5b2370` spells
+                # its address as 'p', '#', '[' and a terminator, and one
+                # printable dword is a coincidence a padded entry is not.
+                if self.looks_like_function(va):
+                    starts.add(va)
+                    continue
                 if self._looks_like_string_tail(blob, off):
                     self.string_candidates.add(va)
                     continue
-                if self.looks_like_function(va):
-                    starts.add(va)
-                elif self.looks_like_thunk(va):
+                if self.looks_like_thunk(va):
                     self.thunk_candidates.add(va)
                     starts.add(va)
                 elif self.looks_like_code_start(va):
@@ -1041,6 +1052,9 @@ class Image(object):
                         pending.append(t)
                 if ci.mnemonic in ("ret", "retn", "jmp"):
                     break
+                if (ci.mnemonic == "call" and ci.op_str.startswith("0x")
+                        and int(ci.op_str, 16) in self.noreturn_callees):
+                    break
                 va = nxt
             else:
                 truncated = True
@@ -1125,6 +1139,17 @@ class Translator(object):
         self.table_sites_inferred = set()
         self.jmp_index = 0
         self.strict = False
+        #: Direct-call targets that never return (see Image.noreturn_callees).
+        #: A CALL to one ends its block: the emitter leaves a trap in place of
+        #: the fall-through instead of a jump onto the padding that follows.
+        self.noreturn_callees = set()
+
+    def never_returns(self, ins):
+        """Is `ins` a direct CALL to a callee the listings show never returning?"""
+        if ins.mnem != "CALL":
+            return False
+        t = self.branch_target(ins)
+        return t is not None and t in self.noreturn_callees
 
     # -- control flow ------------------------------------------------------
 
@@ -1688,7 +1713,7 @@ class Translator(object):
             body = self.emit(fn, i, live_out[i])
             for line in body:
                 out.append("    " + line)
-            if not fn.contiguous[i] and ins.mnem not in TERMINATORS:
+            if not fn.contiguous[i] and ins.mnem not in TERMINATORS and not self.never_returns(ins):
                 t = fn.fallthrough[i]
                 self.stats["_listing_gap"] += 1
                 self.notes.append(
@@ -1698,7 +1723,7 @@ class Translator(object):
         # A function whose last listed instruction is not a terminator falls
         # through into the next function.
         last = fn.insns[-1]
-        if last.mnem not in TERMINATORS:
+        if last.mnem not in TERMINATORS and not self.never_returns(last):
             t = fn.fallthrough[-1] or fn.end
             self.stats["_fallthrough_exit"] += 1
             out.append("    " + " ".join(self.goto_target(fn, t, last)))
@@ -2092,6 +2117,12 @@ class Translator(object):
                 else:
                     self.stats["_call_unknown"] += 1
                     L.append("recomp_call(c, %s);" % hexlit(t))
+                if t in self.noreturn_callees:
+                    # The callee throws or exits; what follows is padding and
+                    # tables, never code.  Reaching this line means it came
+                    # back after all, which the runtime then reports by address.
+                    self.stats["_noreturn_trap"] += 1
+                    L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
                 return L
             L.append("uint32_t t_ = %s;" % read_op(ops[0], 32))
             L.append("c->r[4] -= 4; wr32(c->r[4], %s);" % hexlit(nxt))
@@ -2477,7 +2508,7 @@ class Translator(object):
 # --------------------------------------------------------------- driver ----
 
 WITHDRAWN_CALL_RE = re.compile(r"CALL_FN\(([0-9a-f]{8})\);( return;)?")
-WITHDRAWN_JUMP_RE = re.compile(r"(?:c->eip = 0x[0-9a-f]{8}u; )?recomp_jump\(c, 0x([0-9a-f]{8})u\); return;")
+WITHDRAWN_JUMP_RE = re.compile(r"(?:c->eip = 0x[0-9a-f]{1,8}u; )?recomp_jump\(c, 0x([0-9a-f]{1,8})u\); return;")
 
 
 def retarget_withdrawn(body, pruned):
@@ -2577,6 +2608,17 @@ def main():
         fn.measure(image)
         parsed.append(fn)
 
+    # A listing that ends on a CALL was cut there because the callee never
+    # returns; recovery from the PE must stop at those calls too, or it walks
+    # into the padding and switch tables that follow them.
+    image.noreturn_callees = set()
+    for fn in parsed:
+        last = fn.insns[-1]
+        if last.mnem == "CALL":
+            target = Translator.branch_target(last)
+            if target is not None:
+                image.noreturn_callees.add(target)
+
     # The Ghidra export is not complete: control lands on addresses it never
     # listed, and functions get split at boundaries other code jumps past.
     # Resolve both to a fixpoint - an address inside another function becomes
@@ -2611,6 +2653,7 @@ def main():
     initterm_tables = []
     rejected = set()
     tr = Translator(image, all_addrs, args)
+    tr.noreturn_callees = image.noreturn_callees
 
     if args.check_flags:
         for fn in parsed:
@@ -2705,11 +2748,11 @@ def main():
                 # either: 0049e800 calls 004c3110 and 004c31e0.
                 if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
                     changed |= resolve(Translator.branch_target(ins), listed, fn)
-                if ins.mnem in TERMINATORS:
+                if ins.mnem in TERMINATORS or tr.never_returns(ins):
                     continue
                 if not fn.contiguous[i]:
                     changed |= resolve(fn.fallthrough[i], listed, fn)
-            if fn.insns[-1].mnem not in TERMINATORS:
+            if fn.insns[-1].mnem not in TERMINATORS and not tr.never_returns(fn.insns[-1]):
                 changed |= resolve(fn.fallthrough[-1] or fn.end, listed, fn)
         for t in sorted(tr.unlisted_targets):
             changed |= resolve(t, listed, why="table")

@@ -3238,10 +3238,128 @@ void k_UnhandledExceptionFilter(X86 *c) {
 // There is no SEH in the runtime, so an exception the guest raises cannot be
 // delivered anywhere. Continuing would run the guest past a point it never
 // reaches on Windows, so both abort with the state that caused them.
+} // namespace
+
+static bool printable_guest_string(uint32_t a, std::string *out) {
+    if (!a || !gm_valid(a, 1))
+        return false;
+    std::string s = gm_str(a, 200);
+    if (s.size() < 2)
+        return false;
+    for (char ch : s)
+        if (!(ch == '\t' || ch == '\n' || (ch >= 0x20 && ch < 0x7f)))
+            return false;
+    *out = s;
+    return true;
+}
+
+std::string win32_describe_cxx_throw(uint32_t code, uint32_t nargs, uint32_t args) {
+    if (code != 0xe06d7363u || nargs < 3 || !args || !gm_valid(args, 12))
+        return std::string();
+    uint32_t object = rd32(args + 4), throw_info = rd32(args + 8);
+    std::string text;
+    // ThrowInfo -> CatchableTypeArray -> CatchableType[0] -> TypeDescriptor -> name at +8.
+    if (throw_info && gm_valid(throw_info, 16)) {
+        uint32_t array = rd32(throw_info + 12);
+        if (array && gm_valid(array, 8) && rd32(array) >= 1) {
+            uint32_t catchable = rd32(array + 4);
+            if (catchable && gm_valid(catchable, 8)) {
+                uint32_t type = rd32(catchable + 4);
+                std::string name;
+                if (type && printable_guest_string(type + 8, &name))
+                    text += "type " + name;
+            }
+        }
+    }
+    std::string what;
+    if (object && gm_valid(object, 8) && printable_guest_string(rd32(object + 4), &what))
+        text += (text.empty() ? "" : ", ") + std::string("message \"") + what + "\"";
+    // A class of the game's own keeps its text wherever it likes: quote every
+    // dword of the object that points at text, with its offset.
+    for (uint32_t off = 0; object && off < 32 && gm_valid(object + off, 4); off += 4) {
+        std::string s;
+        if (off != 4 && printable_guest_string(rd32(object + off), &s))
+            text += (text.empty() ? "" : ", ") + std::string("+") + std::to_string(off) + " \"" +
+                    s + "\"";
+    }
+    // And the raw dwords, for fields that are numbers: a line, a code, a count.
+    std::string raw;
+    for (uint32_t off = 0; object && off < 32 && gm_valid(object + off, 4); off += 4) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "%s%08x", off ? " " : "", rd32(object + off));
+        raw += buf;
+    }
+    if (!raw.empty())
+        text += (text.empty() ? "" : ", ") + std::string("object [") + raw + "]";
+    return text;
+}
+
+std::vector<uint32_t> win32_stack_return_candidates(uint32_t esp, uint32_t bytes, uint32_t lo,
+                                                    uint32_t hi, size_t max) {
+    std::vector<uint32_t> out;
+    for (uint32_t at = esp; at + 4 <= esp + bytes && out.size() < max; at += 4) {
+        if (!gm_valid(at, 4))
+            break;
+        uint32_t v = rd32(at);
+        if (v < lo + 2 || v >= hi)
+            continue;
+        // The byte patterns of a CALL whose next instruction is v: E8 rel32 (5
+        // bytes), FF /2 with a register or [reg] (2 bytes), FF /2 [reg+disp8]
+        // (3), FF /2 [reg+disp32] (6), FF 15 [disp32] (6).
+        bool call = false;
+        if (v >= lo + 5 && rd8(v - 5) == 0xe8)
+            call = true;
+        else if (v >= lo + 2 && rd8(v - 2) == 0xff && (rd8(v - 1) & 0x38) == 0x10 &&
+                 (rd8(v - 1) >> 6) != 1 && (rd8(v - 1) & 7) != 4 && (rd8(v - 1) >> 6) != 2)
+            call = true;
+        else if (v >= lo + 3 && rd8(v - 3) == 0xff && (rd8(v - 2) & 0xf8) == 0x50)
+            call = true;
+        else if (v >= lo + 6 && rd8(v - 6) == 0xff &&
+                 ((rd8(v - 5) & 0xf8) == 0x90 || rd8(v - 5) == 0x15))
+            call = true;
+        if (call)
+            out.push_back(v);
+    }
+    return out;
+}
+
+std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max) {
+    std::vector<uint32_t> out;
+    uint32_t lo = loader_image_base(), hi = loader_image_limit();
+    while (ebp && gm_valid(ebp, 8) && out.size() < max) {
+        uint32_t ret = rd32(ebp + 4), next = rd32(ebp);
+        if (ret < lo || ret >= hi)
+            break;
+        out.push_back(ret);
+        if (next <= ebp)
+            break; // frames grow upwards; anything else is not a chain
+        ebp = next;
+    }
+    return out;
+}
+
+namespace {
+
 void k_RaiseException(X86 *c) {
     LOGW("RaiseException(code=%08x flags=%08x nargs=%u args=%08x) at ESP=%08x: "
          "no SEH support, aborting",
          arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), c->r[R_ESP]);
+    std::string what = win32_describe_cxx_throw(arg(c, 0), arg(c, 2), arg(c, 3));
+    if (!what.empty())
+        LOGW("  a C++ throw: %s", what.c_str());
+    std::vector<uint32_t> chain = win32_return_chain(c->r[R_EBP], 12);
+    for (size_t i = 0; i < chain.size(); ++i)
+        LOGW("  frame %zu returns to %08x", i, chain[i]);
+    std::vector<uint32_t> scan = win32_stack_return_candidates(
+        c->r[R_ESP], 0x400, loader_image_base(), loader_image_limit(), 24);
+    std::string line;
+    for (uint32_t v : scan) {
+        char buf[16];
+        snprintf(buf, sizeof buf, " %08x", v);
+        line += buf;
+    }
+    if (!line.empty())
+        LOGW("  return addresses on the stack, newest first:%s", line.c_str());
     abort();
 }
 void k_RtlUnwind(X86 *c) {

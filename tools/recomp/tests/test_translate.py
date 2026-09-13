@@ -1670,6 +1670,9 @@ def main():
     ap.add_argument("--sweep", type=int, default=300,
                     help="loop-free leaf functions to fuzz differentially")
     ap.add_argument("--sweep-iterations", type=int, default=12)
+    ap.add_argument("--sweep-only", action="store_true",
+                    help="build, link, then run only the header contracts and the sweep: "
+                         "for a game that has none of the corpus cases below")
     args = ap.parse_args()
 
     lfails = test_lock_held("before the build")
@@ -1678,8 +1681,10 @@ def main():
           % (DYLIB, os.path.getsize(DYLIB) if os.path.exists(DYLIB) else "missing",
              sys.version.split()[0]), flush=True)
 
+    # The image under test is the one game.toml pins, whichever game that is.
+    cfg = game_config.load(GAME_DIR)
     sha = hashlib.sha256(open(BINARY, "rb").read()).hexdigest()
-    assert sha == "815ba8a550f571c38b602cf3386f65aab942667a4a2d9c7096b3660deac2eacd", sha
+    assert sha == cfg["game"]["sha256"], sha
 
     if not args.no_build:
         build()
@@ -1691,6 +1696,22 @@ def main():
 
     sys.path.insert(0, os.path.join(ROOT, "tools/recomp"))
     import translate as T
+    T.configure(cfg)
+    if args.sweep_only:
+        print("\n== header contracts ==")
+        hfails = test_header_contracts(native)
+        print("  %s  %d checks in the header self-test plus %d driven from here"
+              % ("PASS" if not hfails else "FAIL",
+                 native.lib.harness_header_check_count(), PY_HEADER_CHECKS))
+        for f in hfails[:6]:
+            print("        " + f)
+        funcs = pick_sweep_functions(args.sweep)
+        sfails = run_sweep(emu, native, funcs, args.sweep_iterations, args.seed, True)
+        print("  %s  sweep of %d loop-free leaf functions"
+              % ("PASS" if not sfails else "FAIL", len(funcs)))
+        for f in sfails[:40]:
+            print("        " + f)
+        return 1 if (hfails or sfails) else 0
     for case in CASES:
         listing = os.path.join(ROOT, "analysis/decompiled/D3DPopTB.exe/functions",
                                "%08x.asm" % case.addr)

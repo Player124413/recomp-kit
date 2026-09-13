@@ -988,6 +988,78 @@ static void test_misc_shims(X86 *c) {
     check(gm_str(out) == "blue has 12 units (002a)", "wvsprintfA -> \"%s\"", gm_str(out).c_str());
 }
 
+// What a C++ throw looks like from the runtime: the MSVC exception record
+// names the type through its throw info, the object usually carries a
+// message, and the EBP chain names where it came from. This is what the
+// RaiseException shim prints before it gives up, so a throw in a game whose
+// exceptions the runtime cannot unwind still says what went wrong.
+static void test_cxx_throw_description(X86 *c) {
+    section("describing a C++ exception record");
+    // TypeDescriptor: vtable, spare, then the mangled name in place.
+    uint32_t type = scratch_block(48);
+    wr32(type, 0);
+    wr32(type + 4, 0);
+    memcpy(g_mem + type + 8, ".?AVGameException@@", 20);
+    uint32_t catchable = scratch_block(28); // properties, pType, thisDisplacement...
+    wr32(catchable, 0);
+    wr32(catchable + 4, type);
+    uint32_t array = scratch_block(8); // nCatchableTypes, arrayOfCatchableTypes[]
+    wr32(array, 1);
+    wr32(array + 4, catchable);
+    uint32_t throw_info =
+        scratch_block(16); // attributes, pmfnUnwind, pForwardCompat, pCatchableTypeArray
+    wr32(throw_info, 0);
+    wr32(throw_info + 4, 0);
+    wr32(throw_info + 8, 0);
+    wr32(throw_info + 12, array);
+    uint32_t what = put_str("Quest file not found: Quests\\random.q");
+    uint32_t object = scratch_block(12); // vtable, char *what, int owns
+    wr32(object, 0x00680000);
+    wr32(object + 4, what);
+    wr32(object + 8, 1);
+    uint32_t args = scratch_block(12);
+    wr32(args, 0x19930520);
+    wr32(args + 4, object);
+    wr32(args + 8, throw_info);
+    std::string text = win32_describe_cxx_throw(0xe06d7363, 3, args);
+    check(text.find("GameException") != std::string::npos, "the type is named: %s", text.c_str());
+    check(text.find("Quest file not found") != std::string::npos, "the message is quoted");
+    // A class of the game's own keeps its text wherever it likes: every dword
+    // of the object that points at text is quoted too, with its offset.
+    uint32_t line_text = put_str("GplError: unknown function foo, line#12");
+    wr32(object, line_text);
+    text = win32_describe_cxx_throw(0xe06d7363, 3, args);
+    check(text.find("+0 \"GplError: unknown function foo") != std::string::npos,
+          "object dwords that point at text are quoted: %s", text.c_str());
+    // Without frame pointers the chain stops; the stack still holds return
+    // addresses, recognisable because a CALL precedes each one.
+    uint32_t code = scratch_block(64);
+    g_mem[code + 0] = 0xe8; // CALL rel32 ... the return address is code + 5
+    wr32(code + 1, 0x10);
+    g_mem[code + 5] = 0x90;
+    g_mem[code + 16] = 0xff; // CALL EAX ... return address code + 18
+    g_mem[code + 17] = 0xd0;
+    g_mem[code + 32] = 0x90; // a NOP: code + 33 follows no CALL
+    uint32_t stack = scratch_block(32);
+    wr32(stack + 0, 0x12345678);
+    wr32(stack + 4, code + 18);
+    wr32(stack + 8, code + 33);
+    wr32(stack + 12, code + 5);
+    std::vector<uint32_t> found = win32_stack_return_candidates(stack, 16, code, code + 64, 8);
+    check(found.size() == 2 && found[0] == code + 18 && found[1] == code + 5,
+          "the stack scan keeps the %zu dwords that follow a CALL", found.size());
+    // A frame chain: [EBP] -> caller's EBP, [EBP+4] -> return address in the image.
+    uint32_t f1 = scratch_block(8), f2 = scratch_block(8); // the caller's frame lies above
+    wr32(f1, f2);
+    wr32(f1 + 4, loader_image_base() + 0x1234);
+    wr32(f2, 0);
+    wr32(f2 + 4, loader_image_base() + 0x5678);
+    std::vector<uint32_t> chain = win32_return_chain(f1, 8);
+    check(chain.size() == 2 && chain[0] == loader_image_base() + 0x1234 &&
+              chain[1] == loader_image_base() + 0x5678,
+          "the return chain walks EBP through %zu frames", chain.size());
+}
+
 // The GDI a software-rendered game leans on: a DIB section as its frame
 // buffer, a memory DC to hold it, a colour table for 8-bit modes, palettes;
 // plus the odd process shims and COM class creation its start-up reaches.
@@ -3042,6 +3114,7 @@ int main(int argc, char **argv) {
     test_misc_shims(c);
     test_boot_shims(c);
     test_gdi_and_com(c);
+    test_cxx_throw_description(c);
     test_native_draw_waits(c);
     test_midi(c);
     test_windows(c);

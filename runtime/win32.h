@@ -57,6 +57,19 @@ enum Win32FileOp {
 };
 
 std::string win32_host_path_op(const std::string &guest_path, int op);
+
+// A C++ throw as RaiseException sees it: the MSVC record (code 0xe06d7363)
+// carries the object and its throw info, which names the type; the object of
+// a std::exception-derived class carries its message at +4. Returned as text
+// for the shim to log, since the runtime cannot unwind the throw.
+std::string win32_describe_cxx_throw(uint32_t code, uint32_t nargs, uint32_t args);
+// Return addresses inside the image along the EBP chain from `ebp`, at most `max`.
+std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max);
+// Dwords on the stack from `esp` over `bytes` that lie in [lo, hi) and sit right
+// after a CALL instruction: the return addresses a frame-pointer-less chain
+// hides. Newest first; at most `max`.
+std::vector<uint32_t> win32_stack_return_candidates(uint32_t esp, uint32_t bytes, uint32_t lo,
+                                                    uint32_t hi, size_t max);
 // Kept for existing callers: for_create=false is a read, true is a write.
 std::string win32_host_path(const std::string &guest_path, bool for_create = false);
 // Reverse mapping used by GetModuleFileNameA/GetFullPathNameA.
