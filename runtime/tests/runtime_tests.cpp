@@ -1388,6 +1388,29 @@ static void test_windows(X86 *c) {
           "GetActiveWindow is the main window");
     check(call_import(c, "USER32.dll", "SetFocus", {hwnd}) == hwnd,
           "SetFocus returns the window that had focus");
+    check(call_import(c, "USER32.dll", "GetMenu", {hwnd}) == 0, "GetMenu: no menu");
+    check(call_import(c, "USER32.dll", "IsIconic", {hwnd}) == 0, "IsIconic: never minimised");
+    check(call_import(c, "USER32.dll", "SetForegroundWindow", {hwnd}) == 1, "SetForegroundWindow");
+    check(call_import(c, "USER32.dll", "SetActiveWindow", {hwnd}) == hwnd,
+          "SetActiveWindow returns the previous");
+    check(call_import(c, "USER32.dll", "OpenIcon", {hwnd}) == 1, "OpenIcon");
+    check(call_import(c, "USER32.dll", "FindWindowA", {0, 0}) == 0,
+          "FindWindowA finds no other instance");
+    check(call_import(c, "USER32.dll", "WaitMessage", {}) == 1, "WaitMessage returns");
+    uint32_t work = scratch_block(16);
+    check(call_import(c, "USER32.dll", "SystemParametersInfoA", {48, 0, work, 0}) == 1 &&
+              rd32(work + 8) == 640 && rd32(work + 12) == 480,
+          "SPI_GETWORKAREA is the window's client area");
+    check(call_import(c, "USER32.dll", "SystemParametersInfoA", {0x2000, 0, 0, 0}) == 0,
+          "unknown SPI actions fail");
+    // The input gate is not linked here; use the same user32 cursor bridge
+    // that host input delivery uses before posting WM_MOUSEMOVE.
+    host_set_cursor_pos(200, 100);
+    check(call_import(c, "USER32.dll", "GetMessagePos", {}) == ((100u << 16) | 200u),
+          "GetMessagePos packs y:x");
+    check(call_import(c, "USER32.dll", "GetMessageTime", {}) <=
+              call_import(c, "KERNEL32.dll", "GetTickCount", {}),
+          "GetMessageTime is on the tick clock");
 
     check(call_import(c, "USER32.dll", "SetWindowLongA", {hwnd, 0, 0x1111}) == 0,
           "SetWindowLongA on the first extra dword");

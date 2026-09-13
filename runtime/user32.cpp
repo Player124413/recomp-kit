@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <string.h>
 
+// Defined in kernel32.cpp with the scheduler.
+void sched_checkpoint();
+
 namespace {
 
 struct WndClass {
@@ -432,6 +435,23 @@ void u_GetClientRect(X86 *c) {
     set_eax(c, 1);
 }
 
+void u_SystemParametersInfoA(X86 *c) {
+    const uint32_t SPI_GETWORKAREA = 48;
+    uint32_t action = arg(c, 0), param = arg(c, 2);
+    if (action == SPI_GETWORKAREA && param) {
+        Window *w = find_window(host_main_window());
+        wr32(param + 0, 0);
+        wr32(param + 4, 0);
+        wr32(param + 8, (uint32_t)(w ? w->w : 640));
+        wr32(param + 12, (uint32_t)(w ? w->h : 480));
+        set_eax(c, 1);
+        return;
+    }
+    log_once(("spi:" + std::to_string(action)).c_str(), "SystemParametersInfoA(%u) unsupported",
+             action);
+    set_eax(c, 0);
+}
+
 void u_AdjustWindowRectEx(X86 *c) {
     // The host window has no non-client area, so the client rect is the window
     // rect. Leaving the rectangle untouched keeps the guest's requested client
@@ -459,6 +479,31 @@ void u_GetActiveWindow(X86 *c) {
 }
 void u_SetFocus(X86 *c) {
     set_eax(c, find_window(arg(c, 0)) ? g_main_hwnd : 0);
+}
+void u_GetMenu(X86 *c) {
+    set_eax(c, 0);
+}
+void u_IsIconic(X86 *c) {
+    set_eax(c, 0);
+}
+void u_OpenIcon(X86 *c) {
+    set_eax(c, 1);
+}
+void u_SetForegroundWindow(X86 *c) {
+    set_eax(c, 1);
+}
+void u_FindWindowA(X86 *c) {
+    set_eax(c, 0);
+}
+void u_SetActiveWindow(X86 *c) {
+    // Single-window runtime: the main window is always the active one.
+    set_eax(c, host_main_window());
+}
+void u_WaitMessage(X86 *c) {
+    // A blocking wait in the original; here a scheduling checkpoint so the
+    // service threads run, then return as if a message arrived.
+    sched_checkpoint();
+    set_eax(c, 1);
 }
 void u_ClientToScreen(X86 *c) {
     Window *w = find_window(arg(c, 0));
@@ -874,6 +919,12 @@ void u_GetCursorPos(X86 *c) {
     }
     set_eax(c, 1);
 }
+void u_GetMessagePos(X86 *c) {
+    set_eax(c, ((uint32_t)(uint16_t)g_cursor_y << 16) | (uint16_t)g_cursor_x);
+}
+void u_GetMessageTime(X86 *c) {
+    set_eax(c, host_millis());
+}
 void u_GetAsyncKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
     set_eax(c, vk < 256 && g_key_state[vk] ? 0x8000 : 0);
@@ -1094,6 +1145,7 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "SetWindowPos", 7, u_SetWindowPos},
     {"USER32.dll", "GetWindowRect", 2, u_GetWindowRect},
     {"USER32.dll", "GetClientRect", 2, u_GetClientRect},
+    {"USER32.dll", "SystemParametersInfoA", 4, u_SystemParametersInfoA},
     {"USER32.dll", "AdjustWindowRectEx", 4, u_AdjustWindowRectEx},
     {"USER32.dll", "ClientToScreen", 2, u_ClientToScreen},
     {"USER32.dll", "SetRect", 5, u_SetRect},
@@ -1106,6 +1158,9 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "CreateDialogParamA", 5, u_CreateDialogParamA},
     {"USER32.dll", "PeekMessageA", 5, u_PeekMessageA},
     {"USER32.dll", "GetMessageA", 4, u_GetMessageA},
+    {"USER32.dll", "WaitMessage", 0, u_WaitMessage},
+    {"USER32.dll", "GetMessagePos", 0, u_GetMessagePos},
+    {"USER32.dll", "GetMessageTime", 0, u_GetMessageTime},
     {"USER32.dll", "TranslateMessage", 1, u_TranslateMessage},
     {"USER32.dll", "DispatchMessageA", 1, u_DispatchMessageA},
     {"USER32.dll", "PostMessageA", 4, u_PostMessageA},
@@ -1120,6 +1175,12 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
     {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},
     {"USER32.dll", "SetFocus", 1, u_SetFocus},
+    {"USER32.dll", "GetMenu", 1, u_GetMenu},
+    {"USER32.dll", "IsIconic", 1, u_IsIconic},
+    {"USER32.dll", "OpenIcon", 1, u_OpenIcon},
+    {"USER32.dll", "SetForegroundWindow", 1, u_SetForegroundWindow},
+    {"USER32.dll", "FindWindowA", 2, u_FindWindowA},
+    {"USER32.dll", "SetActiveWindow", 1, u_SetActiveWindow},
     {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
     {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
     {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},
