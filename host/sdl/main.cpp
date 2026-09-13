@@ -986,7 +986,7 @@ void after_events() {
         // The keypad follows the hardware keyboard: attached, no keypad. It is
         // republished every pump: the settings page can change its rows and the
         // view is cheap to compare on the worker side.
-        static const bool force = getenv("POPM_KEYPAD") != nullptr;
+        static const bool force = recomp_env("KEYPAD") != nullptr;
         const bool want = force || platform_ui_keypad_wanted();
         if (want != g_keypad_wanted) {
             g_keypad_wanted = want;

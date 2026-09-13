@@ -4,7 +4,7 @@
 
 - Split on-screen keypad for touch: two 8x5 halves in the bottom corners, three
   sizes, Shift/Ctrl/Alt that hold, latch or lock, HIDE/KEYS tabs, settings on the
-  F10 page persisted per game; replaces the eight-key strip. `POPM_KEYPAD=1` forces
+  F10 page persisted per game; replaces the eight-key strip. `RECOMP_KEYPAD=1` forces
   it on for a desktop check.
 - Switches: every environment switch the kit reads is `RECOMP_<NAME>`, read
   through one function, `recomp_env` in `platform/os.h`. The spellings from the

@@ -149,9 +149,9 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
 #else
 #define POP_VENV_PYTHON ".venv/bin/python"
 #endif
-    // The interpreter that configured the build (CTest passes POP_PYTHON), else
+    // The interpreter that configured the build (CTest passes RECOMP_PYTHON), else
     // the checkout's venv relative to the working directory.
-    const char *python = getenv("POP_PYTHON");
+    const char *python = recomp_env("PYTHON");
     const std::string cmd_s =
         std::string(python && *python ? python : POP_VENV_PYTHON) +
         " -c \""

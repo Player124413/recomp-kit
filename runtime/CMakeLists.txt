@@ -35,7 +35,7 @@ target_compile_options(runtime_tests PRIVATE ${POP_WARN_HOST})
 pop_optimize(runtime_tests 1)
 pop_test_binary(runtime_tests)
 add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
-set_tests_properties(runtime_tests PROPERTIES LABELS game ENVIRONMENT POP_PYTHON=${Python3_EXECUTABLE})
+set_tests_properties(runtime_tests PROPERTIES LABELS game ENVIRONMENT RECOMP_PYTHON=${Python3_EXECUTABLE})
 endif()
 
 if(POP_REAL_GEN AND NOT IOS)

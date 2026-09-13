@@ -12,10 +12,10 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 BUILDLOCK_SH="$ROOT/tools/recomp/buildlock.sh"
 . "$BUILDLOCK_SH"
-buildlock_acquire "$(dirname "${POP_BUILD_ROOT:-$ROOT/build}")" "host integration tests" "$ROOT/host/tests/integration_tests.sh" "$@"
+buildlock_acquire "$(dirname "${RECOMP_BUILD_ROOT:-$ROOT/build}")" "host integration tests" "$ROOT/host/tests/integration_tests.sh" "$@"
 PY=${PY:-$ROOT/.venv/bin/python}
 GAME=${RECOMP_GAME_DIR:?set RECOMP_GAME_DIR to the game directory}
-BUILD=${POP_BUILD_ROOT:-$ROOT/build}
+BUILD=${RECOMP_BUILD_ROOT:-$ROOT/build}
 unset RECOMP_CORE_MODS_DIR RECOMP_NO_MODS
 "$PY" -m unittest "$ROOT/tools/recomp/tests/test_build_core.py"
 

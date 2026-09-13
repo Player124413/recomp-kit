@@ -32,8 +32,7 @@ def main():
     parser.add_argument("--pack", type=Path, default=None)
     args = parser.parse_args()
     if args.pack is None:
-        args.pack = Path(os.environ.get("RECOMP_TEXTURE_PACK_DIR") or os.environ.get("POPM_TEXTURE_PACK_DIR")
-                         or args.build_root / "texture-pack")
+        args.pack = Path(os.environ.get("RECOMP_TEXTURE_PACK_DIR") or args.build_root / "texture-pack")
     contents = args.bundle / "Contents"
     resources = contents / "Resources"
     resources.mkdir(parents=True, exist_ok=True)

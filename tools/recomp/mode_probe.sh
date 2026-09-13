@@ -10,7 +10,7 @@ if [ "${BUILDLOCK_HELD:-}" != 1 ]; then
     exit $?
 fi
 cd "$ROOT"
-if [ "${RECOMP_MODE_PROBE_NO_BUILD:-${POPM_MODE_PROBE_NO_BUILD:-}}" != 1 ]; then
+if [ "${RECOMP_MODE_PROBE_NO_BUILD:-}" != 1 ]; then
     "${PY:-$ROOT/.venv/bin/python}" "$ROOT/tools/build.py" --target smoke
 fi
 python3 "$ROOT/tools/recomp/mode_probe.py" "$@"

@@ -1,6 +1,7 @@
 #pragma once
 #include <stdio.h>
 #include <string.h>
+#include "../../platform/os.h"
 
 struct ModTestSuite {
     const char *name;
@@ -24,12 +25,12 @@ int mod_test_failures();
     static void name_##_run()
 
 // The build root this suite's artifacts live under: the game's build/ when
-// the tests run for a game outside the kit (POP_BUILD_ROOT from CTest), else
+// the tests run for a game outside the kit (RECOMP_BUILD_ROOT from CTest), else
 // the kit's own build/ relative to the working directory.
 #include <stdlib.h>
 #include <string>
 inline std::string mods_test_build_root() {
-    const char *root = getenv("POP_BUILD_ROOT");
+    const char *root = recomp_env("BUILD_ROOT");
     return root && *root ? root : "build";
 }
 inline std::string mods_test_build_path(const char *rel) {
