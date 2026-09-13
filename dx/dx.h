@@ -80,6 +80,8 @@ void dsound_pump();
 // stops. DirectSound's streaming worker is parked in WaitForMultipleObjects on
 // events nothing else would signal.
 void qmixer_frame_pump(X86 *c);
+// Refills Miles streams on the guest frame seam.
+void mss32_frame_pump(X86 *c);
 // Keeps a DirectShow graph's audio channel fed and posts its completion.
 void dshow_frame_pump(X86 *c);
 // The display's frame boundary in the same shape, registered beside it: the

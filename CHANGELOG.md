@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Miles streams decode MP3 through the decoder shared with DirectShow.
+  Streams refill from the guest frame pump, support volume and loop counts,
+  and remain playing until queued PCM drains.
 - USER32: queue `WM_MOVE` and `WM_SIZE` after window creation and the
   corresponding `SetWindowPos` operations, plus `WM_SIZE` on the first show.
   Screen and fullscreen metrics follow the accepted DirectDraw display mode,

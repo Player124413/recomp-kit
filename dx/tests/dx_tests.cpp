@@ -5821,6 +5821,103 @@ static void test_mss32_sample() {
     g_sample_tracking = false;
 }
 
+// The same synthetic MP3 and guest-root mapping as DirectShow, with mixed
+// case and a guest backslash. Playback and queue consumption are deterministic.
+static void test_mss32_stream() {
+    cpu_reset();
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-mss32-stream-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string music = std::string(dir) + "/Music";
+    CHECK(os_mkdir(music.c_str()) == 0);
+    std::string file = music + "/Test.mp3";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    CHECK_EQ(fwrite(kToneMp3, 1, sizeof kToneMp3, f), sizeof kToneMp3);
+    CHECK_EQ(fclose(f), 0);
+    win32_init(dir);
+    g_plays.clear();
+    g_queues.clear();
+    g_queue_enabled = true;
+    g_queued_bytes = 0;
+    g_test_audio_pos = 0;
+    g_ch_streaming = false;
+    uint32_t name = sc(0x100);
+    gm_put_str(name, "music\\test.mp3", 0x100);
+    uint32_t s = call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {1, name, 0});
+    CHECK(s != 0);
+    CHECK_EQ(g_plays.size(), 0u); // opening alone must not sound
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_volume@4"), {s}), 127u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+    call_shim(tramp("mss32.dll", "_AIL_start_stream@4"), {s});
+    mss32_frame_pump(nullptr);
+    CHECK_EQ(g_queues.size(), 0u);
+    g_queue_retired = true; // a refused frame is retained for the next tick
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), 0u);
+    g_queue_retired = false;
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_plays.size(), 1u);
+    CHECK(g_ch_streaming);
+    if (!g_plays.empty()) {
+        CHECK(host_audio_queued_bytes(g_plays[0].channel) > 0);
+        CHECK_EQ(g_plays[0].rate, 44100);
+        CHECK_EQ(g_plays[0].channels, 2);
+        CHECK_EQ(g_plays[0].bits, 16);
+        CHECK_EQ(g_plays[0].bytes + g_queued_bytes, 27648u);
+    }
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 4u);
+    // Decoder EOF is already reached, but queued samples still have to sound.
+    g_stream_played = 27648;
+    g_queued_bytes = 0;
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_volume@8"), {s, 64});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_volume@4"), {s}), 64u);
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_loop_count@8"), {s, 2});
+    call_shim(tramp("mss32.dll", "_AIL_start_stream@4"), {s});
+    mss32_frame_pump(&g_cpu);
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays.back().volume, -595);
+        CHECK_EQ(g_plays.back().bytes + g_queued_bytes, 2u * 27648u);
+        CHECK(g_plays.front().pcm == g_plays.back().pcm); // restart rewinds
+    }
+    g_stream_played = 2 * 27648;
+    g_queued_bytes = 0;
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_volume@8"), {s, 999});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_volume@4"), {s}), 127u);
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_loop_count@8"), {s, 0});
+    call_shim(tramp("mss32.dll", "_AIL_start_stream@4"), {s});
+    mss32_frame_pump(&g_cpu);
+    const uint32_t ahead = 44100 * 2 * 2;
+    CHECK(g_queued_bytes >= ahead && g_queued_bytes < ahead + 4608);
+    size_t before = g_queues.size();
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), before); // a full queue needs no more decoding
+    g_stream_played += g_queued_bytes;
+    g_queued_bytes = 0;
+    mss32_frame_pump(&g_cpu);
+    CHECK(g_queues.size() > before);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 4u);
+    call_shim(tramp("mss32.dll", "_AIL_close_stream@4"), {s});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+    before = g_queues.size();
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), before);
+    CHECK_EQ(g_queued_bytes, 0u);
+    gm_put_str(name, "music\\absent.mp3", 0x100);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {1, name, 0}), 0u);
+    g_queue_enabled = false;
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(music.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+}
+
 static void test_bink_smack_stubs() {
     cpu_reset();
     uint32_t name = sc(0x100);
@@ -9578,6 +9675,7 @@ int main() {
         {"Miles arities", test_mss32_arities},
         {"RIFF WAVE", test_riff_parse},
         {"Miles samples", test_mss32_sample},
+        {"Miles streams", test_mss32_stream},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},

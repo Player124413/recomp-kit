@@ -1,12 +1,13 @@
 // mss32.cpp - Miles Sound System 6 (mss32.dll) as a game imports it: 41
 // stdcall exports whose decorated names carry their arity (_AIL_name@bytes).
-// Samples play PCM WAVE images through shared host audio channels. Streams
-// remain silent; the 3D provider API reports "no providers" so a game can
+// Samples play PCM WAVE images and streams decode MP3 through shared host
+// audio channels. The 3D provider API reports "no providers" so a game can
 // use its plain 2D path. Every entry preserves the guest's stdcall stack.
 #include "com.h"
 #include "dx.h"
 #include "host_api.h"
 #include "riff.h"
+#include "mp3_source.h"
 #include "../runtime/imports.h"
 #include "../runtime/memory.h"
 #include "../runtime/win32.h"
@@ -95,12 +96,6 @@ void sample_update(Sample &s) {
         s.remaining = 0;
         s.playing = false;
     }
-}
-
-void sample_frame_pump(X86 *) {
-    for (auto &s : g_samples)
-        if (s.alive)
-            sample_update(s);
 }
 
 // Use CreateFileA's read resolver, including overlays, drive mapping and
@@ -252,6 +247,178 @@ void ail_sample_loop_count(X86 *c) {
     set_eax(c, s ? s->loops : 0);
 }
 
+// Stream handles own the encoded image, decoder and shared host channel.
+// All state is serviced on the guest frame seam; the host copies each PCM
+// submission. A refused chunk remains pending until a later frame accepts it.
+struct Stream {
+    bool alive = false, playing = false;
+    int32_t channel = -1, volume = 127;
+    uint32_t loops = 1, remaining = 1;
+    uint64_t submitted = 0;
+    Mp3Source source;
+    std::vector<int16_t> pending;
+    size_t pending_pos = 0;
+};
+std::vector<Stream> g_streams(64);
+
+Stream *stream_for(uint32_t handle) {
+    if (!handle || handle > g_streams.size())
+        return nullptr;
+    Stream &s = g_streams[handle - 1];
+    return s.alive ? &s : nullptr;
+}
+
+// Read through the runtime resolver, sharing CreateFileA's overlays, drive
+// mapping and case folding. Open does not play until AIL_start_stream.
+void ail_open_stream(X86 *c) {
+    set_eax(c, 0);
+    uint32_t name = arg(c, 1);
+    if (!name || !gm_valid(name, 1))
+        return;
+    std::string guest = gm_str(name);
+    std::string path = win32_host_path_op(guest, WIN32_FILE_READ);
+    int fd = path.empty() ? -1 : os_fd_open(path.c_str(), OS_O_RDONLY);
+    if (fd < 0) {
+        LOGW("mss32: open_stream(%s): cannot open %s", guest.c_str(), path.c_str());
+        return;
+    }
+    OsStat st{};
+    if (os_fd_stat(fd, &st) != 0 || !st.is_regular || !st.size || st.size > UINT32_MAX) {
+        os_fd_close(fd);
+        return;
+    }
+    std::vector<uint8_t> bytes((size_t)st.size);
+    size_t got = 0;
+    while (got < bytes.size()) {
+        int64_t n = os_fd_read(fd, bytes.data() + got, bytes.size() - got);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    os_fd_close(fd);
+    if (got != bytes.size()) {
+        LOGW("mss32: open_stream(%s): short read of %s", guest.c_str(), path.c_str());
+        return;
+    }
+    for (uint32_t i = 0; i < g_streams.size(); ++i) {
+        Stream &s = g_streams[i];
+        if (s.alive)
+            continue;
+        s = Stream{};
+        if (!s.source.open(bytes)) {
+            LOGW("mss32: open_stream(%s): not an MPEG audio file: %s", guest.c_str(), path.c_str());
+            return;
+        }
+        s.channel = dx_alloc_audio_channel();
+        if (s.channel < 0) {
+            s = Stream{};
+            return;
+        }
+        s.alive = true;
+        LOGV("mss32: open_stream(%s): %s, %u Hz, %u channel(s)", guest.c_str(), path.c_str(),
+             s.source.rate(), s.source.channels());
+        set_eax(c, i + 1);
+        return;
+    }
+}
+
+// Keep one second of appended PCM ahead. Decoder EOF is not playback EOF:
+// status stays playing until the host consumes the first play and all queues.
+void stream_update(Stream &s) {
+    if (!s.playing)
+        return;
+    uint32_t ahead = s.source.rate() * s.source.channels() * 2;
+    while (host_audio_queued_bytes(s.channel) < ahead) {
+        if (s.pending.empty()) {
+            if (!s.source.decode_next(s.pending)) {
+                if (s.loops != 0 && s.remaining <= 1)
+                    break;
+                if (s.remaining > 1)
+                    --s.remaining;
+                s.source.seek_frames(0);
+                if (!s.source.decode_next(s.pending))
+                    break;
+            }
+            s.pending_pos = 0;
+        }
+        uint32_t bytes = (uint32_t)(s.pending.size() - s.pending_pos) * 2;
+        int32_t taken = host_audio_queue(s.channel, s.pending.data() + s.pending_pos, bytes);
+        if (taken <= 0)
+            return;
+        s.submitted += (uint32_t)taken;
+        s.pending_pos += (uint32_t)taken / 2;
+        if (s.pending_pos >= s.pending.size())
+            s.pending.clear();
+    }
+    if (s.source.drained() && s.pending.empty() &&
+        host_audio_played_bytes(s.channel) >= s.submitted)
+        s.playing = false;
+}
+
+// Start with one decoded frame, then convert the channel so subsequent
+// frames append without restarting playback. Starting again rewinds.
+void ail_start_stream(X86 *c) {
+    if (Stream *s = stream_for(arg(c, 0))) {
+        host_audio_stop(s->channel);
+        s->playing = false;
+        s->pending.clear();
+        s->source.seek_frames(0);
+        s->remaining = s->loops;
+        if (s->source.decode_next(s->pending)) {
+            HostAudioPlay p{};
+            p.channel = s->channel;
+            p.pcm = s->pending.data();
+            p.bytes = (uint32_t)s->pending.size() * 2;
+            p.sample_rate = (int32_t)s->source.rate();
+            p.channels = (int32_t)s->source.channels();
+            p.bits = 16;
+            p.volume = miles_volume_mb(s->volume);
+            host_audio_play(&p);
+            s->submitted = p.bytes;
+            s->pending.clear();
+            s->playing = host_audio_stream(s->channel) >= 0;
+            if (!s->playing)
+                host_audio_stop(s->channel);
+        }
+    }
+    set_eax(c, 0);
+}
+
+void ail_close_stream(X86 *c) {
+    if (Stream *s = stream_for(arg(c, 0))) {
+        host_audio_stop(s->channel);
+        dx_free_audio_channel(s->channel);
+        *s = Stream{};
+    }
+    set_eax(c, 0);
+}
+
+void ail_stream_status(X86 *c) {
+    Stream *s = stream_for(arg(c, 0));
+    if (s)
+        stream_update(*s);
+    set_eax(c, s && s->playing ? SMP_PLAYING : SMP_DONE);
+}
+
+void ail_set_stream_volume(X86 *c) {
+    if (Stream *s = stream_for(arg(c, 0))) {
+        s->volume = std::clamp((int32_t)arg(c, 1), 0, 127);
+        host_audio_set_volume(s->channel, miles_volume_mb(s->volume));
+    }
+    set_eax(c, 0);
+}
+
+void ail_stream_volume(X86 *c) {
+    Stream *s = stream_for(arg(c, 0));
+    set_eax(c, s ? (uint32_t)s->volume : 0);
+}
+
+void ail_set_stream_loop_count(X86 *c) {
+    if (Stream *s = stream_for(arg(c, 0)))
+        s->remaining = s->loops = arg(c, 1);
+    set_eax(c, 0);
+}
+
 void ret0(X86 *c) {
     set_eax(c, 0);
 }
@@ -283,13 +450,13 @@ const ImportShim g_mss32_shims[] = {
     AIL(set_sample_loop_count, 8, ail_set_sample_loop_count),
     AIL(sample_loop_count, 4, ail_sample_loop_count),
     AIL(set_sample_reverb, 16, ret0),
-    AIL(open_stream, 12, ret0),
-    AIL(start_stream, 4, ret0),
-    AIL(close_stream, 4, ret0),
-    AIL(stream_status, 4, ret_done),
-    AIL(set_stream_volume, 8, ret0),
-    AIL(stream_volume, 4, ret0),
-    AIL(set_stream_loop_count, 8, ret0),
+    AIL(open_stream, 12, ail_open_stream),
+    AIL(start_stream, 4, ail_start_stream),
+    AIL(close_stream, 4, ail_close_stream),
+    AIL(stream_status, 4, ail_stream_status),
+    AIL(set_stream_volume, 8, ail_set_stream_volume),
+    AIL(stream_volume, 4, ail_stream_volume),
+    AIL(set_stream_loop_count, 8, ail_set_stream_loop_count),
     AIL(enumerate_3D_providers, 12, ret0),
     AIL(open_3D_provider, 4, ret1),
     AIL(close_3D_provider, 4, ret0),
@@ -310,11 +477,21 @@ const ImportShim g_mss32_shims[] = {
 
 } // namespace
 
+void mss32_frame_pump(X86 *c) {
+    if (!c)
+        return;
+    for (auto &s : g_samples)
+        if (s.alive)
+            sample_update(s);
+    for (auto &s : g_streams)
+        if (s.alive)
+            stream_update(s);
+}
+
 void mss32_register() {
     static bool done = false;
     if (done)
         return;
     done = true;
     imports_register(g_mss32_shims, std::size(g_mss32_shims));
-    host_set_frame_pump(sample_frame_pump);
 }

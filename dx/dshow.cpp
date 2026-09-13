@@ -38,6 +38,7 @@
 #include "com.h"
 #include "dx.h"
 #include "host_api.h"
+#include "mp3_source.h"
 #include "../runtime/memory.h"
 #include "../runtime/win32.h"
 
@@ -48,25 +49,6 @@
 #include <map>
 #include <string>
 #include <vector>
-
-#if defined(__clang__)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Weverything"
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wall"
-#pragma GCC diagnostic ignored "-Wextra"
-#pragma GCC diagnostic ignored "-Wunused-function"
-#pragma GCC diagnostic ignored "-Wsign-compare"
-#endif
-#define MINIMP3_IMPLEMENTATION
-#define MINIMP3_NO_SIMD
-#include "../third_party/minimp3/minimp3.h"
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
 
 #define IID_BYTES(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7)                                         \
     {(uint8_t)((a) & 0xff),                                                                        \
@@ -172,16 +154,13 @@ const uint32_t kMaxRefusals = 120;
 struct Source {
     // The file. The whole of it is read once and decoded a frame at a time.
     bool loaded = false;
-    std::string name;           // the guest path, for the log
-    std::vector<uint8_t> bytes; // the file
-    size_t offset = 0;          // next undecoded byte
-    mp3dec_t dec;
+    std::string name; // the guest path, for the log
+    Mp3Source decoder;
+    size_t file_bytes = 0;
     int hz = 0, channels = 0;
     std::vector<int16_t> carry; // decoded, not yet delivered
     size_t carry_pos = 0;
-    uint64_t delivered = 0;       // PCM frames taken from the decoder since the last seek
-    bool drained = false;         // the decoder has nothing more
-    int64_t duration_frames = -1; // lazily counted
+    uint64_t delivered = 0; // PCM frames taken from the decoder since the last seek
 
     // Playback through the graph.
     int32_t channel = -1;
@@ -216,52 +195,18 @@ Source *source_of(const ComObj *mm) {
     return it != sources().end() && it->second.loaded ? &it->second : nullptr;
 }
 
-// Decodes frames until one yields samples. False at the end of the file.
+// The decoder owns the encoded bytes; DirectShow retains a partially read
+// PCM frame when the guest's buffer is smaller than the decoder's output.
 bool decode_next(Source &s) {
-    int16_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
-    while (s.offset < s.bytes.size()) {
-        mp3dec_frame_info_t info;
-        int n = mp3dec_decode_frame(&s.dec, s.bytes.data() + s.offset,
-                                    (int)(s.bytes.size() - s.offset), pcm, &info);
-        if (info.frame_bytes <= 0)
-            break;
-        s.offset += (size_t)info.frame_bytes;
-        if (n > 0) {
-            if (!s.hz) {
-                s.hz = info.hz;
-                s.channels = info.channels;
-            }
-            s.carry.assign(pcm, pcm + n * info.channels);
-            s.carry_pos = 0;
-            return true;
-        }
-    }
-    s.drained = true;
-    return false;
+    s.carry_pos = 0;
+    return s.decoder.decode_next(s.carry);
 }
 
-void rewind(Source &s) {
-    s.offset = 0;
-    mp3dec_init(&s.dec);
+void seek_frames(Source &s, uint64_t target) {
+    s.decoder.seek_frames(target);
     s.carry.clear();
     s.carry_pos = 0;
-    s.delivered = 0;
-    s.drained = false;
-}
-
-// Puts the decoder at `target` PCM frames, parsing frames without decoding
-// them on the way.
-void seek_frames(Source &s, uint64_t target) {
-    rewind(s);
-    while (s.delivered < target && s.offset < s.bytes.size()) {
-        mp3dec_frame_info_t info;
-        int n = mp3dec_decode_frame(&s.dec, s.bytes.data() + s.offset,
-                                    (int)(s.bytes.size() - s.offset), nullptr, &info);
-        if (info.frame_bytes <= 0)
-            break;
-        s.offset += (size_t)info.frame_bytes;
-        s.delivered += (uint64_t)n;
-    }
+    s.delivered = s.decoder.position_frames();
 }
 
 // Copies up to `want` bytes of the next PCM into `dst`, whole frames only.
@@ -295,42 +240,26 @@ bool load_source(Source &s, const std::string &host_path) {
         fclose(f);
         return false;
     }
-    s.bytes.resize((size_t)n);
-    size_t got = fread(s.bytes.data(), 1, (size_t)n, f);
+    std::vector<uint8_t> bytes((size_t)n);
+    size_t got = fread(bytes.data(), 1, (size_t)n, f);
     fclose(f);
-    s.bytes.resize(got);
-    s.hz = s.channels = 0;
-    s.duration_frames = -1;
-    s.pos = 0;
-    rewind(s);
-    // The format comes from the first audible frame, which stays decoded for
-    // the first read.
-    if (!decode_next(s) || s.hz <= 0 || s.channels <= 0) {
-        s.bytes.clear();
+    bytes.resize(got);
+    s.file_bytes = got;
+    s.pos = s.delivered = 0;
+    s.carry.clear();
+    s.carry_pos = 0;
+    // The format comes from the first audible frame, retained for the first read.
+    if (!s.decoder.open(bytes))
         return false;
-    }
+    s.hz = (int)s.decoder.rate();
+    s.channels = (int)s.decoder.channels();
+    decode_next(s);
     s.loaded = true;
     return true;
 }
 
 int64_t duration_frames(Source &s) {
-    if (s.duration_frames >= 0)
-        return s.duration_frames;
-    mp3dec_t dec;
-    mp3dec_init(&dec);
-    size_t off = 0;
-    int64_t total = 0;
-    while (off < s.bytes.size()) {
-        mp3dec_frame_info_t info;
-        int n = mp3dec_decode_frame(&dec, s.bytes.data() + off, (int)(s.bytes.size() - off),
-                                    nullptr, &info);
-        if (info.frame_bytes <= 0)
-            break;
-        off += (size_t)info.frame_bytes;
-        total += n;
-    }
-    s.duration_frames = total;
-    return total;
+    return s.decoder.duration_frames();
 }
 
 // STREAM_TIME and REFERENCE_TIME are 100 ns units.
@@ -596,7 +525,7 @@ void pump(Source &s) {
     if (s.pending_n && !offer(s, s.pending_at, s.pending_n))
         return;
     uint64_t remaining = outstanding_bytes(s);
-    if (!s.drained || s.carry_pos < s.carry.size() || s.pending_n) {
+    if (!s.decoder.drained() || s.carry_pos < s.carry.size() || s.pending_n) {
         while (remaining < kAheadBytes) {
             uint32_t at = 0;
             uint32_t n = decode_chunk(s, &at);
@@ -863,7 +792,7 @@ void MM_OpenFile(X86 *c) {
     if (!mm->dsh_stream)
         media_stream_of(mm);
     LOGV("dshow: OpenFile(%s): %d Hz, %d channel(s), %zu bytes", guest.c_str(), s.hz, s.channels,
-         s.bytes.size());
+         s.file_bytes);
     com_ret(c, S_OK);
 }
 
@@ -1531,7 +1460,7 @@ void ME_WaitForCompletion(X86 *c) {
         com_ret(c, E_FAIL);
         return;
     }
-    bool done = !t.s->running && t.s->loaded && t.s->drained;
+    bool done = !t.s->running && t.s->loaded && t.s->decoder.drained();
     if (out && gm_valid(out, 4))
         wr32(out, done ? EC_COMPLETE : 0);
     com_ret(c, done ? S_OK : E_ABORT);

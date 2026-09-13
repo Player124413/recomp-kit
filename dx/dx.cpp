@@ -589,6 +589,7 @@ void dx_register_shims() {
     // the audio pump's guest callbacks, the order the direct call used to have.
     host_set_frame_pump(ddraw_frame_pump);
     host_set_frame_pump(qmixer_frame_pump);
+    host_set_frame_pump(mss32_frame_pump);
     host_set_frame_pump(dshow_frame_pump);
 }
 
