@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Smoke scripts: `button <left|right|middle> <down|up>` presses or releases a
+  mouse button where the pointer is and leaves it, so the moves in between
+  are a drag; `click` remains a press and a scheduled release.
 - VERSION.dll serves the executable's own version resource out of the mapped
   image: `GetFileVersionInfoSizeA`/`GetFileVersionInfoA` for the game's module
   name, `VerQueryValueA` for `\`, `\VarFileInfo\Translation` and

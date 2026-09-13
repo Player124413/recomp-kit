@@ -15,6 +15,8 @@
 //                             game's own pointer to the top-left corner, which
 //                             is the only position a script can be sure of
 //   click left 320 140        move there, press, release
+//   button right down         press (or up: release) where the pointer is, and
+//                             leave it: the moves until `button right up` are a drag
 //   move entity 1815         move to the entity's attributed body centre
 //   move world 5376 55040 128 move to the projected world destination
 //                            Use wait 800 before clicking to settle guest picking.
@@ -184,6 +186,7 @@ enum HostScriptOp {
     HOST_SCRIPT_MOVE,
     HOST_SCRIPT_MOVEBY,
     HOST_SCRIPT_CLICK,
+    HOST_SCRIPT_BUTTON, // press or release a mouse button where the pointer is
     HOST_SCRIPT_KEY,
     HOST_SCRIPT_DUMP,
     HOST_SCRIPT_EXPECT,

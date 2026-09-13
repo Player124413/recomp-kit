@@ -1219,6 +1219,16 @@ void run_step(const HostScriptStep &step) {
             g_presents + host_script_input_hold_frames(kClickHoldMs, host_pinned_clock_step());
         g_press_at_ms = boot_guest_millis();
         break;
+    case HOST_SCRIPT_BUTTON:
+        // A press that stays down until the script releases it: the moves in
+        // between are a drag. Nothing is scheduled, unlike a click's release.
+        if (step.down) {
+            if (press_button((int)step.button, true))
+                g_holding_button = -1; // the script owns this release
+        } else {
+            press_button((int)step.button, false);
+        }
+        break;
     case HOST_SCRIPT_KEY: {
         HostKeyMapping m = host_key_mapping_for_dik(step.dik);
         if (!m.dik)

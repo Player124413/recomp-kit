@@ -292,6 +292,26 @@ int host_script_parse(const char *text, HostScriptStep *out, int max, char *erro
                 step.x = (int32_t)vx;
                 step.y = (int32_t)vy;
             }
+        } else if (equal_nocase(verb, "button")) {
+            char *which = word(&cursor);
+            char *dir = word(&cursor);
+            if (!which || !dir)
+                return fail(line_number, "button needs left|right|middle and down|up", nullptr);
+            if (equal_nocase(which, "left"))
+                step.button = 0;
+            else if (equal_nocase(which, "right"))
+                step.button = 1;
+            else if (equal_nocase(which, "middle"))
+                step.button = 2;
+            else
+                return fail(line_number, "button needs left, right or middle", which);
+            if (equal_nocase(dir, "down"))
+                step.down = 1;
+            else if (equal_nocase(dir, "up"))
+                step.down = 0;
+            else
+                return fail(line_number, "button needs down or up", dir);
+            step.op = HOST_SCRIPT_BUTTON;
         } else if (equal_nocase(verb, "key")) {
             char *name = word(&cursor);
             char *dir = word(&cursor);

@@ -529,11 +529,29 @@ static void test_script_parsing() {
     // integrates the deltas itself and started its pointer wherever it chose.
     const char *relative = "moveby -2000 -2000\nmoveby 320 140\n";
     CHECK_EQ(host_script_parse(relative, steps, 64, err, sizeof err), 2);
+
     CHECK_EQ(steps[0].op, HOST_SCRIPT_MOVEBY);
     CHECK_EQ(steps[0].x, -2000);
     CHECK_EQ(steps[0].y, -2000);
     CHECK_EQ(steps[1].x, 320);
     CHECK_EQ(steps[1].y, 140);
+
+    // A button held across moves: how a drag is scripted. `button` presses or
+    // releases without moving the pointer, so the moves between them are the
+    // drag; a game that pans on a right-button drag can be driven this way.
+    const char *drag = "button right down\n"
+                       "move 400 260\n"
+                       "wait 100\n"
+                       "button right up\n";
+    CHECK_EQ(host_script_parse(drag, steps, 64, err, sizeof err), 3);
+    CHECK_EQ(steps[0].op, HOST_SCRIPT_BUTTON);
+    CHECK_EQ(steps[0].button, 1);
+    CHECK_EQ(steps[0].down, 1);
+    CHECK_EQ(steps[1].op, HOST_SCRIPT_MOVE);
+    CHECK_EQ(steps[2].op, HOST_SCRIPT_BUTTON);
+    CHECK_EQ(steps[2].down, 0);
+    CHECK_EQ(steps[2].at_ms, 100);
+    CHECK_EQ(host_script_parse("button sideways down\n", steps, 64, err, sizeof err), -1);
 
     // A key a script names has to be one the host can actually press, by the
     // same scan code the real keyboard produces.
