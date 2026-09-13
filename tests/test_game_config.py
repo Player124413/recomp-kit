@@ -49,6 +49,20 @@ class LoadTests(unittest.TestCase):
             self.assertIn('#define RECOMP_GAME_DIR "%s"' % game.resolve().as_posix(), header)
             self.assertIn('#define RECOMP_KIT_DIR "%s"' % ROOT.resolve().as_posix(), header)
 
+    def test_touch_keypad_knob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            base = stub[:stub.index("[touch]")] + stub[stub.index("[bundle]"):]  # without the stub's own [touch]
+            (game / "game.toml").write_text(base)
+            self.assertIn("#define RECOMP_TOUCH_KEYPAD_HIDDEN 0", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[touch]\nkeypad = "hidden"\n')
+            self.assertIn("#define RECOMP_TOUCH_KEYPAD_HIDDEN 1", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[touch]\nkeypad = "sometimes"\n')
+            with self.assertRaises(ValueError):
+                game_config.load(game)
+
     def test_missing_key_is_an_error_naming_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

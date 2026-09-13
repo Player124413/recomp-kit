@@ -27,6 +27,10 @@ def load(game_dir):
     translate = cfg.setdefault("translate", {})
     cfg.setdefault("hooks", {})
     cfg.setdefault("bundle", {}).setdefault("exclude", [])
+    touch = cfg.setdefault("touch", {})
+    touch.setdefault("keypad", "auto")
+    if touch["keypad"] not in ("auto", "hidden"):
+        raise ValueError('%s: [touch] keypad must be "auto" or "hidden", not %r' % (source, touch["keypad"]))
     globals_path = game_dir / translate.get("globals", "globals.toml")
     with globals_path.open("rb") as fh:
         cfg["globals"] = tomllib.load(fh).get("globals", {})

@@ -12,6 +12,8 @@
 #include "mods_internal.h"
 #include "options_menu.h"
 #include "display_settings.h"
+#include "keypad_settings.h"
+#include "game_config.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +34,7 @@ struct Row {
     bool is_menu;
     uint32_t index;
     bool is_display = false;
+    bool is_keypad = false;
 };
 std::vector<Row> g_rows;
 
@@ -41,11 +44,18 @@ void rebuild() {
     g_lines.clear();
     g_index.clear();
     g_rows.clear();
-    if (g_filter.empty())
+    if (g_filter.empty()) {
         for (int i = 0; i < DISPLAY_ROW_COUNT; ++i) {
             g_lines.push_back(mods_display_line(DisplayRow(i)));
             g_rows.push_back({false, uint32_t(i), true});
         }
+        for (int i = 0; i < KEYPAD_ROW_COUNT; ++i) {
+            g_lines.push_back(mods_keypad_line(KeypadRow(i)));
+            Row row{false, uint32_t(i)};
+            row.is_keypad = true;
+            g_rows.push_back(row);
+        }
+    }
     for (uint32_t i = 0; i < mods_menu_entry_count(); ++i) {
         uint32_t owner = 0;
         const char *path = nullptr, *label = nullptr;
@@ -91,6 +101,11 @@ void nudge(int delta) {
         return;
     if (g_rows[g_cursor].is_display) {
         mods_display_nudge(DisplayRow(g_rows[g_cursor].index), delta);
+        rebuild();
+        return;
+    }
+    if (g_rows[g_cursor].is_keypad) {
+        mods_keypad_nudge(KeypadRow(g_rows[g_cursor].index), delta);
         rebuild();
         return;
     }
@@ -230,6 +245,7 @@ void mods_page_init() {
     // hosts use the same committed list from the repository working directory.
     mods_display_load_modes("tools/recomp/baseline/classic-modes.json");
     mods_display_init();
+    mods_keypad_init(RECOMP_TOUCH_KEYPAD_HIDDEN);
     mods_input_remove_all(MODS_OWNER_RUNTIME);
     uint32_t id = 0;
     // Owned by the runtime, so no mod's rollback removes the page's keyboard.

@@ -2,6 +2,7 @@
 // transaction a failed mod init rolls back.
 #include "mods_tests.h"
 #include "../mods_internal.h"
+#include "../keypad_settings.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
@@ -125,4 +126,35 @@ MOD_TEST_SUITE(settings_entries_are_ordered_and_labelled) {
     MOD_CHECK(mods_settings_entry(1, &owner, &mod_id, &key, &label, &kind, &value, &min, &max));
     MOD_CHECK_EQ(owner, 3u);
     MOD_CHECK(!mods_settings_entry(2, &owner, &mod_id, &key, &label, &kind, &value, &min, &max));
+}
+
+MOD_TEST_SUITE(keypad_settings_round_trip) {
+    fresh();
+    mods_keypad_reset();
+    mods_keypad_init(0);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 1);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 1);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 1);
+    MOD_CHECK_EQ(mods_keypad_set(KEYPAD_SIZE_ROW, 7), POP_OK); // clamped into the range
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
+    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_LEFT_ROW, -1), POP_OK);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
+    int64_t v = -1;
+    MOD_CHECK_EQ(mods_settings_get(MODS_OWNER_RUNTIME, "left", &v), POP_OK);
+    MOD_CHECK_EQ(v, 0);
+    MOD_CHECK(mods_keypad_line(KEYPAD_LEFT_ROW).find("hidden") != std::string::npos);
+    MOD_CHECK(mods_keypad_line(KEYPAD_SIZE_ROW).find("Large") != std::string::npos);
+    // The saved values come back on the next init, under the host.keypad/ keys.
+    mods_settings_reset();
+    mods_keypad_reset();
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_keypad_init(0);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
+    // A game that starts hidden does so only without a saved value.
+    mods_settings_reset();
+    mods_keypad_reset();
+    mods_keypad_init(1);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 0);
 }
