@@ -1634,3 +1634,8 @@ extern "C" int32_t host_audio_is_playing(int32_t id) {
     audio_advance(id, &playing);
     return playing ? 1 : 0;
 }
+
+void host_audio_pause(bool paused) {
+    if (g_sink)
+        g_sink->pause(paused);
+}

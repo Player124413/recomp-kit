@@ -44,6 +44,8 @@ extern "C" __attribute__((weak)) void host_present_mode(int *w, int *h, int *bpp
         *bpp = 0;
 }
 
+static std::atomic<bool> g_present_suspended{false};
+
 namespace {
 using Clock = std::chrono::steady_clock;
 template <class T> struct AtomicShared {
@@ -705,7 +707,10 @@ struct Service : std::enable_shared_from_this<Service> {
         }
         {
             // The worker is the only caller of acquire and present.
-            gpu::Texture drawable = offscreen || !chain ? gpu::Texture{} : device->acquire(chain);
+            // Suspended (iOS background): compose and complete, but never touch a drawable.
+            gpu::Texture drawable = offscreen || !chain || g_present_suspended.load()
+                                        ? gpu::Texture{}
+                                        : device->acquire(chain);
             if (!offscreen && !drawable) {
                 if (f) {
                     std::lock_guard lock(mutex);
@@ -1560,4 +1565,11 @@ extern "C" float host_display_aspect() {
 }
 extern "C" uint64_t host_display_epoch() {
     return host_present_transition_epoch();
+}
+
+void host_present_suspend(bool suspended) {
+    g_present_suspended.store(suspended);
+}
+bool host_present_suspended(void) {
+    return g_present_suspended.load();
 }

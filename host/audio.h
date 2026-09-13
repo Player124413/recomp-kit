@@ -145,6 +145,8 @@ double host_audio_render_rate(void);
 // is measured and why. Non-zero if the capture is on.
 int host_audio_capture_begin(const char *path);
 void host_audio_capture_end(void);
+// Pause or resume the output device without stopping the engine (app lifecycle).
+void host_audio_pause(bool paused);
 
 // Channels with something playing on them, which is what separates a silence
 // that is correct from one that is a fault.

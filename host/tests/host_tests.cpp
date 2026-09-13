@@ -108,6 +108,14 @@ static void check(bool ok, const char *what, const char *file, int line) {
 // ===========================================================================
 // present.mm
 // ===========================================================================
+static void test_present_suspend_flag() {
+    CHECK(!host_present_suspended());
+    host_present_suspend(true);
+    CHECK(host_present_suspended());
+    host_present_suspend(false);
+    CHECK(!host_present_suspended());
+}
+
 static void test_palette_expansion() {
     // A 3x2 surface whose pitch is wider than its width, which is what a real
     // driver hands back: the padding must not be read as pixels.
@@ -8770,6 +8778,7 @@ int main(int argc, char **argv) {
         test_entity_click_wait();
         test_entity_completed_present_freshness();
         test_drain_wanted();
+        test_present_suspend_flag();
         printf("script: %d checks, %d failures\n", g_checks, g_failures);
         mem_shutdown();
         return g_failures ? 1 : 0;

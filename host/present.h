@@ -219,6 +219,10 @@ void host_stats_reset(void);
 extern "C" {
 #endif
 void host_present_stop(void); // only after the guest scheduler has stopped
+// While suspended the worker still composes and completes frames but acquires
+// no drawable and presents nothing: what an iOS app must do in the background.
+void host_present_suspend(bool suspended);
+bool host_present_suspended(void);
 void host_frame_seal(void);
 void host_present_first_write(void);
 void host_present_stage_rgba(const uint8_t *rgba, int w, int h);

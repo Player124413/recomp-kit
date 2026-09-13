@@ -16,5 +16,7 @@ struct AudioSink {
                        std::function<void(float *left, float *right, uint32_t frames)> render) = 0;
     virtual void stop() = 0;
     virtual bool running() const = 0;
+    // Stop pulling from the device without tearing the stream down; resume later.
+    virtual void pause(bool paused) = 0;
 };
 std::unique_ptr<AudioSink> make_sdl_sink();

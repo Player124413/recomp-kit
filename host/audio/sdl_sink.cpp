@@ -58,6 +58,14 @@ class SdlSink final : public AudioSink {
         SDL_ResumeAudioStreamDevice(stream_);
         return true;
     }
+    void pause(bool paused) override {
+        if (!stream_)
+            return;
+        if (paused)
+            SDL_PauseAudioStreamDevice(stream_);
+        else
+            SDL_ResumeAudioStreamDevice(stream_);
+    }
     void stop() override {
         if (!stream_)
             return;
