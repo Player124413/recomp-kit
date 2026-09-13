@@ -1108,6 +1108,106 @@ static void test_blt_and_colorkey() {
     }
 }
 
+// A game can keep the pointer Lock handed it and draw through it between
+// frames. The next blit and present must notice those writes without Unlock.
+static void test_retained_pointer_writes() {
+    g_presents.clear();
+    cpu_reset();
+    CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, sc(0), 0}), DD_OK);
+    uint32_t dd = rd32(sc(0));
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 16}), DD_OK);
+
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_PRIMARYSURFACE);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(4), 0}), DD_OK);
+    uint32_t prim = rd32(sc(4));
+
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY);
+    wr32(desc + DDSD_OFF_dwWidth, 640);
+    wr32(desc + DDSD_OFF_dwHeight, 480);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(8), 0}), DD_OK);
+    uint32_t back = rd32(sc(8));
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(12), 0}), DD_OK);
+    uint32_t untouched = rd32(sc(12));
+
+    desc = sc(0x200);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    CHECK_EQ(call_method(back, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t pixels = rd32(desc + DDSD_OFF_lpSurface);
+    CHECK(pixels != 0);
+    CHECK_EQ(rd32(desc + DDSD_OFF_lPitch), 1280u);
+    CHECK_EQ(call_method(back, S_Unlock, {pixels}), DD_OK);
+    uint32_t back_id = com_this(back)->id;
+    uint32_t rev_before = ddraw_surface_revision(back_id);
+    for (uint32_t y = 0; y < 480; ++y)
+        for (uint32_t x = 0; x < 640; ++x)
+            wr16(pixels + y * 1280 + x * 2, 0xe482);
+    uint32_t rect = sc(0x300);
+    wr32(rect, 0);
+    wr32(rect + 4, 0);
+    wr32(rect + 8, 640);
+    wr32(rect + 12, 480);
+    HostFrameHandle frame = host_frame_current();
+    uint32_t records_before = host_frame_record_count(frame);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, back, rect, 0}), DD_OK);
+    CHECK(ddraw_surface_revision(back_id) != rev_before);
+    CHECK_EQ(host_frame_record_count(frame), records_before + 2);
+    const HostBlitRecord *write = host_frame_record(frame, records_before);
+    CHECK(write != nullptr && write->src.surface == HOST_SRC_CPU);
+    if (write && write->src.surface == HOST_SRC_CPU) {
+        CHECK_EQ(write->dst, back_id);
+        CHECK_EQ(write->cpu_bpp, 16u);
+        CHECK_EQ(write->cpu_pitch, 1280);
+        CHECK_EQ(((const uint16_t *)write->cpu_pixels)[200 * 640 + 300], 0xe482u);
+        CHECK_EQ(write->coverage[200 * 640 + 300], 1u);
+    }
+    uint32_t pdesc = sc(0x400);
+    gm_zero(pdesc, DDSD_SIZE);
+    wr32(pdesc, DDSD_SIZE);
+    CHECK_EQ(call_method(prim, S_Lock, {0, pdesc, DDLOCK_READONLY | DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t ppix = rd32(pdesc + DDSD_OFF_lpSurface);
+    CHECK_EQ(rd16(ppix + 200 * 1280 + 300 * 2), 0xe482u);
+    CHECK_EQ(call_method(prim, S_Unlock, {ppix}), DD_OK);
+    uint32_t rev_after = ddraw_surface_revision(back_id);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, back, rect, 0}), DD_OK);
+    CHECK_EQ(ddraw_surface_revision(back_id), rev_after);
+
+    // Regular Blt must see even a single changed pixel at the last row's end.
+    wr16(pixels + 479 * 1280 + 639 * 2, 0x07e0);
+    CHECK_EQ(call_method(prim, S_Blt, {0, back, rect, DDBLT_WAIT, 0}), DD_OK);
+    CHECK(ddraw_surface_revision(back_id) != rev_after);
+    CHECK_EQ(rd16(ppix + 479 * 1280 + 639 * 2), 0x07e0u);
+
+    // A surface never locked writable is untouched, even if its bytes change.
+    CHECK_EQ(call_method(untouched, S_Lock, {0, desc, DDLOCK_READONLY | DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t upix = rd32(desc + DDSD_OFF_lpSurface);
+    CHECK_EQ(call_method(untouched, S_Unlock, {upix}), DD_OK);
+    uint32_t untouched_id = com_this(untouched)->id;
+    uint32_t untouched_rev = ddraw_surface_revision(untouched_id);
+    wr16(upix, 0x001f);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, untouched, rect, 0}), DD_OK);
+    CHECK_EQ(ddraw_surface_revision(untouched_id), untouched_rev);
+
+    // Direct writes through the primary's retained pointer reach present too.
+    CHECK_EQ(call_method(prim, S_Lock, {0, pdesc, DDLOCK_WAIT, 0}), DD_OK);
+    ppix = rd32(pdesc + DDSD_OFF_lpSurface);
+    CHECK_EQ(call_method(prim, S_Unlock, {ppix}), DD_OK);
+    uint32_t primary_rev = ddraw_surface_revision(com_this(prim)->id);
+    wr16(ppix + 200 * 1280 + 300 * 2, 0xf800);
+    ddraw_present(com_this(prim));
+    CHECK(ddraw_surface_revision(com_this(prim)->id) != primary_rev);
+    const Present &p = g_presents.back();
+    CHECK_EQ(((const uint16_t *)(p.pixels.data() + 200 * p.pitch))[300], 0xf800u);
+    primary_rev = ddraw_surface_revision(com_this(prim)->id);
+    ddraw_present(com_this(prim));
+    CHECK_EQ(ddraw_surface_revision(com_this(prim)->id), primary_rev);
+}
+
 // The same keyed blit at 16 bpp: a key is compared against whatever the
 // surface's pixels are, so the 5-6-5 path must key on the 16-bit value.
 static void test_colorkey_16bpp() {
@@ -9226,6 +9326,7 @@ int main() {
         {"resolution depth lifetime", test_resolution_depth_lifetime},
         {"gradient, flip, present", test_gradient_flip},
         {"blt and colour key", test_blt_and_colorkey},
+        {"retained pointer writes", test_retained_pointer_writes},
         {"display ABI", test_display_abi},
         {"record and coverage", test_record_basic_and_coverage},
         {"keyed blit coverage", test_keyed_blit_coverage_and_key_values},

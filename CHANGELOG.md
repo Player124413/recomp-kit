@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- DirectDraw: writes through a writable pointer retained after `Unlock` reach
+  the renderer before `Blt`, `BltFast` and primary presentation. Whole-rectangle
+  hashes detect the writes and share the written-lock CPU recording path;
+  surfaces never locked writable keep their existing path without hashing.
 - Bink: `BinkOpen` returns a 256-byte guest heap record with 640x480
   dimensions and zero frame counters, so a game skips an unavailable
   cinematic instead of treating an open failure as fatal. `BinkClose`

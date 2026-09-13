@@ -154,6 +154,9 @@ struct ComObj {
     uint32_t ckey_dst_lo = 0, ckey_dst_hi = 0;
     bool has_ckey_src = false, has_ckey_dst = false;
     int32_t lock_count = 0;
+    // Once handed a writable Lock pointer, the guest may keep using it forever.
+    bool retained_pointer = false;
+    uint64_t retained_hash = 0;
     bool is_primary = false;
     // True when the shim allocated `pixels` and must free them. False after
     // SetSurfaceDesc points the surface at a buffer the guest owns.

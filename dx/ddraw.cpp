@@ -311,6 +311,22 @@ uint32_t bytes_per_pixel(uint32_t bpp) {
     return bpp <= 8 ? 1u : (bpp <= 16 ? 2u : 4u);
 }
 
+// FNV-1a over every byte in the guest rectangle, without pitch padding or
+// sampling: even a one-pixel sprite must change the retained-pointer hash.
+uint64_t hash_rect(const ComObj *s, const int32_t r[4]) {
+    uint64_t h = 1469598103934665603ull;
+    uint32_t bb = bytes_per_pixel(s->bpp);
+    for (int32_t y = r[1]; y < r[3]; ++y) {
+        const uint8_t *row =
+            (const uint8_t *)gm_ptr(s->pixels + (uint32_t)y * s->pitch + (uint32_t)r[0] * bb);
+        for (int32_t i = 0, n = (r[2] - r[0]) * (int32_t)bb; i < n; ++i) {
+            h ^= row[i];
+            h *= 1099511628211ull;
+        }
+    }
+    return h;
+}
+
 // The recorder, defined below with the rest of the frame machinery. Declared
 // here because every write path above it has to call in.
 struct BlitKeys;
@@ -713,8 +729,15 @@ void surface_pixels_changed(ComObj *s) {
         return;
     // The content is now different from whatever any record referred to.
     ddraw_after_write(s);
-    if (s->is_primary)
+    if (s->is_primary) {
+        // This write already has a record. Do not rediscover it as a retained
+        // pointer write when presenting the primary below.
+        if (s->retained_pointer) {
+            int32_t full[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
+            s->retained_hash = hash_rect(s, full);
+        }
         ddraw_present(s);
+    }
     if (s->texture_handle)
         d3d_upload_texture(s);
     else
@@ -733,6 +756,15 @@ void ddraw_present(ComObj *s) {
         // Which surface is on screen decides which palette the screen is in,
         // so the change is a new version even though no palette was written.
         palette_now();
+    }
+    if (s->retained_pointer) {
+        int32_t full[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
+        uint32_t revision = ddraw_surface_revision(s->id);
+        ddraw_refresh_retained_writes(s, full);
+        // A changed primary was presented by surface_pixels_changed. Avoid
+        // submitting it twice when that notification returns here.
+        if (ddraw_surface_revision(s->id) != revision)
+            return;
     }
     // Whatever the Direct3D device drew belongs in these pixels before they
     // are read: on real hardware the rasterizer wrote here.
@@ -1974,6 +2006,79 @@ void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lo
     sh.armed = true;
 }
 
+namespace {
+// Record changed guest rectangles in frame-owned storage, then apply them to
+// the renderer before any readback. Lock diffs supply solid changed spans;
+// retained pointers supply the whole rectangle because they have no shadow.
+void record_cpu_write_rects(ComObj *s, const std::vector<HostDirtyRect> &boxes) {
+    uint32_t bb = bytes_per_pixel(s->bpp);
+    presenter_write();
+    for (auto box : boxes) {
+        int32_t x0 = box.x0, y0 = box.y0;
+        int32_t w = box.x1 - x0, h = box.y1 - y0;
+        Frame &f = current_frame();
+        HostBlitRecord *r = f.arena.alloc_n<HostBlitRecord>(1);
+        memset(r, 0, sizeof *r);
+        r->seq = g_seq++;
+        r->dst = s->id;
+        r->dst_generation = ddraw_surface_generation(s->id);
+        r->dst_x = x0;
+        r->dst_y = y0;
+        r->w = w;
+        r->h = h;
+        r->src.surface = HOST_SRC_CPU;
+        r->src.revision = 0;
+        r->src_x = 0;
+        r->src_y = 0;
+        // The payload is in the surface's own format, tightly packed, so a 16 bpp
+        // diff is never replayed as 8.
+        r->cpu_bpp = (uint8_t)s->bpp;
+        r->cpu_pitch = w * (int32_t)bb;
+        r->palette_version = palette_version_for(s);
+        r->is_upload = (s->caps & DDSCAPS_TEXTURE) || s->texture_handle ? 1 : 0;
+        r->after_first_draw = g_after_first_draw ? 1 : 0;
+        r->after_first_hud = g_after_first_hud ? 1 : 0;
+
+        uint8_t *pix = (uint8_t *)f.arena.alloc((size_t)r->cpu_pitch * h, 8);
+        uint8_t *cov = (uint8_t *)f.arena.alloc((size_t)w * h, 8);
+        for (int32_t y = 0; y < h; ++y) {
+            uint32_t row =
+                s->pixels + (uint32_t)((r->dst_y + y) * (int32_t)s->pitch + r->dst_x * (int32_t)bb);
+            memcpy(pix + (size_t)y * r->cpu_pitch, gm_ptr(row), (size_t)r->cpu_pitch);
+            memset(cov + (size_t)y * w, 1, (size_t)w);
+        }
+        r->cpu_pixels = pix;
+        r->coverage = cov;
+
+        {
+            auto pv = palettes().find(r->palette_version);
+            if (pv != palettes().end()) {
+                ++pv->second.frame_leases;
+                f.palette_leases.push_back(r->palette_version);
+            }
+        }
+        classify_record(f, *r);
+        f.records.push_back(r);
+        d3d_cpu_write(s, r);
+    }
+}
+} // namespace
+
+// A writable pointer stays writable after Unlock. Detect unannounced stores
+// under the guest baton, before a source read or primary present can read back
+// stale renderer pixels. Surfaces never locked writable pay no hashing cost.
+void ddraw_refresh_retained_writes(ComObj *s, const int32_t rect[4]) {
+    if (!s || !s->retained_pointer || !s->pixels)
+        return;
+    uint64_t hash = hash_rect(s, rect);
+    if (hash == s->retained_hash)
+        return;
+    s->retained_hash = hash;
+    record_cpu_write_rects(s, {{rect[0], rect[1], rect[2], rect[3]}});
+    ddraw_note_cpu_write_impl(s);
+    surface_pixels_changed(s);
+}
+
 // The diff, at the Unlock that closes this lock: one record for what the
 // guest's own stores changed, with the payload, coverage and format the compositor needs
 // to replay them. Returns whether anything changed at all - a lock that wrote
@@ -2072,56 +2177,13 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
         }
         previous = std::move(next);
     }
-    presenter_write();
-    for (auto box : boxes) {
-        int32_t x0 = box.x0, y0 = box.y0;
-        int32_t w = box.x1 - x0, h = box.y1 - y0;
-        Frame &f = current_frame();
-        HostBlitRecord *r = f.arena.alloc_n<HostBlitRecord>(1);
-        memset(r, 0, sizeof *r);
-        r->seq = g_seq++;
-        r->dst = s->id;
-        r->dst_generation = ddraw_surface_generation(s->id);
-        r->dst_x = sh.r[0] + x0;
-        r->dst_y = sh.r[1] + y0;
-        r->w = w;
-        r->h = h;
-        r->src.surface = HOST_SRC_CPU;
-        r->src.revision = 0;
-        r->src_x = 0;
-        r->src_y = 0;
-        // The payload is in the surface's own format, tightly packed, so a 16 bpp
-        // diff is never replayed as 8.
-        r->cpu_bpp = (uint8_t)s->bpp;
-        r->cpu_pitch = w * (int32_t)bb;
-        r->palette_version = palette_version_for(s);
-        r->is_upload = (s->caps & DDSCAPS_TEXTURE) || s->texture_handle ? 1 : 0;
-        r->after_first_draw = g_after_first_draw ? 1 : 0;
-        r->after_first_hud = g_after_first_hud ? 1 : 0;
-
-        uint8_t *pix = (uint8_t *)f.arena.alloc((size_t)r->cpu_pitch * h, 8);
-        uint8_t *cov = (uint8_t *)f.arena.alloc((size_t)w * h, 8);
-        for (int32_t y = 0; y < h; ++y) {
-            uint32_t row =
-                s->pixels + (uint32_t)((r->dst_y + y) * (int32_t)s->pitch + r->dst_x * (int32_t)bb);
-            memcpy(pix + (size_t)y * r->cpu_pitch, gm_ptr(row), (size_t)r->cpu_pitch);
-            for (int32_t x = 0; x < w; ++x)
-                cov[(size_t)y * w + x] = changed[(size_t)(y0 + y) * lw + (x0 + x)];
-        }
-        r->cpu_pixels = pix;
-        r->coverage = cov;
-
-        {
-            auto pv = palettes().find(r->palette_version);
-            if (pv != palettes().end()) {
-                ++pv->second.frame_leases;
-                f.palette_leases.push_back(r->palette_version);
-            }
-        }
-        classify_record(f, *r);
-        f.records.push_back(r);
-        d3d_cpu_write(s, r);
+    for (auto &box : boxes) {
+        box.x0 += sh.r[0];
+        box.x1 += sh.r[0];
+        box.y0 += sh.r[1];
+        box.y1 += sh.r[1];
     }
+    record_cpu_write_rects(s, boxes);
 
     // Anything still open under this lock has now been told about these
     // pixels, so its own "before" is re-based to what they are NOW. Two things
@@ -2304,6 +2366,7 @@ void Surface_Blt(X86 *c) {
         // which of its pixels may be written.
         if (keys.dst)
             ++g_access_ref().dstkey_read;
+        ddraw_refresh_retained_writes(src, sr);
         d3d_read_surface(src, sr, HOST_READ_BLT_SOURCE);
         if (keys.dst)
             d3d_read_surface(dst, d, HOST_READ_DSTKEY);
@@ -2384,6 +2447,7 @@ void Surface_BltFast(X86 *c) {
     ++g_access_ref().blt_source;
     if (keys.dst)
         ++g_access_ref().dstkey_read;
+    ddraw_refresh_retained_writes(src, sr);
     d3d_read_surface(src, sr, HOST_READ_BLT_SOURCE);
     if (keys.dst)
         d3d_read_surface(dst, d, HOST_READ_DSTKEY);
@@ -2767,6 +2831,8 @@ void Surface_Lock(X86 *c) {
     // lock can name a different rectangle, and one taken beneath a read-only
     // outer lock is the only record of what it wrote.
     lock_shadow_take(s, r, arg(c, 3), p);
+    if (!(arg(c, 3) & DDLOCK_READONLY))
+        s->retained_pointer = true;
     ++s->lock_count;
     com_ret(c, DD_OK);
 }
@@ -2980,8 +3046,13 @@ void Surface_Unlock(X86 *c) {
         ddraw_note_cpu_write_impl(s);
     // The screen and the renderer are told once, when the last lock is gone:
     // a nested Unlock leaves the guest still holding a pointer.
-    if (!s->lock_count)
+    if (!s->lock_count) {
+        if (s->retained_pointer) {
+            int32_t full[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
+            s->retained_hash = hash_rect(s, full);
+        }
         surface_pixels_changed(s);
+    }
     com_ret(c, DD_OK);
 }
 

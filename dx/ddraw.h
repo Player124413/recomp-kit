@@ -66,6 +66,9 @@ uint32_t ddraw_surface_generation(uint32_t surface_id);
 // nobody has leased.
 void ddraw_before_write(struct ComObj *s);
 void ddraw_after_write(struct ComObj *s);
+// Notice writes through a pointer retained after Unlock before a reader can
+// overwrite them. The rectangle is within the surface, with exclusive maxima.
+void ddraw_refresh_retained_writes(struct ComObj *s, const int32_t rect[4]);
 // IDirect3DTexture2::Load read a surface's pixels, which is one of the readers
 // the coherence contract names.
 void ddraw_note_texture_load(void);
