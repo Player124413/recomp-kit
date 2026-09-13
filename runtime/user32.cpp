@@ -439,6 +439,24 @@ void u_AdjustWindowRectEx(X86 *c) {
     set_eax(c, 1);
 }
 
+// ScreenToClient is ClientToScreen's inverse: the window's own position taken
+// off a point the game polled with GetCursorPos.
+void u_ScreenToClient(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    uint32_t p = arg(c, 1);
+    if (p && w) {
+        wr32(p + 0, rd32(p + 0) - (uint32_t)w->x);
+        wr32(p + 4, rd32(p + 4) - (uint32_t)w->y);
+    }
+    set_eax(c, w ? 1 : 0);
+}
+// One window is ever active and focused: the game's main window.
+void u_GetActiveWindow(X86 *c) {
+    set_eax(c, g_main_hwnd);
+}
+void u_SetFocus(X86 *c) {
+    set_eax(c, find_window(arg(c, 0)) ? g_main_hwnd : 0);
+}
 void u_ClientToScreen(X86 *c) {
     Window *w = find_window(arg(c, 0));
     uint32_t p = arg(c, 1);
@@ -1096,6 +1114,9 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "LoadIconA", 2, u_LoadIconA},
     {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
     {"USER32.dll", "CreateIconIndirect", 1, u_CreateIconIndirect},
+    {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
+    {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},
+    {"USER32.dll", "SetFocus", 1, u_SetFocus},
     {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
     {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
     {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},

@@ -1087,7 +1087,8 @@ static void test_gdi_and_com(X86 *c) {
     // version string comes from its data instead.
     uint32_t vh = scratch_block(4);
     check(call_import(c, "VERSION.dll", "GetFileVersionInfoSizeA", {put_str("x.exe"), vh}) == 0 &&
-              call_import(c, "VERSION.dll", "GetFileVersionInfoA", {put_str("x.exe"), 0, 0, 0}) == 0 &&
+              call_import(c, "VERSION.dll", "GetFileVersionInfoA", {put_str("x.exe"), 0, 0, 0}) ==
+                  0 &&
               call_import(c, "VERSION.dll", "VerQueryValueA", {0, put_str("\\"), vh, vh}) == 0,
           "VERSION.dll reports no version information");
 }
@@ -1209,6 +1210,18 @@ static void test_windows(X86 *c) {
     call_import(c, "USER32.dll", "GetClientRect", {hwnd, rc});
     check(rd32(rc + 8) == 640 && rd32(rc + 12) == 480, "GetClientRect -> %ux%u", rd32(rc + 8),
           rd32(rc + 12));
+    // A pointer game converts the cursor it polled with GetCursorPos into
+    // client coordinates; a window at the origin maps a point onto itself.
+    uint32_t pt = scratch_block(8);
+    wr32(pt, 123);
+    wr32(pt + 4, 45);
+    check(call_import(c, "USER32.dll", "ScreenToClient", {hwnd, pt}) == 1 && rd32(pt) == 123 &&
+              rd32(pt + 4) == 45,
+          "ScreenToClient through a window at the origin");
+    check(call_import(c, "USER32.dll", "GetActiveWindow", {}) == hwnd,
+          "GetActiveWindow is the main window");
+    check(call_import(c, "USER32.dll", "SetFocus", {hwnd}) == hwnd,
+          "SetFocus returns the window that had focus");
 
     check(call_import(c, "USER32.dll", "SetWindowLongA", {hwnd, 0, 0x1111}) == 0,
           "SetWindowLongA on the first extra dword");
