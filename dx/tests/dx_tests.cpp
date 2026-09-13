@@ -15,6 +15,7 @@
 #include "../com.h"
 #include "../dx.h"
 #include "../host_api.h"
+#include "../riff.h"
 #include "../ddraw.h"
 #include "../../runtime/memory.h"
 #include "../../runtime/win32.h"
@@ -259,8 +260,13 @@ static uint64_t g_queued_accepted = 0;
 // plays a sound on a named channel and refills behind it rather than
 // appending into a ring.
 static uint32_t g_voice_remaining = 0;
+// Existing tests assume a playing host; sample tests explicitly finish a voice.
+static std::map<int32_t, bool> g_sample_playing;
+static bool g_sample_tracking = false;
 
 void host_audio_play(const HostAudioPlay *p) {
+    if (g_sample_tracking)
+        g_sample_playing[p->channel] = true;
     PlayRecord r;
     r.channel = p->channel;
     r.rate = p->sample_rate;
@@ -334,6 +340,8 @@ uint32_t host_audio_voice_remaining_bytes(int32_t) {
 }
 
 void host_audio_stop(int32_t ch) {
+    if (g_sample_tracking)
+        g_sample_playing[ch] = false;
     g_stops.push_back(ch);
     g_queued_bytes = 0;
     g_voice_remaining = 0;
@@ -344,7 +352,9 @@ void host_audio_set_frequency(int32_t, uint32_t) {}
 uint32_t host_audio_position(int32_t) {
     return g_test_audio_pos;
 }
-int32_t host_audio_is_playing(int32_t) {
+int32_t host_audio_is_playing(int32_t ch) {
+    if (auto it = g_sample_playing.find(ch); g_sample_tracking && it != g_sample_playing.end())
+        return it->second ? 1 : 0;
     return 1;
 }
 
@@ -5631,14 +5641,184 @@ static void test_mss32_arities() {
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_startup@0"), {}), 1u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_enumerate_3D_providers@12"), {0, 0, 0}), 0u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_3D_provider@4"), {0}), 1u);
-    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {0}), 0u);
+    uint32_t sample = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {0});
+    CHECK(sample != 0);
+    call_shim(tramp("mss32.dll", "_AIL_release_sample_handle@4"), {sample});
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_3D_sample_handle@4"), {0}), 0u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {0, 0, 0}), 0u);
-    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {0}), 2u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {0}), 1u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {0}), 2u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_3D_sample_status@4"), {0}), 2u);
     CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_3D_orientation@28"), {0, 0, 0, 0, 0, 0, 0}),
              0u);
+}
+
+// A canonical 44-byte header and eight bytes of mono, 8-bit PCM at 22050 Hz.
+static uint32_t build_test_wave() {
+    uint32_t wav = sc(0x100);
+    static const uint8_t header[44] = {
+        'R', 'I', 'F', 'F', 44 + 8 - 8, 0, 0,   0,   'W', 'A',  'V',  'E', 'f', 'm',  't',
+        ' ', 16,  0,   0,   0,          1, 0,   1,   0,   0x22, 0x56, 0,   0,   0x22, 0x56,
+        0,   0,   1,   0,   8,          0, 'd', 'a', 't', 'a',  8,    0,   0,   0};
+    for (uint32_t i = 0; i < 44; ++i)
+        wr8(wav + i, header[i]);
+    for (uint32_t i = 0; i < 8; ++i)
+        wr8(wav + 44 + i, (uint8_t)(0x80 + i));
+    return wav;
+}
+
+static void test_riff_parse() {
+    cpu_reset();
+    uint32_t wav = build_test_wave();
+    RiffWave w{};
+    CHECK(riff_parse_wave(wav, 52, &w));
+    CHECK_EQ(w.pcm, wav + 44);
+    CHECK_EQ(w.pcm_bytes, 8u);
+    CHECK_EQ(w.rate, 22050u);
+    CHECK_EQ(w.channels, 1u);
+    CHECK_EQ(w.bits, 8u);
+    wr8(wav + 20, 2); // format tag 2 (ADPCM) is refused
+    CHECK(!riff_parse_wave(wav, 52, &w));
+    build_test_wave();
+    CHECK(!riff_parse_wave(wav, 11, &w));
+    CHECK(!riff_parse_wave(wav, 25, &w)); // truncated fmt
+    CHECK(!riff_parse_wave(0xfffffff0u, 52, &w));
+    CHECK(!riff_parse_wave(wav, 52, nullptr));
+    wr32(wav + 16, 0xffffffffu); // chunk arithmetic must not wrap
+    CHECK(!riff_parse_wave(wav, 52, &w));
+    build_test_wave();
+    CHECK(riff_parse_wave(wav, 48, &w)); // data is bounded by the supplied image
+    CHECK_EQ(w.pcm_bytes, 4u);
+    // An odd-sized unknown chunk has one pad byte before the data chunk.
+    build_test_wave();
+    memmove(g_mem + wav + 46, g_mem + wav + 36, 16);
+    memcpy(g_mem + wav + 36, "JUNK", 4);
+    wr32(wav + 40, 1);
+    wr16(wav + 44, 0);
+    wr32(wav + 4, 54);
+    CHECK(riff_parse_wave(wav, 62, &w));
+    CHECK_EQ(w.pcm, wav + 54);
+    CHECK_EQ(w.pcm_bytes, 8u);
+}
+
+static void test_mss32_sample() {
+    cpu_reset();
+    g_sample_tracking = true;
+    g_plays.clear();
+    uint32_t wav = build_test_wave();
+    uint32_t h = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {1});
+    CHECK(h != 0);
+    call_shim(tramp("mss32.dll", "_AIL_init_sample@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_sample_file@12"), {h, wav, 0}), 1u);
+    call_shim(tramp("mss32.dll", "_AIL_set_sample_volume@8"), {h, 127});
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    CHECK_EQ(g_plays.size(), 1u);
+    if (g_plays.size() != 1)
+        return;
+    CHECK_EQ(g_plays[0].rate, 22050u);
+    CHECK_EQ(g_plays[0].bytes, 8u);
+    CHECK_EQ(g_plays[0].channels, 1);
+    CHECK_EQ(g_plays[0].bits, 8);
+    CHECK_EQ(g_plays[0].volume, 0);
+    CHECK_EQ(g_plays[0].pan, 0);
+    CHECK_EQ(g_plays[0].loop, 0);
+    CHECK_EQ(g_plays[0].pcm[7], 0x87u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 4u);
+    call_shim(tramp("mss32.dll", "_AIL_end_sample@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 2u);
+
+    // Assert the Miles conversions through the actual host play record.
+    struct {
+        uint32_t volume, pan;
+        int32_t volume_mb, pan_mb;
+    } levels[] = {{127, 64, 0, 0}, {64, 0, -595, -10000}, {0, 127, -10000, 10000}};
+    for (auto level : levels) {
+        call_shim(tramp("mss32.dll", "_AIL_set_sample_volume@8"), {h, level.volume});
+        call_shim(tramp("mss32.dll", "_AIL_set_sample_pan@8"), {h, level.pan});
+        call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+        CHECK_EQ(g_plays.back().volume, level.volume_mb);
+        CHECK_EQ(g_plays.back().pan, level.pan_mb);
+    }
+    int32_t channel = g_plays.back().channel;
+    g_sample_playing[channel] = false;
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 2u);
+    call_shim(tramp("mss32.dll", "_AIL_set_sample_loop_count@8"), {h, 0});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_loop_count@4"), {h}), 0u);
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    CHECK_EQ(g_plays.back().loop, 1);
+    call_shim(tramp("mss32.dll", "_AIL_end_sample@4"), {h});
+
+    call_shim(tramp("mss32.dll", "_AIL_set_sample_loop_count@8"), {h, 3});
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    size_t first = g_plays.size();
+    for (unsigned i = 0; i < 3; ++i) {
+        g_sample_playing[channel] = false;
+        host_pump_timers(&g_cpu); // finite repeats progress without a Miles status poll
+        CHECK_EQ(g_plays.size(), first + (i < 2 ? i + 1 : 2));
+    }
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 2u);
+    CHECK_EQ(g_plays.back().loop, 0);
+
+    call_shim(tramp("mss32.dll", "_AIL_init_sample@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_loop_count@4"), {h}), 1u);
+    first = g_plays.size();
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    CHECK_EQ(g_plays.size(), first); // init discarded the image
+    wr8(wav + 20, 2);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_sample_file@12"), {h, wav, 0}), 0u);
+    call_shim(tramp("mss32.dll", "_AIL_release_sample_handle@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 1u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {65}), 1u);
+    int32_t reused = dx_alloc_audio_channel();
+    CHECK_EQ(reused, channel);
+    dx_free_audio_channel(reused);
+    std::set<uint32_t> handles;
+    for (unsigned i = 0; i < 64; ++i) {
+        uint32_t slot = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {1});
+        CHECK(slot >= 1 && slot <= 64);
+        CHECK(handles.insert(slot).second);
+    }
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {1}), 0u);
+    for (uint32_t slot : handles)
+        call_shim(tramp("mss32.dll", "_AIL_release_sample_handle@4"), {slot});
+
+    // File reads use guest path case/drive normalization and guest-owned memory.
+    wav = build_test_wave();
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-mss32-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string file = std::string(dir) + "/Tone.wav";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    CHECK_EQ(fwrite(g_mem + wav, 1, 52, f), 52u);
+    CHECK_EQ(fclose(f), 0);
+    win32_init(dir);
+    uint32_t name = sc(0x300);
+    gm_put_str(name, "C:\\tone.WAV", 0x100);
+    uint32_t read = tramp("mss32.dll", "_AIL_file_read@8");
+    for (uint32_t dest : {0u, 0xffffffffu, sc(0x500)}) {
+        uint32_t loaded = call_shim(read, {name, dest});
+        CHECK(loaded != 0);
+        if (!loaded)
+            continue;
+        CHECK_EQ(memcmp(g_mem + loaded, g_mem + wav, 52), 0);
+        if (dest == sc(0x500)) {
+            CHECK_EQ(loaded, dest);
+        } else {
+            CHECK_EQ(heap_size(loaded), 52u);
+            call_shim(tramp("mss32.dll", "_AIL_mem_free_lock@4"), {loaded});
+            CHECK(!heap_owns(loaded));
+        }
+    }
+    CHECK_EQ(call_shim(read, {name, GUEST_SIZE - 1}), 0u);
+    gm_put_str(name, "absent.wav", 0x100);
+    CHECK_EQ(call_shim(read, {name, 0}), 0u);
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+    g_sample_playing.clear();
+    g_sample_tracking = false;
 }
 
 static void test_bink_smack_stubs() {
@@ -9396,6 +9576,8 @@ int main() {
         {"DirectInput", test_dinput},
         {"QMixer", test_qmixer},
         {"Miles arities", test_mss32_arities},
+        {"RIFF WAVE", test_riff_parse},
+        {"Miles samples", test_mss32_sample},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
