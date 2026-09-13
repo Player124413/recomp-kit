@@ -16,7 +16,9 @@ Native suites are CTest entries with labels: `nogame` runs everywhere and in CI,
 `game` needs your installation, `gpu` needs a Metal device, `device` needs a
 real Metal and audio device (the offline audio render is not what a hosted CI
 runner produces), `mods` needs the translated archive and the entity snapshot `tools/test.py --mods` captures. Run
-one directly with `.venv/bin/ctest --preset macos -L nogame` or `-R dx_tests`.
+one directly with `.venv/bin/ctest --test-dir build/cmake/macos -L nogame` or `-R dx_tests`.
+Every `tools/test.py` mode takes `--game-dir /abs/path/to/<game>`; without it
+the kit's stub game is used and the `game`-labelled suites report a skip.
 
 Invoke these with `.venv/bin/python`. The native tests need a macOS Metal device;
 CI compiles them but does not claim GPU or original-game execution. The mod suite

@@ -17,37 +17,32 @@ portable tests and mod examples. Open an issue before a large architecture chang
 - First translation: [Ghidra 12.1.3](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.3_build).
 - A Java runtime compatible with that Ghidra distribution. The documented setup
   was tested with OpenJDK 26.0.1; set `JAVA_HOME` to the JDK directory.
-- Your own supported GOG installation of Populous: The Beginning.
+- Your own supported installation of the game you are building. Its
+  `game.toml` names the executable and its SHA-256; the loader refuses other
+  binaries because translated addresses and data layouts are tied to that
+  image. Do not bypass the hash to add support for another version.
 
-The executable must be `D3DPopTB.exe` with SHA-256:
-
-```text
-815ba8a550f571c38b602cf3386f65aab942667a4a2d9c7096b3660deac2eacd
-```
-
-The loader refuses other binaries because translated addresses and data layouts
-are tied to this image. Do not bypass the hash to add support for another version.
-
-## Prepare your game installation
+## Prepare a game installation
 
 Building the app, running it, the game-backed suites and regenerating the
-translation all require this step; generated code is never tracked.
-
-Use a directory containing the executable and its `data`, `levels`, `objects`
-and `sound` directories. Paths containing spaces are supported when quoted.
+translation all require this step; generated code is never tracked. Every
+command below takes `--game-dir /abs/path/to/<game>` when run from the kit;
+a game repository's `tools/*.py` wrappers pass it for you.
 
 ```sh
 .venv/bin/python tools/setup.py \
-  --game-dir "/path/to/your/Populous installation" \
+  --game-dir /abs/path/to/the/game/repository \
+  --install "/path/to/your/installed game" \
   --ghidra-home "/path/to/ghidra_12.1.3_PUBLIC" \
   --java-home "/path/to/your/jdk/Contents/Home"
 ```
 
-Setup verifies the executable, links the installation at ignored `original/gog/`,
-fetches the pinned [pop3-rev annotation metadata](https://github.com/hrttf111/pop3-rev/tree/60408e4e99b76ab2e5461897c8e1b33756360eaa),
-and exports translation inputs into ignored `analysis/`. It does not download the
-game. Existing links to another installation and dirty metadata checkouts are
-preserved and reported. The first export can take several minutes.
+Setup verifies the executable against `game.toml`, links the installation
+where `developer_exe` points (ignored `<game>/original/...`), fetches the
+annotation metadata `[setup]` names, and exports translation inputs into
+ignored `<game>/analysis/`. It does not download the game. Existing links to
+another installation and dirty metadata checkouts are preserved and reported.
+The first export can take several minutes.
 
 If inputs already exist, `--link-only` validates the game link without running
 Ghidra. `GHIDRA_HOME` and `JAVA_HOME` can supply the tool paths instead of flags.
@@ -55,8 +50,8 @@ Ghidra. `GHIDRA_HOME` and `JAVA_HOME` can supply the tool paths instead of flags
 ## Build and run
 
 ```sh
-.venv/bin/python tools/build.py --jobs 8
-open build/PopRecomp.app
+.venv/bin/python tools/build.py --game-dir /abs/path/to/<game> --jobs 8
+open /abs/path/to/<game>/build/<AppName>.app
 ```
 
 The first build translates and compiles the original functions. Subsequent builds
@@ -70,17 +65,21 @@ translation or its C helpers, regenerate explicitly:
 `--target smoke` builds the offscreen scripted host, `--target headless` the
 minimal boot host, `--target fixture` the parity fixture and `--target plugins`
 every mod plugin. `--preset` and `--config Debug` pick the CMake preset; the
-CMake tree lives in `build/cmake/<preset>` and every artifact keeps its documented
-path under `build/`. Build outputs and your default writable profile stay in
-`build/`. `POPM_PROFILE_DIR` selects a separate profile for an interactive run.
-Keep the app in the checkout; moving it requires explicitly configuring its game path.
+CMake tree lives in `<build root>/cmake/<preset>` and every artifact keeps its
+documented path under that build root: the game's `build/` when the game lives
+outside the kit, the kit's `build/` for the stub. Your default writable profile
+stays there too. `POPM_PROFILE_DIR` selects a separate profile for an
+interactive run. Keep the app in the checkout; moving it requires explicitly
+configuring its game path.
 
 ## Add a game
 
-Create `games/<id>/game.toml` and `games/<id>/globals.toml` following
-`games/populous/`. Build with `tools/build.py --game <id>`. Nothing under
-`runtime/`, `dx/`, `host/` or `platform/` may name your game; put addresses
-under `[hooks]` and use the generated `RECOMP_HOOK_*` macros.
+Make a repository for it with `game.toml` and `globals.toml` at its root,
+following `games/stub/` for the keys and populous-recomp for a complete
+example, and add this kit as a submodule at `kit/`. Build with
+`kit/tools/build.py --game-dir "$PWD"`. Nothing under `runtime/`, `dx/`,
+`host/` or `platform/` may name your game; put addresses under `[hooks]` and
+use the generated `RECOMP_HOOK_*` macros.
 
 ## Check your change
 

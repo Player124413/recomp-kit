@@ -1,32 +1,23 @@
-Populous: The Beginning is the original game represented by this project.
-Original game names, executable code, artwork, audio, levels and other data retain
-their original ownership and notices. Original in-game credits are preserved.
-This project is not affiliated with or endorsed by the original game's publishers.
+recomp-kit is a static recompilation kit. Every game it builds is represented
+by its own repository, which carries that game's notices. Original game names,
+executable code, artwork, audio, levels and other data retain their original
+ownership and notices; this project is not affiliated with or endorsed by any
+game's publisher.
 
-The handwritten native host, compatibility runtime, translator, build/test tools
-and project documentation are covered by LICENSE. The project-created terrain
-material source is described in games/populous/assets/terrain/README.md and is covered by LICENSE.
-
-Original game files are not distributed in this repository and are not relicensed by
-its MIT license. The directory translation/ holds a translation of the one supported
-GOG build of D3DPopTB.exe (SHA-256 815ba8a5...eacd), generated from that executable
-by this project's tools; it is distributed so prebuilt binaries can be published,
-under the same terms as the handwritten code, and claims nothing over the original
-work's behaviour or ownership. The game's executable, data, artwork, audio and levels
-are still required from the player's own copy and are never included. Replacement packs derived
-from original game artwork are also local build products.
+The handwritten native host, compatibility runtime, translator, build/test
+tools and project documentation are covered by LICENSE. Generated translations
+of a game's executable are local build products and are never tracked here.
+A game's executable, data, artwork, audio and levels are always required from
+the player's own copy and are never included.
 
 Lua 5.4.6 is included unmodified under its upstream MIT license; see
 third_party/lua/LICENSE and the notices in its source files.
 
-The optional setup step retrieves the pinned pop3-rev annotation metadata by
-hrttf111 from https://github.com/hrttf111/pop3-rev into ignored local storage.
-That upstream metadata retains its own ownership; it is not included or relicensed
-here. Ghidra, Capstone, pefile, Unicorn, NumPy and Pillow are external development
-tools with their own licenses, not original game dependencies at runtime.
+Ghidra, Capstone, pefile, Unicorn, NumPy and Pillow are external development
+tools with their own licenses, not game dependencies at runtime.
 
 TinySoundFont (third_party/tsf/tsf.h) is Copyright (C) 2017-2023 Bernhard Schelling,
-licensed under the MIT License; see third_party/tsf/LICENSE. It renders the game's
+licensed under the MIT License; see third_party/tsf/LICENSE. It renders a game's
 own SoundFont, which is not included.
 
 SDL3 is fetched at build time from https://github.com/libsdl-org/SDL at a pinned

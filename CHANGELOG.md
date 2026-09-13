@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Builds take `--game-dir`: a game directory anywhere, with outputs under its own
+  `build/`; paths in `game.toml` resolve from its directory. The kit ships `games/stub`
+  for game-free builds and CI. Populous moves to github.com/veritr1x/populous-recomp,
+  which pulls the kit in as a submodule; its smoke scripts, release notes, game docs and
+  game-bound tests go with it.
 - Imported the Populous recompilation from populous-recomp-checkout at
   b450dfa8bae7fe568192ef61028ed82489cba394 as the base of recomp-kit. The
   translation is no longer tracked; regenerate it with tools/build.py --regenerate.

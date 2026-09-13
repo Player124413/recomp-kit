@@ -259,7 +259,7 @@ every version of it is a mouse that appears dead.
 ## The smoke run
 
 `make recomp-smoke` boots the game, presses the buttons in
-`tools/recomp/smoke/level1.script`, and says whether what came out satisfies the
+the game's `smoke/level1.script`, and says whether what came out satisfies the
 script's expectations. It exists so gameplay is checked before a person is
 asked to look at a build.
 
