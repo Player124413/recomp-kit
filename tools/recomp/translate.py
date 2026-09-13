@@ -719,6 +719,18 @@ class Image(object):
     #: A thunk is short and ends by transferring control somewhere else.
     THUNK_LIMIT = 8
 
+    def plausible_immediate_target(self, va):
+        """Could an instruction immediate naming `va` be a code address?
+
+        The immediate is the evidence that something is stored there; this
+        asks whether it could be entered.  Beyond the two function-start
+        signals, a thunk qualifies: `atexit` is handed ten-byte
+        `MOV ECX,obj / JMP dtor` stubs packed straight after their
+        initializer's RET, unaligned and unpadded, and the CRT calls them at
+        exit."""
+        return (self.looks_like_function(va) or self.looks_like_code_start(va)
+                or self.looks_like_thunk(va))
+
     def looks_like_thunk(self, va):
         """Does `va` look like a thunk?
 
@@ -2774,8 +2786,7 @@ def main():
                     continue
                 if any(lo <= t < hi for lo, hi in tr.table_ranges):
                     continue
-                if not (image.looks_like_function(t)
-                        or image.looks_like_code_start(t)):
+                if not image.plausible_immediate_target(t):
                     continue
                 hook_evidence[t].add("immediate")
                 if resolve(t, listed, why="immediate"):

@@ -562,6 +562,61 @@ static void test_files(X86 *c) {
     call_import(c, "KERNEL32.dll", "GetCurrentDirectoryA", {260, pathbuf});
     check(gm_str(pathbuf) == RECOMP_GUEST_ROOT, "GetCurrentDirectoryA -> \"%s\"",
           gm_str(pathbuf).c_str());
+
+    // The path GetModuleFileNameA hands out must open, whatever the guest
+    // root's shape: a game installed under C:\GOG Games\<name> spells its
+    // own files through two root components, not one.
+    uint32_t absolute = put_str(RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE);
+    uint32_t ah =
+        call_import(c, "KERNEL32.dll", "CreateFileA", {absolute, 0x80000000u, 1, 0, 3, 0x80, 0});
+    check(ah != 0xffffffffu, "an absolute path through the whole guest root opens: \"%s\"",
+          RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE);
+    if (ah != 0xffffffffu)
+        call_import(c, "KERNEL32.dll", "CloseHandle", {ah});
+}
+
+// The imports a Visual C++ 6 CRT's start-up and a windowed game's first
+// frame reach before any DirectDraw: each has a fixed stdcall argument count
+// the trampoline must pop, which call_import checks through ESP.
+static void test_boot_shims(X86 *c) {
+    section("boot-path shims: CRT locale, shell folders, window metrics");
+    uint32_t buf = scratch_block(300);
+    check(call_import(c, "KERNEL32.dll", "GetEnvironmentVariableA", {put_str("MAJX"), buf, 300}) ==
+                  0 &&
+              call_import(c, "KERNEL32.dll", "GetLastError", {}) == 203,
+          "GetEnvironmentVariableA of an unset name returns 0 with ERROR_ENVVAR_NOT_FOUND");
+    check(call_import(c, "KERNEL32.dll", "GetUserDefaultLCID", {}) == 0x0409,
+          "GetUserDefaultLCID is en-US");
+    check(call_import(c, "KERNEL32.dll", "IsValidCodePage", {1252}) == 1 &&
+              call_import(c, "KERNEL32.dll", "IsValidCodePage", {12345}) == 0,
+          "IsValidCodePage knows the Windows code pages and refuses an invented one");
+    check(call_import(c, "KERNEL32.dll", "IsValidLocale", {0x0409, 1}) == 1,
+          "IsValidLocale accepts en-US");
+    check(call_import(c, "KERNEL32.dll", "EnumSystemLocalesA", {0, 1}) == 1,
+          "EnumSystemLocalesA succeeds without calling back");
+    uint32_t path = scratch_block(260);
+    check(call_import(c, "SHELL32.dll", "SHGetSpecialFolderPathA", {0, path, 5, 0}) == 1 &&
+              gm_str(path).rfind(RECOMP_GUEST_ROOT, 0) == 0 &&
+              gm_str(path).size() > strlen(RECOMP_GUEST_ROOT),
+          "SHGetSpecialFolderPathA(CSIDL_PERSONAL) names a directory under the guest root: "
+          "\"%s\"",
+          gm_str(path).c_str());
+    check(call_import(c, "USER32.dll", "IsWindowUnicode", {0x10001}) == 0,
+          "IsWindowUnicode: every window is ANSI");
+    uint32_t cx = call_import(c, "USER32.dll", "GetSystemMetrics", {0});
+    uint32_t cy = call_import(c, "USER32.dll", "GetSystemMetrics", {1});
+    check(cx >= 640 && cy >= 480 && cx > cy, "GetSystemMetrics reports a screen of %ux%u", cx, cy);
+    check(call_import(c, "USER32.dll", "GetSystemMetrics", {4}) > 0,
+          "SM_CYCAPTION is a caption height");
+    check(call_import(c, "USER32.dll", "LoadCursorA", {0, 0x7f00}) != 0,
+          "LoadCursorA(IDC_ARROW) hands out a handle");
+    uint32_t ms = scratch_block(32);
+    wr32(ms, 32);
+    call_import(c, "KERNEL32.dll", "GlobalMemoryStatus", {ms});
+    check(rd32(ms + 8) >= 256u * 1024 * 1024 && rd32(ms + 12) > 0 && rd32(ms + 12) <= rd32(ms + 8) &&
+              rd32(ms + 4) <= 100 && rd32(ms + 24) >= rd32(ms + 28),
+          "GlobalMemoryStatus reports %u MB physical, %u MB free, load %u%%",
+          rd32(ms + 8) >> 20, rd32(ms + 12) >> 20, rd32(ms + 4));
 }
 
 // ---------------------------------------------------------------------------
@@ -2867,6 +2922,7 @@ int main(int argc, char **argv) {
     test_pinned_clock(c);
     test_cadence_trace(c);
     test_misc_shims(c);
+    test_boot_shims(c);
     test_native_draw_waits(c);
     test_midi(c);
     test_windows(c);

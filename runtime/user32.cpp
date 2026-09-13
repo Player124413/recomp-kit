@@ -766,6 +766,63 @@ void u_EndPaint(X86 *c) {
     set_eax(c, 1);
 }
 
+// The desktop a game measures before it makes its window.  DirectDraw sets
+// the real mode afterwards; these only size and place a windowed frame.
+void u_GetSystemMetrics(X86 *c) {
+    uint32_t v = 0;
+    switch (arg(c, 0)) {
+    case 0:  // SM_CXSCREEN
+    case 16: // SM_CXFULLSCREEN
+        v = 1024;
+        break;
+    case 1: // SM_CYSCREEN
+        v = 768;
+        break;
+    case 17: // SM_CYFULLSCREEN
+        v = 768 - 19;
+        break;
+    case 4: // SM_CYCAPTION
+        v = 19;
+        break;
+    case 5: // SM_CXBORDER
+    case 6: // SM_CYBORDER
+        v = 1;
+        break;
+    case 7: // SM_CXDLGFRAME
+    case 8: // SM_CYDLGFRAME
+        v = 3;
+        break;
+    case 11: // SM_CXICON
+    case 12: // SM_CYICON
+    case 13: // SM_CXCURSOR
+    case 14: // SM_CYCURSOR
+        v = 32;
+        break;
+    case 32: // SM_CXFRAME
+    case 33: // SM_CYFRAME
+        v = 4;
+        break;
+    case 43: // SM_CMOUSEBUTTONS
+        v = 2;
+        break;
+    case 80: // SM_CMONITORS
+        v = 1;
+        break;
+    default:
+        break;
+    }
+    set_eax(c, v);
+}
+// One handle per stock cursor id; the host draws the pointer, so the handle
+// only has to be distinct and non-zero.
+void u_LoadCursorA(X86 *c) {
+    set_eax(c, 0x0002a000u + (arg(c, 1) & 0xfffu));
+}
+// Every window the runtime creates is an ANSI window: the game then takes
+// its RegisterClassA / CreateWindowExA path.
+void u_IsWindowUnicode(X86 *c) {
+    set_eax(c, 0);
+}
 void u_LoadIconA(X86 *c) {
     set_eax(c, 0x00029001);
 }
@@ -1028,6 +1085,9 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "BeginPaint", 2, u_BeginPaint},
     {"USER32.dll", "EndPaint", 2, u_EndPaint},
     {"USER32.dll", "LoadIconA", 2, u_LoadIconA},
+    {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
+    {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
+    {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},
     {"USER32.dll", "SetCursor", 1, u_SetCursor},
     {"USER32.dll", "SetCursorPos", 2, u_SetCursorPos},
     {"USER32.dll", "GetDoubleClickTime", 0, u_GetDoubleClickTime},

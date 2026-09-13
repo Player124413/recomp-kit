@@ -292,7 +292,21 @@ static std::vector<std::string> normalise_components(const std::string &guest_pa
         }
         norm.push_back(c);
     }
-    if (!norm.empty() && lower(norm[0]) == lower(win32_guest_root_name()))
+    // An absolute path spelled through the guest root - which GetModuleFileNameA
+    // hands out, and which is more than one component for a game installed
+    // under C:\GOG Games\<name> - is the same file as the root-relative one.
+    static const std::vector<std::string> root = [] {
+        std::string r = RECOMP_GUEST_ROOT;
+        if (r.size() >= 2 && r[1] == ':')
+            r = r.substr(2);
+        return split_path(r);
+    }();
+    bool under_root = norm.size() >= root.size() && !root.empty();
+    for (size_t i = 0; under_root && i < root.size(); ++i)
+        under_root = lower(norm[i]) == lower(root[i]);
+    if (under_root)
+        norm.erase(norm.begin(), norm.begin() + (long)root.size());
+    else if (!norm.empty() && lower(norm[0]) == lower(win32_guest_root_name()))
         norm.erase(norm.begin());
     return norm;
 }
@@ -3491,6 +3505,51 @@ const char *locale_info(uint32_t lctype) {
     }
 }
 
+// The Visual C++ 6 CRT's start-up asks about the environment and the locale
+// before main: nothing is set, and the answer is the one en-US machine every
+// game of the era saw.
+void k_GetEnvironmentVariableA(X86 *c) {
+    set_last_error(203); // ERROR_ENVVAR_NOT_FOUND
+    set_eax(c, 0);
+}
+void k_GetUserDefaultLCID(X86 *c) {
+    set_eax(c, 0x0409);
+}
+void k_IsValidCodePage(X86 *c) {
+    uint32_t cp = arg(c, 0);
+    set_eax(
+        c, (cp == 0 || cp == 1 || cp == 437 || cp == 850 || cp == 1200 || cp == 1252 || cp == 65001)
+               ? 1
+               : 0);
+}
+void k_IsValidLocale(X86 *c) {
+    uint32_t lcid = arg(c, 0);
+    set_eax(c, (lcid == 0x0409 || lcid == 0x0009 || lcid == 0x0400 || lcid == 0x0800) ? 1 : 0);
+}
+void k_EnumSystemLocalesA(X86 *c) {
+    // The CRT enumerates to find a locale matching a name it was given; with
+    // none offered it falls back to the default, so no callback is made.
+    set_eax(c, 1);
+}
+
+// GlobalMemoryStatus(MEMORYSTATUS*): the machine a game of this era sized its
+// caches for.  A quarter of half a gigabyte is in use; the virtual space is a
+// 32-bit process's 2 GB less the reserved top pages.
+void k_GlobalMemoryStatus(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (!p)
+        return;
+    const uint32_t mb = 1024u * 1024u;
+    wr32(p + 0, 32);           // dwLength
+    wr32(p + 4, 25);           // dwMemoryLoad, percent
+    wr32(p + 8, 512u * mb);    // dwTotalPhys
+    wr32(p + 12, 384u * mb);   // dwAvailPhys
+    wr32(p + 16, 1024u * mb);  // dwTotalPageFile
+    wr32(p + 20, 768u * mb);   // dwAvailPageFile
+    wr32(p + 24, 0x7ffe0000u); // dwTotalVirtual
+    wr32(p + 28, 0x60000000u); // dwAvailVirtual
+}
+
 void k_GetLocaleInfoA(X86 *c) {
     uint32_t lctype = arg(c, 1), buf = arg(c, 2), len = arg(c, 3);
     const char *s = locale_info(lctype);
@@ -3882,6 +3941,12 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "CompareStringA", 6, k_CompareStringA},
     {"KERNEL32.dll", "CompareStringW", 6, k_CompareStringW},
     {"KERNEL32.dll", "GetLocaleInfoA", 4, k_GetLocaleInfoA},
+    {"KERNEL32.dll", "GetEnvironmentVariableA", 3, k_GetEnvironmentVariableA},
+    {"KERNEL32.dll", "GetUserDefaultLCID", 0, k_GetUserDefaultLCID},
+    {"KERNEL32.dll", "IsValidCodePage", 1, k_IsValidCodePage},
+    {"KERNEL32.dll", "IsValidLocale", 2, k_IsValidLocale},
+    {"KERNEL32.dll", "EnumSystemLocalesA", 2, k_EnumSystemLocalesA},
+    {"KERNEL32.dll", "GlobalMemoryStatus", 1, k_GlobalMemoryStatus},
     {"KERNEL32.dll", "GetLocaleInfoW", 4, k_GetLocaleInfoW},
 };
 const size_t g_kernel32_shim_count = sizeof(g_kernel32_shims) / sizeof(g_kernel32_shims[0]);

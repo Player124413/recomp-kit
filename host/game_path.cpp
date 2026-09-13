@@ -53,17 +53,18 @@ GamePath game_path_resolve(const char *flag) {
         g.source = GamePathSource::Environment;
         return g;
     }
+    // The build's own copy of the game: game.toml names it by an absolute
+    // path (a game repository's original/), so it is found from wherever the
+    // app runs; a relative spelling is taken from the checkout root.
     const HostLayout &l = host_layout();
-    if (l.developer) {
-        // The developer's executable, as game.toml names it: absolute since the
-        // game moved to its own directory, so no checkout prefix.
-        std::string candidate = RECOMP_DEVELOPER_EXE;
-        OsStat st;
-        if (os_stat(candidate.c_str(), &st) == 0) {
-            g.exe = candidate;
-            g.source = GamePathSource::Checkout;
-            return g;
-        }
+    std::string candidate = RECOMP_DEVELOPER_EXE;
+    if (candidate.empty() || candidate[0] != '/')
+        candidate = l.developer ? l.checkout_root + "/" + candidate : std::string();
+    OsStat st;
+    if (!candidate.empty() && os_stat(candidate.c_str(), &st) == 0) {
+        g.exe = candidate;
+        g.source = GamePathSource::Checkout;
+        return g;
     }
     if (FILE *f = fopen(saved_file().c_str(), "rb")) {
         char line[4096] = {0};

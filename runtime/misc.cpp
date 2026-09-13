@@ -682,6 +682,45 @@ void g_GetSystemPaletteEntries(X86 *c) {
 // -------------------------------------------------------------------------
 // SHELL32 / ole32
 // -------------------------------------------------------------------------
+// SHGetSpecialFolderPathA(hwnd, path, csidl, create): the per-user folders a
+// game keeps its settings and saves in.  They live under the guest root, so
+// they resolve like every other game path (and the mod layer's file seam can
+// redirect them); the folder is created when asked.
+void s_SHGetSpecialFolderPathA(X86 *c) {
+    uint32_t buf = arg(c, 1), csidl = arg(c, 2), create = arg(c, 3);
+    const char *name;
+    switch (csidl & 0xff) {
+    case 0x05: // CSIDL_PERSONAL
+        name = "Documents";
+        break;
+    case 0x1a: // CSIDL_APPDATA
+    case 0x1c: // CSIDL_LOCAL_APPDATA
+        name = "AppData";
+        break;
+    case 0x23: // CSIDL_COMMON_APPDATA
+        name = "CommonAppData";
+        break;
+    case 0x26: // CSIDL_PROGRAM_FILES
+        name = "Program Files";
+        break;
+    default:
+        name = "Documents";
+        break;
+    }
+    std::string guest = std::string(RECOMP_GUEST_ROOT) + "\\" + name;
+    if (create) {
+        std::string host = win32_host_path(guest, true);
+        if (!host.empty())
+            os_mkdir(host.c_str());
+    }
+    if (!buf) {
+        set_eax(c, 0);
+        return;
+    }
+    gm_put_str(buf, guest.c_str(), 260);
+    set_eax(c, 1);
+}
+
 void s_ShellExecuteA(X86 *c) {
     LOGW("ShellExecuteA(\"%s\", \"%s\"): nothing is launched from the runtime",
          gm_str(arg(c, 1), 64).c_str(), gm_str(arg(c, 2), 260).c_str());
@@ -1330,6 +1369,7 @@ const ImportShim g_misc_shims[] = {
     {"GDI32.dll", "GetSystemPaletteEntries", 4, g_GetSystemPaletteEntries},
     // SHELL32
     {"SHELL32.dll", "ShellExecuteA", 6, s_ShellExecuteA},
+    {"SHELL32.dll", "SHGetSpecialFolderPathA", 4, s_SHGetSpecialFolderPathA},
     // ole32
     {"ole32.dll", "CoInitialize", 1, o_CoInitialize},
     {"ole32.dll", "CoUninitialize", 0, o_CoUninitialize},

@@ -1017,8 +1017,16 @@ static void test_game_path() {
     os_setenv("POPM_PROFILE_DIR", dir);
     os_unsetenv("POP_RECOMP_EXE");
     host_layout_set_exe_path_for_test((std::string(dir) + "/nowhere/exe").c_str()); // no checkout
-    // Nothing saved: None.
-    CHECK(game_path_resolve(nullptr).source == GamePathSource::None);
+    // The build's own developer copy (an absolute path from game.toml) is
+    // used from wherever the app runs, so a game repository's build finds its
+    // game without a checkout marker above the executable.
+    OsStat dev_st;
+    const bool have_dev = os_stat(RECOMP_DEVELOPER_EXE, &dev_st) == 0;
+    const GamePathSource idle = have_dev ? GamePathSource::Checkout : GamePathSource::None;
+    GamePath first = game_path_resolve(nullptr);
+    CHECK(first.source == idle);
+    if (have_dev)
+        CHECK(first.exe == RECOMP_DEVELOPER_EXE);
     // A flag wins without any check.
     CHECK(game_path_resolve("/x/D3DPopTB.exe").source == GamePathSource::Flag);
     // A saved path to a wrong file is ignored.
@@ -1030,14 +1038,13 @@ static void test_game_path() {
     CHECK(!game_path_is_supported(wrong, &digest));
     CHECK(digest.size() == 64);
     CHECK(game_path_save(wrong));
-    CHECK(game_path_resolve(nullptr).source == GamePathSource::None);
+    CHECK(game_path_resolve(nullptr).source == idle);
     // The real game, when present, is accepted and remembered.
-    OsStat st;
-    if (os_stat(RECOMP_DEVELOPER_EXE, &st) == 0) {
+    if (have_dev) {
         CHECK(game_path_is_supported(RECOMP_DEVELOPER_EXE, nullptr));
         CHECK(game_path_save(RECOMP_DEVELOPER_EXE));
         GamePath g = game_path_resolve(nullptr);
-        CHECK(g.source == GamePathSource::Saved && g.exe == RECOMP_DEVELOPER_EXE);
+        CHECK(g.exe == RECOMP_DEVELOPER_EXE);
     }
     os_unsetenv("POPM_PROFILE_DIR");
     host_layout_set_exe_path_for_test(nullptr);
