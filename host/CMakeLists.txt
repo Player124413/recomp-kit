@@ -52,7 +52,7 @@ pop_test_binary(input_touch_tests)
 add_test(NAME input_touch_tests COMMAND input_touch_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(input_touch_tests PROPERTIES LABELS nogame)
 
-add_executable(keypad_tests ${HOST}/keypad_layout.cpp ${HOST}/tests/keypad_tests.cpp)
+add_executable(keypad_tests ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp ${HOST}/tests/keypad_tests.cpp)
 target_include_directories(keypad_tests PRIVATE ${POP_ROOT})
 target_compile_options(keypad_tests PRIVATE ${POP_WARN_WERROR})
 pop_link_sdl(keypad_tests)

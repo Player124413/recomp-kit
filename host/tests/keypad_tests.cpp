@@ -1,5 +1,6 @@
 // keypad_tests.cpp - the split keypad's tables, geometry and modifiers.
 #include "../keypad_layout.h"
+#include "../keypad_modifiers.h"
 
 #include <SDL3/SDL_scancode.h>
 #include <stdio.h>
@@ -180,6 +181,93 @@ static void test_modifier_predicate() {
           keypad_modifier_bit(kScanLAlt) == 4u && keypad_modifier_bit(kScanA) == 0u);
 }
 
+static const uint64_t MS = 1000000ull;
+
+static void test_hold_chords() {
+    KeypadModifiers m;
+    std::vector<KeypadKeyEvent> out;
+    m.press(kScanLShift, 0, &out);
+    CHECK(out.size() == 1 && out[0].scancode == kScanLShift && out[0].down);
+    CHECK(m.lit() == 0); // held is not lit
+    out.clear();
+    m.release(kScanLShift, 300 * MS, &out); // held 300 ms: a hold, not a tap
+    CHECK(out.size() == 1 && !out[0].down);
+    CHECK(m.lit() == 0);
+}
+
+static void test_tap_latches_for_the_next_key() {
+    KeypadModifiers m;
+    std::vector<KeypadKeyEvent> out;
+    m.press(kScanLCtrl, 0, &out);
+    m.release(kScanLCtrl, 100 * MS, &out); // a tap
+    CHECK(out.size() == 1 && out[0].down); // still down: latched
+    CHECK(m.lit() == 2u);
+    out.clear();
+    m.key_lifted(500 * MS, &out); // the next key's release ends the latch
+    CHECK(out.size() == 1 && out[0].scancode == kScanLCtrl && !out[0].down);
+    CHECK(m.lit() == 0);
+}
+
+static void test_double_tap_locks_until_the_next_tap() {
+    KeypadModifiers m;
+    std::vector<KeypadKeyEvent> out;
+    m.press(kScanLAlt, 0, &out);
+    m.release(kScanLAlt, 100 * MS, &out);
+    m.press(kScanLAlt, 300 * MS, &out); // within 400 ms of the first tap
+    m.release(kScanLAlt, 350 * MS, &out);
+    CHECK(out.size() == 1 && out[0].down); // one down, never released
+    CHECK(m.lit() == 4u);
+    out.clear();
+    m.key_lifted(1000 * MS, &out);
+    m.key_lifted(2000 * MS, &out);
+    CHECK(out.empty()); // locked survives keys
+    m.press(kScanLAlt, 3000 * MS, &out);
+    m.release(kScanLAlt, 3050 * MS, &out); // a tap while locked: off
+    CHECK(out.size() == 1 && !out[0].down);
+    CHECK(m.lit() == 0);
+}
+
+static void test_a_slow_second_press_is_a_new_latch_not_a_lock() {
+    KeypadModifiers m;
+    std::vector<KeypadKeyEvent> out;
+    m.press(kScanLShift, 0, &out);
+    m.release(kScanLShift, 100 * MS, &out); // latched
+    out.clear();
+    m.press(kScanLShift, 900 * MS, &out); // later than 400 ms after the tap
+    CHECK(out.empty());                   // already down
+    m.release(kScanLShift, 950 * MS, &out);
+    CHECK(out.size() == 1 && !out[0].down); // a tap on a latched modifier turns it off
+    CHECK(m.lit() == 0);
+}
+
+static void test_a_hold_on_a_lit_modifier_keeps_it() {
+    KeypadModifiers m;
+    std::vector<KeypadKeyEvent> out;
+    m.press(kScanLCtrl, 0, &out);
+    m.release(kScanLCtrl, 50 * MS, &out);
+    m.press(kScanLCtrl, 100 * MS, &out);
+    m.release(kScanLCtrl, 140 * MS, &out); // locked
+    CHECK(m.lit() == 2u);
+    out.clear();
+    m.press(kScanLCtrl, 1000 * MS, &out);
+    m.release(kScanLCtrl, 1400 * MS, &out); // a chord hold while locked: still locked
+    CHECK(out.empty() && m.lit() == 2u);
+}
+
+static void test_cancel_releases_without_latching() {
+    KeypadModifiers m;
+    std::vector<KeypadKeyEvent> out;
+    m.press(kScanLCtrl, 0, &out);
+    out.clear();
+    m.cancel(kScanLCtrl, &out);
+    CHECK(out.size() == 1 && !out[0].down && m.lit() == 0);
+    m.press(kScanLShift, 0, &out);
+    m.release(kScanLShift, 50 * MS, &out); // latched
+    out.clear();
+    m.cancel_all(&out);
+    CHECK(out.size() == 1 && out[0].scancode == kScanLShift && !out[0].down && m.lit() == 0);
+}
+
 int main() {
     test_tables_fill_the_grid_once();
     test_geometry_at_default_size();
@@ -188,6 +276,12 @@ int main() {
     test_tabs_toggle_and_a_hidden_half_is_only_its_tab();
     test_a_gap_between_keys_is_the_keypads();
     test_modifier_predicate();
+    test_hold_chords();
+    test_tap_latches_for_the_next_key();
+    test_double_tap_locks_until_the_next_tap();
+    test_a_slow_second_press_is_a_new_latch_not_a_lock();
+    test_a_hold_on_a_lit_modifier_keeps_it();
+    test_cancel_releases_without_latching();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;
