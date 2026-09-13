@@ -92,10 +92,15 @@ def configure(preset, extra=(), build_dir=None):
     subprocess.run(command + list(extra), cwd=ROOT, check=True)
 
 
-def build(preset, targets, jobs, extra=(), build_dir=None):
-    """`extra` goes after the targets: a leading "--" hands the rest to the native tool."""
+def build(preset, targets, jobs, extra=(), build_dir=None, config="Release"):
+    """`extra` goes after the targets: a leading "--" hands the rest to the native tool.
+
+    A build directory named directly (not through the build preset) needs the
+    configuration spelled out too: the Xcode generator is multi-config and
+    would otherwise build Debug, whose -O0 translation overflows the guest's
+    stack on the device."""
     command = [cmake_tool("cmake"), "--build"]
-    command += [str(build_dir)] if build_dir is not None else ["--preset", preset]
+    command += [str(build_dir), "--config", config] if build_dir is not None else ["--preset", preset]
     command += ["--parallel", str(jobs), "--target"] + list(targets) + list(extra)
     subprocess.run(command, cwd=ROOT, check=True)
 
@@ -250,7 +255,7 @@ def main():
                                  % args.build_root)
                 configure(preset, defines + ["-DRECOMP_IOS_TEAM=" + args.team], build_dir=build_dir)
                 extra = ["--", "CODE_SIGNING_ALLOWED=NO"] if args.stub else ["--", "-allowProvisioningUpdates"]
-                build(preset, TARGETS["ios"], args.jobs, extra, build_dir=build_dir)
+                build(preset, TARGETS["ios"], args.jobs, extra, build_dir=build_dir, config="Release")
                 if not args.stub and not args.no_install:
                     app = ios_app_bundle(cfg["game"]["app_name"], args.build_root)
                     device = args.device or pick_device(devicectl_list())
@@ -259,7 +264,7 @@ def main():
                 if args.target == "app":
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
-                build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir)
+                build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
     except TimeoutError as error:
