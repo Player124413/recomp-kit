@@ -62,10 +62,25 @@ static void test_long_press_is_right_click() {
     CHECK(out.size() == 2 && out[1].kind == TouchAction::Button && out[1].button == 1 &&
           out[1].down);
     out.clear();
-    m.finger_up({1, 50, 60}, 400 * MS, &out);
-    CHECK(out.empty()); // the press already fired; the release is held
+    // Lifted almost at once: the press is kept down until the hold time.
+    m.finger_up({1, 50, 60}, 380 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion);
     m.tick(360 * MS + kTouchClickHoldNs, &out);
-    CHECK(out.size() == 1 && out[0].button == 1 && !out[0].down);
+    CHECK(out.size() == 2 && out[1].button == 1 && !out[1].down);
+}
+
+static void test_long_press_then_drag_is_a_right_drag() {
+    TouchMapper m;
+    std::vector<TouchAction> out;
+    m.finger_down({1, 50, 60}, 0, &out);
+    m.tick(360 * MS, &out); // right down
+    out.clear();
+    m.finger_motion({1, 120, 90}, 500 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 120);
+    out.clear();
+    m.finger_up({1, 130, 95}, 900 * MS, &out);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion &&
+          out[1].kind == TouchAction::Button && out[1].button == 1 && !out[1].down);
 }
 
 static void test_drag_is_left_drag() {
@@ -179,6 +194,7 @@ int main() {
     test_tap_is_left_click();
     test_a_new_finger_releases_a_held_click_first();
     test_long_press_is_right_click();
+    test_long_press_then_drag_is_a_right_drag();
     test_drag_is_left_drag();
     test_two_finger_drag_pans_with_arrows();
     test_two_finger_tap_is_escape_three_is_f10_four_toggles_keyboard();

@@ -57,6 +57,8 @@ class TouchMapper {
     int max_fingers_ = 0;         // most fingers down during this gesture
     bool dragging_ = false;       // one-finger drag in progress (left held)
     bool long_fired_ = false;     // long press already emitted for this gesture
+    bool right_held_ = false;     // the long press's right button is down until the finger lifts
+    uint64_t right_down_ = 0;
     bool text_input_ = false;
     double pan_cx_ = 0, pan_cy_ = 0, pan_acc_x_ = 0, pan_acc_y_ = 0;
     // A click's release, held back until kTouchClickHoldNs after its press.

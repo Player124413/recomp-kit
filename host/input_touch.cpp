@@ -62,6 +62,7 @@ void TouchMapper::reset_gesture() {
     max_fingers_ = 0;
     dragging_ = false;
     long_fired_ = false;
+    right_held_ = false;
     pan_acc_x_ = pan_acc_y_ = 0;
 }
 
@@ -95,6 +96,10 @@ void TouchMapper::finger_motion(TouchPoint p, uint64_t, std::vector<TouchAction>
             f.x = p.x;
             f.y = p.y;
         }
+    if (fingers_.size() == 1 && right_held_) {
+        motion(out, fingers_[0].x, fingers_[0].y); // a right-button drag
+        return;
+    }
     if (fingers_.size() == 1 && max_fingers_ == 1 && !long_fired_) {
         Finger &f = fingers_[0];
         if (!dragging_ && dist(f.x0, f.y0, f.x, f.y) > kTouchTapTravel) {
@@ -138,7 +143,19 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
         return; // the gesture ends when the last finger lifts
     const bool moved = dist(lifted.x0, lifted.y0, lifted.x, lifted.y) > kTouchTapTravel;
     if (max_fingers_ == 1) {
-        if (dragging_) {
+        if (right_held_) {
+            motion(out, lifted.x, lifted.y);
+            if (now - right_down_ >= kTouchClickHoldNs) {
+                button(out, 1, false, lifted.x, lifted.y);
+            } else {
+                // Lifted almost at once: keep the press long enough to be seen.
+                release_pending_ = true;
+                release_button_ = 1;
+                release_x_ = lifted.x;
+                release_y_ = lifted.y;
+                release_due_ = right_down_ + kTouchClickHoldNs;
+            }
+        } else if (dragging_) {
             motion(out, lifted.x, lifted.y);
             button(out, 0, false, lifted.x, lifted.y);
         } else if (!long_fired_ && !moved && now - lifted.t0 < kTouchLongPressNs) {
@@ -165,6 +182,8 @@ void TouchMapper::finger_cancel(int64_t id, std::vector<TouchAction> *out) {
         return;
     if (dragging_)
         button(out, 0, false, 0, 0);
+    if (right_held_)
+        button(out, 1, false, 0, 0);
     reset_gesture();
 }
 
@@ -175,6 +194,8 @@ void TouchMapper::cancel_all(std::vector<TouchAction> *out) {
     }
     if (dragging_)
         button(out, 0, false, 0, 0);
+    if (right_held_)
+        button(out, 1, false, 0, 0);
     fingers_.clear();
     reset_gesture();
 }
@@ -188,7 +209,12 @@ void TouchMapper::tick(uint64_t now, std::vector<TouchAction> *out) {
         return;
     const Finger &f = fingers_[0];
     if (now - f.t0 >= kTouchLongPressNs && dist(f.x0, f.y0, f.x, f.y) <= kTouchTapTravel) {
+        // Right button down, held until the finger lifts: a right-drag pans
+        // or rotates the camera; a quick lift is a right click.
         long_fired_ = true;
-        click(out, 1, f.x, f.y, now);
+        right_held_ = true;
+        right_down_ = now;
+        motion(out, f.x, f.y);
+        button(out, 1, true, f.x, f.y);
     }
 }
