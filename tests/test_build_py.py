@@ -56,6 +56,28 @@ class BuildPyTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             build_py.parse_args(["--stub", "--config", "Debug"], system="Linux")
 
+    def test_ios_target_uses_the_ios_preset_and_needs_macos(self):
+        args, _ = build_py.parse_args(["--target", "ios", "--team", "T"], system="Darwin")
+        self.assertEqual(build_py.preset_name(args.preset, args.config, stub=False, target=args.target), "ios")
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--target", "ios", "--team", "T"], system="Linux")
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--target", "ios"], system="Darwin")  # no team
+
+    def test_pick_device_prefers_the_single_paired_ipad(self):
+        devices = [
+            {"identifier": "A", "hardwareProperties": {"productType": "iPhone16,1"},
+             "connectionProperties": {"pairingState": "paired"}},
+            {"identifier": "B", "hardwareProperties": {"productType": "iPad16,3"},
+             "connectionProperties": {"pairingState": "paired"}},
+        ]
+        self.assertEqual(build_py.pick_device(devices), "B")
+        with self.assertRaises(SystemExit):
+            build_py.pick_device(devices + [{"identifier": "C", "hardwareProperties": {"productType": "iPad14,1"},
+                                             "connectionProperties": {"pairingState": "paired"}}])
+        with self.assertRaises(SystemExit):
+            build_py.pick_device([])
+
 
 if __name__ == "__main__":
     unittest.main()

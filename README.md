@@ -37,6 +37,23 @@ Generated code is never tracked. A build without game files links the hosts
 against a stub translation: `.venv/bin/python tools/build.py --stub`. Its
 outputs live under `build/stub/` so they never replace a real build.
 
+## Run on an iPad
+
+Requires Xcode with the iOS SDK, an Apple developer team signed in to Xcode,
+a paired iPad with developer mode on, and a macOS build already regenerated.
+
+```sh
+export RECOMP_IOS_TEAM=<your team id>       # security find-identity -v -p codesigning
+.venv/bin/python tools/build.py --target ios --console
+```
+
+The build stages your game directory into the app (see `[bundle].exclude` in
+`games/populous/game.toml`), signs it, installs it with `devicectl` and streams
+the console. Touch: tap = left click, long press = right click, drag = left
+drag, two-finger drag pans, two-finger tap = Escape, three-finger tap = F10
+(Options), four-finger tap toggles the keyboard. `tools/ios_logs.py` pulls the
+app's Documents (saves) back to the Mac.
+
 ## Check a change
 
 ```sh

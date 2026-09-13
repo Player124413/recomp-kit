@@ -49,6 +49,9 @@ jobs:
           - os: windows-2025
             preset: windows-stub
             labels: nogame
+          - os: macos-15
+            preset: ios-stub
+            labels: none
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -89,8 +92,14 @@ jobs:
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build every test binary this platform has
+        if: matrix.preset != 'ios-stub'
         run: cmake --build --preset ${{ matrix.preset }} --target check_binaries
       - name: Link every host against the stub translation
+        if: matrix.preset != 'ios-stub'
         run: cmake --build --preset ${{ matrix.preset }} --target recomp_app pop_headless pop_smoke
+      - name: Compile the iOS app against the stub translation (no signing)
+        if: matrix.preset == 'ios-stub'
+        run: cmake --build --preset ${{ matrix.preset }} --target recomp_app -- CODE_SIGNING_ALLOWED=NO
       - name: Run the suites that need no game files
+        if: matrix.preset != 'ios-stub'
         run: ctest --preset ${{ matrix.preset }} -L "${{ matrix.labels }}" --output-on-failure

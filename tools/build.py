@@ -2,12 +2,14 @@
 """Build the native app through CMake, regenerating original-game code only when needed."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/recomp"))
@@ -23,9 +25,10 @@ TARGETS = {
     "fixture": ["pop_fixture"],
     "gen": ["recomp_gen"],
     "plugins": ["plugins"],
+    "ios": ["recomp_app"],
 }
-MACOS_ONLY = {"app", "smoke", "headless"}
-NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen"}
+MACOS_ONLY = {"app", "smoke", "headless", "ios"}
+NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios"}
 
 
 def default_preset(system=None):
@@ -33,8 +36,10 @@ def default_preset(system=None):
     return {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}[system or platform.system()]
 
 
-def preset_name(preset, config, stub=False):
-    """Debug and stub builds live in their own binary directories, so they are their own presets."""
+def preset_name(preset, config, stub=False, target=None):
+    """Debug, stub and iOS builds live in their own binary directories, so they are their own presets."""
+    if target == "ios":
+        return "ios-stub" if stub else "ios"
     if stub:
         return preset + "-stub"
     return preset if config == "Release" else preset + "-debug"
@@ -59,9 +64,49 @@ def configure(preset, extra=()):
                    + list(extra), cwd=ROOT, check=True)
 
 
-def build(preset, targets, jobs):
+def build(preset, targets, jobs, extra=()):
+    """`extra` goes after the targets: a leading "--" hands the rest to the native tool."""
     subprocess.run([cmake_tool("cmake"), "--build", "--preset", preset, "--parallel", str(jobs), "--target"]
-                   + list(targets), cwd=ROOT, check=True)
+                   + list(targets) + list(extra), cwd=ROOT, check=True)
+
+
+def devicectl_list():
+    """Paired devices as devicectl reports them."""
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        path = tmp.name
+    subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", path], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(path) as fh:
+        return json.load(fh)["result"]["devices"]
+
+
+def pick_device(devices):
+    """The one paired iPad, or exit asking for --device."""
+    ipads = [d for d in devices
+             if d.get("hardwareProperties", {}).get("productType", "").startswith("iPad")
+             and d.get("connectionProperties", {}).get("pairingState") == "paired"]
+    if len(ipads) == 1:
+        return ipads[0]["identifier"]
+    names = ", ".join("%s (%s)" % (d.get("deviceProperties", {}).get("name", "?"), d["identifier"]) for d in ipads)
+    sys.exit("Pass --device <identifier>; paired iPads: %s" % (names or "none"))
+
+
+def ios_app_bundle(app_name, root=ROOT):
+    """The signed bundle under build/ios; Xcode adds a configuration directory (Release-iphoneos)."""
+    found = sorted((Path(root) / "build/ios").glob("**/%s.app" % app_name))
+    if not found:
+        sys.exit("No %s.app under build/ios; did the iOS build succeed?" % app_name)
+    return found[-1]
+
+
+def install_and_launch(app, bundle_id, device, console):
+    """Install the bundle with devicectl and launch it, optionally streaming its console."""
+    subprocess.run(["xcrun", "devicectl", "device", "install", "app", "--device", device, str(app)], check=True)
+    launch = ["xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", device]
+    if console:
+        launch.append("--console")
+    launch.append(bundle_id)
+    subprocess.run(launch, check=True)
 
 
 def publish_generated(root, translate):
@@ -129,7 +174,14 @@ def parse_args(argv, system=None):
     parser.add_argument("--game", default="populous", help="Directory under games/ whose game.toml configures the build")
     parser.add_argument("--stub", action="store_true",
                         help="Link the hosts against a stub translation (no game code; CI's build)")
+    parser.add_argument("--device", default=None, help="devicectl identifier of the iPad (ios target)")
+    parser.add_argument("--team", default=os.environ.get("RECOMP_IOS_TEAM", ""),
+                        help="Apple team id for automatic signing (ios target; default $RECOMP_IOS_TEAM)")
+    parser.add_argument("--no-install", action="store_true", help="Build the iOS app without installing it")
+    parser.add_argument("--console", action="store_true", help="After launching on the device, stream its console")
     args = parser.parse_args(argv)
+    if args.target == "ios" and not args.stub and not args.team:
+        parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
     if args.stub and (args.config == "Debug" or args.regenerate):
         parser.error("--stub cannot be combined with --config Debug or --regenerate")
     if not (ROOT / "games" / args.game / "game.toml").is_file():
@@ -149,17 +201,28 @@ def main():
     # Regenerating needs the game and its listings.
     if args.regenerate and not (ROOT / cfg["game"]["developer_exe"]).is_file():
         parser.error("Prepare your own game installation with tools/setup.py first")
-    preset = preset_name(args.preset, args.config, stub=args.stub)
+    preset = preset_name(args.preset, args.config, stub=args.stub, target=args.target)
     try:
         with buildlock.BuildLock(ROOT, "tools/build.py"):
             if args.target in NEEDS_GEN and args.regenerate:
                 if not (ROOT / cfg["translate"]["listings"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
                 publish_generated(ROOT, lambda stage: run_translator(stage, args.game))
-            if args.target == "app":
-                texture_pack(args.game)
-            configure(preset, ["-DRECOMP_GAME=" + args.game])
-            build(preset, TARGETS[args.target], args.jobs)
+            if args.target == "ios":
+                if not args.stub and not (ROOT / "build/recomp/gen/table.c").is_file():
+                    parser.error("No translation in build/recomp/gen; run tools/build.py --regenerate on macOS first")
+                configure(preset, ["-DRECOMP_GAME=" + args.game, "-DRECOMP_IOS_TEAM=" + args.team])
+                extra = ["--", "CODE_SIGNING_ALLOWED=NO"] if args.stub else ["--", "-allowProvisioningUpdates"]
+                build(preset, TARGETS["ios"], args.jobs, extra)
+                if not args.stub and not args.no_install:
+                    app = ios_app_bundle(cfg["game"]["app_name"])
+                    device = args.device or pick_device(devicectl_list())
+                    install_and_launch(app, cfg["game"]["bundle_id"], device, args.console)
+            else:
+                if args.target == "app":
+                    texture_pack(args.game)
+                configure(preset, ["-DRECOMP_GAME=" + args.game])
+                build(preset, TARGETS[args.target], args.jobs)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
     except TimeoutError as error:

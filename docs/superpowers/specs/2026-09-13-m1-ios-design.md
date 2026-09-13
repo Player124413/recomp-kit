@@ -92,24 +92,18 @@ CMake: `platform_ui_desktop.cpp` (today's behaviour, extracted) and
 `platform_ui_ios.mm`.
 
 ```c++
-struct PlatformUi {
-    // Where the guest's game root is; empty on failure with `error` set.
-    // Desktop: --exe / POP_RECOMP_EXE / checkout / saved path / picker.
-    // iOS: Documents/game, seeded from <bundle>/game when missing or stale.
-    static std::string resolve_game_exe(const char *flag, std::string *error);
-    // Desktop: sized, centered, resizable. iOS: fullscreen, HIGH_PIXEL_DENSITY.
-    static SDL_Window *create_window(const char *title, int mode_w, int mode_h, SDL_WindowFlags surface);
-    // Desktop: relative mode and confinement. iOS: no-op.
-    static void apply_pointer_capture(bool captured);
-    // True when the event is a lifecycle event the host handled here
-    // (WILL_ENTER_BACKGROUND pauses audio and presentation, DID_ENTER_FOREGROUND resumes).
-    static bool handle_lifecycle(const SDL_Event &e);
-    static bool has_pointer();   // desktop true; iOS false unless a mouse is attached
-};
+void platform_ui_init_hints();
+GamePath platform_ui_resolve_game(const char *flag, std::string *error);
+SDL_Window *platform_ui_create_window(const char *title, int mode_w, int mode_h, int scale,
+                                      SDL_WindowFlags surface_flag, int *window_mode);
+bool platform_ui_handle_lifecycle(const SDL_Event &e);
 ```
 
+Pointer capture needs no seam: `SDL_HideCursor`, `SDL_ShowCursor` and
+`SDL_SetWindowMouseRect` are harmless no-ops on iOS.
+
 `main.cpp` includes `SDL3/SDL_main.h` (a no-op on desktop, the UIKit entry
-on iOS), calls these five functions where it used to do the work inline, and
+on iOS), calls these four functions where it used to do the work inline, and
 routes finger events to the touch mapper. Options that came from argv on
 desktop (`--exe`, `--version`, `--probe-layout`) stay desktop-only; the iOS
 build has no argv.
@@ -145,12 +139,12 @@ pixel size.
 | One-finger drag (travel over 12 px) | left down at start, motion while moving, left up at release |
 | Two-finger drag | arrow-key down/up pulses matching the dominant direction, one pulse per 24 px |
 | Two-finger tap | Escape down, Escape up |
-| Three-finger tap | toggles the on-screen bar |
+| Three-finger tap | F10 down, F10 up (Options) |
+| Four-finger tap | toggles the on-screen keyboard (`SDL_StartTextInput` / `SDL_StopTextInput`) |
 
-The on-screen bar is drawn by the existing UI layer (`host/ui_layer.cpp`)
-as three buttons: Escape, F10 (Options), and Keyboard, which calls
-`SDL_StartTextInput` so the game's name-entry fields work. Thresholds are
-constants in `input_touch.h`.
+There is no on-screen bar: `host/ui_layer.cpp` reconstructs guest UI from
+frame writes and is not a widget toolkit, so Options and the keyboard are
+gestures. Thresholds are constants in `input_touch.h`.
 
 ### 5.5 Metal and layout
 
@@ -214,7 +208,7 @@ On the iPad Pro, launched from the home screen after `tools/build.py --target io
 1. The main menu appears fullscreen in landscape.
 2. A level loads from the menu by touch alone.
 3. Units can be selected and ordered by tap and drag; the camera pans with a
-   two-finger drag; Escape and Options work from the bar.
+   two-finger drag; Escape (two-finger tap) and Options (three-finger tap) work.
 4. The pulled gameplay log shows the game's native frame rate sustained
    during play (the same measure the macOS smoke run reports).
 5. Backgrounding and returning resumes play with audio.
