@@ -52,7 +52,7 @@ void mods_display_live_defaults() {
 }
 // The overlay a fresh profile starts with, when the host wants something
 // other than the live default: a player build starts without the graph.
-extern "C" void mods_display_default_overlay(int mode) {
+void mods_display_default_overlay(int mode) {
     if (initialized)
         return;
     desired[DISPLAY_OVERLAY] = std::clamp(mode, 0, 2);
