@@ -149,7 +149,11 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
 #else
 #define POP_VENV_PYTHON ".venv/bin/python"
 #endif
-    const char *cmd = POP_VENV_PYTHON
+    // The interpreter that configured the build (CTest passes POP_PYTHON), else
+    // the checkout's venv relative to the working directory.
+    const char *python = getenv("POP_PYTHON");
+    const std::string cmd_s =
+        std::string(python && *python ? python : POP_VENV_PYTHON) +
         " -c \""
         "import pefile;pe=pefile.PE('" RECOMP_DEVELOPER_EXE "');b=pe.OPTIONAL_HEADER.ImageBase;"
         "print('IMAGE %x %x %x' % (b, pe.OPTIONAL_HEADER.SizeOfImage, "
@@ -157,6 +161,7 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
         "[print('%s %x %x %x' % (s.Name.decode().rstrip(chr(0)), b+s.VirtualAddress, "
         "s.Misc_VirtualSize, s.SizeOfRawData)) for s in pe.sections]"
         "\" 2>/dev/null";
+    const char *cmd = cmd_s.c_str();
     FILE *p = popen(cmd, "r");
     if (!p) {
         err = "popen failed";
