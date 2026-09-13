@@ -694,13 +694,18 @@ void push_touch_action_now(const TouchAction &a) {
 // reach the gesture mapper.
 std::map<int64_t, int> g_overlay_fingers;
 bool g_touch_overlay_on = false;
+bool g_touch_overlay_collapsed = false;
+
+void publish_touch_overlay() {
+    host_present_set_touch_overlay(!g_touch_overlay_on ? 0 : g_touch_overlay_collapsed ? 2 : 1);
+}
 
 int touch_overlay_key_at(const SDL_TouchFingerEvent &f) {
     if (!g_touch_overlay_on)
         return 0;
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
-    return touch_overlay_hit(dw, dh, f.x * dw, f.y * dh);
+    return touch_overlay_hit(dw, dh, g_touch_overlay_collapsed, f.x * dw, f.y * dh);
 }
 
 void push_touch_key(int scancode, bool down) {
@@ -811,7 +816,8 @@ void handle_event(const SDL_Event &event) {
         if (held != g_overlay_fingers.end()) {
             // A key-bar finger: release its key when it lifts, ignore its motion.
             if (event.type == SDL_EVENT_FINGER_UP) {
-                push_touch_key(held->second, false);
+                if (held->second != kTouchOverlayToggle)
+                    push_touch_key(held->second, false);
                 g_overlay_fingers.erase(held);
             }
             break;
@@ -819,7 +825,11 @@ void handle_event(const SDL_Event &event) {
         if (event.type == SDL_EVENT_FINGER_DOWN) {
             if (const int key = touch_overlay_key_at(event.tfinger)) {
                 g_overlay_fingers[finger] = key;
-                push_touch_key(key, true);
+                if (key == kTouchOverlayToggle) {
+                    g_touch_overlay_collapsed = !g_touch_overlay_collapsed;
+                    publish_touch_overlay();
+                } else
+                    push_touch_key(key, true);
                 break;
             }
             g_touch.finger_down(touch_point(event.tfinger), now, &actions);
@@ -897,7 +907,7 @@ void after_events() {
         const bool want_bar = platform_ui_touch_overlay_wanted();
         if (want_bar != g_touch_overlay_on) {
             g_touch_overlay_on = want_bar;
-            host_present_set_touch_overlay(want_bar);
+            publish_touch_overlay();
         }
     }
     // A shell-launched process does not always come forward on its own, and a

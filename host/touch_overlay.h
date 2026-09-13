@@ -11,10 +11,13 @@
 class TouchOverlay {
   public:
     ~TouchOverlay();
-    void draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h);
+    // collapsed: draw only the bottom-right tab that brings the strip back.
+    void draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h,
+              bool collapsed);
 
   private:
-    void update(gpu::Device *device, int w);
+    void update(gpu::Device *device, bool collapsed);
+    bool collapsed_ = false;
     gpu::Device *device_ = nullptr;
     gpu::Texture texture_;
     int texture_w_ = 0, texture_h_ = 0;

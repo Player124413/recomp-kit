@@ -223,10 +223,10 @@ void host_present_stop(void); // only after the guest scheduler has stopped
 // no drawable and presents nothing: what an iOS app must do in the background.
 void host_present_suspend(bool suspended);
 bool host_present_suspended(void);
-// Show or hide the on-screen key bar (host/touch_overlay_layout.h) the worker
-// draws over every presented frame.
-void host_present_set_touch_overlay(bool shown);
-bool host_present_touch_overlay(void);
+// The on-screen key strip (host/touch_overlay_layout.h) the worker draws over
+// every presented frame: 0 none, 1 the strip, 2 collapsed to its tab.
+void host_present_set_touch_overlay(int mode);
+int host_present_touch_overlay(void);
 void host_frame_seal(void);
 void host_present_first_write(void);
 void host_present_stage_rgba(const uint8_t *rgba, int w, int h);

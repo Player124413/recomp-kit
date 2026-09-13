@@ -45,18 +45,24 @@ TouchOverlay::~TouchOverlay() {
 // The bar is rasterized on its logical grid (kTouchBarWidth x kTouchBarHeight)
 // and stretched to the drawable width when drawn, so the raster never changes
 // with the window and the hit test's mapping is the same stretch.
-void TouchOverlay::update(gpu::Device *device, int) {
-    const int w = kTouchBarWidth, h = kTouchBarHeight;
+void TouchOverlay::update(gpu::Device *device, bool collapsed) {
+    // Collapsed, only the tab's columns are drawn; the raster keeps the strip's
+    // logical width so the stretch is the same and the tab lands where the
+    // hit test expects it.
+    const int w = kTouchBarWidth, h = collapsed ? kTouchBarTabHeight : kTouchBarHeight;
     pixels_.assign(size_t(w) * h * 4, 0);
     Canvas c{pixels_, w, h};
-    c.fill(0, 0, w, h, 6, 9, 15, 150);
     std::vector<TouchKey> keys;
-    touch_overlay_layout(w, h, &keys);
+    touch_overlay_layout(w, h, collapsed, &keys);
+    if (!collapsed)
+        c.fill(0, 0, w, h, 6, 9, 15, 150);
     for (const TouchKey &k : keys) {
+        c.fill(k.x, k.y, k.w, k.h, 6, 9, 15, 150);
         c.fill(k.x + 3, k.y + 3, k.w - 6, k.h - 6, 40, 48, 64, 200);
         const int text_w = int(strlen(k.label)) * 12;
         c.text(k.x + (k.w - text_w) / 2, k.y + (k.h - 16) / 2, k.label, 235, 242, 255);
     }
+    collapsed_ = collapsed;
     if (device_ != device || !texture_ || texture_w_ != w || texture_h_ != h) {
         if (device_ && texture_)
             device_->destroy(texture_);
@@ -71,11 +77,11 @@ void TouchOverlay::update(gpu::Device *device, int) {
 }
 
 void TouchOverlay::draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w,
-                        int h) {
+                        int h, bool collapsed) {
     if (!device || !target || !cb || w <= 0 || h <= 0)
         return;
-    if (!texture_ || device_ != device)
-        update(device, w);
+    if (!texture_ || device_ != device || collapsed_ != collapsed)
+        update(device, collapsed);
     if (!texture_)
         return;
     gpu::RenderState state;
@@ -88,7 +94,7 @@ void TouchOverlay::draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture
     if (!pipeline)
         return;
     // Full width along the bottom edge; height from the shared layout.
-    const double bar_h = touch_overlay_height(w);
+    const double bar_h = touch_overlay_height(w, collapsed);
     float rect[] = {-1.0f, float(-1 + 2 * bar_h / h), 2.0f, float(-2 * bar_h / h)};
     gpu::RenderPass pass;
     pass.color_count = 1;
