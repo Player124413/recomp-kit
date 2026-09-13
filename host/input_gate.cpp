@@ -934,16 +934,41 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
     *dy = cy;
 }
 
-bool host_gate_pointer_settled(void) {
-    if (!g_pointer_target_valid)
-        return true;
-    const auto hit = host_gate_hit_test(nullptr, g_target_window_x, g_target_window_y);
-    if (hit.kind == HitResult::HIT_NONE)
-        return true;
-    int32_t dx = 0, dy = 0;
-    if (!pointer_correction(hit, &dx, &dy, false))
-        return true; // no readable guest pointer: nothing to wait for
-    return dx == 0 && dy == 0;
+bool host_gate_pointer_place(int32_t x, int32_t y) {
+    if (!g_mem)
+        return false;
+    const auto p = host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
+    if (p.failure != HostGuestPointer::None)
+        return false;
+    x = std::clamp(x, 0, std::max(0, g_layout.drawable_w - 1));
+    y = std::clamp(y, 0, std::max(0, g_layout.drawable_h - 1));
+    // The same mapping pointer_correction() converges toward: the drawable
+    // position scaled into the game's screen, or in enhanced gameplay the
+    // layout's own guest coordinate for the scene and sidebar.
+    const auto hit = host_gate_hit_test(nullptr, x, y);
+    int64_t tx, ty;
+    if (!g_layout.classic && g_layout.cls == HOST_SCREEN_GAMEPLAY &&
+        hit.kind != HitResult::HIT_NONE) {
+        tx = hit.gx;
+        ty = hit.gy;
+    } else {
+        const int32_t screen_w = p.right - p.left + 1, screen_h = p.bottom - p.top + 1;
+        const double span_x = std::max(1, g_layout.drawable_w - 1);
+        const double span_y = std::max(1, g_layout.drawable_h - 1);
+        tx = p.left + int64_t(std::lround(x / span_x * (screen_w - 1)));
+        ty = p.top + int64_t(std::lround(y / span_y * (screen_h - 1)));
+    }
+    tx = std::clamp(tx, int64_t(p.left), int64_t(p.right));
+    ty = std::clamp(ty, int64_t(p.top), int64_t(p.bottom));
+    wr32(p.object + 0x20, uint32_t(tx));
+    wr32(p.object + 0x24, uint32_t(ty));
+    // Tell the closed loop where the pair now is, so it neither fights the
+    // write nor reads it as a foreign writer.
+    g_loop_expect_valid = true;
+    g_loop_expect_x = int32_t(tx);
+    g_loop_expect_y = int32_t(ty);
+    g_pointer_target_valid = false;
+    return true;
 }
 
 void host_gate_pointer_tick() {

@@ -80,8 +80,25 @@ GamePath platform_ui_resolve_game(const char *, std::string *error) {
     return g;
 }
 
+namespace {
+// SDL3 does not queue the app lifecycle events; it hands them to event
+// watchers on the UIKit callstack that raised them (SDL_SendAppEvent). The
+// host's event loop therefore never sees them, and this watcher is the only
+// place the background transition can be acted on before iOS freezes the
+// process.
+bool lifecycle_watch(void *, SDL_Event *e) {
+    platform_ui_handle_lifecycle(*e);
+    return true;
+}
+} // namespace
+
 SDL_Window *platform_ui_create_window(const char *title, int, int, int,
                                       SDL_WindowFlags surface_flag, int *window_mode) {
+    static bool watching = false;
+    if (!watching) {
+        SDL_AddEventWatch(lifecycle_watch, nullptr);
+        watching = true;
+    }
     SDL_Window *w = SDL_CreateWindow(
         title, 0, 0, surface_flag | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window_mode)

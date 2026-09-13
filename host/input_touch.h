@@ -13,6 +13,9 @@
 constexpr double kTouchTapTravel = 12.0;
 constexpr uint64_t kTouchLongPressNs = 350ull * 1000000ull;
 constexpr double kTouchPanStep = 24.0;
+// A synthesized click stays pressed this long: a game that samples its mouse
+// buttons once per frame never sees a press and release inside one frame.
+constexpr uint64_t kTouchClickHoldNs = 90ull * 1000000ull;
 
 struct TouchPoint {
     int64_t id;
@@ -51,6 +54,12 @@ class TouchMapper {
     bool long_fired_ = false;     // long press already emitted for this gesture
     bool text_input_ = false;
     double pan_cx_ = 0, pan_cy_ = 0, pan_acc_x_ = 0, pan_acc_y_ = 0;
+    // A click's release, held back until kTouchClickHoldNs after its press.
+    bool release_pending_ = false;
+    int release_button_ = 0;
+    double release_x_ = 0, release_y_ = 0;
+    uint64_t release_due_ = 0;
+    void click(std::vector<TouchAction> *out, int button, double x, double y, uint64_t now);
     double centroid_x() const;
     double centroid_y() const;
     void reset_gesture();

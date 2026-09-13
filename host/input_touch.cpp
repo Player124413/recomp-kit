@@ -47,6 +47,17 @@ double TouchMapper::centroid_y() const {
         s += f.y;
     return fingers_.empty() ? 0 : s / fingers_.size();
 }
+// Press now; the release follows from tick() once the hold time has passed.
+void TouchMapper::click(std::vector<TouchAction> *out, int b, double x, double y, uint64_t now) {
+    motion(out, x, y);
+    button(out, b, true, x, y);
+    release_pending_ = true;
+    release_button_ = b;
+    release_x_ = x;
+    release_y_ = y;
+    release_due_ = now + kTouchClickHoldNs;
+}
+
 void TouchMapper::reset_gesture() {
     max_fingers_ = 0;
     dragging_ = false;
@@ -55,6 +66,12 @@ void TouchMapper::reset_gesture() {
 }
 
 void TouchMapper::finger_down(TouchPoint p, uint64_t now, std::vector<TouchAction> *out) {
+    if (release_pending_) {
+        // A new finger before the last click released: release it first so
+        // the two clicks stay distinct.
+        release_pending_ = false;
+        button(out, release_button_, false, release_x_, release_y_);
+    }
     if (fingers_.empty())
         reset_gesture();
     fingers_.push_back({p.id, p.x, p.y, p.x, p.y, now});
@@ -125,9 +142,7 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
             motion(out, lifted.x, lifted.y);
             button(out, 0, false, lifted.x, lifted.y);
         } else if (!long_fired_ && !moved && now - lifted.t0 < kTouchLongPressNs) {
-            motion(out, lifted.x, lifted.y);
-            button(out, 0, true, lifted.x, lifted.y);
-            button(out, 0, false, lifted.x, lifted.y);
+            click(out, 0, lifted.x, lifted.y, now);
         }
     } else if (max_fingers_ == 2 && fabs(pan_acc_x_) < kTouchPanStep &&
                fabs(pan_acc_y_) < kTouchPanStep && !moved) {
@@ -141,13 +156,15 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
 }
 
 void TouchMapper::tick(uint64_t now, std::vector<TouchAction> *out) {
+    if (release_pending_ && now >= release_due_) {
+        release_pending_ = false;
+        button(out, release_button_, false, release_x_, release_y_);
+    }
     if (fingers_.size() != 1 || max_fingers_ != 1 || dragging_ || long_fired_)
         return;
     const Finger &f = fingers_[0];
     if (now - f.t0 >= kTouchLongPressNs && dist(f.x0, f.y0, f.x, f.y) <= kTouchTapTravel) {
         long_fired_ = true;
-        motion(out, f.x, f.y);
-        button(out, 1, true, f.x, f.y);
-        button(out, 1, false, f.x, f.y);
+        click(out, 1, f.x, f.y, now);
     }
 }

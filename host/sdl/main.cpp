@@ -186,7 +186,7 @@ void view_point_to_drawable(double px, double py, int32_t *out_x, int32_t *out_y
 // below and applied from pump(), which runs on a thread that holds the baton.
 // ---------------------------------------------------------------------------
 struct PendingInput {
-    enum Kind { MOTION, BUTTON, WHEEL, KEY, MODIFIERS, FOCUS, RELEASE_CAPTURE } kind;
+    enum Kind { MOTION, BUTTON, WHEEL, KEY, MODIFIERS, FOCUS, RELEASE_CAPTURE, PLACE } kind;
     int32_t x = 0, y = 0, dz = 0;
     double dx = 0, dy = 0; // Drawable deltas preserve subpixel motion in the queue.
     int drawable_w = 0, drawable_h = 0;
@@ -595,6 +595,9 @@ void apply_input(const PendingInput &e) {
     case PendingInput::RELEASE_CAPTURE:
         apply_pointer_capture(false);
         break;
+    case PendingInput::PLACE:
+        host_gate_pointer_place(e.x, e.y);
+        break;
     }
 }
 
@@ -631,41 +634,16 @@ void post_drawable_size();
 
 TouchMapper g_touch;
 
-// Touch clicks wait for the game's cursor. Populous hit-tests against the
-// pointer it integrates from relative motion, so a press in the same instant
-// as the move lands where the cursor WAS. Buttons queue here until the gate
-// reports the cursor settled at the target, or kTouchClickDeadlineNs passes.
-constexpr uint64_t kTouchClickDeadlineNs = 150ull * 1000000ull;
-struct DeferredTouch {
-    TouchAction action;
-    uint64_t due_ns;
-};
-std::vector<DeferredTouch> g_deferred_touch;
+// A touch names a place. The motion event moves the host's idea of the
+// pointer; the PLACE event that follows writes the game's own cursor there
+// (host_gate_pointer_place) so the click after it hit-tests where the finger
+// is, with no convergence to wait for. All three travel the SDL queue in order.
+constexpr Sint32 kTouchPlaceEvent = 0x70756c63; // 'pulc'
 void push_touch_action_now(const TouchAction &a);
 
-void flush_deferred_touch(bool force) {
-    const uint64_t now = SDL_GetTicksNS();
-    while (!g_deferred_touch.empty()) {
-        const DeferredTouch &d = g_deferred_touch.front();
-        if (!force && now < d.due_ns && !host_gate_pointer_settled())
-            return; // in order: the first one not ready blocks the rest
-        push_touch_action_now(d.action);
-        g_deferred_touch.erase(g_deferred_touch.begin());
-    }
-}
-
-// Replays the mapper's actions as SDL events on our window, so the existing
-// mouse and key handling sees touch exactly as it sees a pointer. Buttons go
-// through the deferral queue; motion and keys go straight out.
 void push_touch_actions(const std::vector<TouchAction> &actions) {
-    const uint64_t now = SDL_GetTicksNS();
-    for (const TouchAction &a : actions) {
-        if (a.kind == TouchAction::Button || !g_deferred_touch.empty())
-            g_deferred_touch.push_back({a, now + kTouchClickDeadlineNs});
-        else
-            push_touch_action_now(a);
-    }
-    flush_deferred_touch(false);
+    for (const TouchAction &a : actions)
+        push_touch_action_now(a);
 }
 
 void push_touch_action_now(const TouchAction &a) {
@@ -674,13 +652,22 @@ void push_touch_action_now(const TouchAction &a) {
         SDL_Event e{};
         e.common.timestamp = SDL_GetTicksNS();
         switch (a.kind) {
-        case TouchAction::Motion:
+        case TouchAction::Motion: {
             e.type = SDL_EVENT_MOUSE_MOTION;
             e.motion.windowID = ours;
             e.motion.which = SDL_TOUCH_MOUSEID;
             e.motion.x = (float)a.x;
             e.motion.y = (float)a.y;
-            break;
+            SDL_PushEvent(&e);
+            SDL_Event place{};
+            place.type = SDL_EVENT_USER;
+            place.user.windowID = ours;
+            place.user.code = kTouchPlaceEvent;
+            place.user.data1 = (void *)(intptr_t)lround(a.x * 16);
+            place.user.data2 = (void *)(intptr_t)lround(a.y * 16);
+            SDL_PushEvent(&place);
+            return;
+        }
         case TouchAction::Button:
             e.type = a.down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
             e.button.windowID = ours;
@@ -804,6 +791,16 @@ void handle_event(const SDL_Event &event) {
         post_drawable_size();
         update_platform_pointer_capture();
         break;
+    case SDL_EVENT_USER:
+        if (event.user.code == kTouchPlaceEvent) {
+            PendingInput e;
+            e.kind = PendingInput::PLACE;
+            view_point_to_drawable(double((intptr_t)event.user.data1) / 16.0,
+                                   double((intptr_t)event.user.data2) / 16.0, &e.x, &e.y,
+                                   &e.drawable_w, &e.drawable_h);
+            queue_or_apply(e);
+        }
+        break;
     case SDL_EVENT_FINGER_DOWN:
     case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_MOTION: {
@@ -896,7 +893,6 @@ void after_events() {
         std::vector<TouchAction> actions;
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
-        flush_deferred_touch(false);
         // The key bar follows the hardware keyboard: attached, no bar.
         const bool want_bar = platform_ui_touch_overlay_wanted();
         if (want_bar != g_touch_overlay_on) {
