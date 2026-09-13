@@ -27,6 +27,14 @@ function(pop_ios_bundle target)
       WORKING_DIRECTORY ${POP_ROOT}
       COMMENT "Staging game files into ${RECOMP_APP_NAME}.app/game"
       VERBATIM)
+    # The app icon is the game's own: the executable's icon group, scaled.
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/extract_icon.py
+              --exe ${POP_ROOT}/${RECOMP_DEVELOPER_EXE}
+              --dest $<TARGET_BUNDLE_CONTENT_DIR:${target}>
+      WORKING_DIRECTORY ${POP_ROOT}
+      COMMENT "Extracting the app icon from the game executable"
+      VERBATIM)
   endif()
   # classic-modes.json is the one resource the host reads at startup.
   add_custom_command(TARGET ${target} POST_BUILD
