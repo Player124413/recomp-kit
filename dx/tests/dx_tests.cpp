@@ -5495,6 +5495,17 @@ static void test_mss32_arities() {
              0u);
 }
 
+static void test_bink_smack_stubs() {
+    cpu_reset();
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {0, 0}), 0u);
+    uint32_t err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+    CHECK(err != 0);
+    CHECK_EQ(strcmp(gm_str(err).c_str(), "no video decoder"), 0);
+    CHECK_EQ(call_shim(tramp("smackw32.dll", "_SmackOpen@12"), {0, 0, 0}), 0u);
+    CHECK_EQ(imports_argc(tramp("binkw32.dll", "_BinkCopyToBuffer@28")), 7u);
+    CHECK_EQ(imports_argc(tramp("smackw32.dll", "_SmackToBuffer@28")), 7u);
+}
+
 // QMixer: a session, a channel, and a wave supplied the way the game supplies
 // one, as raw PCM plus an explicit WAVEFORMATEX in a five-dword record. There
 // is no RIFF container on this path.
@@ -9224,6 +9235,7 @@ int main() {
         {"DirectInput", test_dinput},
         {"QMixer", test_qmixer},
         {"Miles arities", test_mss32_arities},
+        {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},
