@@ -20,6 +20,7 @@
 #include "host_api.h"
 #include "ddraw.h"
 #include "../runtime/memory.h"
+#include "../platform/os.h"
 #include "../runtime/mods_seam.h"
 #include "../mods/sprite_view.h"
 
@@ -2428,8 +2429,19 @@ void d3d_read_surface(ComObj *s, const int32_t *rect, HostReadReason reason) {
         r = {rect[0], rect[1], rect[2], rect[3]};
     if (host_d3d_legacy_writeback())
         host_d3d_flush_surface(&d, "legacy reader");
-    if (host_d3d_make_coherent(&d, ddraw_surface_generation(s->id), rect ? &r : nullptr, reason) <
-        0) {
+    int rc =
+        host_d3d_make_coherent(&d, ddraw_surface_generation(s->id), rect ? &r : nullptr, reason);
+    // A GPU read can be refused for a while rather than for good: iOS denies
+    // GPU work to a process in the background, and the command buffer of a
+    // read the guest asked for around a background/foreground transition
+    // completes with an error. The guest thread has nowhere to go until the
+    // read succeeds, so ask again for up to a second before giving up.
+    for (int attempt = 0; rc < 0 && attempt < 100; ++attempt) {
+        os_sleep_us(10000);
+        rc = host_d3d_make_coherent(&d, ddraw_surface_generation(s->id), rect ? &r : nullptr,
+                                    reason);
+    }
+    if (rc < 0) {
         fprintf(stderr,
                 "[host] coherence read failed for surface %u; refusing stale guest pixels\n",
                 s->id);

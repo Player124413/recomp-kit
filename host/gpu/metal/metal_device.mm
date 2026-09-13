@@ -826,8 +826,16 @@ CommandStatus MetalDevice::status(CommandBuffer cb) {
         buffer = it->second;
     }
     switch (buffer.status) {
-    case MTLCommandBufferStatusError:
+    case MTLCommandBufferStatusError: {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            fprintf(stderr, "[gpu] a command buffer failed: %s\n",
+                    buffer.error ? buffer.error.localizedDescription.UTF8String
+                                 : "no error object");
+        }
         return CommandStatus::Error;
+    }
     case MTLCommandBufferStatusCompleted:
         return CommandStatus::Completed;
     default:
