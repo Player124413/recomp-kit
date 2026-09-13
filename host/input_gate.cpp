@@ -14,7 +14,9 @@
 #include <mutex>
 #include <utility>
 
-// Drawable pixels at the far edges that still count as the edge row/column.
+// Drawable pixels at either edge that still count as the edge row/column: an
+// iPadOS pointer stops half a point short of the left edge (drawable x 1), and
+// the last window point lands a pixel or two short of the last drawable row.
 constexpr int kEdgeSlackPx = 3;
 
 namespace {
@@ -233,8 +235,10 @@ bool pointer_correction(const HitResult &hit, int32_t *dx, int32_t *dy, bool del
     // at row 4 leaves the pointer visibly at the top without ever panning.
     const bool scene_edge =
         g_layout.cls == HOST_SCREEN_GAMEPLAY && hit.kind == HitResult::HIT_SCENE;
-    const bool exact_x = scene_edge && (g_drawable_x <= 0 || g_drawable_x >= span_x - kEdgeSlackPx);
-    const bool exact_y = scene_edge && (g_drawable_y <= 0 || g_drawable_y >= span_y - kEdgeSlackPx);
+    const bool exact_x =
+        scene_edge && (g_drawable_x <= kEdgeSlackPx || g_drawable_x >= span_x - kEdgeSlackPx);
+    const bool exact_y =
+        scene_edge && (g_drawable_y <= kEdgeSlackPx || g_drawable_y >= span_y - kEdgeSlackPx);
     const bool close =
         std::abs(tx - p.x) <= (exact_x ? 0 : 4) && std::abs(ty - p.y) <= (exact_y ? 0 : 4);
     if (!delivery) {
@@ -381,13 +385,13 @@ HitResult hit_layout(const LayoutSnapshot &layout, double x, double y) {
     // A pointer or finger at the window's last point lands a pixel or two
     // short of the drawable's last row once scaled (1666 of 1668 on an
     // iPad), so the last kEdgeSlackPx pixels all count as the edge.
-    if (x <= 0)
+    if (x <= kEdgeSlackPx)
         h.gx = 0;
     else if (x >= layout.drawable_w - 1 - kEdgeSlackPx)
         h.gx = h.guest.w - 1;
     else if (h.guest.w > 2)
         h.gx = std::clamp(h.gx, 1, h.guest.w - 2);
-    if (y <= 0)
+    if (y <= kEdgeSlackPx)
         h.gy = 0;
     else if (y >= layout.drawable_h - 1 - kEdgeSlackPx)
         h.gy = h.guest.h - 1;
@@ -954,9 +958,13 @@ bool host_gate_pointer_place(int32_t x, int32_t y) {
     // short of the drawable's last row or column once scaled (1666 of 1668 on
     // an iPad), and the hit test hands only that last pixel the guest's edge,
     // which is the row the game scrolls from. Treat the last few pixels as it.
-    if (x >= g_layout.drawable_w - 1 - kEdgeSlackPx)
+    if (x <= kEdgeSlackPx)
+        x = 0;
+    else if (x >= g_layout.drawable_w - 1 - kEdgeSlackPx)
         x = std::max(0, g_layout.drawable_w - 1);
-    if (y >= g_layout.drawable_h - 1 - kEdgeSlackPx)
+    if (y <= kEdgeSlackPx)
+        y = 0;
+    else if (y >= g_layout.drawable_h - 1 - kEdgeSlackPx)
         y = std::max(0, g_layout.drawable_h - 1);
     // The same mapping pointer_correction() converges toward: the drawable
     // position scaled into the game's screen, or in enhanced gameplay the
