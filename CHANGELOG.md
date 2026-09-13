@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build: allow the app, smoke and headless hosts on Linux and Windows,
+  including translation with `--regenerate`. Only the iOS packager requires
+  macOS, including stub builds.
 - Miles streams decode MP3 through the decoder shared with DirectShow.
   Streams refill from the guest frame pump, support volume and loop counts,
   and remain playing until queued PCM drains.

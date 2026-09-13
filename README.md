@@ -45,7 +45,13 @@ Every kit tool takes `--game-dir <absolute path>`; the game repository's own
 directory. Outputs go under `<game>/build` when the game lives outside the
 kit, else under the kit's `build/`.
 
-## Build a game on macOS
+## Build a game on desktop
+
+`tools/build.py --target app` selects the `macos`, `linux` or `windows`
+CMake preset and builds `recomp_app`. `--regenerate` runs the Python
+translator on all three platforms. The iOS packager runs on macOS,
+including `--target ios --stub` builds. See [Contributing](CONTRIBUTING.md)
+for platform prerequisites; the commands below use a macOS shell.
 
 From the game repository, with Python 3.9 or later, Ghidra for the first
 translation, and your own copy of the game:

@@ -75,9 +75,10 @@ adapter APIs, build tools and reviewed extension points are the primary places t
 contribute. Generated functions have address/symbol comments and per-instruction
 provenance; change the translator or a reviewed replacement, then regenerate.
 
-The native app currently targets macOS. `src/core/` contains only shared type
-headers used by the retained tests; it is not a second game engine. Capture/replay
-under `mods/native/` validates prospective native replacements locally.
+The desktop app builds on macOS, Linux and Windows; the iOS packager runs
+on macOS. `src/core/` contains only shared type headers used by the retained
+tests; it is not a second game engine. Capture/replay under `mods/native/`
+validates prospective native replacements locally.
 
 Platform services (threads, virtual memory, plugins, files, clocks) go through
 `platform/os.h`, with POSIX and Win32 implementations; the build is

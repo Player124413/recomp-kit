@@ -32,7 +32,7 @@ TARGETS = {
     "plugins": ["plugins"],
     "ios": ["recomp_app"],
 }
-MACOS_ONLY = {"app", "smoke", "headless", "ios"}
+MACOS_ONLY = {"ios"}
 NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios"}
 
 
@@ -228,9 +228,8 @@ def parse_args(argv, system=None):
         parser.error("No game config at %s/game.toml" % args.game_dir)
     if args.target == "plugins" and not (args.game_dir / "mods/CMakeLists.txt").is_file():
         parser.error("%s has no mods/CMakeLists.txt; nothing to build for --target plugins" % args.game_dir)
-    if args.target in MACOS_ONLY and not args.stub and (system or platform.system()) != "Darwin":
-        parser.error("The %s host currently builds on macOS; use --target fixture, gen or plugins elsewhere"
-                     % args.target)
+    if args.target in MACOS_ONLY and (system or platform.system()) != "Darwin":
+        parser.error("The iOS packager runs on macOS")
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
     args.build_root = build_root_for(args.game_dir)

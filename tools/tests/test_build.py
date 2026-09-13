@@ -1,11 +1,27 @@
-"""Build-tool translator arguments, without invoking the translator."""
+"""Build-tool platform gates and translator arguments, without invoking the translator."""
 
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 spec = importlib.util.spec_from_file_location("build", Path(__file__).parents[1] / "build.py")
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+
+
+def test_app_target_allowed_on_linux():
+    args, _ = build.parse_args(
+        ["--target", "app", "--game-dir", str(build.ROOT / "games/stub")], system="Linux")
+    assert args.preset == "linux"
+
+
+def test_ios_target_still_needs_macos(capsys):
+    with pytest.raises(SystemExit) as error:
+        build.parse_args(
+            ["--target", "ios", "--stub", "--game-dir", str(build.ROOT / "games/stub")], system="Linux")
+    assert error.value.code == 2
+    assert "The iOS packager runs on macOS" in capsys.readouterr().err
 
 
 def test_allow_table_gaps_reaches_the_translator(tmp_path, monkeypatch):

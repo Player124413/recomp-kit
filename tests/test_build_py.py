@@ -25,11 +25,14 @@ class BuildPyTests(unittest.TestCase):
         self.assertEqual(build_py.archive_path(root, "Darwin"), root / "recomp/librecomp_gen.a")
         self.assertEqual(build_py.archive_path(root, "Windows"), root / "recomp/recomp_gen.lib")
 
-    def test_macos_hosts_are_refused_elsewhere(self):
-        with self.assertRaises(SystemExit):
-            build_py.parse_args(["--target", "smoke"], system="Linux")
-        args, _ = build_py.parse_args(["--target", "fixture"], system="Linux")
-        self.assertEqual(args.preset, "linux")
+    def test_desktop_hosts_are_allowed_on_linux_and_windows(self):
+        for system, preset in (("Linux", "linux"), ("Windows", "windows")):
+            for target in ("app", "smoke", "headless", "fixture"):
+                for extra in ([], ["--regenerate"]):
+                    with self.subTest(system=system, target=target, extra=extra):
+                        args, _ = build_py.parse_args(["--target", target] + extra, system=system)
+                        self.assertEqual(args.preset, preset)
+                        self.assertEqual(args.regenerate, bool(extra))
 
     def test_jobs_must_be_positive(self):
         with self.assertRaises(SystemExit):

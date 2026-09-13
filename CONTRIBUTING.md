@@ -9,11 +9,10 @@ portable tests and mod examples. Open an issue before a large architecture chang
 - Python 3.9 or later; create `.venv` and install `requirements-dev.txt`.
 - Native builds on macOS: Apple Silicon, Xcode Command Line Tools and Git. CMake
   and Ninja come from `requirements-dev.txt`.
-- Portable-layer builds on Linux: clang and lld (`apt-get install clang lld`).
-- Portable-layer builds on Windows: LLVM's clang, a Visual Studio developer
-  command prompt for the Windows SDK, and `tools/build.py --target fixture`
-  or `tools/test.py --compile-only`. Linux and Windows build and test the
-  runtime, adapters and mod foundation only; no game host exists for them yet.
+- Native builds on Linux: clang and lld (`apt-get install clang lld`).
+- Native builds on Windows: LLVM's clang and a Visual Studio developer
+  command prompt for the Windows SDK. On Windows, use `.venv/Scripts/python.exe`
+  in place of `.venv/bin/python` in the commands below.
 - First translation: [Ghidra 12.1.3](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.3_build).
 - A Java runtime compatible with that Ghidra distribution. The documented setup
   was tested with OpenJDK 26.0.1; set `JAVA_HOME` to the JDK directory.
@@ -21,6 +20,10 @@ portable tests and mod examples. Open an issue before a large architecture chang
   `game.toml` names the executable and its SHA-256; the loader refuses other
   binaries because translated addresses and data layouts are tied to that
   image. Do not bypass the hash to add support for another version.
+
+`tools/build.py --target app` builds the desktop host on macOS, Linux and
+Windows; `--regenerate` runs the Python translator on each. Only the iOS
+packager (`--target ios`, including `--stub`) requires macOS.
 
 ## Prepare a game installation
 
