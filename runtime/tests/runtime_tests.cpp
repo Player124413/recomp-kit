@@ -1397,6 +1397,53 @@ static void test_windows(X86 *c) {
         call_import(c, "USER32.dll", "CreateWindowExA",
                     {0, clsname, title, 0x80000000u, 0, 0, 640, 480, 0, 0, 0x400000, 0});
     check(hwnd != 0, "CreateWindowExA -> %08x", hwnd);
+
+    // Windows sends a new window its position and size; a game sizes its blit
+    // rectangle from them and never asks again.
+    uint32_t msgbuf = scratch_block(28);
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1 /* PM_REMOVE */}) ==
+                  1 &&
+              rd32(msgbuf) == hwnd && rd32(msgbuf + 4) == 0x0003 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == 0u,
+          "WM_MOVE follows CreateWindowExA (lParam %08x)", rd32(msgbuf + 12));
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf) == hwnd && rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((480u << 16) | 640u),
+          "WM_SIZE follows it with the client size (lParam %08x)", rd32(msgbuf + 12));
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, 800, 600, 0});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf + 4) == 0x0003 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((20u << 16) | 10u),
+          "SetWindowPos posts WM_MOVE");
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((600u << 16) | 800u),
+          "and WM_SIZE");
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 0, 0, 0, 0, 0x0003 /* NOSIZE|NOMOVE */});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "a SetWindowPos that neither moves nor sizes posts nothing");
+
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "ShowWindow hiding a new window posts no WM_SIZE");
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((600u << 16) | 800u),
+          "ShowWindow posts WM_SIZE on the first show");
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "ShowWindow on a visible window posts no second WM_SIZE");
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "ShowWindow after hiding posts no second WM_SIZE");
+
+    // Restore the geometry and visibility used by the existing window checks.
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 0, 0, 640, 480, 0});
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0x0003, 0x0005, 1})) {
+    }
     check(host_main_window() == hwnd, "host_main_window sees it");
     check(host_window_proc(hwnd) == wndproc, "the class WNDPROC was recorded");
 
@@ -2252,6 +2299,9 @@ static void test_callbacks(X86 *c) {
 
     g_callback_hits = 0;
     uint32_t msg = scratch_block(28);
+    // Creation geometry is queued separately from these synchronous callbacks.
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, hwnd, 0x0003, 0x0005, 1})) {
+    }
     wr32(msg + 0, hwnd);
     wr32(msg + 4, 0x0113); // WM_TIMER
     wr32(msg + 8, 7);
@@ -2382,6 +2432,8 @@ static void test_callbacks(X86 *c) {
     g_callback_hits = 0;
     check(call_import(c, "USER32.dll", "UpdateWindow", {pwnd}) == 1 && g_callback_hits == 1,
           "a WNDPROC that ignores WM_PAINT leaves the region dirty and is asked again");
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, pwnd, 0x0003, 0x0005, 1})) {
+    }
     call_import(c, "USER32.dll", "DestroyWindow", {pwnd});
 
     // A procedure that does call BeginPaint validates it, so the next
@@ -2407,6 +2459,8 @@ static void test_callbacks(X86 *c) {
     call_import(c, "USER32.dll", "InvalidateRect", {vwnd, 0, 0});
     check(call_import(c, "USER32.dll", "UpdateWindow", {vwnd}) == 1 && g_painted == 2,
           "InvalidateRect makes the next UpdateWindow paint again");
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, vwnd, 0x0003, 0x0005, 1})) {
+    }
     call_import(c, "USER32.dll", "DestroyWindow", {vwnd});
     pwnd = vwnd;
 
@@ -2432,6 +2486,8 @@ static void test_callbacks(X86 *c) {
     check(dhwnd != 0, "CreateWindowExA succeeds when WM_NCCREATE goes to DefWindowProc");
     check(call_import(c, "USER32.dll", "DefWindowProcA", {dhwnd, 0x0081, 0, 0}) == 1,
           "DefWindowProcA answers WM_NCCREATE with TRUE");
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, dhwnd, 0x0003, 0x0005, 1})) {
+    }
     call_import(c, "USER32.dll", "DestroyWindow", {dhwnd});
 
     // WM_QUIT reaches the guest whatever the filter says.

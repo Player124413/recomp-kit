@@ -1116,6 +1116,11 @@ static void test_retained_pointer_writes() {
     CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, sc(0), 0}), DD_OK);
     uint32_t dd = rd32(sc(0));
     CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 16}), DD_OK);
+    // Fullscreen geometry follows the accepted mode, including the caption deduction.
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 640u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {1}), 480u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {16}), 640u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {17}), 480u - 19u);
 
     uint32_t desc = sc(0x100);
     gm_zero(desc, DDSD_SIZE);
@@ -4794,6 +4799,11 @@ static void test_enum_display_modes() {
     CHECK_EQ(mh, 480);
     CHECK_EQ(mbpp, 8);
     uint32_t caps = tramp("GDI32.dll", "GetDeviceCaps");
+    // Without a display mode, screen metrics retain the desktop fallback.
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 1024u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {1}), 768u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {16}), 1024u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {17}), 768u - 19u);
     uint32_t hdc = call_shim(tramp("USER32.dll", "GetDC"), {0});
     auto check_caps = [&](uint32_t w, uint32_t h, uint32_t bpp) {
         CHECK_EQ(call_shim(caps, {hdc, 8}), w);

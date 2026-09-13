@@ -42,6 +42,7 @@ struct Window {
     uint32_t hinstance = 0;
     std::vector<uint32_t> extra;
     bool visible = false;
+    bool shown = false;
     // Windows tracks an update region per window; the runtime only needs to
     // know whether it is empty, which is what UpdateWindow and BeginPaint act
     // on. Showing a window invalidates it, painting it validates it.
@@ -99,6 +100,18 @@ std::string class_key(uint32_t p) {
 Window *find_window(uint32_t hwnd) {
     auto it = windows().find(hwnd);
     return it == windows().end() ? nullptr : &it->second;
+}
+
+// Windows tells a window where it is and how big it is as soon as it exists,
+// and again whenever that changes; a game sizes its blit rectangle from those
+// two messages and never asks again. No non-client area is modelled here.
+static void post_geometry(uint32_t hwnd, const Window *w, bool moved, bool sized) {
+    if (moved)
+        host_post_message(hwnd, 0x0003 /* WM_MOVE */, 0,
+                          ((uint32_t)(uint16_t)w->y << 16) | (uint16_t)w->x);
+    if (sized)
+        host_post_message(hwnd, 0x0005 /* WM_SIZE */, 0 /* SIZE_RESTORED */,
+                          ((uint32_t)(uint16_t)w->h << 16) | (uint16_t)w->w);
 }
 
 void store_msg(uint32_t p, const Msg &m) {
@@ -328,8 +341,10 @@ void u_CreateWindowExA(X86 *c) {
     // it invalidates the window and tells the host, and a host does not have
     // to know that CreateWindowExA can be a show as well.
     if (Window *nw = find_window(hwnd)) {
+        post_geometry(hwnd, nw, true, true);
         if ((nw->style & WS_VISIBLE) && !nw->visible) {
             nw->visible = true;
+            nw->shown = true;
             nw->update_pending = true;
             if (g_window_shown)
                 g_window_shown(hwnd);
@@ -366,6 +381,10 @@ void u_ShowWindow(X86 *c) {
     set_eax(c, was ? 1 : 0);
     if (!was && w->visible) {
         w->update_pending = true;
+        if (!w->shown) {
+            w->shown = true;
+            post_geometry(w->hwnd, w, false, true);
+        }
         if (g_window_shown)
             g_window_shown(w->hwnd);
     }
@@ -403,6 +422,7 @@ void u_SetWindowPos(X86 *c) {
             w->w = (int32_t)arg(c, 4);
             w->h = (int32_t)arg(c, 5);
         } // SWP_NOSIZE
+        post_geometry(w->hwnd, w, !(flags & 0x0002), !(flags & 0x0001));
     }
     set_eax(c, 1);
 }
@@ -832,20 +852,25 @@ void u_EndPaint(X86 *c) {
     set_eax(c, 1);
 }
 
-// The desktop a game measures before it makes its window.  DirectDraw sets
-// the real mode afterwards; these only size and place a windowed frame.
+// Use the desktop fallback until DirectDraw selects a mode, then report that
+// mode so a window procedure can size its fullscreen blit rectangle correctly.
 void u_GetSystemMetrics(X86 *c) {
+    uint32_t width = 0, height = 0, bpp = 0;
+    if (!ddraw_display_mode(&width, &height, &bpp)) {
+        width = 1024;
+        height = 768;
+    }
     uint32_t v = 0;
     switch (arg(c, 0)) {
     case 0:  // SM_CXSCREEN
     case 16: // SM_CXFULLSCREEN
-        v = 1024;
+        v = width;
         break;
     case 1: // SM_CYSCREEN
-        v = 768;
+        v = height;
         break;
     case 17: // SM_CYFULLSCREEN
-        v = 768 - 19;
+        v = height - 19;
         break;
     case 4: // SM_CYCAPTION
         v = 19;

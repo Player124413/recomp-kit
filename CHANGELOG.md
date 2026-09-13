@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- USER32: queue `WM_MOVE` and `WM_SIZE` after window creation and the
+  corresponding `SetWindowPos` operations, plus `WM_SIZE` on the first show.
+  Screen and fullscreen metrics follow the accepted DirectDraw display mode,
+  retaining the caption-height deduction and 1024x768 fallback without a mode.
+  Games can now size their fullscreen blit rectangles from window messages.
 - DirectDraw: writes through a writable pointer retained after `Unlock` reach
   the renderer before `Blt`, `BltFast` and primary presentation. Whole-rectangle
   hashes detect the writes and share the written-lock CPU recording path;
