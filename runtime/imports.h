@@ -123,6 +123,8 @@ extern const ImportShim g_user32_shims[];
 extern const size_t g_user32_shim_count;
 extern const ImportShim g_misc_shims[];
 extern const size_t g_misc_shim_count;
+extern const ImportShim g_gdi32_shims[];
+extern const size_t g_gdi32_shim_count;
 
 // Per-import call counts, for the runtime tests and end-of-run diagnostics.
 void imports_dump_stats(FILE *out);

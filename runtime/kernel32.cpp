@@ -3535,6 +3535,18 @@ void k_EnumSystemLocalesA(X86 *c) {
 // GlobalMemoryStatus(MEMORYSTATUS*): the machine a game of this era sized its
 // caches for.  A quarter of half a gigabyte is in use; the virtual space is a
 // 32-bit process's 2 GB less the reserved top pages.
+// SetErrorMode(mode) returns the previous mode; nothing here shows a critical-
+// error box either way.  GetLogicalDrives: one fixed disk, C:.
+static uint32_t g_error_mode = 0;
+void k_SetErrorMode(X86 *c) {
+    uint32_t prev = g_error_mode;
+    g_error_mode = arg(c, 0);
+    set_eax(c, prev);
+}
+void k_GetLogicalDrives(X86 *c) {
+    set_eax(c, 0x4);
+}
+
 void k_GlobalMemoryStatus(X86 *c) {
     uint32_t p = arg(c, 0);
     if (!p)
@@ -3947,6 +3959,8 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "IsValidLocale", 2, k_IsValidLocale},
     {"KERNEL32.dll", "EnumSystemLocalesA", 2, k_EnumSystemLocalesA},
     {"KERNEL32.dll", "GlobalMemoryStatus", 1, k_GlobalMemoryStatus},
+    {"KERNEL32.dll", "SetErrorMode", 1, k_SetErrorMode},
+    {"KERNEL32.dll", "GetLogicalDrives", 0, k_GetLogicalDrives},
     {"KERNEL32.dll", "GetLocaleInfoW", 4, k_GetLocaleInfoW},
 };
 const size_t g_kernel32_shim_count = sizeof(g_kernel32_shims) / sizeof(g_kernel32_shims[0]);

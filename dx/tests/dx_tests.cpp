@@ -2590,6 +2590,31 @@ static void test_lock_diff_partial_records_and_payload() {
     }
 }
 
+// A DirectSound object made through CoCreateInstance is not initialised
+// until the game calls Initialize on it, which must therefore succeed; the
+// class is the only one the runtime registers.
+static void test_cocreate_directsound() {
+    static const uint8_t clsid_dsound[16] = {0x46, 0xd9, 0xd4, 0x47, 0xe8, 0x62, 0xcf, 0x11,
+                                             0x93, 0xbc, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    static const uint8_t iid_dsound[16] = {0x83, 0xfa, 0x9a, 0x27, 0x81, 0x49, 0xce, 0x11,
+                                           0xa5, 0x21, 0x00, 0x20, 0xaf, 0x0b, 0xe5, 0x60};
+    uint32_t clsid = sc(0x1d00), iid = sc(0x1d10), ppv = sc(0x1d20);
+    memcpy(g_mem + clsid, clsid_dsound, 16);
+    memcpy(g_mem + iid, iid_dsound, 16);
+    wr32(ppv, 0);
+    uint32_t cocreate = tramp("ole32.dll", "CoCreateInstance");
+    CHECK(cocreate != 0);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), DS_OK);
+    uint32_t ds = rd32(ppv);
+    CHECK(ds != 0);
+    if (ds) {
+        CHECK_EQ(call_method(ds, 10, {0}), DS_OK); // Initialize(NULL): the default device
+        call_method(ds, 2);                        // Release
+    }
+    wr8(clsid, 0xff);
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), 0x80040154u); // REGDB_E_CLASSNOTREG
+}
+
 static void test_getdc_releasedc() {
     rec_reset();
     uint32_t rt = make_render_target_for_test(64, 64, 8);
@@ -8728,6 +8753,7 @@ int main() {
         {"lock write records", test_lock_write_records},
         {"lock clusters", test_lock_diff_partial_records_and_payload},
         {"DC write diff", test_getdc_releasedc},
+        {"CoCreateInstance DirectSound", test_cocreate_directsound},
         {"palette versions", test_palette_versions},
         {"storage generations", test_storage_generations},
         {"draw snapshot is deep", test_draw_snapshot_is_deep},

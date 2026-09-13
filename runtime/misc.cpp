@@ -1252,6 +1252,44 @@ void m_midiOutLongMsg(X86 *c) {
     }
     set_eax(c, MMSYSERR_NOERROR);
 }
+// The mixer API: there is no mixer device.  Every call says so with
+// MMSYSERR_NODRIVER, and the count of devices is zero, so a game leaves its
+// volume sliders alone rather than driving a control that is not there.
+void m_mixerGetNumDevs(X86 *c) {
+    set_eax(c, 0);
+}
+void m_mixerNoDriver(X86 *c) {
+    set_eax(c, 6); // MMSYSERR_NODRIVER
+}
+
+// VERSION.dll: the executable's version resource is not served, so a game
+// that reads its own version string falls back to whatever it keeps in data.
+void v_GetFileVersionInfoSizeA(X86 *c) {
+    uint32_t handle_out = arg(c, 1);
+    if (handle_out)
+        wr32(handle_out, 0);
+    set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
+    set_eax(c, 0);
+}
+void v_GetFileVersionInfoA(X86 *c) {
+    set_last_error(1813);
+    set_eax(c, 0);
+}
+void v_VerQueryValueA(X86 *c) {
+    set_eax(c, 0);
+}
+
+// mciGetErrorStringA(error, buffer, length): the one MCI answer given above.
+void m_mciGetErrorStringA(X86 *c) {
+    uint32_t buf = arg(c, 1), len = arg(c, 2);
+    if (!buf || !len) {
+        set_eax(c, 0);
+        return;
+    }
+    gm_put_str(buf, "The specified device is not installed on the system.", len);
+    set_eax(c, 1);
+}
+
 void m_mciSendCommandA(X86 *c) {
     log_once("mciSendCommandA", "mciSendCommandA(%08x): MCI is not implemented", arg(c, 1));
     set_eax(c, 266); // MCIERR_DEVICE_NOT_INSTALLED
@@ -1419,6 +1457,18 @@ const ImportShim g_misc_shims[] = {
     {"WINMM.dll", "midiOutPrepareHeader", 3, m_midiOutPrepareHeader},
     {"WINMM.dll", "midiOutUnprepareHeader", 3, m_midiOutUnprepareHeader},
     {"WINMM.dll", "mciSendCommandA", 4, m_mciSendCommandA},
+    {"WINMM.dll", "mciGetErrorStringA", 3, m_mciGetErrorStringA},
+    {"WINMM.dll", "mixerGetNumDevs", 0, m_mixerGetNumDevs},
+    {"WINMM.dll", "mixerOpen", 6, m_mixerNoDriver},
+    {"WINMM.dll", "mixerClose", 1, m_mixerNoDriver},
+    {"WINMM.dll", "mixerGetDevCapsA", 3, m_mixerNoDriver},
+    {"WINMM.dll", "mixerGetLineInfoA", 3, m_mixerNoDriver},
+    {"WINMM.dll", "mixerGetLineControlsA", 3, m_mixerNoDriver},
+    {"WINMM.dll", "mixerGetControlDetailsA", 3, m_mixerNoDriver},
+    {"WINMM.dll", "mixerSetControlDetails", 3, m_mixerNoDriver},
+    {"VERSION.dll", "GetFileVersionInfoSizeA", 2, v_GetFileVersionInfoSizeA},
+    {"VERSION.dll", "GetFileVersionInfoA", 4, v_GetFileVersionInfoA},
+    {"VERSION.dll", "VerQueryValueA", 4, v_VerQueryValueA},
     // WINMM: logging-only, correct stdcall pop counts so the guest stack stays
     // balanced. MIDI and aux output belong to the audio task.
     {"WINMM.dll", "auxGetDevCapsA", 3, nullptr},

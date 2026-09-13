@@ -613,10 +613,11 @@ static void test_boot_shims(X86 *c) {
     uint32_t ms = scratch_block(32);
     wr32(ms, 32);
     call_import(c, "KERNEL32.dll", "GlobalMemoryStatus", {ms});
-    check(rd32(ms + 8) >= 256u * 1024 * 1024 && rd32(ms + 12) > 0 && rd32(ms + 12) <= rd32(ms + 8) &&
-              rd32(ms + 4) <= 100 && rd32(ms + 24) >= rd32(ms + 28),
-          "GlobalMemoryStatus reports %u MB physical, %u MB free, load %u%%",
-          rd32(ms + 8) >> 20, rd32(ms + 12) >> 20, rd32(ms + 4));
+    check(rd32(ms + 8) >= 256u * 1024 * 1024 && rd32(ms + 12) > 0 &&
+              rd32(ms + 12) <= rd32(ms + 8) && rd32(ms + 4) <= 100 &&
+              rd32(ms + 24) >= rd32(ms + 28),
+          "GlobalMemoryStatus reports %u MB physical, %u MB free, load %u%%", rd32(ms + 8) >> 20,
+          rd32(ms + 12) >> 20, rd32(ms + 4));
 }
 
 // ---------------------------------------------------------------------------
@@ -985,6 +986,110 @@ static void test_misc_shims(X86 *c) {
     uint32_t out = scratch_block(128);
     call_import(c, "USER32.dll", "wvsprintfA", {out, fmt, va});
     check(gm_str(out) == "blue has 12 units (002a)", "wvsprintfA -> \"%s\"", gm_str(out).c_str());
+}
+
+// The GDI a software-rendered game leans on: a DIB section as its frame
+// buffer, a memory DC to hold it, a colour table for 8-bit modes, palettes;
+// plus the odd process shims and COM class creation its start-up reaches.
+static void test_gdi_and_com(X86 *c) {
+    section("GDI DIB sections, palettes, process shims, COM class creation");
+    // A top-down 64x32 16-bpp 565 DIB, the shape the game's frame buffer takes.
+    uint32_t bmi = scratch_block(0x440);
+    memset(g_mem + bmi, 0, 0x440);
+    wr32(bmi + 0, 40);
+    wr32(bmi + 4, 64);
+    wr32(bmi + 8, (uint32_t)-32);
+    wr16(bmi + 12, 1);
+    wr16(bmi + 14, 16);
+    wr32(bmi + 16, 3); // BI_BITFIELDS
+    wr32(bmi + 40, 0xf800);
+    wr32(bmi + 44, 0x07e0);
+    wr32(bmi + 48, 0x001f);
+    uint32_t bits = scratch_block(4);
+    wr32(bits, 0);
+    uint32_t hdc = call_import(c, "USER32.dll", "GetDC", {0});
+    uint32_t hbm = call_import(c, "GDI32.dll", "CreateDIBSection", {hdc, bmi, 0, bits, 0, 0});
+    check(hbm != 0 && rd32(bits) != 0 && heap_owns(rd32(bits)),
+          "CreateDIBSection -> %08x with bits at %08x on the guest heap", hbm, rd32(bits));
+    check(heap_size(rd32(bits)) != 0xffffffffu && heap_size(rd32(bits)) >= 64u * 2 * 32,
+          "the bits cover 64x32 at 16 bpp (%u bytes)", heap_size(rd32(bits)));
+    uint32_t bm = scratch_block(24);
+    check(call_import(c, "GDI32.dll", "GetObjectA", {hbm, 24, bm}) == 24 && rd32(bm + 4) == 64 &&
+              rd32(bm + 8) == 32 && rd32(bm + 12) == 128 && rd16(bm + 18) == 16 &&
+              rd32(bm + 20) == rd32(bits),
+          "GetObjectA describes the bitmap: 64x32, stride %u, %u bpp, bits %08x", rd32(bm + 12),
+          rd16(bm + 18), rd32(bm + 20));
+    uint32_t mdc = call_import(c, "GDI32.dll", "CreateCompatibleDC", {hdc});
+    check(mdc != 0 && call_import(c, "GDI32.dll", "SelectObject", {mdc, hbm}) != 0,
+          "a memory DC takes the bitmap");
+    check(call_import(c, "GDI32.dll", "DeleteDC", {mdc}) == 1, "DeleteDC");
+    call_import(c, "USER32.dll", "ReleaseDC", {0, hdc});
+    uint32_t old_bits = rd32(bits);
+    check(call_import(c, "GDI32.dll", "DeleteObject", {hbm}) == 1 && !heap_owns(old_bits),
+          "DeleteObject frees the bits");
+    // 8 bpp with a colour table set through the DC it is selected into.
+    wr16(bmi + 14, 8);
+    wr32(bmi + 16, 0);
+    uint32_t hbm8 = call_import(c, "GDI32.dll", "CreateDIBSection", {0, bmi, 0, bits, 0, 0});
+    uint32_t mdc8 = call_import(c, "GDI32.dll", "CreateCompatibleDC", {0});
+    call_import(c, "GDI32.dll", "SelectObject", {mdc8, hbm8});
+    uint32_t pal = scratch_block(16);
+    wr32(pal, 0x00ff0000);
+    wr32(pal + 4, 0x0000ff00);
+    check(hbm8 != 0 && call_import(c, "GDI32.dll", "SetDIBColorTable", {mdc8, 0, 2, pal}) == 2,
+          "an 8-bpp DIB takes a colour table");
+    call_import(c, "GDI32.dll", "DeleteDC", {mdc8});
+    call_import(c, "GDI32.dll", "DeleteObject", {hbm8});
+    // A logical palette round-trips its entries.
+    uint32_t lp = scratch_block(4 + 4 * 4);
+    wr16(lp, 0x300);
+    wr16(lp + 2, 4);
+    for (uint32_t i = 0; i < 4; ++i)
+        wr32(lp + 4 + 4 * i, 0x00102030u + i);
+    uint32_t hpal = call_import(c, "GDI32.dll", "CreatePalette", {lp});
+    uint32_t got = scratch_block(16);
+    check(hpal != 0 && call_import(c, "GDI32.dll", "GetPaletteEntries", {hpal, 1, 2, got}) == 2 &&
+              rd32(got) == 0x00102031u && rd32(got + 4) == 0x00102032u,
+          "CreatePalette / GetPaletteEntries round-trip");
+    check(call_import(c, "GDI32.dll", "SelectPalette", {hdc, hpal, 0}) != 0 &&
+              call_import(c, "GDI32.dll", "RealizePalette", {hdc}) == 4,
+          "SelectPalette / RealizePalette report the entries");
+    call_import(c, "GDI32.dll", "DeleteObject", {hpal});
+
+    check(call_import(c, "KERNEL32.dll", "SetErrorMode", {0x8001}) == 0 &&
+              call_import(c, "KERNEL32.dll", "SetErrorMode", {0}) == 0x8001,
+          "SetErrorMode returns the previous mode");
+    check(call_import(c, "KERNEL32.dll", "GetLogicalDrives", {}) & 0x4, "GetLogicalDrives has C:");
+    uint32_t msg = scratch_block(128);
+    check(call_import(c, "WINMM.dll", "mciGetErrorStringA", {266, msg, 128}) == 1 &&
+              !gm_str(msg).empty(),
+          "mciGetErrorStringA(MCIERR_DEVICE_NOT_INSTALLED) -> \"%s\"", gm_str(msg).c_str());
+
+    // The mixer API: no mixer device, said with the right argument counts.
+    check(call_import(c, "WINMM.dll", "mixerGetNumDevs", {}) == 0, "mixerGetNumDevs: none");
+    uint32_t hmx = scratch_block(4);
+    check(call_import(c, "WINMM.dll", "mixerOpen", {hmx, 0, 0, 0, 0, 0}) == 6 &&
+              call_import(c, "WINMM.dll", "mixerClose", {0}) == 6 &&
+              call_import(c, "WINMM.dll", "mixerGetDevCapsA", {0, msg, 128}) == 6 &&
+              call_import(c, "WINMM.dll", "mixerGetLineInfoA", {0, msg, 0}) == 6 &&
+              call_import(c, "WINMM.dll", "mixerGetLineControlsA", {0, msg, 0}) == 6 &&
+              call_import(c, "WINMM.dll", "mixerGetControlDetailsA", {0, msg, 0}) == 6 &&
+              call_import(c, "WINMM.dll", "mixerSetControlDetails", {0, msg, 0}) == 6,
+          "every mixer call reports MMSYSERR_NODRIVER");
+    // An icon built from bitmaps is a handle the host never draws.
+    uint32_t iconinfo = scratch_block(20);
+    memset(g_mem + iconinfo, 0, 20);
+    wr32(iconinfo, 0); // fIcon = FALSE: a cursor
+    uint32_t hicon = call_import(c, "USER32.dll", "CreateIconIndirect", {iconinfo});
+    check(hicon != 0 && call_import(c, "USER32.dll", "DestroyIcon", {hicon}) == 1,
+          "CreateIconIndirect / DestroyIcon");
+    // The version resource of the executable is not served: the game's own
+    // version string comes from its data instead.
+    uint32_t vh = scratch_block(4);
+    check(call_import(c, "VERSION.dll", "GetFileVersionInfoSizeA", {put_str("x.exe"), vh}) == 0 &&
+              call_import(c, "VERSION.dll", "GetFileVersionInfoA", {put_str("x.exe"), 0, 0, 0}) == 0 &&
+              call_import(c, "VERSION.dll", "VerQueryValueA", {0, put_str("\\"), vh, vh}) == 0,
+          "VERSION.dll reports no version information");
 }
 
 // A stand-in for generated guest code: a trampoline the stub recomp_call can
@@ -2923,6 +3028,7 @@ int main(int argc, char **argv) {
     test_cadence_trace(c);
     test_misc_shims(c);
     test_boot_shims(c);
+    test_gdi_and_com(c);
     test_native_draw_waits(c);
     test_midi(c);
     test_windows(c);

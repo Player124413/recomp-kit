@@ -823,6 +823,15 @@ void u_LoadCursorA(X86 *c) {
 void u_IsWindowUnicode(X86 *c) {
     set_eax(c, 0);
 }
+// An icon or cursor assembled from bitmaps: a distinct handle, never drawn by
+// the host, which paints its own pointer.
+static uint32_t g_next_icon = 0x0002b000u;
+void u_CreateIconIndirect(X86 *c) {
+    set_eax(c, arg(c, 0) ? g_next_icon++ : 0);
+}
+void u_DestroyIcon(X86 *c) {
+    set_eax(c, arg(c, 0) ? 1 : 0);
+}
 void u_LoadIconA(X86 *c) {
     set_eax(c, 0x00029001);
 }
@@ -1086,6 +1095,8 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "EndPaint", 2, u_EndPaint},
     {"USER32.dll", "LoadIconA", 2, u_LoadIconA},
     {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
+    {"USER32.dll", "CreateIconIndirect", 1, u_CreateIconIndirect},
+    {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
     {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
     {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},
     {"USER32.dll", "SetCursor", 1, u_SetCursor},

@@ -1608,7 +1608,12 @@ void DS_GetSpeakerConfig(X86 *c) {
 void DS_SetSpeakerConfig(X86 *c) {
     com_ret(c, DS_OK);
 }
-DX_STUB(DS_Initialize, DSERR_INVALIDCALL) // DirectSoundCreate already did it
+// Initialize(lpGuid): an object from DirectSoundCreate is already initialised
+// and one from CoCreateInstance is not; both are the same host object here,
+// and the default device is the only device, so it succeeds either way.
+void DS_Initialize(X86 *c) {
+    com_ret(c, DS_OK);
+}
 
 const ComMethod g_dsound[] = {
     {"QueryInterface", 3, com_QueryInterface},
@@ -1653,9 +1658,55 @@ void DirectSoundCreate(X86 *c) {
     com_ret(c, DS_OK);
 }
 
+// CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv): the one COM
+// class this runtime registers is DirectSound, which a game built against the
+// DirectX 7 era SDK creates this way rather than through DirectSoundCreate.
+// Every other class is not registered, which the game sees as a missing
+// component and handles as it would on a machine without it.
+static const uint8_t CLSID_DirectSound_[16] =
+    IID_BYTES(0x47D4D946, 0x62E8, 0x11CF, 0x93, 0xBC, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00);
+static const uint8_t IID_IUnknown_[16] =
+    IID_BYTES(0x00000000, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46);
+
+void CoCreateInstance(X86 *c) {
+    uint32_t clsid = arg(c, 0), outer = arg(c, 1), riid = arg(c, 3), out = arg(c, 4);
+    if (!out || !gm_valid(out, 4) || !clsid || !gm_valid(clsid, 16) || !riid ||
+        !gm_valid(riid, 16)) {
+        com_ret(c, DSERR_INVALIDPARAM);
+        return;
+    }
+    wr32(out, 0);
+    if (memcmp(g_mem + clsid, CLSID_DirectSound_, 16) != 0) {
+        log_once("ole32.cocreate", "CoCreateInstance: class %08x-... is not registered here",
+                 rd32(clsid));
+        com_ret(c, 0x80040154u); // REGDB_E_CLASSNOTREG
+        return;
+    }
+    if (outer) {
+        com_ret(c, CLASS_E_NOAGGREGATION);
+        return;
+    }
+    if (memcmp(g_mem + riid, IID_IDirectSound_, 16) != 0 &&
+        memcmp(g_mem + riid, IID_IUnknown_, 16) != 0) {
+        com_ret(c, E_NOINTERFACE);
+        return;
+    }
+    ComObj *ds = com_new(K_DSOUND);
+    uint32_t view = com_view(ds, IF_DSOUND);
+    if (!view) {
+        com_release(ds);
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    wr32(out, view);
+    LOGV("dsound: CoCreateInstance(CLSID_DirectSound) -> %08x", view);
+    com_ret(c, DS_OK);
+}
+
 const ImportShim g_dsound_exports[] = {
     {"DSOUND.dll", "ord1", 3, DirectSoundCreate},
     {"DSOUND.dll", "DirectSoundCreate", 3, DirectSoundCreate},
+    {"ole32.dll", "CoCreateInstance", 5, CoCreateInstance},
 };
 
 // A DirectSound object also answers to IDirectSound3DListener, and a buffer to
