@@ -17,7 +17,7 @@
 - The stub game is `games/stub/` with the exact `game.toml` of spec 5.4 and a `globals.toml` declaring `simulation_turn`, `command_frame` and `entity_base` (stride 179, count 2000) at distinct 0x0070xxxx addresses.
 - Every Populous-only file listed in spec section 6 leaves the kit in Task 6; nothing else about Populous changes (comments stay; M2 generalises).
 - Commands run from the repo root through `tools/build.py` / `tools/test.py`; format with `.venv/bin/python tools/format.py --write` before each commit; never chain `build.py | grep`.
-- Kit work on branch `game-repo-split` (from `main` at `m1`); game repo work on branch `thin-kit` in `~/Documents/Tests/populous-recomp-checkout`.
+- Kit work on branch `game-repo-split` (from `main` at `m1`); game repo work on branch `thin-kit` in `<workspace>/populous-recomp-checkout`.
 - Deleting or replacing trees in populous-recomp happens only after tag `legacy-macos-source` exists and is pushed (Task 7 step 1).
 
 ---
@@ -330,7 +330,7 @@ ln -s ../../original games/populous/original; ln -s ../../analysis games/populou
 .venv/bin/python tools/test.py --game-dir $PWD/games/populous --native > /tmp/t2.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --game-dir $PWD/games/populous --mods > /tmp/t3.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --game-dir $PWD/games/populous --gameplay > /tmp/t4.log 2>&1; echo exit $?
-RECOMP_IOS_TEAM=<TEAM_ID> .venv/bin/python tools/build.py --game-dir $PWD/games/populous --target ios --no-install --jobs 8 > /tmp/b5.log 2>&1; echo exit $?
+RECOMP_IOS_TEAM=<team id> .venv/bin/python tools/build.py --game-dir $PWD/games/populous --target ios --no-install --jobs 8 > /tmp/b5.log 2>&1; echo exit $?
 .venv/bin/python tools/build.py --stub --jobs 8 > /tmp/b6.log 2>&1; echo exit $?   # the stub game, default
 ```
 
@@ -369,12 +369,12 @@ git commit -m "Docs: games live in their own repositories; --game-dir"
 ### Task 5: Stage the Populous files for the game repo
 
 **Files:**
-- Create: `~/Documents/Tests/populous-staging/` (outside both repos; deleted in Task 7)
+- Create: `<workspace>/populous-staging/` (outside both repos; deleted in Task 7)
 
 - [ ] **Step 1: Copy with history-free `cp`**
 
 ```bash
-S=~/Documents/Tests/populous-staging; rm -rf "$S"; mkdir -p "$S/tools/release" "$S/smoke" "$S/docs" "$S/tests"
+S=<workspace>/populous-staging; rm -rf "$S"; mkdir -p "$S/tools/release" "$S/smoke" "$S/docs" "$S/tests"
 cp -R games/populous/. "$S/"                       # game.toml, globals.toml, core/, tests/, mods/, assets/
 rm -f "$S/original" "$S/analysis"                   # the temporary symlinks from Task 3
 cp tools/recomp/smoke/*.script "$S/smoke/"
@@ -471,11 +471,11 @@ Fix each hit: docs point at populous-recomp for Populous matters; `tools/test.py
 .venv/bin/python tools/build.py --stub --jobs 8 > /tmp/b.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --native > /tmp/t2.log 2>&1; echo exit $?         # stub: game-labelled suites skip
 RECOMP_IOS_TEAM= .venv/bin/python tools/build.py --stub --target ios --jobs 8 > /tmp/b3.log 2>&1; echo exit $?
-S=~/Documents/Tests/populous-staging; ln -sfn "$PWD/../populous-recomp-checkout/original" "$S/original"; ln -sfn "$PWD/../populous-recomp/analysis" "$S/analysis"
+S=<workspace>/populous-staging; ln -sfn "$PWD/../populous-recomp-checkout/original" "$S/original"; ln -sfn "$PWD/../populous-recomp/analysis" "$S/analysis"
 .venv/bin/python tools/build.py --game-dir "$S" --regenerate --jobs 8 > /tmp/b4.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --game-dir "$S" --native > /tmp/t5.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --game-dir "$S" --gameplay > /tmp/t6.log 2>&1; echo exit $?
-RECOMP_IOS_TEAM=<TEAM_ID> .venv/bin/python tools/build.py --game-dir "$S" --target ios --jobs 8 > /tmp/b7.log 2>&1; echo exit $?
+RECOMP_IOS_TEAM=<team id> .venv/bin/python tools/build.py --game-dir "$S" --target ios --jobs 8 > /tmp/b7.log 2>&1; echo exit $?
 ```
 
 Expected: all 0; the last installs and launches Populous on the iPad from the staged game directory with outputs under `$S/build`. `tools/check_game_literals.py` still passes (`.venv/bin/python tools/check_game_literals.py; echo exit $?`).
@@ -496,14 +496,14 @@ When CI is green, use superpowers:finishing-a-development-branch to merge into `
 
 ### Task 7: The thin populous-recomp
 
-**Files (in `~/Documents/Tests/populous-recomp-checkout`):**
+**Files (in `<workspace>/populous-recomp-checkout`):**
 - Create: `.gitmodules` (via `git submodule add`), `kit/` submodule, `tools/build.py`, `tools/test.py`, `tools/setup.py`, `tools/ios_logs.py`, `tests/test_game_config.py` (from staging), `.github/workflows/checks.yml`, `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, `docs/testing.md`
 - Delete: `src/`, `third_party/`, `cmake/`, `translation/`, `CMakeLists.txt`, `CMakePresets.json`, `Makefile`, `requirements-dev.txt`, `.github/workflows/release.yml`, old `tools/*`, old `tests/*`, old `mods/`, old `docs/*` (replaced by the staged copies), `assets/` (replaced)
 
 - [ ] **Step 1: Tag the old tree and branch**
 
 ```bash
-cd ~/Documents/Tests/populous-recomp-checkout
+cd <workspace>/populous-recomp-checkout
 git status --short          # expect one untracked line at most; stop if tracked files are modified
 git tag -a legacy-macos-source -m "The single-repo macOS source tree before the kit split"
 git push origin legacy-macos-source
@@ -514,7 +514,7 @@ git checkout -b thin-kit
 
 ```bash
 git rm -r -q src third_party cmake translation CMakeLists.txt CMakePresets.json Makefile requirements-dev.txt .github/workflows/release.yml tools tests mods docs assets
-S=~/Documents/Tests/populous-staging
+S=<workspace>/populous-staging
 rm -f "$S/original" "$S/analysis"; rm -rf "$S/build"
 cp -R "$S/." .
 git submodule add https://github.com/veritr1x/recomp-kit.git kit
@@ -607,7 +607,7 @@ ls original/gog/D3DPopTB.exe; ln -sfn ../populous-recomp/analysis analysis   # t
 .venv/bin/python tools/test.py --native > /tmp/t3.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --mods > /tmp/t4.log 2>&1; echo exit $?
 .venv/bin/python tools/test.py --gameplay > /tmp/t5.log 2>&1; echo exit $?
-RECOMP_IOS_TEAM=<TEAM_ID> .venv/bin/python tools/build.py --target ios --jobs 8 > build-ios.log 2>&1; echo exit $?
+RECOMP_IOS_TEAM=<team id> .venv/bin/python tools/build.py --target ios --jobs 8 > build-ios.log 2>&1; echo exit $?
 ```
 
 Expected: all 0; outputs under `populous-recomp-checkout/build/`; the iPad shows Populous. Ask the user to play a minute (taps, keypad strip, F10 settings persist). Move the two `.log` files under `build/` afterwards.
@@ -625,4 +625,4 @@ The previous single-repo tree is tag legacy-macos-source."
 git push -u origin thin-kit
 ```
 
-Then superpowers:finishing-a-development-branch (merge into `main`, push), `git tag -a kit-1 -m "First build on recomp-kit m1.1" && git push origin kit-1`, and `rm -rf ~/Documents/Tests/populous-staging`. Finally, in the kit, remove the temporary symlinks if any remain (`git status --short` clean) and update the memory note about where Populous lives.
+Then superpowers:finishing-a-development-branch (merge into `main`, push), `git tag -a kit-1 -m "First build on recomp-kit m1.1" && git push origin kit-1`, and `rm -rf <workspace>/populous-staging`. Finally, in the kit, remove the temporary symlinks if any remain (`git status --short` clean) and update the memory note about where Populous lives.

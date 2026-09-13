@@ -4,7 +4,7 @@
 
 **Goal:** Move the generic parts of the Populous recompilation into this repository, put every Populous-specific value behind a per-game config directory, and build Populous from `games/populous/` with no regression.
 
-**Architecture:** The checkout at `~/Documents/Tests/populous-recomp-checkout` (commit `b450dfa8bae7fe568192ef61028ed82489cba394`) is imported verbatim minus its tracked translation, then its C/C++ tree is promoted to the spec's top-level layout. A generator turns `games/<id>/game.toml` plus `globals.toml` into a `game_config.h` header and a `game_config.cmake` fragment at configure time; runtime, shims, hosts and the translator read identity, addresses and paths from there instead of literals. A stub translation lets CI link every host without game code.
+**Architecture:** The checkout at `<workspace>/populous-recomp-checkout` (commit `b450dfa8bae7fe568192ef61028ed82489cba394`) is imported verbatim minus its tracked translation, then its C/C++ tree is promoted to the spec's top-level layout. A generator turns `games/<id>/game.toml` plus `globals.toml` into a `game_config.h` header and a `game_config.cmake` fragment at configure time; runtime, shims, hosts and the translator read identity, addresses and paths from there instead of literals. A stub translation lets CI link every host without game code.
 
 **Tech Stack:** C11 and C++20 under clang, CMake 3.24 with Ninja, SDL3 3.4.16 fetched by CMake, Python 3.9 tooling (`tomli` for TOML), Ghidra listings as translator input, Unicorn for the differential oracle, pytest for Python tests, CTest for native tests.
 
@@ -20,7 +20,7 @@
 - Python floor is 3.9 (the Mac ships 3.9.6), so TOML is read through `tomllib` with a `tomli` fallback.
 - Guest addresses stay 32-bit guest addresses; never host pointers.
 - Every commit leaves `tools/test.py` (portable suites) passing. Tasks that touch native code also leave `tools/test.py --native` passing.
-- Paths in this plan: `KIT=~/Documents/Tests/recomp-kit`, `SRC=~/Documents/Tests/populous-recomp-checkout`.
+- Paths in this plan: `KIT=<workspace>/recomp-kit`, `SRC=<workspace>/populous-recomp-checkout`.
 
 ## Deviations from the spec recorded by this plan
 
@@ -84,10 +84,10 @@ Responsibilities of the new files:
 - [ ] **Step 1: Copy tracked files, excluding the translation and the release workflow**
 
 ```bash
-cd ~/Documents/Tests/populous-recomp-checkout
+cd <workspace>/populous-recomp-checkout
 git ls-files -z | grep -zvE '^(translation/|docs/superpowers/|\.github/workflows/release\.yml$)' \
-  | rsync -a --files-from=- --from0 ./ ~/Documents/Tests/recomp-kit/
-cd ~/Documents/Tests/recomp-kit
+  | rsync -a --files-from=- --from0 ./ <workspace>/recomp-kit/
+cd <workspace>/recomp-kit
 ls   # expect AGENTS.md CMakeLists.txt cmake docs mods src third_party tools tests ...
 test ! -d translation && echo "no translation tracked"
 ls docs/superpowers/specs   # only this repo's spec; the checkout's own superpowers docs were excluded
@@ -96,7 +96,7 @@ ls docs/superpowers/specs   # only this repo's spec; the checkout's own superpow
 - [ ] **Step 2: Link the developer's game inputs (ignored paths)**
 
 ```bash
-cd ~/Documents/Tests/recomp-kit
+cd <workspace>/recomp-kit
 ln -s ../populous-recomp-checkout/original original
 ln -s ../populous-recomp/analysis analysis
 test -f original/gog/D3DPopTB.exe && test -f analysis/decompiled/D3DPopTB.exe/functions.tsv && echo "inputs linked"
@@ -106,7 +106,7 @@ git status --short | grep -E '^\?\? (original|analysis)' && echo "BUG: symlinks 
 - [ ] **Step 3: Create the virtual environment**
 
 ```bash
-cd ~/Documents/Tests/recomp-kit
+cd <workspace>/recomp-kit
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -c "import capstone, pefile, unicorn, pytest; print('ok')"
@@ -215,7 +215,7 @@ git commit -m "Import populous-recomp-checkout b450dfa without the tracked trans
 - [ ] **Step 1: Move directories with git**
 
 ```bash
-cd ~/Documents/Tests/recomp-kit
+cd <workspace>/recomp-kit
 mkdir -p games/populous
 git mv mods games/populous/mods
 git mv src/recomp/mods mods
@@ -266,7 +266,7 @@ add_subdirectory(host)
 - [ ] **Step 3: Rewrite includes**
 
 ```bash
-cd ~/Documents/Tests/recomp-kit
+cd <workspace>/recomp-kit
 sed -i '' 's|"backends/indexed_frame.hpp"|"indexed_frame.hpp"|' host/present.cpp host/present_pixels.cpp host/indexed_frame.cpp
 sed -i '' 's|"src/recomp/dx/host_api.h"|"dx/host_api.h"|' dx/tests/host_api_header_test.c
 sed -i '' 's|"src/recomp/mods/pop_mod_api.h"|"mods/pop_mod_api.h"|' mods/tests/api_header_test.c
@@ -284,7 +284,7 @@ grep -rn '#include "' mods/native | grep -vE '"(\.\./)*(runtime|dx|platform|host
 - [ ] **Step 4: Rewrite Python and documentation paths**
 
 ```bash
-cd ~/Documents/Tests/recomp-kit
+cd <workspace>/recomp-kit
 sed -i '' 's|"src", "mods", "tests", "tools/recomp/runtime"|"runtime", "dx", "host", "platform", "mods", "games", "tests"|' tools/format.py
 sed -i '' 's|ROOT / "src" / "recomp" / "host"|ROOT / "host"|' tools/recomp/tests/test_host_boundary.py
 sed -i '' 's|root / "tools/recomp/runtime/x86.h"|root / "runtime/x86.h"|; s|assets/terrain/materials-v1.png|games/populous/assets/terrain/materials-v1.png|' tools/build.py
@@ -1308,7 +1308,7 @@ Before writing, list the real exports so the stub matches them exactly:
 
 ```bash
 grep -nE '^(const |void |int32_t |uint32_t |uint64_t |uint8_t |const char \*)[a-z_ ]*recomp_[a-z_]+' \
-  ~/Documents/Tests/populous-recomp-checkout/translation/table.c | cut -c1-120
+  <workspace>/populous-recomp-checkout/translation/table.c | cut -c1-120
 ```
 
 Then:
@@ -1625,7 +1625,7 @@ Expected: the `tooling` job and all three `native-compile` jobs pass. If `gh` is
 - [ ] **Step 1: Clean regeneration and build**
 
 ```bash
-cd ~/Documents/Tests/recomp-kit
+cd <workspace>/recomp-kit
 rm -rf build/cmake build/recomp/gen
 .venv/bin/python tools/build.py --regenerate --jobs 8
 diff -rq build/baseline/gen build/recomp/gen && echo IDENTICAL
