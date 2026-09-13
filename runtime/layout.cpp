@@ -54,6 +54,8 @@ HostLayout compute() {
         l.resources_dir = parent(dir) + "/Resources";
     else if (exists(dir + "/resources"))
         l.resources_dir = dir + "/resources";
+    else if (exists(dir + "/Info.plist"))
+        l.resources_dir = dir; // a flat bundle (iOS): resources beside the executable
     else if (l.developer)
         l.resources_dir = l.checkout_root;
     const char *env = getenv("POPM_PROFILE_DIR");

@@ -105,6 +105,15 @@ int main() {
     CHECK(host_layout().resources_dir == root + "/co/build/Y.app/Contents/Resources");
     CHECK(host_resource("mods/core") == root + "/co/build/Y.app/Contents/Resources/mods/core");
     CHECK(host_layout().profile_dir == root + "/co/build/recomp/profile");
+    // 6. A flat bundle (iOS): Info.plist beside the executable, no Contents/MacOS.
+    mkdir_p(root + "/Flat.app");
+    touch(root + "/Flat.app/Info.plist");
+    touch(root + "/Flat.app/Flat");
+    host_layout_set_exe_path_for_test((root + "/Flat.app/Flat").c_str());
+    CHECK(host_layout().resources_dir == root + "/Flat.app");
+    CHECK(!host_layout().developer);
+    CHECK(host_resource("classic-modes.json") == root + "/Flat.app/classic-modes.json");
+
     host_layout_set_exe_path_for_test(nullptr);
     printf("%d checks, %d failures\n", g_checks, g_failures);
     if (!g_failures)
