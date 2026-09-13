@@ -5533,7 +5533,21 @@ static void test_mss32_arities() {
 
 static void test_bink_smack_stubs() {
     cpu_reset();
-    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {0, 0}), 0u);
+    uint32_t name = sc(0x100);
+    gm_put_str(name, "intro.bik", 0x100);
+    uint32_t bink = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {name, 0});
+    CHECK(bink != 0);
+    CHECK_EQ(rd32(bink + 0x00), 640u);
+    CHECK_EQ(rd32(bink + 0x04), 480u);
+    CHECK_EQ(rd32(bink + 0x10), 0u); // frame count: a finished video
+    CHECK_EQ(rd32(bink + 0x14), 0u); // current frame
+    CHECK_EQ(rd32(bink + 0x08), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkWait@4"), {bink}), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {bink}), 0u);
+    call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {bink});
+    CHECK_EQ(rd32(bink + 0x14), 0u); // still finished
+    call_shim(tramp("binkw32.dll", "_BinkClose@4"), {bink});
+    CHECK(!heap_owns(bink));
     uint32_t err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
     CHECK(err != 0);
     CHECK_EQ(strcmp(gm_str(err).c_str(), "no video decoder"), 0);

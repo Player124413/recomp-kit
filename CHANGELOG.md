@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bink: `BinkOpen` returns a 256-byte guest heap record with 640x480
+  dimensions and zero frame counters, so a game skips an unavailable
+  cinematic instead of treating an open failure as fatal. `BinkClose`
+  frees the record; decoding and waiting remain no-ops, and `SmackOpen`
+  still returns 0. No video decoder is included.
 - GDI: `GetDeviceCaps` reports the accepted DirectDraw mode and depth-dependent
   palette capabilities, falling back to 640x480x8 before a mode is set.
   `GetTextExtentPointA` shares the fixed 7-pixel width and 16-pixel height of
