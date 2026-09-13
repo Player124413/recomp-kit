@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/recomp"))
@@ -32,9 +33,10 @@ TARGETS = {
     "gen": ["recomp_gen"],
     "plugins": ["plugins"],
     "ios": ["recomp_app"],
+    "android": ["recomp_app"],
 }
 MACOS_ONLY = {"ios"}
-NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios"}
+NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios", "android"}
 
 
 def default_preset(system=None):
@@ -43,9 +45,9 @@ def default_preset(system=None):
 
 
 def preset_name(preset, config, stub=False, target=None):
-    """Debug, stub and iOS builds live in their own binary directories, so they are their own presets."""
-    if target == "ios":
-        return "ios-stub" if stub else "ios"
+    """Debug, stub and mobile builds use separate presets and binary directories."""
+    if target in {"ios", "android"}:
+        return target + "-stub" if stub else target
     if stub:
         return preset + "-stub"
     return preset if config == "Release" else preset + "-debug"
@@ -145,6 +147,80 @@ def install_and_launch(app, bundle_id, device, console):
     subprocess.run(launch, check=True)
 
 
+def android_project(build_root, cfg, *, gen_dir):
+    """Render the Gradle project without building it; gen_dir is the CMake binary directory.
+
+    SDL's Java sources stay in that build's FetchContent checkout. Gradle
+    only packages the native library built by CMake, never invokes CMake.
+    """
+    template = ROOT / "platform/android"
+    out = Path(build_root) / "android"
+    shutil.copytree(template, out, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(".gradle", "build", ".gitignore", "local.properties"))
+    values = {key: cfg["game"][key] for key in ("app_name", "bundle_id", "id")}
+    values["sdl_java_dir"] = (Path(gen_dir).resolve() / "_deps/sdl3-src/android-project/app/src/main/java").as_posix()
+    for original in template.rglob("*.in"):
+        source = out / original.relative_to(template)
+        text = source.read_text()
+        for key, value in values.items():
+            if source.name.endswith(".xml.in"):
+                value = escape(value, {'"': "&quot;", "'": "&apos;"})
+            else:
+                value = json.dumps(value, ensure_ascii=False)[1:-1].replace("$", r"\$")
+            text = text.replace("@%s@" % key, value)
+        source.with_suffix("").write_text(text)
+        source.unlink()
+    return out
+
+
+def android_apk(build_root, cfg, *, gen_dir):
+    """Stage libmain.so beside the rendered SDL activity and assemble a debug APK."""
+    library = Path(gen_dir) / "host/libmain.so"
+    sdl_activity = Path(gen_dir) / "_deps/sdl3-src/android-project/app/src/main/java/org/libsdl/app/SDLActivity.java"
+    for path in (library, sdl_activity):
+        if not path.is_file():
+            raise FileNotFoundError("Android CMake build input is missing: %s" % path)
+    out = android_project(build_root, cfg, gen_dir=gen_dir)
+    jni = out / "app/src/main/jniLibs/arm64-v8a"
+    jni.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(library, jni / "libmain.so")
+    wrapper = "gradlew.bat" if platform.system() == "Windows" else "./gradlew"
+    subprocess.run([wrapper, "assembleDebug"], cwd=out, check=True)
+    apk = out / "app/build/outputs/apk/debug/app-debug.apk"
+    if not apk.is_file():
+        raise FileNotFoundError("No APK after assembleDebug: %s" % apk)
+    print("Packaged %s (%d bytes)" % (apk, apk.stat().st_size), flush=True)
+    return apk
+
+
+def android_install_and_launch(apk, bundle_id, device=None, console=False):
+    """Install and launch on one ready adb device; skip cleanly when none is attached."""
+    adb = shutil.which("adb")
+    if not adb and os.environ.get("ANDROID_HOME"):
+        name = "adb.exe" if platform.system() == "Windows" else "adb"
+        candidate = Path(os.environ["ANDROID_HOME"]) / "platform-tools" / name
+        if candidate.is_file():
+            adb = str(candidate)
+    if not adb:
+        print("adb unavailable; skipped Android install, launch and logcat.")
+        return
+    result = subprocess.run([adb, "devices"], check=True, capture_output=True, text=True)
+    devices = [fields[0] for line in result.stdout.splitlines()
+               if len(fields := line.split()) == 2 and fields[1] == "device"]
+    if not devices:
+        print("No Android device attached; skipped install, launch and logcat.")
+        return
+    if device is not None and device not in devices:
+        raise ValueError("Android device %s is not ready in adb devices" % device)
+    if device is None and len(devices) != 1:
+        raise ValueError("Pass --device <adb serial>; ready Android devices: %s" % ", ".join(devices))
+    command = [adb, "-s", device or devices[0]]
+    subprocess.run(command + ["install", "-r", str(apk)], check=True)
+    subprocess.run(command + ["shell", "am", "start", "-n", bundle_id + "/dev.recompkit.RecompActivity"], check=True)
+    if console:
+        subprocess.run(command + ["logcat"], check=True)
+
+
 def publish_generated(build_root, translate):
     """Stage a translation, then publish gen/ and symbols.json by rename.
 
@@ -213,10 +289,10 @@ def parse_args(argv, system=None):
                         help="Absolute directory holding the game.toml this build is for (default: the kit's stub game)")
     parser.add_argument("--stub", action="store_true",
                         help="Link the hosts against a stub translation (no game code; CI's build)")
-    parser.add_argument("--device", default=None, help="devicectl identifier of the iPad (ios target)")
+    parser.add_argument("--device", default=None, help="devicectl identifier (iOS) or adb serial (Android)")
     parser.add_argument("--team", default=os.environ.get("RECOMP_IOS_TEAM", ""),
                         help="Apple team id for automatic signing (ios target; default $RECOMP_IOS_TEAM)")
-    parser.add_argument("--no-install", action="store_true", help="Build the iOS app without installing it")
+    parser.add_argument("--no-install", action="store_true", help="Build the mobile app without installing it")
     parser.add_argument("--console", action="store_true", help="After launching on the device, stream its console")
     args = parser.parse_args(argv)
     if args.target == "ios" and not args.stub and not args.team:
@@ -273,6 +349,10 @@ def main():
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
                 build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
+                if args.target == "android":
+                    apk = android_apk(args.build_root, cfg, gen_dir=build_dir)
+                    if not args.no_install:
+                        android_install_and_launch(apk, cfg["game"]["bundle_id"], args.device, args.console)
                 system = platform.system()
                 if args.target == "app" and not args.stub and system in {"Linux", "Windows"}:
                     # The desktop Ninja presets write OUTPUT_NAME into POP_OUT.
@@ -285,6 +365,8 @@ def main():
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
     except TimeoutError as error:
+        parser.exit(1, "%s\n" % error)
+    except (OSError, ValueError) as error:
         parser.exit(1, "%s\n" % error)
 
 

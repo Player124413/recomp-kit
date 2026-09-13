@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Build `--target android` through the NDK preset, then package its
+  `libmain.so` with an SDLActivity subclass and the matching FetchContent
+  Java sources. Add a Gradle 9.7.1 wrapper and AGP 9.1.1 templates for
+  arm64-v8a, API 29 minimum, compile/target SDK 36 and required Vulkan 1.1.
+  Install and launch on a ready adb device, stream logcat with `--console`,
+  and skip device actions when none is attached. Stub APK packaging is
+  verified on macOS; Android device execution remains unverified.
+
 - Add `android` and `android-stub` NDK presets for arm64-v8a, API 29 and
   static libc++. Build the SDL host as `libmain.so` with static SDL3 and
   NDK Vulkan/log libraries, omit desktop tests and add an Android stub CI
