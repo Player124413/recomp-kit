@@ -6,6 +6,25 @@
   sizes, Shift/Ctrl/Alt that hold, latch or lock, HIDE/KEYS tabs, settings on the
   F10 page persisted per game; replaces the eight-key strip. `POPM_KEYPAD=1` forces
   it on for a desktop check.
+- Translator: instruction forms a Visual C++ 6 executable uses that the first
+  corpus did not: `LOOP`, `INT3`, `CLC`/`STC`, `PUSHF`/`POPF`, 16-bit `PUSH`/`POP`,
+  word- and dword-width `CMPS`/`SCAS` with every REP prefix, `FPTAN`,
+  `FSAVE`/`FNSAVE`, `FRSTOR`, `FINIT`/`FNINIT`, and segment registers as a `MOV`
+  source (the flat selectors) or destination (dropped; a CS load is `#UD`).
+  `x86.h` gains `x87_finit`, `x87_fnsave`, `x87_frstor` and the wider string
+  compares. `tools/recomp/tests/test_translate_insns.py` checks each form against
+  Unicorn on synthetic listings without a game, and runs in `tools/test.py`.
+- Translator: jump tables bounded the way that compiler's hand-written `memcpy`
+  bounds them - a low-bit `AND` mask whose unreachable slot holds code, a guard
+  that branches to the jump after `CMP idx,N` (0..N-1) or `SUB idx,N` (-N..-1),
+  and a `NEG` of a bounded index - decode exactly instead of falling back to a
+  forward read that found nothing or the wrong entries
+  (`tools/recomp/tests/test_jumptables.py`).
+- Translator: a literal transfer to a block the sweep withdrew (padding after a
+  call that never returns) becomes `recomp_unknown_call(c, addr); return;` rather
+  than a dangling dispatch, so a listing that ends on a `throw` translates. The
+  dispatch gate now names the functions that failed to translate before it
+  reports what dispatched to them (`tools/recomp/tests/test_translate_driver.py`).
 - Builds take `--game-dir`: a game directory anywhere, with outputs under its own
   `build/`; paths in `game.toml` resolve from its directory. The kit ships `games/stub`
   for game-free builds and CI. Populous moves to github.com/veritr1x/populous-recomp,

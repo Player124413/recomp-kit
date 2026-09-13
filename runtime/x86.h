@@ -731,6 +731,54 @@ static inline void repne_cmpsb(X86 *c) {
     }
 }
 
+/* The same at word and dword width.  A REP-prefixed compare with ECX = 0
+ * runs nothing and leaves every flag as it found it, like the byte forms. */
+#define X86_CMPS_SCAS(SUF, BITS, MASK)                                                             \
+    static inline void scas##SUF(X86 *c) {                                                         \
+        x86_sub_flags##BITS(c, c->r[R_EAX] & (MASK), rd##BITS(c->r[R_EDI]));                       \
+        c->r[R_EDI] += c->eflags_df ? (uint32_t)-(BITS / 8) : (uint32_t)(BITS / 8);                \
+    }                                                                                              \
+    static inline void cmps##SUF(X86 *c) {                                                         \
+        x86_sub_flags##BITS(c, rd##BITS(c->r[R_ESI]), rd##BITS(c->r[R_EDI]));                      \
+        c->r[R_EDI] += c->eflags_df ? (uint32_t)-(BITS / 8) : (uint32_t)(BITS / 8);                \
+        c->r[R_ESI] += c->eflags_df ? (uint32_t)-(BITS / 8) : (uint32_t)(BITS / 8);                \
+    }                                                                                              \
+    static inline void repe_scas##SUF(X86 *c) {                                                    \
+        while (c->r[R_ECX]) {                                                                      \
+            scas##SUF(c);                                                                          \
+            c->r[R_ECX]--;                                                                         \
+            if (!c->eflags_zf)                                                                     \
+                break;                                                                             \
+        }                                                                                          \
+    }                                                                                              \
+    static inline void repne_scas##SUF(X86 *c) {                                                   \
+        while (c->r[R_ECX]) {                                                                      \
+            scas##SUF(c);                                                                          \
+            c->r[R_ECX]--;                                                                         \
+            if (c->eflags_zf)                                                                      \
+                break;                                                                             \
+        }                                                                                          \
+    }                                                                                              \
+    static inline void repe_cmps##SUF(X86 *c) {                                                    \
+        while (c->r[R_ECX]) {                                                                      \
+            cmps##SUF(c);                                                                          \
+            c->r[R_ECX]--;                                                                         \
+            if (!c->eflags_zf)                                                                     \
+                break;                                                                             \
+        }                                                                                          \
+    }                                                                                              \
+    static inline void repne_cmps##SUF(X86 *c) {                                                   \
+        while (c->r[R_ECX]) {                                                                      \
+            cmps##SUF(c);                                                                          \
+            c->r[R_ECX]--;                                                                         \
+            if (c->eflags_zf)                                                                      \
+                break;                                                                             \
+        }                                                                                          \
+    }
+X86_CMPS_SCAS(w, 16, 0xffffu)
+X86_CMPS_SCAS(d, 32, 0xffffffffu)
+#undef X86_CMPS_SCAS
+
 /* -------------------------------------------------------------- x87 -----
  * st[] holds doubles.  ST(i) is st[(fpu_top + i) & 7]; a push predecrements
  * fpu_top.  Status-word bits: C0=8 C1=9 C2=10 TOP=11..13 C3=14.
@@ -983,6 +1031,50 @@ static inline double fround_cw(const X86 *c, double v) {
  * window between the two FLDCWs contains a single FISTP and no arithmetic. */
 static inline void x87_set_cw(X86 *c, uint16_t cw) {
     c->fpu_cw = cw;
+}
+
+/* FINIT/FNINIT: the post-reset state - control word 0x037f (round to nearest,
+ * extended precision, every exception masked), status clear, TOP = 0, every
+ * register tagged empty.  The register values themselves are left alone, as
+ * on hardware; the tags make them unreadable. */
+static inline void x87_finit(X86 *c) {
+    x87_set_cw(c, 0x037fu);
+    c->fpu_sw = 0;
+    c->fpu_top = 0;
+    c->fpu_tag = 0xffffu;
+}
+
+/* FNSAVE m108: the 32-bit protected-mode layout.  Control, status and tag
+ * words each in their own dword, then the four exception pointers (FIP, FCS
+ * with the opcode, FDP, FDS), which this model does not track and writes as
+ * zero, then ST(0) through ST(7) as 80-bit values in stack order.  FNSAVE
+ * then reinitialises the FPU, which is why the CRT pairs it with FRSTOR. */
+static inline void x87_fnsave(X86 *c, uint32_t a) {
+    unsigned i;
+    wr32(a, c->fpu_cw);
+    wr32(a + 4, fstsw(c));
+    wr32(a + 8, c->fpu_tag);
+    wr32(a + 12, 0);
+    wr32(a + 16, 0);
+    wr32(a + 20, 0);
+    wr32(a + 24, 0);
+    for (i = 0; i < 8; i++)
+        wrf80(a + 28 + 10 * i, ST(c, i));
+    x87_finit(c);
+}
+
+/* FRSTOR m108: the inverse.  TOP comes out of the saved status word and the
+ * eight registers go back into the physical slots that TOP implies, so a
+ * later ST(i) reads what FNSAVE wrote as ST(i). */
+static inline void x87_frstor(X86 *c, uint32_t a) {
+    unsigned i;
+    uint16_t sw = rd16(a + 4);
+    x87_set_cw(c, rd16(a));
+    c->fpu_top = (sw >> 11) & 7u;
+    c->fpu_sw = (uint16_t)(sw & (uint16_t)~0x3800u);
+    c->fpu_tag = rd16(a + 8);
+    for (i = 0; i < 8; i++)
+        c->st[(c->fpu_top + i) & 7u] = rdf80(a + 28 + 10 * i);
 }
 
 /* FST/FSTP to a float, rounded per RC.  The host conversion rounds to

@@ -264,6 +264,10 @@ MEM_RE = re.compile(
     r"\[([^\]]*)\]$")
 
 IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
+#: Segment selectors as a 32-bit Windows process sees them: the flat code
+#: and data selectors, FS for the TEB.  Read-only here; the game never
+#: reloads a segment register.
+SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, "GS": 0x00}
 ST_RE = re.compile(r"^ST([0-7])$")
 
 
@@ -326,6 +330,8 @@ def parse_operand(text):
     m = ST_RE.match(text)
     if m:
         return Op("st", sti=int(m.group(1)))
+    if text in SEGMENT_SELECTOR:
+        return Op("sreg", size=16, imm=SEGMENT_SELECTOR[text])
     if IMM_RE.match(text):
         return Op("imm", imm=parse_imm(text))
     m = MEM_RE.match(text)
@@ -387,6 +393,8 @@ def read_op(op, size):
         return hexlit(op.imm) if size == 32 else "0x%xu" % (op.imm & mask_of(size))
     if op.kind == "mem":
         return "rd%d(%s)" % (size, addr_expr(op))
+    if op.kind == "sreg":
+        return "0x%xu" % op.imm
     raise TranslateError("cannot read operand %r" % op.kind)
 
 
@@ -489,6 +497,9 @@ for _dst, _src in (("E", "Z"), ("NE", "NZ"), ("NAE", "C"), ("NB", "NC"),
 
 JCC = {"J" + k: v for k, v in COND.items()}
 JCC["JECXZ"] = ("c->r[1] == 0", ())
+# LOOP decrements ECX and branches while it is not zero; the decrement is
+# the condition, so it happens whichever way the branch goes.
+JCC["LOOP"] = ("(c->r[1] = c->r[1] - 1u) != 0u", ())
 SETCC = {"SET" + k: v for k, v in COND.items()}
 CMOVCC = {"CMOV" + k: v for k, v in COND.items()}
 
@@ -542,8 +553,16 @@ FLAG_EFFECT = {
     "SAHF": (frozenset(("cf", "pf", "af", "zf", "sf")), NO_FLAGS),
     "POPFD": (ALL_FLAGS, NO_FLAGS),
     "PUSHFD": (NO_FLAGS, ALL_FLAGS),
+    "POPF": (ALL_FLAGS, NO_FLAGS),
+    "PUSHF": (NO_FLAGS, ALL_FLAGS),
     "SCASB": (ARITH_ALL, NO_FLAGS),
+    "SCASW": (ARITH_ALL, NO_FLAGS),
+    "SCASD": (ARITH_ALL, NO_FLAGS),
     "CMPSB": (ARITH_ALL, NO_FLAGS),
+    "CMPSW": (ARITH_ALL, NO_FLAGS),
+    "CMPSD": (ARITH_ALL, NO_FLAGS),
+    "CLC": (frozenset(("cf",)), NO_FLAGS),
+    "STC": (frozenset(("cf",)), NO_FLAGS),
     "NOT": (NO_FLAGS, NO_FLAGS),
 }
 
@@ -890,7 +909,7 @@ class Image(object):
     X87_INT = frozenset(("FILD", "FIST", "FISTP", "FIADD", "FISUB", "FISUBR",
                          "FIMUL", "FIDIV", "FIDIVR", "FICOM", "FICOMP",
                          "FNSTSW", "FSTSW", "FNSTCW", "FSTCW", "FLDCW",
-                         "FNSTENV", "FLDENV", "FNSAVE", "FRSTOR"))
+                         "FNSTENV", "FLDENV", "FNSAVE", "FSAVE", "FRSTOR"))
     REP_PREFIX = {"rep": "REP", "repe": "REPE", "repz": "REPE",
                   "repne": "REPNE", "repnz": "REPNE"}
     #: Mnemonics capstone spells differently from the listing grammar.
@@ -1237,6 +1256,24 @@ class Translator(object):
             self.stats["_jmp_table_bounded"] += 1
             return targets
 
+        ranged = self.index_range(fn, i, op.index)
+        if ranged is not None:
+            lo, hi, holes = ranged
+            targets = []
+            for k in range(lo, hi + 1):
+                t = self.image.rd32(dword_base + 4 * k)
+                if holes and not (t is not None and (self.is_block_entry(fn, t)
+                                                     or self.plausible_code(t))):
+                    # A masked index the guards never produce: the slot
+                    # holds whatever the compiler put there, usually code.
+                    self.stats["_jmp_table_holes"] += 1
+                    continue
+                self.want_target(fn, ins, t, k)
+                targets.append(t)
+            self.table_ranges.add((dword_base + 4 * lo, dword_base + 4 * (hi + 1)))
+            self.stats["_jmp_table_ranged"] += 1
+            return targets
+
         # No bound recovered.  Read while the entries stay plausible code and
         # hand each one to the recovery machinery rather than stopping at the
         # first that is not yet a block entry: the FMV decoder's table at
@@ -1258,6 +1295,74 @@ class Translator(object):
         if targets:
             self.table_ranges.add((dword_base, dword_base + 4 * len(targets)))
         return targets or None
+
+    #: Guards that branch TO a jump when the index is in range: `JC` after
+    #: `CMP idx,N` leaves 0..N-1 at the target, after `SUB idx,N` -N..-1.
+    RANGE_GUARDS = frozenset(("JC", "JB", "JNAE"))
+
+    def index_range(self, fn, i, reg):
+        """The signed range of `reg` at instruction i, or None.
+
+        Visual C++ 6's hand-written `memcpy` bounds its table indices in ways
+        the `CMP` + `JA` shape does not cover: a low-bit `AND` mask whose zero
+        case an earlier test diverted (so slot 0 holds code, not an address),
+        a `SUB idx,4` / `JC` pair whose taken branch reaches the jump with the
+        index in -4..-1, a `CMP idx,N` / `JC` pair likewise leaving 0..N-1,
+        and a `NEG` of a bounded index.  Returns (lo, hi, holes): `holes` is
+        set for the mask shape, where slots the guards never produce may hold
+        anything.  Fall-through dataflow is followed back to the nearest write
+        of `reg`; a guard branching to the instruction contributes the range
+        its compare or subtract leaves."""
+        ins = fn.insns[i]
+        ranges = []
+        # Fall-through: the nearest earlier write of the register, provided
+        # the path from it to here is straight-line code.
+        for j in range(i - 1, max(-1, i - 16), -1):
+            prev = fn.insns[j]
+            if prev.mnem in TERMINATORS or not fn.contiguous[j]:
+                break
+            if prev.mnem == "CMP" and len(prev.ops) == 2:
+                b = self.cmp_bound_here(fn, j, reg)
+                if b is not None:
+                    ranges.append((0, b - 1, False))
+                break
+            if not self.writes_reg32(prev, reg):
+                continue
+            try:
+                ops = [parse_operand(o) for o in prev.ops]
+            except TranslateError:
+                break
+            if prev.mnem == "AND" and len(ops) == 2 and ops[1].kind == "imm" \
+                    and 0 < ops[1].imm < 256 and not (ops[1].imm & (ops[1].imm + 1)):
+                ranges.append((0, ops[1].imm, True))
+            elif prev.mnem == "NEG" and len(ops) == 1:
+                inner = self.index_range(fn, j, reg)
+                if inner is not None:
+                    ranges.append((-inner[1], -inner[0], inner[2]))
+            break
+        # Branch-in: a guard whose taken edge lands here.
+        for j, guard in enumerate(fn.insns):
+            if guard.mnem not in self.RANGE_GUARDS or self.branch_target(guard) != ins.addr:
+                continue
+            for k in range(j - 1, max(-1, j - 6), -1):
+                setter = fn.insns[k]
+                defs, _uses = flag_effect(setter)
+                if not defs:
+                    continue
+                if setter.mnem in ("CMP", "SUB") and len(setter.ops) == 2:
+                    try:
+                        a, b = parse_operand(setter.ops[0]), parse_operand(setter.ops[1])
+                    except TranslateError:
+                        break
+                    if a.kind == "reg" and a.reg == reg and b.kind == "imm" and 0 < b.imm <= 0xFFFF:
+                        if setter.mnem == "CMP":
+                            ranges.append((0, b.imm - 1, False))
+                        else:
+                            ranges.append((-b.imm, -1, False))
+                break
+        if not ranges:
+            return None
+        return (min(r[0] for r in ranges), max(r[1] for r in ranges), any(r[2] for r in ranges))
 
     def plausible_code(self, va):
         """Could `va` be an address in this program's code?"""
@@ -1461,6 +1566,8 @@ class Translator(object):
     def writes_reg32(ins, reg):
         if not ins.ops:
             return False
+        if ins.mnem == "LOOP":
+            return reg == 1                # ECX
         if ins.mnem in ("CMP", "TEST", "PUSH", "JMP") or ins.mnem in JCC:
             return False
         try:
@@ -1688,6 +1795,11 @@ class Translator(object):
         if m == "MOV":
             size = operand_size(ops)
             dst, src = ops
+            if dst.kind == "sreg":
+                # A segment load means nothing in the flat model the runtime
+                # provides; a load of CS is an invalid opcode on the CPU too.
+                # These come from data Ghidra decoded as code.
+                return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
             L.append(write_op(dst, size, read_op(src, size)))
             return L
 
@@ -1722,6 +1834,10 @@ class Translator(object):
 
         if m == "PUSH":
             size = operand_size(ops, hint=32)
+            if size == 16:
+                L.append("uint32_t v_ = %s;" % read_op(ops[0], 16))
+                L.append("c->r[4] -= 2; wr16(c->r[4], (uint16_t)v_);")
+                return L
             if size != 32:
                 raise TranslateError("non-32-bit PUSH")
             L.append("uint32_t v_ = %s;" % read_op(ops[0], 32))
@@ -1730,6 +1846,10 @@ class Translator(object):
 
         if m == "POP":
             size = operand_size(ops, hint=32)
+            if size == 16:
+                L.append("uint32_t v_ = rd16(c->r[4]); c->r[4] += 2;")
+                L.append(write_op(ops[0], 16, "v_"))
+                return L
             if size != 32:
                 raise TranslateError("non-32-bit POP")
             L.append("uint32_t v_ = rd32(c->r[4]); c->r[4] += 4;")
@@ -1744,6 +1864,11 @@ class Translator(object):
             return ["c->r[4] -= 4; wr32(c->r[4], x86_get_eflags(c));"]
         if m == "POPFD":
             return ["x86_set_eflags(c, rd32(c->r[4])); c->r[4] += 4;"]
+        if m == "PUSHF":
+            return ["c->r[4] -= 2; wr16(c->r[4], (uint16_t)x86_get_eflags(c));"]
+        if m == "POPF":
+            return ["x86_set_eflags(c, (x86_get_eflags(c) & 0xffff0000u) | rd16(c->r[4]));",
+                    "c->r[4] += 2;"]
         if m == "LEAVE":
             return ["c->r[4] = c->r[5]; c->r[5] = rd32(c->r[4]); c->r[4] += 4;"]
         if m == "SAHF":
@@ -1916,6 +2041,10 @@ class Translator(object):
             return ["c->eflags_df = 0;"]
         if m == "STD":
             return ["c->eflags_df = 1;"]
+        if m == "CLC":
+            return ["c->eflags_cf = 0;"]
+        if m == "STC":
+            return ["c->eflags_cf = 1;"]
 
         # ---------------------------------------------------- control flow --
         if m in JCC:
@@ -1975,6 +2104,8 @@ class Translator(object):
             return ["recomp_hlt(c);"]
         if m == "INT":
             return ["recomp_int(c, %s);" % hexlit(parse_imm(ins.ops[0]))]
+        if m == "INT3":
+            return ["recomp_int(c, 3u);"]
         if m == "IN":
             size = operand_size(ops[:1], hint=32)
             port = read_op(ops[1], 32) if len(ops) > 1 else "0u"
@@ -2032,8 +2163,6 @@ class Translator(object):
         suf = {"B": "b", "W": "w", "D": "d"}[m[-1]]
         kind = m[:-1].lower()
         if kind in ("scas", "cmps"):
-            if suf != "b":
-                raise TranslateError("%s at width %s" % (m, suf))
             if ins.rep == "REPE" or ins.rep == "REP":
                 return ["repe_%s(c);" % m.lower()]
             if ins.rep == "REPNE":
@@ -2258,6 +2387,11 @@ class Translator(object):
                  "FRNDINT": "fx87_exact(c, fround_cw(c, %s))"}
         if m in UNARY:
             return [setst(0, UNARY[m] % st(0))]
+        if m == "FPTAN":
+            L.append("double v_ = %s;" % st(0))
+            L.append(setst(0, "fx87_exact(c, tan(v_))"))
+            L.append("fpush(c, 1.0);")
+            return L
         if m == "FSINCOS":
             L.append("double v_ = %s;" % st(0))
             L.append(setst(0, "fx87_exact(c, sin(v_))"))
@@ -2316,13 +2450,53 @@ class Translator(object):
             return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
         if m == "FFREE":
             return [";"]
-        if m in ("FNSTENV", "FLDENV", "FNSAVE", "FRSTOR", "FINIT", "FNINIT"):
+        if m in ("FSAVE", "FNSAVE"):
+            return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
+        if m == "FRSTOR":
+            return ["x87_frstor(c, %s);" % addr_expr(ops[0])]
+        if m in ("FINIT", "FNINIT"):
+            return ["x87_finit(c);"]
+        if m in ("FNSTENV", "FLDENV"):
             raise TranslateError("unsupported x87 environment op %s" % m)
 
         raise TranslateError("unhandled x87 mnemonic %s" % m)
 
 
 # --------------------------------------------------------------- driver ----
+
+WITHDRAWN_CALL_RE = re.compile(r"CALL_FN\(([0-9a-f]{8})\);( return;)?")
+WITHDRAWN_JUMP_RE = re.compile(r"(?:c->eip = 0x[0-9a-f]{8}u; )?recomp_jump\(c, 0x([0-9a-f]{8})u\); return;")
+
+
+def retarget_withdrawn(body, pruned):
+    """Turn every literal transfer to a withdrawn block into a trap.
+
+    A block the sweep recovered and then withdrew (its own dispatch went
+    nowhere, so it was never code: padding after a call that does not
+    return, a table read as instructions) may still be named by the
+    function that fell through or jumped to it.  Real code never gets there
+    - the call before it threw or exited - so the transfer becomes
+    `recomp_unknown_call(c, addr); return;`, which the runtime reports if it
+    is ever reached and which the entry-point gate does not count as a
+    dispatch.  Only literal spellings change; nothing else in the body does."""
+    if not pruned:
+        return body
+    out = []
+    for line in body:
+        def call(m):
+            target = int(m.group(1), 16)
+            if target not in pruned:
+                return m.group(0)
+            return "recomp_unknown_call(c, 0x%08xu); return;" % target
+
+        def jump(m):
+            target = int(m.group(1), 16)
+            if target not in pruned:
+                return m.group(0)
+            return "recomp_unknown_call(c, 0x%08xu); return;" % target
+        out.append(WITHDRAWN_JUMP_RE.sub(jump, WITHDRAWN_CALL_RE.sub(call, line)))
+    return out
+
 
 def load_functions(only=None):
     funcs = []
@@ -2745,6 +2919,11 @@ def main():
             pruned.append(a)
         for t in [t for t, f in extra.items() if f.addr in drop]:
             del extra[t]
+    if pruned:
+        gone = set(pruned)
+        for a in bodies:
+            bodies[a] = retarget_withdrawn(bodies[a], gone)
+        tr.stats["_withdrawn_retargeted"] = len(gone)
 
     ok = [fn for fn in parsed if fn.addr in bodies]
     entry_names = sorted(set([fn.addr for fn in ok])
@@ -2823,6 +3002,10 @@ def main():
         for target, line in dangling_targets(bodies[fn.addr], known):
             dangling.append((fn.addr, target, line))
     if dangling:
+        # A target that Ghidra listed but that failed to translate is the
+        # usual cause, so name the failures first: they are what to fix.
+        for a, why in failures[:40]:
+            print("  fn_%08x failed: %s" % (a, why[:160]), file=sys.stderr)
         for caller, target, line in dangling[:20]:
             print("  fn_%08x dispatches to %08x, which is not an entry point: %s"
                   % (caller, target, line[:110]), file=sys.stderr)
