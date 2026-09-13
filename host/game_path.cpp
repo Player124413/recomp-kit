@@ -55,7 +55,9 @@ GamePath game_path_resolve(const char *flag) {
     }
     const HostLayout &l = host_layout();
     if (l.developer) {
-        std::string candidate = l.checkout_root + "/" + RECOMP_DEVELOPER_EXE;
+        // The developer's executable, as game.toml names it: absolute since the
+        // game moved to its own directory, so no checkout prefix.
+        std::string candidate = RECOMP_DEVELOPER_EXE;
         OsStat st;
         if (os_stat(candidate.c_str(), &st) == 0) {
             g.exe = candidate;
