@@ -49,8 +49,10 @@ export RECOMP_IOS_TEAM=<your team id>       # security find-identity -v -p codes
 
 The build stages your game directory into the app (see `[bundle].exclude` in
 `games/populous/game.toml`), signs it, installs it with `devicectl` and streams
-the console. Touch: tap = left click, long press = right click, drag = left
-drag, two-finger drag pans, two-finger tap = Escape, three-finger tap = F10
+the console. Touch: tap = left click, long press then lift = right click, long press then
+drag = wheel-button drag (Populous scrolls or rotates the map), a hold on a
+screen edge scrolls, drag = left drag, two-finger drag pans, two-finger tap =
+Escape, three-finger tap = F10
 (Options), four-finger tap toggles the keyboard. `tools/ios_logs.py` pulls the
 app's Documents (saves) back to the Mac.
 

@@ -679,7 +679,9 @@ void push_touch_action_now(const TouchAction &a) {
             e.type = a.down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
             e.button.windowID = ours;
             e.button.which = SDL_TOUCH_MOUSEID;
-            e.button.button = a.button == 1 ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+            e.button.button = a.button == 1   ? SDL_BUTTON_RIGHT
+                              : a.button == 2 ? SDL_BUTTON_MIDDLE
+                                              : SDL_BUTTON_LEFT;
             e.button.down = a.down;
             e.button.clicks = 1;
             e.button.x = (float)a.x;
@@ -727,6 +729,7 @@ TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
     int w = 0, h = 0;
     if (g_window)
         SDL_GetWindowSize(g_window, &w, &h);
+    g_touch.set_bounds(w, h);
     return {(int64_t)f.fingerID, f.x * w, f.y * h};
 }
 

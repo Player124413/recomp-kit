@@ -16,6 +16,12 @@ constexpr double kTouchPanStep = 24.0;
 // A synthesized click stays pressed this long: a game that samples its mouse
 // buttons once per frame never sees a press and release inside one frame.
 constexpr uint64_t kTouchClickHoldNs = 90ull * 1000000ull;
+// A finger this close to a side of the window is placed exactly on it: games
+// scroll when the cursor sits on the outermost row or column, which a finger
+// on a bezel never quite reaches. When such a hold ends the cursor is moved
+// back inside by kTouchEdgeRelease so the scrolling stops with the finger.
+constexpr double kTouchEdgeMargin = 16.0;
+constexpr double kTouchEdgeRelease = 48.0;
 
 struct TouchPoint {
     int64_t id;
@@ -25,21 +31,23 @@ struct TouchPoint {
 struct TouchAction {
     enum Kind { Motion, Button, Key } kind;
     // Motion only: also place the game's own cursor here. True for a press
-    // and for a left drag; false while the right button is held, when the
-    // game is in its camera mode and reads relative movement instead.
+    // and for a left drag; false while the wheel button is held, when the
+    // game scrolls or rotates from relative movement instead.
     bool place = true;
     double x = 0, y = 0; // Motion, Button
-    int button = 0;      // Button: 0 left, 1 right
+    int button = 0;      // Button: 0 left, 1 right, 2 middle (wheel)
     bool down = false;   // Button, Key
     int scancode = 0;    // Key: an SDL_Scancode value
 };
 
 class TouchMapper {
   public:
+    // The window's size in points. Enables edge snapping; zero disables it.
+    void set_bounds(double w, double h);
     void finger_down(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
     void finger_motion(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
     void finger_up(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
-    // Fires time-based gestures (long press). Call once per pump.
+    // Fires time-based gestures (long press, held releases). Call once per pump.
     void tick(uint64_t now_ns, std::vector<TouchAction> *out);
     // The system took the finger away (SDL_EVENT_FINGER_CANCELED): forget it
     // without a click; a drag it was holding is released.
@@ -60,17 +68,25 @@ class TouchMapper {
     std::vector<Finger> fingers_; // currently down, in order of arrival
     int max_fingers_ = 0;         // most fingers down during this gesture
     bool dragging_ = false;       // one-finger drag in progress (left held)
-    bool long_fired_ = false;     // long press already emitted for this gesture
-    bool right_held_ = false;     // the long press's right button is down until the finger lifts
-    uint64_t right_down_ = 0;
+    bool long_fired_ = false;     // the finger has rested for the long-press time
+    bool middle_held_ = false;    // a drag after the long press: wheel button down
     bool text_input_ = false;
     double pan_cx_ = 0, pan_cy_ = 0, pan_acc_x_ = 0, pan_acc_y_ = 0;
+    double bounds_w_ = 0, bounds_h_ = 0;
+    bool snapped_ = false;               // the gesture's placed point sits on a window edge
+    double placed_x_ = 0, placed_y_ = 0; // the last placed point
+    // Where the cursor goes once an edge hold is over, after any held release.
+    bool nudge_pending_ = false;
+    double nudge_x_ = 0, nudge_y_ = 0;
     // A click's release, held back until kTouchClickHoldNs after its press.
     bool release_pending_ = false;
     int release_button_ = 0;
     double release_x_ = 0, release_y_ = 0;
     uint64_t release_due_ = 0;
+    void place(std::vector<TouchAction> *out, double x, double y);
     void click(std::vector<TouchAction> *out, int button, double x, double y, uint64_t now);
+    void end_edge_hold(std::vector<TouchAction> *out);
+    void release_held(std::vector<TouchAction> *out);
     double centroid_x() const;
     double centroid_y() const;
     void reset_gesture();

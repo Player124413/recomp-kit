@@ -59,29 +59,85 @@ static void test_long_press_is_right_click() {
     m.tick(300 * MS, &out);
     CHECK(out.empty());
     m.tick(360 * MS, &out);
-    CHECK(out.size() == 2 && out[1].kind == TouchAction::Button && out[1].button == 1 &&
-          out[1].down);
+    // The rest only places the cursor; the button waits for the lift.
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place && out[0].x == 50);
     out.clear();
-    // Lifted almost at once: the press is kept down until the hold time.
     m.finger_up({1, 50, 60}, 380 * MS, &out);
-    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion);
-    m.tick(360 * MS + kTouchClickHoldNs, &out);
-    CHECK(out.size() == 2 && out[1].button == 1 && !out[1].down);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion &&
+          out[1].kind == TouchAction::Button && out[1].button == 1 && out[1].down);
+    m.tick(380 * MS + kTouchClickHoldNs, &out);
+    CHECK(out.size() == 3 && out[2].kind == TouchAction::Button && out[2].button == 1 &&
+          !out[2].down);
 }
 
-static void test_long_press_then_drag_is_a_right_drag() {
+static void test_long_press_then_drag_is_a_wheel_button_drag() {
     TouchMapper m;
     std::vector<TouchAction> out;
     m.finger_down({1, 50, 60}, 0, &out);
-    m.tick(360 * MS, &out); // right down
+    m.tick(360 * MS, &out); // cursor placed
     out.clear();
+    m.finger_motion({1, 55, 62}, 400 * MS, &out);
+    CHECK(out.empty()); // still resting
     m.finger_motion({1, 120, 90}, 500 * MS, &out);
-    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 120);
-    CHECK(!out[0].place); // camera mode: relative movement, no cursor placement
+    CHECK(out.size() == 2);
+    CHECK(out[0].kind == TouchAction::Button && out[0].button == 2 && out[0].down &&
+          out[0].x == 50 && out[0].y == 60);
+    CHECK(out[1].kind == TouchAction::Motion && out[1].x == 120 && !out[1].place);
+    out.clear();
+    m.finger_motion({1, 125, 92}, 600 * MS, &out);
+    CHECK(out.size() == 1 && !out[0].place);
     out.clear();
     m.finger_up({1, 130, 95}, 900 * MS, &out);
-    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion &&
-          out[1].kind == TouchAction::Button && out[1].button == 1 && !out[1].down);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion && !out[0].place &&
+          out[1].kind == TouchAction::Button && out[1].button == 2 && !out[1].down);
+    out.clear();
+    m.tick(2000 * MS, &out);
+    CHECK(out.empty()); // no right click after a drag
+}
+
+static void test_edge_hold_scrolls_then_moves_the_cursor_inside() {
+    TouchMapper m;
+    m.set_bounds(1000, 800);
+    std::vector<TouchAction> out;
+    m.finger_down({1, 5, 400}, 0, &out);
+    m.tick(360 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 0 &&
+          out[0].y == 400); // snapped onto the left edge
+    out.clear();
+    m.tick(1500 * MS, &out);
+    CHECK(out.empty()); // an edge hold is not a right click
+    m.finger_up({1, 6, 402}, 2000 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place &&
+          out[0].x == kTouchEdgeRelease && out[0].y == 400);
+    m.tick(3000 * MS, &out);
+    CHECK(out.size() == 1); // and no click
+}
+
+static void test_tap_on_an_edge_clicks_there_then_moves_inside() {
+    TouchMapper m;
+    m.set_bounds(1000, 800);
+    std::vector<TouchAction> out;
+    m.finger_down({1, 995, 790}, 0, &out);
+    m.finger_up({1, 996, 791}, 50 * MS, &out);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion && out[0].x == 999 &&
+          out[0].y == 799);
+    CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down &&
+          out[1].x == 999);
+    out.clear();
+    m.tick(50 * MS + kTouchClickHoldNs, &out);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Button && !out[0].down);
+    CHECK(out[1].kind == TouchAction::Motion && out[1].x == 999 - kTouchEdgeRelease &&
+          out[1].y == 799 - kTouchEdgeRelease);
+}
+
+static void test_no_bounds_means_no_snapping() {
+    TouchMapper m;
+    std::vector<TouchAction> out;
+    m.finger_down({1, 2, 3}, 0, &out);
+    m.finger_up({1, 2, 3}, 50 * MS, &out);
+    CHECK(out.size() == 2 && out[0].x == 2 && out[0].y == 3);
+    m.tick(50 * MS + kTouchClickHoldNs, &out);
+    CHECK(out.size() == 3); // release, no nudge
 }
 
 static void test_drag_is_left_drag() {
@@ -195,7 +251,10 @@ int main() {
     test_tap_is_left_click();
     test_a_new_finger_releases_a_held_click_first();
     test_long_press_is_right_click();
-    test_long_press_then_drag_is_a_right_drag();
+    test_long_press_then_drag_is_a_wheel_button_drag();
+    test_edge_hold_scrolls_then_moves_the_cursor_inside();
+    test_tap_on_an_edge_clicks_there_then_moves_inside();
+    test_no_bounds_means_no_snapping();
     test_drag_is_left_drag();
     test_two_finger_drag_pans_with_arrows();
     test_two_finger_tap_is_escape_three_is_f10_four_toggles_keyboard();

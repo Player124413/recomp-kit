@@ -36,6 +36,11 @@ double dist(double ax, double ay, double bx, double by) {
 }
 } // namespace
 
+void TouchMapper::set_bounds(double w, double h) {
+    bounds_w_ = w;
+    bounds_h_ = h;
+}
+
 double TouchMapper::centroid_x() const {
     double s = 0;
     for (const Finger &f : fingers_)
@@ -48,22 +53,84 @@ double TouchMapper::centroid_y() const {
         s += f.y;
     return fingers_.empty() ? 0 : s / fingers_.size();
 }
+
+// A placed motion: the point, snapped onto a window edge when the finger is
+// within kTouchEdgeMargin of one. Remembers whether it landed on an edge.
+void TouchMapper::place(std::vector<TouchAction> *out, double x, double y) {
+    bool at_edge = false;
+    if (bounds_w_ > 0 && bounds_h_ > 0) {
+        if (x < kTouchEdgeMargin) {
+            x = 0;
+            at_edge = true;
+        } else if (x > bounds_w_ - 1 - kTouchEdgeMargin) {
+            x = bounds_w_ - 1;
+            at_edge = true;
+        }
+        if (y < kTouchEdgeMargin) {
+            y = 0;
+            at_edge = true;
+        } else if (y > bounds_h_ - 1 - kTouchEdgeMargin) {
+            y = bounds_h_ - 1;
+            at_edge = true;
+        }
+    }
+    snapped_ = at_edge;
+    placed_x_ = x;
+    placed_y_ = y;
+    motion(out, x, y);
+}
+
 // Press now; the release follows from tick() once the hold time has passed.
 void TouchMapper::click(std::vector<TouchAction> *out, int b, double x, double y, uint64_t now) {
-    motion(out, x, y);
-    button(out, b, true, x, y);
+    place(out, x, y);
+    const TouchAction &placed = out->back();
+    button(out, b, true, placed.x, placed.y);
     release_pending_ = true;
     release_button_ = b;
-    release_x_ = x;
-    release_y_ = y;
+    release_x_ = placed.x;
+    release_y_ = placed.y;
     release_due_ = now + kTouchClickHoldNs;
+}
+
+// The gesture ended on an edge: once nothing is held any more, move the cursor
+// back inside so the game stops scrolling.
+void TouchMapper::end_edge_hold(std::vector<TouchAction> *out) {
+    if (!snapped_)
+        return;
+    snapped_ = false;
+    double x = placed_x_, y = placed_y_;
+    if (x <= 0)
+        x = kTouchEdgeRelease;
+    else if (x >= bounds_w_ - 1)
+        x = bounds_w_ - 1 - kTouchEdgeRelease;
+    if (y <= 0)
+        y = kTouchEdgeRelease;
+    else if (y >= bounds_h_ - 1)
+        y = bounds_h_ - 1 - kTouchEdgeRelease;
+    if (release_pending_) {
+        nudge_pending_ = true;
+        nudge_x_ = x;
+        nudge_y_ = y;
+        return;
+    }
+    nudge_pending_ = false;
+    motion(out, x, y);
+}
+
+void TouchMapper::release_held(std::vector<TouchAction> *out) {
+    release_pending_ = false;
+    button(out, release_button_, false, release_x_, release_y_);
+    if (nudge_pending_) {
+        nudge_pending_ = false;
+        motion(out, nudge_x_, nudge_y_);
+    }
 }
 
 void TouchMapper::reset_gesture() {
     max_fingers_ = 0;
     dragging_ = false;
     long_fired_ = false;
-    right_held_ = false;
+    middle_held_ = false;
     pan_acc_x_ = pan_acc_y_ = 0;
 }
 
@@ -71,8 +138,7 @@ void TouchMapper::finger_down(TouchPoint p, uint64_t now, std::vector<TouchActio
     if (release_pending_) {
         // A new finger before the last click released: release it first so
         // the two clicks stay distinct.
-        release_pending_ = false;
-        button(out, release_button_, false, release_x_, release_y_);
+        release_held(out);
     }
     if (fingers_.empty())
         reset_gesture();
@@ -84,6 +150,10 @@ void TouchMapper::finger_down(TouchPoint p, uint64_t now, std::vector<TouchActio
         if (dragging_) {
             button(out, 0, false, fingers_[0].x, fingers_[0].y);
             dragging_ = false;
+        }
+        if (middle_held_) {
+            button(out, 2, false, fingers_[0].x, fingers_[0].y);
+            middle_held_ = false;
         }
         pan_cx_ = centroid_x();
         pan_cy_ = centroid_y();
@@ -97,19 +167,31 @@ void TouchMapper::finger_motion(TouchPoint p, uint64_t, std::vector<TouchAction>
             f.x = p.x;
             f.y = p.y;
         }
-    if (fingers_.size() == 1 && right_held_) {
-        motion(out, fingers_[0].x, fingers_[0].y, false); // a right-button drag: deltas only
-        return;
-    }
-    if (fingers_.size() == 1 && max_fingers_ == 1 && !long_fired_) {
+    if (fingers_.size() == 1 && max_fingers_ == 1) {
         Finger &f = fingers_[0];
+        if (middle_held_) {
+            motion(out, f.x, f.y, false); // wheel-button drag: deltas only
+            return;
+        }
+        if (long_fired_) {
+            // A drag after the long press scrolls the map the way the game's
+            // own wheel-button drag does. The press point was placed already.
+            if (dist(f.x0, f.y0, f.x, f.y) > kTouchTapTravel) {
+                middle_held_ = true;
+                snapped_ = false;
+                button(out, 2, true, f.x0, f.y0);
+                motion(out, f.x, f.y, false);
+            }
+            return;
+        }
         if (!dragging_ && dist(f.x0, f.y0, f.x, f.y) > kTouchTapTravel) {
             dragging_ = true;
-            motion(out, f.x0, f.y0);
-            button(out, 0, true, f.x0, f.y0);
+            place(out, f.x0, f.y0);
+            const TouchAction &placed = out->back();
+            button(out, 0, true, placed.x, placed.y);
         }
         if (dragging_)
-            motion(out, f.x, f.y);
+            place(out, f.x, f.y);
         return;
     }
     if (fingers_.size() == 2 && max_fingers_ == 2) {
@@ -144,24 +226,22 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
         return; // the gesture ends when the last finger lifts
     const bool moved = dist(lifted.x0, lifted.y0, lifted.x, lifted.y) > kTouchTapTravel;
     if (max_fingers_ == 1) {
-        if (right_held_) {
+        if (middle_held_) {
             motion(out, lifted.x, lifted.y, false);
-            if (now - right_down_ >= kTouchClickHoldNs) {
-                button(out, 1, false, lifted.x, lifted.y);
-            } else {
-                // Lifted almost at once: keep the press long enough to be seen.
-                release_pending_ = true;
-                release_button_ = 1;
-                release_x_ = lifted.x;
-                release_y_ = lifted.y;
-                release_due_ = right_down_ + kTouchClickHoldNs;
-            }
+            button(out, 2, false, lifted.x, lifted.y);
         } else if (dragging_) {
-            motion(out, lifted.x, lifted.y);
-            button(out, 0, false, lifted.x, lifted.y);
-        } else if (!long_fired_ && !moved && now - lifted.t0 < kTouchLongPressNs) {
+            place(out, lifted.x, lifted.y);
+            const TouchAction &placed = out->back();
+            button(out, 0, false, placed.x, placed.y);
+        } else if (long_fired_) {
+            // A still long press that lifts is a right click, unless it was an
+            // edge hold, which only scrolled.
+            if (!moved && !snapped_)
+                click(out, 1, lifted.x, lifted.y, now);
+        } else if (!moved && now - lifted.t0 < kTouchLongPressNs) {
             click(out, 0, lifted.x, lifted.y, now);
         }
+        end_edge_hold(out);
     } else if (max_fingers_ == 2 && fabs(pan_acc_x_) < kTouchPanStep &&
                fabs(pan_acc_y_) < kTouchPanStep && !moved) {
         key_tap(out, SDL_SCANCODE_ESCAPE);
@@ -183,39 +263,35 @@ void TouchMapper::finger_cancel(int64_t id, std::vector<TouchAction> *out) {
         return;
     if (dragging_)
         button(out, 0, false, 0, 0);
-    if (right_held_)
-        button(out, 1, false, 0, 0);
+    if (middle_held_)
+        button(out, 2, false, 0, 0);
+    end_edge_hold(out);
     reset_gesture();
 }
 
 void TouchMapper::cancel_all(std::vector<TouchAction> *out) {
-    if (release_pending_) {
-        release_pending_ = false;
-        button(out, release_button_, false, release_x_, release_y_);
-    }
+    if (release_pending_)
+        release_held(out);
     if (dragging_)
         button(out, 0, false, 0, 0);
-    if (right_held_)
-        button(out, 1, false, 0, 0);
+    if (middle_held_)
+        button(out, 2, false, 0, 0);
     fingers_.clear();
+    end_edge_hold(out);
     reset_gesture();
 }
 
 void TouchMapper::tick(uint64_t now, std::vector<TouchAction> *out) {
-    if (release_pending_ && now >= release_due_) {
-        release_pending_ = false;
-        button(out, release_button_, false, release_x_, release_y_);
-    }
+    if (release_pending_ && now >= release_due_)
+        release_held(out);
     if (fingers_.size() != 1 || max_fingers_ != 1 || dragging_ || long_fired_)
         return;
     const Finger &f = fingers_[0];
     if (now - f.t0 >= kTouchLongPressNs && dist(f.x0, f.y0, f.x, f.y) <= kTouchTapTravel) {
-        // Right button down, held until the finger lifts: a right-drag pans
-        // or rotates the camera; a quick lift is a right click.
+        // The finger has rested: put the cursor under it. What follows decides
+        // the button - a lift is a right click, a drag a wheel-button drag, and
+        // on a window edge the rest itself scrolls the map.
         long_fired_ = true;
-        right_held_ = true;
-        right_down_ = now;
-        motion(out, f.x, f.y);
-        button(out, 1, true, f.x, f.y);
+        place(out, f.x0, f.y0);
     }
 }

@@ -134,9 +134,11 @@ pixel size.
 
 | Gesture | Emits |
 |---|---|
-| Tap (release within 350 ms, travel under 20 px) | motion to point, left down, left up |
-| Long press (held 350 ms, travel under 20 px) | motion to point, right down, right up |
-| One-finger drag (travel over 12 px) | left down at start, motion while moving, left up at release |
+| Tap (release within 350 ms, travel under 20 px) | motion to point, left down, left up 90 ms later |
+| Long press (rested 350 ms, travel under 20 px) then lift | motion to point at 350 ms; right down, right up on the lift. Populous: unselect followers or a spell, query an object |
+| Long press then drag | wheel-button down at the press point, relative motion while moving, wheel-button up at release. Populous scrolls the map with a wheel-button drag, and rotates when it starts near the bottom of the screen |
+| Hold within 16 pt of a window edge | the cursor is placed exactly on that edge for as long as the finger rests (edge scrolling); no right click; on the lift the cursor moves 48 pt inside so scrolling stops |
+| One-finger drag (travel over 20 px) | left down at start, motion while moving, left up at release |
 | Two-finger drag | arrow-key down/up pulses matching the dominant direction, one pulse per 24 px |
 | Two-finger tap | Escape down, Escape up |
 | Three-finger tap | F10 down, F10 up (Options) |
@@ -144,7 +146,8 @@ pixel size.
 
 A key bar (`host/touch_overlay.cpp`, layout in `touch_overlay_layout.h`) is
 drawn by the presenter along the bottom edge when no hardware keyboard is
-attached: Esc, F10, the four arrows, Space, Enter. A finger on a key holds
+attached: Esc, F10, the four arrows, Space, Enter, and HIDE, which collapses
+the strip to a KEYS tab in the bottom-right corner. A finger on a key holds
 that key until it lifts and never reaches the gesture mapper. Thresholds are
 constants in `input_touch.h`.
 
