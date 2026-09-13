@@ -142,9 +142,22 @@ pixel size.
 | Three-finger tap | F10 down, F10 up (Options) |
 | Four-finger tap | toggles the on-screen keyboard (`SDL_StartTextInput` / `SDL_StopTextInput`) |
 
-There is no on-screen bar: `host/ui_layer.cpp` reconstructs guest UI from
-frame writes and is not a widget toolkit, so Options and the keyboard are
-gestures. Thresholds are constants in `input_touch.h`.
+A key bar (`host/touch_overlay.cpp`, layout in `touch_overlay_layout.h`) is
+drawn by the presenter along the bottom edge when no hardware keyboard is
+attached: Esc, F10, the four arrows, Space, Enter. A finger on a key holds
+that key until it lifts and never reaches the gesture mapper. Thresholds are
+constants in `input_touch.h`.
+
+Two facts about the game shaped the click path, both measured on the device:
+
+- Populous hit-tests against the cursor it integrates from relative motion
+  and the host's damped correction can take hundreds of milliseconds to walk
+  it across the screen. A touch therefore writes the game's cursor pair
+  directly (`host_gate_pointer_place`, offsets 0x20/0x24 of the mouse device
+  object) through an ordered `PLACE` input between the motion and the click.
+- The game samples its mouse buttons once per frame, so a press and release
+  inside one frame is invisible. A synthesized click stays pressed for
+  `kTouchClickHoldNs` (90 ms) and releases from the mapper's tick.
 
 ### 5.5 Metal and layout
 
@@ -175,6 +188,11 @@ gestures. Thresholds are constants in `input_touch.h`.
 
 `tools/ios_logs.py` pulls the app's `Documents` and the gameplay log with
 `devicectl device copy from --domain-type appDataContainer`.
+
+SDL3 delivers `SDL_EVENT_WILL_ENTER_BACKGROUND` and its siblings only to
+event watchers (`SDL_AddEventWatch`), never through the queue; the iOS seam
+registers a watcher, and `host_present_suspend(true)` drains in-flight GPU
+work because the GPU completes nothing in the background.
 
 ## 6. Error handling
 

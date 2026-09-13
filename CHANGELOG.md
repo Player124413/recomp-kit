@@ -12,6 +12,8 @@
 - tools/build.py --stub and the *-stub CMake presets link the hosts without game code.
 - iOS: `tools/build.py --target ios` builds, signs and installs the app on a paired iPad;
   touch mapper, fullscreen Metal window, game files seeded into Documents on first launch.
+- iOS: on-screen key bar, taps that place the game's cursor and hold the click, app icon
+  from the game executable, lifecycle-driven suspend of audio and presentation.
 
 - Build with CMake presets for macOS, Linux and Windows through the unchanged
   `tools/build.py` and `tools/test.py`; the xcrun shell scripts are gone.
