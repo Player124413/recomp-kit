@@ -683,6 +683,22 @@ bool mods_write_run_record(const char *path) {
     // Published by rename, and only after the bytes are on disk: a reader
     // either sees the previous record or this one, never a truncated file, and
     // a write that fails half way leaves the previous record in place.
+    // The record's directory is the host's state directory, which a game
+    // repository that has never carried a mod does not have yet.
+    std::string parent = std::string(path);
+    size_t slash = parent.find_last_of('/');
+    if (slash != std::string::npos) {
+        parent.resize(slash);
+        std::string made;
+        for (size_t i = 1; i <= parent.size(); ++i) {
+            if (i == parent.size() || parent[i] == '/') {
+                made = parent.substr(0, i);
+                OsStat st;
+                if (os_stat(made.c_str(), &st) != 0)
+                    os_mkdir(made.c_str());
+            }
+        }
+    }
     std::string tmp = std::string(path) + ".tmp";
     FILE *f = fopen(tmp.c_str(), "wb");
     if (!f) {

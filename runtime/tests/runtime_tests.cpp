@@ -2604,14 +2604,56 @@ static void test_mod_seams(X86 *c) {
     check(w == g_seam_root + "/write/data/shared.txt",
           "a write resolves through the write tier, not the read tier");
 
-    // CreateFileA with GENERIC_WRITE and OPEN_EXISTING is a WRITE, which is
-    // the case that would otherwise open an original asset for writing.
+    // CreateFileA with GENERIC_WRITE and OPEN_EXISTING opens through the READ
+    // tier and defers the write classification to the first WriteFile. A game
+    // opens its archives read/write and never writes them; classifying the
+    // open as a write copied every archive into the profile. The write tier is
+    // resolved when a byte is actually written, and the handle continues at
+    // the offset it had reached; the read tier is never written.
     g_seam_calls.clear();
     uint32_t name = put_str("data\\shared.txt");
-    call_import(c, "KERNEL32.dll", "CreateFileA",
-                {name, 0x40000000u, 0, 0, 3 /*OPEN_EXISTING*/, 0, 0});
+    uint32_t hw = call_import(c, "KERNEL32.dll", "CreateFileA",
+                              {name, 0xC0000000u, 0, 0, 3 /*OPEN_EXISTING*/, 0, 0});
+    check(hw != 0xffffffffu && !g_seam_calls.empty() &&
+              g_seam_calls.back().second == WIN32_FILE_READ,
+          "read/write OPEN_EXISTING opens through the read tier");
+    uint32_t rbuf = scratch + 0x900, got = scratch + 0x9f0;
+    check(call_import(c, "KERNEL32.dll", "ReadFile", {hw, rbuf, 4, got, 0}) == 1 &&
+              rd32(got) == 4 && memcmp(g_mem + rbuf, "read", 4) == 0,
+          "and reads the read tier's bytes");
+    g_seam_calls.clear();
+    uint32_t wdata = put_str("WXYZ");
+    check(call_import(c, "KERNEL32.dll", "WriteFile", {hw, wdata, 4, got, 0}) == 1 &&
+              rd32(got) == 4,
+          "the first WriteFile on it succeeds");
     check(!g_seam_calls.empty() && g_seam_calls.back().second == WIN32_FILE_WRITE,
-          "write-only OPEN_EXISTING is classified as a write");
+          "and is what resolves the write tier");
+    call_import(c, "KERNEL32.dll", "CloseHandle", {hw});
+    {
+        FILE *wf = fopen((g_seam_root + "/write/data/shared.txt").c_str(), "rb");
+        check(wf != nullptr, "the write tier now holds the file");
+        if (wf) {
+            char b[8] = {0};
+            fseek(wf, 4, SEEK_SET);
+            size_t n = fread(b, 1, 4, wf);
+            fclose(wf);
+            check(n == 4 && memcmp(b, "WXYZ", 4) == 0,
+                  "the bytes landed at the offset the handle had reached");
+        }
+        FILE *rf = fopen((g_seam_root + "/read/data/shared.txt").c_str(), "rb");
+        char rb[16] = {0};
+        size_t rn = rf ? fread(rb, 1, 9, rf) : 0;
+        if (rf)
+            fclose(rf);
+        check(rn == 9 && memcmp(rb, "read tier", 9) == 0, "the read tier is untouched");
+    }
+    // A write-only OPEN_EXISTING that never writes touches no tier either.
+    g_seam_calls.clear();
+    uint32_t hwo = call_import(c, "KERNEL32.dll", "CreateFileA",
+                               {name, 0x40000000u, 0, 0, 3 /*OPEN_EXISTING*/, 0, 0});
+    check(hwo != 0xffffffffu && g_seam_calls.back().second == WIN32_FILE_READ,
+          "write-only OPEN_EXISTING is classified at the first write, not the open");
+    call_import(c, "KERNEL32.dll", "CloseHandle", {hwo});
 
     g_seam_calls.clear();
     call_import(c, "KERNEL32.dll", "DeleteFileA", {name});

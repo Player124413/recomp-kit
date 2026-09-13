@@ -9,6 +9,7 @@
 #include "../../runtime/memory.h"
 #include "../../runtime/guest.h"
 #include "../../runtime/win32.h"
+#include "../../runtime/layout.h"
 
 extern "C" bool mods_test_reset_loader(void);
 extern "C" void mods_test_set_next_owner(uint32_t owner);
@@ -1410,4 +1411,29 @@ MOD_TEST_SUITE(loader_an_empty_run_still_writes_its_record) {
     // asserted against a fresh process in tools/recomp/mods_test.sh; this
     // binary has loaded mods many times over, so what it accumulates here
     // would not be evidence either way.
+}
+
+// The profile is the writable tier whether or not anything game-specific in
+// the loader works: a game whose symbol table is absent (a port without mods)
+// still must not have its saves and settings written into its own
+// installation. The overlay therefore goes in before the first step that can
+// fail, and before RECOMP_NO_MODS is honoured.
+MOD_TEST_SUITE(loader_installs_the_writable_tier_before_anything_can_fail) {
+    fresh();
+    win32_set_file_ops(nullptr, nullptr);                     // as at boot, before the loader ran
+    host_layout_set_exe_path_for_test("/nowhere/at/all/exe"); // no checkout: no symbols.json
+    MOD_CHECK(!mods_load_all());
+    host_layout_set_exe_path_for_test(nullptr);
+    std::string w = win32_host_path_op("saves\\slot1.sav", WIN32_FILE_WRITE);
+    std::string profile = mods_overlay_profile_dir();
+    MOD_CHECK(!w.empty() && !profile.empty() && w.rfind(profile, 0) == 0);
+    MOD_CHECK(mods_test_reset_loader());
+
+    fresh();
+    win32_set_file_ops(nullptr, nullptr);
+    os_setenv("RECOMP_NO_MODS", "1");
+    mods_load_all(); // true or not (this build's symbol table decides), the tier is up
+    os_unsetenv("RECOMP_NO_MODS");
+    w = win32_host_path_op("saves\\slot1.sav", WIN32_FILE_WRITE);
+    MOD_CHECK(!w.empty() && w.rfind(mods_overlay_profile_dir(), 0) == 0);
 }

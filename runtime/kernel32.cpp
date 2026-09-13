@@ -94,6 +94,12 @@ struct HObj {
     HKind kind = H_NONE;
     int fd = -1;      // H_FILE, H_MAPPING
     std::string path; // H_FILE, H_MAPPING, H_MODULE
+    // H_FILE opened for writing on an existing file: the open went through
+    // the read tier, and the write tier is resolved by the first write. See
+    // file_promote_for_write.
+    bool write_pending = false;
+    int write_flags = 0;    // the open flags the caller asked for
+    std::string guest_name; // what to resolve again, as the caller spelled it
     // H_FIND
     std::vector<std::string> matches;
     // The host path each match actually came from. A listing can merge tiers,
@@ -670,14 +676,44 @@ void k_VirtualFree(X86 *c) {
 // -------------------------------------------------------------------------
 // Files
 // -------------------------------------------------------------------------
+// A handle opened for writing on an existing file went through the read tier
+// (see k_CreateFileA); the first byte written brings it to the write tier:
+// the path is resolved again as a WRITE - which is where an overlay copies the
+// file up - and the handle continues there at the offset it had reached.
+// False when the write tier refuses, which the caller reports as denied.
+static bool file_promote_for_write(HObj *o) {
+    if (!o->write_pending)
+        return true;
+    std::string host = win32_host_path_op(o->guest_name, WIN32_FILE_WRITE);
+    if (host.empty())
+        return false;
+    int64_t pos = os_fd_seek(o->fd, 0, OS_SEEK_CUR);
+    int fd = os_fd_open(host.c_str(), o->write_flags | OS_O_CREAT);
+    if (fd < 0)
+        return false;
+    if (pos > 0)
+        os_fd_seek(fd, pos, OS_SEEK_SET);
+    os_fd_close(o->fd);
+    o->fd = fd;
+    o->path = host;
+    o->write_pending = false;
+    win32_invalidate_dir_cache();
+    LOGV("CreateFileA(%s): first write, now %s", o->guest_name.c_str(), host.c_str());
+    return true;
+}
+
 void k_CreateFileA(X86 *c) {
     std::string name = gm_str(arg(c, 0));
     uint32_t access = arg(c, 1), disp = arg(c, 4);
     bool want_write = (access & 0x40000000u) != 0; // GENERIC_WRITE
     bool create = (disp == 1 || disp == 2 || disp == 4 || disp == 5);
-    // A write is a write whether or not it creates: OPEN_EXISTING for writing
-    // must not resolve to a file the mod layer only meant to be read.
-    int op = (want_write || create) ? WIN32_FILE_WRITE : WIN32_FILE_READ;
+    // A create or a truncation is a write from the start. Writing to an
+    // existing file is not, yet: a game opens its archives read/write and
+    // never writes them, and treating that open as a write copied every
+    // archive into the profile. Such a handle opens through the read tier and
+    // moves to the write tier at its first WriteFile (file_promote_for_write).
+    bool deferred = want_write && !create;
+    int op = (want_write && !deferred) ? WIN32_FILE_WRITE : WIN32_FILE_READ;
     std::string host = win32_host_path_op(name, op);
     if (host.empty()) {
         set_last_error(ERROR_FILE_NOT_FOUND_);
@@ -686,6 +722,9 @@ void k_CreateFileA(X86 *c) {
         return;
     }
     int flags = want_write ? (access & 0x80000000u ? OS_O_RDWR : OS_O_WRONLY) : OS_O_RDONLY;
+    int wanted = flags;
+    if (deferred)
+        flags = OS_O_RDONLY;
     switch (disp) {
     case 1:
         flags |= OS_O_CREAT | OS_O_EXCL;
@@ -713,8 +752,14 @@ void k_CreateFileA(X86 *c) {
     uint32_t h = handle_new(H_FILE);
     handles()[h].fd = fd;
     handles()[h].path = host;
+    if (deferred) {
+        handles()[h].write_pending = true;
+        handles()[h].write_flags = wanted;
+        handles()[h].guest_name = name;
+    }
     set_last_error(ERROR_SUCCESS_);
-    LOGV("CreateFileA(%s) -> %s handle %08x", name.c_str(), host.c_str(), h);
+    LOGV("CreateFileA(%s) -> %s handle %08x%s", name.c_str(), host.c_str(), h,
+         deferred ? " (write tier at the first write)" : "");
     set_eax(c, h);
 }
 
@@ -762,6 +807,11 @@ void k_WriteFile(X86 *c) {
     }
     if (!o || o->kind != H_FILE) {
         set_last_error(ERROR_INVALID_HANDLE_);
+        set_eax(c, 0);
+        return;
+    }
+    if (!file_promote_for_write(o)) {
+        set_last_error(ERROR_ACCESS_DENIED_);
         set_eax(c, 0);
         return;
     }
@@ -841,7 +891,7 @@ void k_FlushFileBuffers(X86 *c) {
 
 void k_SetEndOfFile(X86 *c) {
     HObj *o = handle_get(arg(c, 0), H_FILE);
-    if (!o) {
+    if (!o || !file_promote_for_write(o)) {
         set_eax(c, 0);
         return;
     }

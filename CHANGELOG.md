@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- File seam: a handle opened for writing on an existing file goes through the
+  read tier and is promoted to the write tier by its first WriteFile or
+  SetEndOfFile, continuing at the offset it had reached. Classifying the open
+  itself as a write copied every archive a game opens read/write into the
+  profile (one game: 590 MB per fresh profile, and a copy the watchdog cut
+  short then hung the next run). A create or truncation is still a write from
+  the start. `runtime_tests` covers the promotion against the seam fixture.
+- Mods loader: the overlay - the profile as the writable tier - is installed
+  before the symbol table is loaded and before RECOMP_NO_MODS is honoured, so a
+  port with no symbol table or mods still keeps its saves, settings and logs
+  out of the game's own installation. The run record creates its directory.
 - DirectShow multimedia streaming, the reading side (`dx/dshow.cpp`): a game
   that plays its MP3 music through `CoCreateInstance(CLSID_AMMultiMediaStream)`
   gets IAMMultiMediaStream over the file, decoded with minimp3

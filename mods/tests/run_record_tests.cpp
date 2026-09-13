@@ -70,6 +70,16 @@ void capture(const std::string &dir) {
 
 } // namespace
 
+// The record's directory need not exist: the host names it under its state
+// directory, which a game repository without mods has never created.
+MOD_TEST_SUITE(run_record_makes_its_directory) {
+    std::string d = make_dir("run_record", "nested");
+    std::string path = d + "/deeper/run.json";
+    MOD_CHECK(mods_write_run_record(path.c_str()));
+    OsStat st;
+    MOD_CHECK(os_stat(path.c_str(), &st) == 0 && st.is_regular);
+}
+
 MOD_TEST_SUITE(run_record_capture) {
     const char *suite = "run_record";
 

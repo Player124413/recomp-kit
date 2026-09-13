@@ -536,6 +536,11 @@ bool mods_load_all() {
     retire_contexts();
     const ModsRoots roots = mods_roots();
     printf("mods: roots core=%s user=%s\n", roots.core.c_str(), roots.user.c_str());
+    // The overlay first, before anything that can fail and before
+    // RECOMP_NO_MODS is honoured: the profile being the writable tier is what
+    // keeps a game's saves and settings out of its own installation, and that
+    // holds for a port with no symbol table and no mods at all.
+    mods_overlay_reset();
     if (!mods_symbols_load(nullptr)) {
         LOGW("mods: %s", mods_symbols_error());
         return false;
@@ -556,7 +561,6 @@ bool mods_load_all() {
                 return c.revoked.load(std::memory_order_acquire) ? nullptr : &c.api;
         return nullptr;
     });
-    mods_overlay_reset();
     mods_settings_load(mods_settings_path());
     if (!mods_events_init())
         return false;
