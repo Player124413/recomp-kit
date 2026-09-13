@@ -31,6 +31,7 @@ void dsound_register();
 void dshow_register();
 void dinput_register();
 void qmixer_register();
+void mss32_register();
 void weanetr_register();
 
 // Per-module state resets. Each drops the cached guest addresses and handle

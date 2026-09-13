@@ -5424,6 +5424,77 @@ static void test_dinput() {
     CHECK_EQ(rd32(sc(12)), 0);
 }
 
+// Miles Sound System: every import has the arity its decorated name states,
+// so a call through it leaves ESP where the caller expects.
+static void test_mss32_arities() {
+    cpu_reset();
+    struct {
+        const char *name;
+        uint32_t argc;
+    } expected[] = {
+        {"_AIL_startup@0", 0},
+        {"_AIL_shutdown@0", 0},
+        {"_AIL_set_preference@8", 2},
+        {"_AIL_waveOutOpen@16", 4},
+        {"_AIL_mem_free_lock@4", 1},
+        {"_AIL_file_read@8", 2},
+        {"_AIL_allocate_sample_handle@4", 1},
+        {"_AIL_release_sample_handle@4", 1},
+        {"_AIL_init_sample@4", 1},
+        {"_AIL_set_sample_file@12", 3},
+        {"_AIL_start_sample@4", 1},
+        {"_AIL_end_sample@4", 1},
+        {"_AIL_sample_status@4", 1},
+        {"_AIL_set_sample_volume@8", 2},
+        {"_AIL_set_sample_pan@8", 2},
+        {"_AIL_set_sample_loop_count@8", 2},
+        {"_AIL_sample_loop_count@4", 1},
+        {"_AIL_set_sample_reverb@16", 4},
+        {"_AIL_open_stream@12", 3},
+        {"_AIL_start_stream@4", 1},
+        {"_AIL_close_stream@4", 1},
+        {"_AIL_stream_status@4", 1},
+        {"_AIL_set_stream_volume@8", 2},
+        {"_AIL_stream_volume@4", 1},
+        {"_AIL_set_stream_loop_count@8", 2},
+        {"_AIL_enumerate_3D_providers@12", 3},
+        {"_AIL_open_3D_provider@4", 1},
+        {"_AIL_close_3D_provider@4", 1},
+        {"_AIL_set_3D_provider_preference@12", 3},
+        {"_AIL_3D_provider_attribute@12", 3},
+        {"_AIL_allocate_3D_sample_handle@4", 1},
+        {"_AIL_release_3D_sample_handle@4", 1},
+        {"_AIL_set_3D_sample_file@8", 2},
+        {"_AIL_start_3D_sample@4", 1},
+        {"_AIL_end_3D_sample@4", 1},
+        {"_AIL_3D_sample_status@4", 1},
+        {"_AIL_set_3D_sample_volume@8", 2},
+        {"_AIL_set_3D_sample_loop_count@8", 2},
+        {"_AIL_set_3D_position@16", 4},
+        {"_AIL_set_3D_orientation@28", 7},
+        {"_AIL_3D_update_position@8", 2},
+    };
+    for (auto &e : expected) {
+        uint32_t t = tramp("mss32.dll", e.name);
+        CHECK(t != 0);
+        CHECK_EQ(imports_argc(t), e.argc);
+    }
+    CHECK_EQ(imports_argc(0), 0u);
+    CHECK_EQ(imports_argc(TRAMP_BASE + 1), 0u);
+    CHECK_EQ(imports_argc(TRAMP_BASE + imports_count() * TRAMP_STRIDE), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_startup@0"), {}), 1u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_enumerate_3D_providers@12"), {0, 0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_3D_provider@4"), {0}), 1u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_3D_sample_handle@4"), {0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {0, 0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {0}), 2u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {0}), 2u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_3D_sample_status@4"), {0}), 2u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_3D_orientation@28"), {0, 0, 0, 0, 0, 0, 0}),
+             0u);
+}
+
 // QMixer: a session, a channel, and a wave supplied the way the game supplies
 // one, as raw PCM plus an explicit WAVEFORMATEX in a five-dword record. There
 // is no RIFF container on this path.
@@ -9152,6 +9223,7 @@ int main() {
         {"DirectSound", test_dsound},
         {"DirectInput", test_dinput},
         {"QMixer", test_qmixer},
+        {"Miles arities", test_mss32_arities},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},

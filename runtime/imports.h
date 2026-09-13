@@ -98,6 +98,8 @@ static inline bool imports_is_trampoline(uint32_t a) {
 }
 // "DLL!name" for a trampoline address, or nullptr.
 const char *imports_describe(uint32_t target);
+// Stdcall argument count for an allocated trampoline, or 0 otherwise.
+uint8_t imports_argc(uint32_t trampoline);
 
 // Runs the shim bound to `target`. Returns false when `target` is not a
 // trampoline (recomp_call then falls through to its function table).
