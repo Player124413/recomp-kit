@@ -14,6 +14,17 @@
   touch mapper, fullscreen Metal window, game files seeded into Documents on first launch.
 - iOS: on-screen key bar, taps that place the game's cursor and hold the click, app icon
   from the game executable, lifecycle-driven suspend of audio and presentation.
+- iOS acceptance fixes: the key bar hides to a KEYS tab; a long press then lift is a
+  right click and a long press then drag holds the wheel button (Populous scrolls and
+  rotates with it; the game has no right-drag camera); a finger resting on a screen
+  edge scrolls; settings persist (the translation's symbol table ships in the bundle
+  so the mod settings store initialises); touch is cancelled cleanly on focus loss.
+- Pointer hit test: the first and last three drawable pixels count as the scrolling
+  edge, so an iPadOS trackpad pointer (which stops half a point short of the left
+  edge) and the window's last point reach the row or column the game scrolls from.
+- A GPU surface read refused around a background/foreground transition is retried
+  for up to a second instead of aborting the game; the Metal device reports the first
+  failed command buffer's error.
 
 - Build with CMake presets for macOS, Linux and Windows through the unchanged
   `tools/build.py` and `tools/test.py`; the xcrun shell scripts are gone.
