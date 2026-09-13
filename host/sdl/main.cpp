@@ -868,8 +868,6 @@ void handle_event(const SDL_Event &event) {
             queue_or_apply(e);
         }
         break;
-    case SDL_EVENT_FINGER_DOWN:
-    case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_CANCELED: {
         // The system took the finger (a gesture, a call): whatever it held lets go.
         const int64_t finger = (int64_t)event.tfinger.fingerID;
@@ -882,6 +880,8 @@ void handle_event(const SDL_Event &event) {
         push_touch_actions(actions);
         break;
     }
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_MOTION: {
         std::vector<TouchAction> actions;
         const uint64_t now = SDL_GetTicksNS();
