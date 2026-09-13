@@ -65,6 +65,11 @@ std::string win32_host_path_op(const std::string &guest_path, int op);
 std::string win32_describe_cxx_throw(uint32_t code, uint32_t nargs, uint32_t args);
 // Return addresses inside the image along the EBP chain from `ebp`, at most `max`.
 std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max);
+// If `value` points at an object whose vtable carries MSVC RTTI, the class's
+// mangled name; otherwise an empty string.
+std::string win32_describe_pointer(uint32_t value);
+// Forget the command line handed out so far (tests change POPM_GUEST_ARGS).
+void win32_reset_command_line_for_test();
 // Dwords on the stack from `esp` over `bytes` that lie in [lo, hi) and sit right
 // after a CALL instruction: the return addresses a frame-pointer-less chain
 // hides. Newest first; at most `max`.

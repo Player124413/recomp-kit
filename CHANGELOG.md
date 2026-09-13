@@ -38,6 +38,15 @@
   `mciGetErrorStringA`, `VERSION.dll` (no version resource).
 - dx: `CoCreateInstance` for `CLSID_DirectSound` (every other class is
   `REGDB_E_CLASSNOTREG`) and `IDirectSound::Initialize` succeeds.
+- Runtime: `POPM_GUEST_ARGS` appends switches to the command line the CRT reads
+  through `GetCommandLineA`, so a game's own `-debugout` or `-nointro` can be
+  passed. The RaiseException diagnostic also names the class of every object a
+  register points at (through MSVC RTTI) and dumps the thrown object's dwords.
+- user32: `ScreenToClient`, `GetActiveWindow`, `SetFocus`.
+- Translator: a pushed immediate that decodes as a thunk, a call to a callee the
+  listings show never returning (recovery stops there; the emitter leaves a trap),
+  and a code pointer whose bytes happen to be printable are all handled; see the
+  translator tests.
 - Translator: a literal transfer to a block the sweep withdrew (padding after a
   call that never returns) becomes `recomp_unknown_call(c, addr); return;` rather
   than a dangling dispatch, so a listing that ends on a `throw` translates. The

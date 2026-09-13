@@ -610,6 +610,16 @@ static void test_boot_shims(X86 *c) {
           "SM_CYCAPTION is a caption height");
     check(call_import(c, "USER32.dll", "LoadCursorA", {0, 0x7f00}) != 0,
           "LoadCursorA(IDC_ARROW) hands out a handle");
+    // The command line is the executable's path, plus whatever switches the
+    // developer asks for through POPM_GUEST_ARGS: a game's own -debugout or
+    // -nointro, which are how it is told to write its log or skip its intro.
+    os_setenv("POPM_GUEST_ARGS", "-debugout -nointro");
+    win32_reset_command_line_for_test();
+    std::string cmdline = gm_str(call_import(c, "KERNEL32.dll", "GetCommandLineA", {}));
+    check(cmdline == std::string(RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE) + " -debugout -nointro",
+          "GetCommandLineA appends POPM_GUEST_ARGS: \"%s\"", cmdline.c_str());
+    os_unsetenv("POPM_GUEST_ARGS");
+    win32_reset_command_line_for_test();
     uint32_t ms = scratch_block(32);
     wr32(ms, 32);
     call_import(c, "KERNEL32.dll", "GlobalMemoryStatus", {ms});
@@ -1048,6 +1058,19 @@ static void test_cxx_throw_description(X86 *c) {
     std::vector<uint32_t> found = win32_stack_return_candidates(stack, 16, code, code + 64, 8);
     check(found.size() == 2 && found[0] == code + 18 && found[1] == code + 5,
           "the stack scan keeps the %zu dwords that follow a CALL", found.size());
+    // A register that holds an object with a vtable is named by its class:
+    // MSVC's RTTI hangs the complete-object locator off vtable[-1], and its
+    // type descriptor carries the mangled name.  Anything else is described as
+    // the bare value.
+    uint32_t col = scratch_block(20), vtbl = scratch_block(16), obj = scratch_block(8);
+    wr32(col + 12, type); // pCompleteObject locator -> TypeDescriptor
+    wr32(vtbl, col);      // vtable[-1]
+    wr32(obj, vtbl + 4);  // the object's vtable pointer
+    std::string named = win32_describe_pointer(obj);
+    check(named.find("GameException") != std::string::npos, "an object is named by its RTTI: %s",
+          named.c_str());
+    check(win32_describe_pointer(0x12345678).empty() || win32_describe_pointer(0x12345678) == "",
+          "a value that points at nothing describes as nothing");
     // A frame chain: [EBP] -> caller's EBP, [EBP+4] -> return address in the image.
     uint32_t f1 = scratch_block(8), f2 = scratch_block(8); // the caller's frame lies above
     wr32(f1, f2);

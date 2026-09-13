@@ -1231,11 +1231,23 @@ void k_UnmapViewOfFile(X86 *c) {
 // -------------------------------------------------------------------------
 // Modules, environment, misc process state
 // -------------------------------------------------------------------------
+// The command line is the executable's path, plus the switches POPM_GUEST_ARGS
+// names: a game's own -debugout or -nointro, the way its players and its
+// developers steered it.  Read once, when the CRT first asks.
 void k_GetCommandLineA(X86 *c) {
-    if (!g_cmdline_addr)
-        g_cmdline_addr = guest_strdup(RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE);
+    if (!g_cmdline_addr) {
+        std::string line = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+        if (const char *extra = getenv("POPM_GUEST_ARGS"); extra && *extra)
+            line += std::string(" ") + extra;
+        g_cmdline_addr = guest_strdup(line.c_str());
+    }
     set_eax(c, g_cmdline_addr);
 }
+} // namespace
+void win32_reset_command_line_for_test() {
+    g_cmdline_addr = 0;
+}
+namespace {
 
 // The environment block is a run of NUL-terminated strings ended by an extra
 // NUL. GetEnvironmentStringsW must hand back UTF-16, not the ANSI bytes.
@@ -3294,6 +3306,27 @@ std::string win32_describe_cxx_throw(uint32_t code, uint32_t nargs, uint32_t arg
     return text;
 }
 
+std::string win32_describe_pointer(uint32_t value) {
+    // object -> vtable; vtable[-1] -> RTTICompleteObjectLocator; +12 -> TypeDescriptor;
+    // +8 -> the mangled name.  Every hop is checked before it is taken, and the
+    // name has to look like one MSVC writes.
+    if (!value || !gm_valid(value, 4))
+        return std::string();
+    uint32_t vtbl = rd32(value);
+    if (vtbl < 4 || !gm_valid(vtbl - 4, 4))
+        return std::string();
+    uint32_t col = rd32(vtbl - 4);
+    if (!col || !gm_valid(col, 16))
+        return std::string();
+    uint32_t type = rd32(col + 12);
+    if (!type || !gm_valid(type, 12))
+        return std::string();
+    std::string name;
+    if (!printable_guest_string(type + 8, &name) || name.compare(0, 2, ".?") != 0)
+        return std::string();
+    return name;
+}
+
 std::vector<uint32_t> win32_stack_return_candidates(uint32_t esp, uint32_t bytes, uint32_t lo,
                                                     uint32_t hi, size_t max) {
     std::vector<uint32_t> out;
@@ -3350,6 +3383,15 @@ void k_RaiseException(X86 *c) {
     std::vector<uint32_t> chain = win32_return_chain(c->r[R_EBP], 12);
     for (size_t i = 0; i < chain.size(); ++i)
         LOGW("  frame %zu returns to %08x", i, chain[i]);
+    static const char *const regs[8] = {"EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"};
+    std::string objects;
+    for (int i = 0; i < 8; ++i) {
+        std::string what = win32_describe_pointer(c->r[i]);
+        if (!what.empty())
+            objects += std::string(" ") + regs[i] + "=" + what;
+    }
+    if (!objects.empty())
+        LOGW("  registers holding objects:%s", objects.c_str());
     std::vector<uint32_t> scan = win32_stack_return_candidates(
         c->r[R_ESP], 0x400, loader_image_base(), loader_image_limit(), 24);
     std::string line;
