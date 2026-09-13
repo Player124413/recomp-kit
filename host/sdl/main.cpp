@@ -448,7 +448,12 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
     y = hit.gy;
     if (!down && !(g_buttons & ~(1u << button)))
         host_gate_end_drag();
-    if (host_gate_button(button, down, x, y))
+    static const bool trace_buttons = getenv("POPM_TRACE_POINTER") != nullptr;
+    const bool consumed = host_gate_button(button, down, x, y);
+    if (trace_buttons)
+        fprintf(stderr, "[pointer-button] button %d %s at %d,%d consumed %d captured %d\n", button,
+                down ? "down" : "up", x, y, int(consumed), int(host_pointer_captured()));
+    if (consumed)
         return;
     if (down)
         host_gate_begin_drag(&hit);
