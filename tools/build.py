@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tools/recomp"))
 sys.path.insert(0, str(ROOT / "tools"))
 import game_config  # noqa: E402
 import buildlock  # noqa: E402
+import package_desktop  # noqa: E402
 
 # What each --target builds. `plugins` is every mod plugin the game ships.
 TARGETS = {
@@ -272,6 +273,15 @@ def main():
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
                 build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
+                system = platform.system()
+                if args.target == "app" and not args.stub and system in {"Linux", "Windows"}:
+                    # The desktop Ninja presets write OUTPUT_NAME into POP_OUT.
+                    suffix = ".exe" if system == "Windows" else ""
+                    binary = args.build_root / "recomp" / (cfg["game"]["app_name"] + suffix)
+                    if not binary.is_file():
+                        parser.exit(1, "No desktop app binary at %s after the build\n" % binary)
+                    packaged = package_desktop.stage(binary, cfg, args.build_root / "package", system=system)
+                    print("Packaged %s" % packaged)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
     except TimeoutError as error:

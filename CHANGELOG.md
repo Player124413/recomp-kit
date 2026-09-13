@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Package successful desktop app builds under `build/package`: a Linux
+  folder and architecture-named tarball, or a Windows folder. Include the
+  kit notices, display-mode baseline, available translation symbol index
+  and launch instructions using `RECOMP_EXE`; exclude original game files.
 - Build: allow the app, smoke and headless hosts on Linux and Windows,
   including translation with `--regenerate`. Only the iOS packager requires
   macOS, including stub builds.
