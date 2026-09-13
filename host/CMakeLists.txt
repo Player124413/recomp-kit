@@ -42,6 +42,15 @@ pop_test_binary(compositor_tests)
 add_test(NAME compositor_tests COMMAND compositor_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(compositor_tests PROPERTIES LABELS gpu)
 
+add_executable(input_touch_tests ${HOST}/input_touch.cpp ${HOST}/tests/input_touch_tests.cpp)
+target_include_directories(input_touch_tests PRIVATE ${POP_ROOT})
+target_compile_options(input_touch_tests PRIVATE ${POP_WARN_WERROR})
+pop_link_sdl(input_touch_tests)
+pop_optimize(input_touch_tests 1)
+pop_test_binary(input_touch_tests)
+add_test(NAME input_touch_tests COMMAND input_touch_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(input_touch_tests PROPERTIES LABELS nogame)
+
 add_executable(ui_layer_tests ${HOST}/ui_layer.cpp ${HOST}/tests/test_frame_builder.cpp ${HOST}/tests/ui_layer_tests.cpp)
 target_compile_options(ui_layer_tests PRIVATE ${POP_WARN_WERROR})
 pop_optimize(ui_layer_tests 1)
@@ -109,7 +118,7 @@ if(TARGET recomp_gen)
             ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
-            ${HOST}/input.cpp ${HOST}/input_gate.cpp ${POP_AUDIO_SOURCES}
+            ${HOST}/input.cpp ${HOST}/input_gate.cpp ${HOST}/input_touch.cpp ${POP_AUDIO_SOURCES}
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_METAL})
   pop_link_sdl(recomp_app)

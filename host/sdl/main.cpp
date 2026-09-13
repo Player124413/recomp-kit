@@ -29,6 +29,7 @@
 #include "../gpu/gpu_factory.h"
 #include "../input.h"
 #include "../input_gate.h"
+#include "../input_touch.h"
 #include "../midi.h"
 #include "../present.h"
 #include "../window_presentation.h"
@@ -620,6 +621,52 @@ void apply_focus(bool focused, uint32_t modifier_flags) {
 
 void post_drawable_size();
 
+TouchMapper g_touch;
+
+// Replays the mapper's actions as SDL events on our window, so the existing
+// mouse and key handling sees touch exactly as it sees a pointer.
+void push_touch_actions(const std::vector<TouchAction> &actions) {
+    const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
+    for (const TouchAction &a : actions) {
+        SDL_Event e{};
+        e.common.timestamp = SDL_GetTicksNS();
+        switch (a.kind) {
+        case TouchAction::Motion:
+            e.type = SDL_EVENT_MOUSE_MOTION;
+            e.motion.windowID = ours;
+            e.motion.which = SDL_TOUCH_MOUSEID;
+            e.motion.x = (float)a.x;
+            e.motion.y = (float)a.y;
+            break;
+        case TouchAction::Button:
+            e.type = a.down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            e.button.windowID = ours;
+            e.button.which = SDL_TOUCH_MOUSEID;
+            e.button.button = a.button == 1 ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+            e.button.down = a.down;
+            e.button.clicks = 1;
+            e.button.x = (float)a.x;
+            e.button.y = (float)a.y;
+            break;
+        case TouchAction::Key:
+            e.type = a.down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+            e.key.windowID = ours;
+            e.key.scancode = (SDL_Scancode)a.scancode;
+            e.key.key = SDL_GetKeyFromScancode((SDL_Scancode)a.scancode, SDL_KMOD_NONE, false);
+            e.key.down = a.down;
+            break;
+        }
+        SDL_PushEvent(&e);
+    }
+}
+
+TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
+    int w = 0, h = 0;
+    if (g_window)
+        SDL_GetWindowSize(g_window, &w, &h);
+    return {(int64_t)f.fingerID, f.x * w, f.y * h};
+}
+
 // One SDL event, translated into both of the input paths the game reads: the
 // DirectInput device state, and the Win32 message queue.
 void handle_event(const SDL_Event &event) {
@@ -693,6 +740,28 @@ void handle_event(const SDL_Event &event) {
         post_drawable_size();
         update_platform_pointer_capture();
         break;
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION: {
+        std::vector<TouchAction> actions;
+        const uint64_t now = SDL_GetTicksNS();
+        if (event.type == SDL_EVENT_FINGER_DOWN)
+            g_touch.finger_down(touch_point(event.tfinger), now, &actions);
+        else if (event.type == SDL_EVENT_FINGER_UP)
+            g_touch.finger_up(touch_point(event.tfinger), now, &actions);
+        else
+            g_touch.finger_motion(touch_point(event.tfinger), now, &actions);
+        push_touch_actions(actions);
+        static bool text_input = false;
+        if (g_touch.text_input_wanted() != text_input) {
+            text_input = g_touch.text_input_wanted();
+            if (text_input)
+                SDL_StartTextInput(g_window);
+            else
+                SDL_StopTextInput(g_window);
+        }
+        break;
+    }
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
     case SDL_EVENT_QUIT:
         // The guest closes itself: WM_CLOSE runs its own shutdown path, and
@@ -742,6 +811,12 @@ int service(double seconds) {
 
 // The housekeeping every turn does once the events are in.
 void after_events() {
+    {
+        // Time-based gestures (a long press) fire from the clock, not an event.
+        std::vector<TouchAction> actions;
+        g_touch.tick(SDL_GetTicksNS(), &actions);
+        push_touch_actions(actions);
+    }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
     // briefly, rather than once at startup and never afterwards.
