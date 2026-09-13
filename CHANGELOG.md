@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build: define `profile_tests` only when the translation's `funcs.h` defines
+  its target function `FN_00500040`, so other translations can build all
+  native test binaries without that game-specific suite.
 - Runtime: optional `[game] heap_base` sets the heap arena start through the
   generated config and build definitions, so images ending above 16 MB can
   load. The default remains `0x01000000`; the value must be page aligned,
