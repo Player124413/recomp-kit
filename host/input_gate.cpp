@@ -142,7 +142,7 @@ bool pointer_correction(const HitResult &hit, int32_t *dx, int32_t *dy, bool del
     // 00526dd2 is MOV ECX,0xd0595c (B9 immediate), NOT MOV ECX,[...].
     // Resolve a fresh snapshot each delivery; neither the context pointer nor
     // the coordinate values survive into the next delivery.
-    const auto p = host_guest_pointer_resolve(g_mem, GUEST_SIZE, 0x00d0595c);
+    const auto p = host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
     if (p.failure != HostGuestPointer::None) {
         const char *reason = host_guest_pointer_failure_name(p.failure);
         const std::string key = std::string("host.pointer.") + reason;

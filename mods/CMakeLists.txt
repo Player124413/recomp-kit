@@ -58,6 +58,14 @@ foreach(src ${POP_FIXTURE_SOURCES})
   if(stem STREQUAL "old_cpu")
     set(first INCLUDE_FIRST ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/old_header)
   endif()
+  # display_projection wraps the game's own display mod; without that game
+  # there is nothing to wrap.
+  if(stem STREQUAL "display_projection")
+    if(NOT EXISTS ${RECOMP_GAME_DIR}/mods/core/display/display.c)
+      continue()
+    endif()
+    set(first INCLUDE_FIRST ${RECOMP_GAME_DIR})
+  endif()
   pop_add_plugin(fixture_${stem} SOURCE ${src} OUTPUT_DIR ${POP_OUT}/mods-fixtures
     OUTPUT_NAME ${stem} ${first} OPTIONS -g)
   add_dependencies(mod_fixtures fixture_${stem})
@@ -76,21 +84,6 @@ add_test(NAME layout_tests COMMAND layout_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(layout_tests PROPERTIES LABELS nogame)
 endif()
 
-# The roots resolver, run from a relocated app-shaped directory by roots_tests.py.
-# The test asserts the player layout under build/; a stub build under
-# build/stub/ is not a player layout, so it is not registered there.
-if(NOT POP_TRANSLATE STREQUAL "STUB" AND NOT IOS)
-add_executable(roots_probe roots.cpp ${POP_ROOT}/runtime/layout.cpp ${POP_ROOT}/games/populous/mods/core/tests/roots_probe.cpp)
-target_include_directories(roots_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(roots_probe PRIVATE recomp_platform)
-pop_optimize(roots_probe 1)
-pop_test_binary(roots_probe)
-add_test(NAME roots_tests
-  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/games/populous/mods/core/tests/roots_tests.py $<TARGET_FILE:roots_probe>
-  WORKING_DIRECTORY ${POP_ROOT})
-set_tests_properties(roots_tests PROPERTIES LABELS nogame)
-endif()
-
 if(TARGET recomp_gen AND NOT IOS)
   add_library(mods_api_header_test OBJECT tests/api_header_test.c)
   target_compile_definitions(mods_api_header_test PRIVATE POPM_TESTING=1)
@@ -101,17 +94,25 @@ if(TARGET recomp_gen AND NOT IOS)
   file(GLOB POP_MODS_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
   # layout_tests is its own nogame executable with its own main.
   list(REMOVE_ITEM POP_MODS_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/layout_tests.cpp)
+  # game_view_tests decodes the game's entity records with the game's own codec.
+  if(NOT EXISTS ${RECOMP_GAME_DIR}/tests/entity_codec.hpp)
+    list(REMOVE_ITEM POP_MODS_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/game_view_tests.cpp)
+  endif()
   if(WIN32)
     # The replay bridge includes the native page tracker (mprotect, signal
     # handlers); Windows has the capture seam stub instead.
     list(REMOVE_ITEM POP_MODS_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/tests/replay_tests_bridge.cpp)
   endif()
   add_executable(mods_tests ${POP_MODS_TEST_SOURCES} $<TARGET_OBJECTS:mods_api_header_test>)
+  target_include_directories(mods_tests PRIVATE ${RECOMP_GAME_DIR})
   target_link_libraries(mods_tests PRIVATE recomp_platform recomp_runtime_testing recomp_snapshot recomp_mods_testing lua)
   target_compile_options(mods_tests PRIVATE ${POP_WARN_HOST})
   pop_optimize(mods_tests 1)
   pop_link_gen(mods_tests)
-  add_dependencies(mods_tests mod_fixtures core_mods)
+  add_dependencies(mods_tests mod_fixtures)
+  if(TARGET core_mods) # the game's core mods, when the game has any
+    add_dependencies(mods_tests core_mods)
+  endif()
   add_test(NAME mods_tests COMMAND mods_tests WORKING_DIRECTORY ${POP_ROOT})
   set_tests_properties(mods_tests PROPERTIES LABELS mods)
 endif()

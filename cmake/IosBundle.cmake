@@ -22,7 +22,7 @@ function(pop_ios_bundle target)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/stage_game_files.py
               --game-dir ${RECOMP_GAME_DIR}
-              --source ${POP_ROOT}/${RECOMP_DEVELOPER_GAME_DIR}
+              --source ${RECOMP_DEVELOPER_GAME_DIR}
               --dest $<TARGET_BUNDLE_CONTENT_DIR:${target}>/game
       WORKING_DIRECTORY ${POP_ROOT}
       COMMENT "Staging game files into ${RECOMP_APP_NAME}.app/game"
@@ -30,7 +30,7 @@ function(pop_ios_bundle target)
     # The app icon is the game's own: the executable's icon group, scaled.
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/extract_icon.py
-              --exe ${POP_ROOT}/${RECOMP_DEVELOPER_EXE}
+              --exe ${RECOMP_DEVELOPER_EXE}
               --dest $<TARGET_BUNDLE_CONTENT_DIR:${target}>
       WORKING_DIRECTORY ${POP_ROOT}
       COMMENT "Extracting the app icon from the game executable"
@@ -43,9 +43,9 @@ function(pop_ios_bundle target)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/tools/recomp/baseline/classic-modes.json
             $<TARGET_BUNDLE_CONTENT_DIR:${target}>/classic-modes.json
     VERBATIM)
-  if(EXISTS ${POP_ROOT}/build/recomp/symbols.json)
+  if(EXISTS ${POP_BUILD_ROOT}/recomp/symbols.json)
     add_custom_command(TARGET ${target} POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/build/recomp/symbols.json
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_BUILD_ROOT}/recomp/symbols.json
               $<TARGET_BUNDLE_CONTENT_DIR:${target}>/symbols.json
       VERBATIM)
   endif()

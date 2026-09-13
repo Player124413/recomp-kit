@@ -116,14 +116,18 @@ if(TARGET recomp_gen)
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_FOUNDATION})
   pop_link_sdl(pop_headless)
-  add_dependencies(pop_headless core_mods)
+  if(TARGET core_mods)
+    add_dependencies(pop_headless core_mods)
+  endif()
 
   pop_host(pop_smoke GEN UI_LAYER
     SOURCES ${HOST}/smoke_main.cpp ${HOST}/script.cpp ${HOST}/input.cpp ${HOST}/input_gate.cpp
             ${HOST}/page_overlay.cpp ${POP_PRESENT_SOURCES} ${HOST}/audio_math.cpp
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_FOUNDATION} ${FW_METAL})
-  add_dependencies(pop_smoke core_mods smoke_probe)
+  if(TARGET core_mods)
+    add_dependencies(pop_smoke core_mods smoke_probe)
+  endif()
 
   endif()
 
@@ -143,7 +147,7 @@ if(TARGET recomp_gen)
     pop_mac_bundle(recomp_app)
   endif()
 
-  if(APPLE AND NOT IOS) # Objective-C++ source; a desktop test
+  if(APPLE AND NOT IOS AND EXISTS ${RECOMP_GAME_DIR}/mods/examples/luawalk/main.lua) # Objective-C++ source; a desktop test
     # Real loader, hooks and DirectDraw seal/service with fake GPU acks.
     pop_host(present_events_tests GEN UI_LAYER
       SOURCES ${POP_ROOT}/mods/tests/present_events_tests.mm
@@ -151,7 +155,7 @@ if(TARGET recomp_gen)
       LIBS recomp_platform recomp_runtime_testing recomp_snapshot recomp_dx recomp_mods_testing lua gpu_backend
       FRAMEWORKS ${FW_FOUNDATION} ${FW_METAL})
     add_test(NAME present_events_tests COMMAND present_events_tests ${POP_ROOT} WORKING_DIRECTORY ${POP_ROOT})
-    set_tests_properties(present_events_tests PROPERTIES LABELS mods)
+    set_tests_properties(present_events_tests PROPERTIES LABELS mods ENVIRONMENT RECOMP_GAME_DIR=${RECOMP_GAME_DIR})
   endif()
 endif()
 

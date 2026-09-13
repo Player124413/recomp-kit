@@ -1,3 +1,4 @@
+#include "game_config.h"
 #include "../../mods/sprite_view.h"
 #include "../passes.h"
 // dx_tests.cpp - headless tests for the DirectX, audio and input shims.
@@ -2271,7 +2272,8 @@ static void test_v4_unlock_takes_a_rect() {
 // and the cursor draw at 004fd370 is the only code that uses them.
 static void test_cursor_surface_learned() {
     rec_reset();
-    const uint32_t kPtrA = 0x005d5718u, kPtrB = 0x005d571cu;
+    const uint32_t ptrs[] = RECOMP_HOOK_CURSOR_SURFACE_PTRS; // the game's cursor globals
+    const uint32_t kPtrA = ptrs[0], kPtrB = ptrs[1];
     wr32(kPtrA, 0);
     wr32(kPtrB, 0);
     CHECK_EQ(host_cursor_surface(), HOST_SURFACE_NONE);

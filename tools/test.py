@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Run explicit contributor suites, with game-backed checks isolated from player saves."""
+"""Run explicit contributor suites, with game-backed checks isolated from player saves.
+
+The game is a directory holding game.toml (--game-dir, default the kit's stub
+game); its outputs live under the build root tools/build.py chooses for it."""
 
 import argparse
 import importlib.util
@@ -34,25 +37,31 @@ def run(args, env=None):
     subprocess.run([str(arg) for arg in args], cwd=ROOT, env=env, check=True)
 
 
-def ctest(preset, labels, env):
+def ctest(build_dir, labels, env):
     """Run the CTest entries whose label matches `labels` (a regex)."""
-    run([build_py.cmake_tool("ctest"), "--preset", preset, "-L", labels, "--output-on-failure"], env)
+    run([build_py.cmake_tool("ctest"), "--test-dir", str(build_dir), "-L", labels, "--output-on-failure"], env)
 
 
-def native(preset, env, jobs, run_tests):
+def configure(preset, game_dir, build_root):
+    build_dir = build_py.build_dir_for(build_root, preset)
+    build_py.configure(preset, build_py.game_defines(game_dir, build_root), build_dir=build_dir)
+    return build_dir
+
+
+def native(preset, env, jobs, run_tests, game_dir, build_root):
     """Build every test binary this platform has; run the suites that need no snapshot."""
-    build_py.configure(preset)
-    build_py.build(preset, ["check_binaries"], jobs)
+    build_dir = configure(preset, game_dir, build_root)
+    build_py.build(preset, ["check_binaries"], jobs, build_dir=build_dir)
     if run_tests:
-        ctest(preset, "nogame|game|gpu|device", env)
+        ctest(build_dir, "nogame|game|gpu|device", env)
 
 
-def mods(preset, env, jobs):
+def mods(preset, env, jobs, game_dir, build_root):
     """Generate the real entity fixture locally, then run the mod suites under one build lock."""
-    with buildlock.BuildLock(ROOT, "mod tests"):
-        build_py.configure(preset)
-        build_py.build(preset, ["pop_fixture", "mods_tests", "present_events_tests"], jobs)
-        output = ROOT / "build/tests"
+    with buildlock.BuildLock(build_root.parent, "mod tests"):
+        build_dir = configure(preset, game_dir, build_root)
+        build_py.build(preset, ["pop_fixture", "mods_tests", "present_events_tests"], jobs, build_dir=build_dir)
+        output = build_root / "tests"
         output.mkdir(parents=True, exist_ok=True)
         case = Path(tempfile.mkdtemp(prefix="mod-fixture-", dir=output))
         fixture_env = dict(env, POPM_NO_MODS="1", POP_RECOMP_FIXTURE="frames:32",
@@ -62,26 +71,29 @@ def mods(preset, env, jobs):
                            POPM_RUN_RECORD=str(case / "run.json"))
         print("Mod fixture diagnostics: %s" % case, flush=True)
         with (case / "fixture.log").open("w") as log:
-            result = subprocess.run([str(ROOT / "build/recomp/pop_fixture")], cwd=ROOT, env=fixture_env,
+            result = subprocess.run([str(build_root / "recomp/pop_fixture")], cwd=ROOT, env=fixture_env,
                                     stdout=log, stderr=subprocess.STDOUT, timeout=120)
         result.check_returncode()
         snapshot = case / "snapshots/frame32._data_00598000.bin"
         if not snapshot.is_file():
             raise RuntimeError("The entity fixture was not captured; inspect %s" % case)
-        ctest(preset, "mods", dict(env, POPM_TEST_GAME_VIEW_SNAPSHOT=str(snapshot)))
+        ctest(build_dir, "mods", dict(env, POPM_TEST_GAME_VIEW_SNAPSHOT=str(snapshot)))
 
 
-def gameplay(jobs):
-    """Replay native Options and movement in a unique profile; retain diagnostics under build/."""
-    run([sys.executable, "tools/build.py", "--target", "smoke", "--jobs", jobs])
+def gameplay(jobs, game_dir, build_root):
+    """Replay native Options and movement in a unique profile; retain diagnostics under the build root."""
+    run([sys.executable, "tools/build.py", "--game-dir", game_dir, "--target", "smoke", "--jobs", jobs])
     spec = importlib.util.spec_from_file_location("mode_probe", ROOT / "tools/recomp/mode_probe.py")
     probe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(probe)
-    output = ROOT / "build/gameplay"
+    output = build_root / "gameplay"
     output.mkdir(parents=True, exist_ok=True)
     case = Path(tempfile.mkdtemp(prefix="options-", dir=output))
-    script = (ROOT / "tools/recomp/smoke/native-options.script").read_text()
-    pack = ROOT / "build/texture-pack"
+    script_path = game_dir / "smoke/native-options.script"
+    if not script_path.is_file():
+        raise RuntimeError("The game has no smoke/native-options.script: %s" % script_path)
+    script = script_path.read_text()
+    pack = build_root / "texture-pack"
     manifest = json.loads((pack / "manifest.json").read_text()) if (pack / "manifest.json").is_file() else {}
     # Material detail ships from project artwork. Original-game replacement
     # textures are optional, so only assert HD replacements when some exist.
@@ -98,11 +110,11 @@ def gameplay(jobs):
     env.pop("POP_SMOKE_CLASSIC_PROBE", None)
     env.update(POP_SMOKE_DRAWABLE="1280x960",
                POPM_DDRAW_MODES="640x480x8,640x480x16,800x600x16,3840x2160x16",
-               POPM_CORE_MODS_DIR=str(ROOT / "build/recomp/mods/core"),
+               POPM_CORE_MODS_DIR=str(build_root / "recomp/mods/core"),
                POPM_TEXTURE_PACK_DIR=str(pack))
     print("Gameplay diagnostics: %s" % case, flush=True)
     with (case / "smoke.log").open("w") as log:
-        result = subprocess.run([str(ROOT / "build/recomp/pop_smoke")], cwd=ROOT, env=env,
+        result = subprocess.run([str(build_root / "recomp/pop_smoke")], cwd=ROOT, env=env,
                                 stdout=log, stderr=subprocess.STDOUT, timeout=300)
     result.check_returncode()
     text = (case / "smoke.log").read_text()
@@ -113,6 +125,12 @@ def gameplay(jobs):
         raise RuntimeError("Gameplay assertions did not complete; inspect %s" % case)
 
 
+def integration(env, game_dir, build_root):
+    """The host integration script: roots, plugins, headless, smoke and fixture runs against the game."""
+    run([str(ROOT / "host/tests/integration_tests.sh")],
+        dict(env, RECOMP_GAME_DIR=str(game_dir), POP_BUILD_ROOT=str(build_root)))
+
+
 def main():
     """Choose portable, compile-only or game-backed suites and check their prerequisites."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -120,30 +138,37 @@ def main():
     group.add_argument("--native", action="store_true", help="Build and run the native suites")
     group.add_argument("--mods", action="store_true", help="Real game-backed mod tests")
     group.add_argument("--gameplay", action="store_true", help="Scripted native Options and gameplay run")
+    group.add_argument("--integration", action="store_true", help="The host integration script against the game")
     group.add_argument("--compile-only", action="store_true", help="Build the native test binaries only")
     parser.add_argument("--preset", default=build_py.default_preset())
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
-    parser.add_argument("--game", default="populous", help="Directory under games/")
+    parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",
+                        help="Absolute directory holding the game.toml (default: the kit's stub game)")
     args = parser.parse_args()
-    cfg = build_py.game_config.load(ROOT / "games" / args.game)
-    game_backed = args.mods or args.gameplay
+    if not args.game_dir.is_absolute() or not (args.game_dir / "game.toml").is_file():
+        parser.error("--game-dir must be an absolute directory holding game.toml: %s" % args.game_dir)
+    cfg = build_py.game_config.load(args.game_dir)
+    build_root = build_py.build_root_for(args.game_dir)
+    game_backed = args.mods or args.gameplay or args.integration
     if game_backed and platform.system() != "Darwin":
         parser.error("Game-backed suites require macOS")
-    if (game_backed or args.native) and not (ROOT / cfg["game"]["developer_exe"]).is_file():
+    if game_backed and not cfg["developer_exe_path"].is_file():
         parser.error("This suite needs your game installation; run tools/setup.py first, "
-                     "or run `ctest --preset <preset> -L nogame` for the portable suites")
-    if game_backed and not build_py.archive_path().is_file():
+                     "or run `ctest --test-dir <build dir> -L nogame` for the portable suites")
+    if game_backed and not build_py.archive_path(build_root).is_file():
         parser.error("Build the game with tools/build.py before running this suite")
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("POPM_", "POP_RECOMP_", "POP_SMOKE_", "POP_HOST_"))}
     env["PY"] = sys.executable
     try:
         if args.gameplay:
-            gameplay(args.jobs)
+            gameplay(args.jobs, args.game_dir, build_root)
         elif args.mods:
-            mods(args.preset, env, args.jobs)
+            mods(args.preset, env, args.jobs, args.game_dir, build_root)
+        elif args.integration:
+            integration(env, args.game_dir, build_root)
         elif args.native or args.compile_only:
-            native(args.preset, env, args.jobs, run_tests=args.native)
+            native(args.preset, env, args.jobs, args.native, args.game_dir, build_root)
         else:
             run([sys.executable, "-m", "pytest", "-q"] + PORTABLE_TESTS, env)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError, TimeoutError) as error:

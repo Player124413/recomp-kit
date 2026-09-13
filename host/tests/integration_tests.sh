@@ -8,32 +8,33 @@
 # Headless throughout. The windowed app is BUILT and its symbols inspected;
 # it is never launched, which is the rule for every gate in this plan.
 set -e
-ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
 BUILDLOCK_SH="$ROOT/tools/recomp/buildlock.sh"
 . "$BUILDLOCK_SH"
-buildlock_acquire "$ROOT" "host integration tests" "$ROOT/host/tests/integration_tests.sh" "$@"
+buildlock_acquire "$(dirname "${POP_BUILD_ROOT:-$ROOT/build}")" "host integration tests" "$ROOT/host/tests/integration_tests.sh" "$@"
 PY=${PY:-$ROOT/.venv/bin/python}
+GAME=${RECOMP_GAME_DIR:?set RECOMP_GAME_DIR to the game directory}
+BUILD=${POP_BUILD_ROOT:-$ROOT/build}
 unset POPM_CORE_MODS_DIR POPM_NO_MODS
-"$ROOT/games/populous/mods/core/tests/roots_tests.sh"
 "$PY" -m unittest "$ROOT/tools/recomp/tests/test_build_core.py"
 
-OUT=build/recomp/integration
+OUT=$BUILD/recomp/integration
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-"$PY" tools/build.py --target plugins >/dev/null
+"$PY" tools/build.py --game-dir "$GAME" --target plugins >/dev/null
 
 fail=0
 check() { if eval "$2"; then echo "  [ok] $1"; else echo "  [FAIL] $1"; fail=1; fi }
 
 echo "== headless host =="
-"$PY" tools/build.py --target headless >/dev/null
-POPM_MODS_DIR=mods POPM_PROFILE_DIR="$OUT/headless" \
+"$PY" tools/build.py --game-dir "$GAME" --target headless >/dev/null
+POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/headless" \
 POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
-    build/recomp/pop_headless > "$OUT/headless.log" 2>&1 || true
+    $BUILD/recomp/pop_headless > "$OUT/headless.log" 2>&1 || true
 check "the headless reports the packaged core root" \
-      "grep -Fq 'mods: roots core=build/recomp/mods/core user=mods' $OUT/headless.log"
+      "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=$GAME/mods' $OUT/headless.log"
 check "the headless host loaded the probe mod" \
       "grep -q 'mods: loaded smoke.probe' $OUT/headless.log"
 check "its hooks ran inside the game" \
@@ -68,13 +69,13 @@ check "a guest ExitProcess inside a hooked call still tore down completely" \
        [ -s $OUT/headless/probe.txt ]"
 
 echo "== smoke host =="
-"$PY" tools/build.py --target smoke >/dev/null
-POPM_MODS_DIR=mods POPM_PROFILE_DIR="$OUT/smoke" \
-POP_RECOMP_SCRIPT=tools/recomp/smoke/integration.script \
+"$PY" tools/build.py --game-dir "$GAME" --target smoke >/dev/null
+POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/smoke" \
+POP_RECOMP_SCRIPT=$GAME/smoke/integration.script \
 POP_HOST_DUMP_DIR="$OUT/smoke-frames" \
-    build/recomp/pop_smoke > "$OUT/smoke.log" 2>&1 || true
+    $BUILD/recomp/pop_smoke > "$OUT/smoke.log" 2>&1 || true
 check "the smoke reports the packaged core root" \
-      "grep -Fq 'mods: roots core=build/recomp/mods/core user=mods' $OUT/smoke.log"
+      "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=$GAME/mods' $OUT/smoke.log"
 check "the smoke host loaded the probe mod" \
       "grep -q 'mods: loaded smoke.probe' $OUT/smoke.log"
 check "its hooks ran inside the game" \
@@ -97,23 +98,26 @@ check "F10 opened the settings page" \
       "grep -q 'settings page opened' $OUT/smoke.log"
 
 echo "== parity fixture =="
-"$PY" tools/build.py --target fixture >/dev/null
+"$PY" tools/build.py --game-dir "$GAME" --target fixture >/dev/null
 # Exercise default core discovery directly, without the Python oracle or a
 # user-root opt-in. A fixture that retains its old opt-in guard fails this.
 (
     unset POPM_MODS_DIR
     POP_RECOMP_FIXTURE=frames:4 POP_RECOMP_OUT="$OUT/fixture-default" \
     POPM_PROFILE_DIR="$OUT/fixture-default-profile" \
-        build/recomp/pop_fixture > "$OUT/fixture-default.log" 2>&1
+        $BUILD/recomp/pop_fixture > "$OUT/fixture-default.log" 2>&1
 ) && fixture_default_ok=1 || fixture_default_ok=0
 check "the fixture with no user-root override completed" "[ $fixture_default_ok -eq 1 ]"
 check "the default fixture reports both roots" \
-      "grep -Fq 'mods: roots core=build/recomp/mods/core user=mods' $OUT/fixture-default.log"
-POPM_MODS_DIR=mods POPM_PROFILE_DIR="$OUT/fixture" \
-    .venv/bin/python tools/recomp/parity.py --frames 4 --out "$OUT/parity" \
-    > "$OUT/fixture.log" 2>&1 || true
+      "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=mods' $OUT/fixture-default.log"
+# The fixture with the game's user root: the probe mod loads and its hooks
+# run inside the fixture's own startup. (tools/recomp/parity.py, which once
+# drove this, left with the M0 consolidation; the fixture is run directly.)
+POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/fixture" \
+POP_RECOMP_FIXTURE=frames:4 POP_RECOMP_OUT="$OUT/parity" \
+    $BUILD/recomp/pop_fixture > "$OUT/fixture.log" 2>&1 || true
 check "the fixture reports the packaged core root" \
-      "grep -Fq 'mods: roots core=build/recomp/mods/core user=mods' $OUT/fixture.log"
+      "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=$GAME/mods' $OUT/fixture.log"
 check "the parity fixture loaded the probe mod" \
       "grep -q 'mods: loaded smoke.probe' $OUT/fixture.log"
 check "and its hooks ran inside the fixture's own startup" \
@@ -129,9 +133,9 @@ check "and left no teardown undone" \
 # nothing. This requires the run to SUCCEED, then requires no load message and
 # no probe output at all in a profile directory that starts empty.
 rm -rf "$OUT/off-profile"
-if POPM_NO_MODS=1 POPM_MODS_DIR=mods POPM_PROFILE_DIR="$OUT/off-profile" \
-       .venv/bin/python tools/recomp/parity.py --frames 4 --out "$OUT/parity-off" \
-       > "$OUT/off.log" 2>&1; then off_ok=1; else off_ok=0; fi
+if POPM_NO_MODS=1 POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/off-profile" \
+       POP_RECOMP_FIXTURE=frames:4 POP_RECOMP_OUT="$OUT/parity-off" \
+       $BUILD/recomp/pop_fixture > "$OUT/off.log" 2>&1; then off_ok=1; else off_ok=0; fi
 check "the run with mods disabled completed" "[ $off_ok -eq 1 ]"
 check "and loaded no mod" "! grep -q 'mods: loaded' $OUT/off.log"
 check "and no plugin left anything behind" "[ ! -e $OUT/off-profile/probe.txt ]"
@@ -139,8 +143,8 @@ check "and no plugin left anything behind" "[ ! -e $OUT/off-profile/probe.txt ]"
 # cannot be told from a run that was never made, so a disabled run records an
 # explicit empty mod set rather than nothing at all.
 check "and it still recorded the run, with an empty mod set" \
-      "[ -s build/recomp/mods/run.json ] && \
-       .venv/bin/python -c \"import json,sys; d=json.load(open('build/recomp/mods/run.json')); sys.exit(0 if d['mods']==[] else 1)\""
+      "[ -s $BUILD/recomp/mods/run.json ] && \
+       .venv/bin/python -c \"import json,sys; d=json.load(open('$BUILD/recomp/mods/run.json')); sys.exit(0 if d['mods']==[] else 1)\""
 
 echo "== an empty mods directory behaves as if the foundation were not there =="
 # Not the same question as POPM_NO_MODS. Here the runtime IS live and the
@@ -152,9 +156,9 @@ echo "== an empty mods directory behaves as if the foundation were not there =="
 mkdir -p "$OUT/empty-mods"
 rm -rf "$OUT/empty-profile"
 POPM_CORE_MODS_DIR="$OUT/empty-mods" POPM_MODS_DIR="$OUT/empty-mods" POPM_PROFILE_DIR="$OUT/empty-profile" \
-POP_RECOMP_SCRIPT=tools/recomp/smoke/integration.script \
+POP_RECOMP_SCRIPT=$GAME/smoke/integration.script \
 POP_HOST_DUMP_DIR="$OUT/empty-frames" \
-    build/recomp/pop_smoke > "$OUT/empty.log" 2>&1 || true
+    $BUILD/recomp/pop_smoke > "$OUT/empty.log" 2>&1 || true
 check "an empty mods directory loaded nothing" \
       "! grep -q 'mods: loaded' $OUT/empty.log"
 check "and F10 did not open the settings page" \
@@ -165,37 +169,37 @@ check "and F10 did not open the settings page" \
 # loader and the host actually ran. Exactly one of them must, and the run is
 # recorded with an explicit empty set either way: a run whose metadata is
 # absent cannot be told from a run that was never made.
-rm -f build/recomp/mods/run.json
+rm -f $BUILD/recomp/mods/run.json
 POPM_CORE_MODS_DIR="$OUT/empty-mods" POPM_MODS_DIR="$OUT/empty-mods" POPM_PROFILE_DIR="$OUT/empty-headless" \
 POP_RECOMP_MAX_FRAMES=20 POP_RECOMP_FRAME_EVERY=0 \
-    build/recomp/pop_headless > "$OUT/empty-headless.log" 2>&1 || true
+    $BUILD/recomp/pop_headless > "$OUT/empty-headless.log" 2>&1 || true
 check "the headless host with an empty directory recorded the run" \
-      "[ -s build/recomp/mods/run.json ]"
+      "[ -s $BUILD/recomp/mods/run.json ]"
 check "and recorded an empty mod set" \
-      ".venv/bin/python -c \"import json,sys; d=json.load(open('build/recomp/mods/run.json')); sys.exit(0 if d['mods']==[] else 1)\""
+      ".venv/bin/python -c \"import json,sys; d=json.load(open('$BUILD/recomp/mods/run.json')); sys.exit(0 if d['mods']==[] else 1)\""
 
 echo "== windowed app: links the runtime, never launched here =="
 make recomp > "$OUT/app.log" 2>&1
 # The installer runs as the bundle's post-build step, which Ninja skips when
 # the app is already up to date, so the evidence is the installed plugin.
 check "the app build installed its core root" \
-      "[ -s build/PopRecomp.app/Contents/Resources/mods/core/display/display.dylib ]"
+      "[ -s $BUILD/PopRecomp.app/Contents/Resources/mods/core/display/display.dylib ]"
 check "the app contains the executable-relative roots resolver" \
-      "nm -U build/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_roots"
+      "nm -U $BUILD/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_roots"
 check "the app core resources were copied" \
-      "cmp games/populous/mods/core/README.md build/PopRecomp.app/Contents/Resources/mods/core/README.md"
-check "build/PopRecomp.app built" "[ -x build/PopRecomp.app/Contents/MacOS/PopRecomp ]"
+      "cmp $GAME/mods/core/README.md $BUILD/PopRecomp.app/Contents/Resources/mods/core/README.md"
+check "build/PopRecomp.app built" "[ -x $BUILD/PopRecomp.app/Contents/MacOS/PopRecomp ]"
 # Launching the app is the user's, never the build's: check the symbols
 # instead, which is what "the runtime ships in it" actually means.
 check "the app binary contains the mod loader" \
-      "nm -U build/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_load_all"
+      "nm -U $BUILD/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_load_all"
 # mods_load_all alone is not decisive: mods_seam.cpp defines it weakly, so it
 # is present in a binary that has only the seam. mods_symbols_load exists only
 # in the module itself, so it is what distinguishes shipped from stubbed.
 check "and the module itself, not just the weak seam" \
-      "nm -U build/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_symbols_load"
+      "nm -U $BUILD/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_symbols_load"
 check "the app binary contains the Lua core" \
-      "nm -U build/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_lua_core_init"
+      "nm -U $BUILD/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_lua_core_init"
 
 echo "== a pinned clock makes a run repeatable =="
 # POP_RECOMP_PIN_CLOCK replaces the millisecond clock the guest reads with a
@@ -224,10 +228,10 @@ echo "== a pinned clock makes a run repeatable =="
 # waits are in the same pinned milliseconds, so a pinned run covers less guest
 # time and makes fewer calls. Only pinned against pinned means anything.
 pin_run() {
-    POPM_MODS_DIR=mods POPM_AUDIO_TRACE=100000 POP_RECOMP_PIN_CLOCK=1 \
-    POP_RECOMP_SCRIPT=tools/recomp/smoke/level1.script \
+    POPM_MODS_DIR="$GAME/mods" POPM_AUDIO_TRACE=100000 POP_RECOMP_PIN_CLOCK=1 \
+    POP_RECOMP_SCRIPT=$GAME/smoke/level1.script \
     POP_HOST_DUMP_DIR="$OUT/pin-$1-frames" \
-        build/recomp/pop_smoke > "$OUT/pin-$1.log" 2>&1 || true
+        $BUILD/recomp/pop_smoke > "$OUT/pin-$1.log" 2>&1 || true
     grep -o 'QSWaveMix[A-Za-z]*(.*' "$OUT/pin-$1.log" > "$OUT/pin-$1.calls"
     sort "$OUT/pin-$1.calls" > "$OUT/pin-$1.sorted"
 }
@@ -256,15 +260,15 @@ check "and the run said which clock it ran on" \
 # clocks are even the same kind of thing. The headless host is used for it
 # because it tears its mods down through the loader's own shutdown, which is
 # what writes the record; sixty frames is enough and takes seconds.
-POPM_MODS_DIR=mods POP_RECOMP_PIN_CLOCK=1 \
+POPM_MODS_DIR="$GAME/mods" POP_RECOMP_PIN_CLOCK=1 \
 POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
-    build/recomp/pop_headless > "$OUT/pin-record.log" 2>&1 || true
+    $BUILD/recomp/pop_headless > "$OUT/pin-record.log" 2>&1 || true
 check "a pinned run records the clock it ran on" \
-      "grep -Fq '\"clock\": \"pinned start=100 step=50\"' build/recomp/mods/run.json"
-POPM_MODS_DIR=mods POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
-    build/recomp/pop_headless > "$OUT/unpin-record.log" 2>&1 || true
+      "grep -Fq '\"clock\": \"pinned start=100 step=50\"' $BUILD/recomp/mods/run.json"
+POPM_MODS_DIR="$GAME/mods" POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
+    $BUILD/recomp/pop_headless > "$OUT/unpin-record.log" 2>&1 || true
 check "and an unpinned one records that it did not" \
-      "grep -Fq '\"clock\": \"monotonic\"' build/recomp/mods/run.json"
+      "grep -Fq '\"clock\": \"monotonic\"' $BUILD/recomp/mods/run.json"
 
 [ $fail -eq 0 ] && echo "the mod runtime ships in every host"
 exit $fail

@@ -1,7 +1,7 @@
 # The translated game lives only in the developer's build/recomp/gen; the
 # kit never tracks generated code (spec section 11). Generated C is platform
 # independent, so every preset (macOS, iOS) compiles the same directory.
-set(POP_GEN_DIR ${POP_ROOT}/build/recomp/gen)
+set(POP_GEN_DIR ${POP_BUILD_ROOT}/recomp/gen)
 if(POP_TRANSLATE STREQUAL "STUB")
   # A link-only translation for builds without game code (CI).
   set(POP_GEN_DIR ${CMAKE_BINARY_DIR}/stub-gen)

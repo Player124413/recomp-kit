@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render games/<id>/game.toml into game_config.h and game_config.cmake.
 
-    tools/gen_game_config.py --game-dir games/populous --header OUT.h --cmake OUT.cmake
+    tools/gen_game_config.py --game-dir /abs/path/to/<game> --header OUT.h --cmake OUT.cmake
 
 The header is what runtime/, dx/ and host/ include for every game-specific
 value; the cmake fragment names the app and the image base for the build."""
@@ -15,8 +15,7 @@ import game_config  # noqa: E402
 
 STRINGS = (("id", "RECOMP_GAME_ID"), ("name", "RECOMP_GAME_NAME"), ("app_name", "RECOMP_APP_NAME"),
            ("bundle_id", "RECOMP_BUNDLE_ID"), ("executable", "RECOMP_EXECUTABLE"),
-           ("sha256", "RECOMP_EXE_SHA256"), ("guest_root", "RECOMP_GUEST_ROOT"),
-           ("developer_exe", "RECOMP_DEVELOPER_EXE"))
+           ("sha256", "RECOMP_EXE_SHA256"), ("guest_root", "RECOMP_GUEST_ROOT"))
 ADDRESSES = (("image_base", "RECOMP_IMAGE_BASE"), ("entry_point", "RECOMP_ENTRY_POINT"))
 
 
@@ -36,6 +35,10 @@ def render_header(cfg):
         lines.append("#define %s %s" % (macro, c_string(game[key])))
     for key, macro in ADDRESSES:
         lines.append("#define %s %s" % (macro, c_hex(game[key])))
+    # Absolute: the developer's game lives beside game.toml, not under the kit.
+    lines.append("#define RECOMP_DEVELOPER_EXE %s" % c_string(cfg["developer_exe_path"].as_posix()))
+    lines.append("#define RECOMP_DEVELOPER_GAME_DIR %s" % c_string(cfg["developer_exe_path"].parent.as_posix()))
+    lines.append("#define RECOMP_GAME_DIR %s" % c_string(Path(cfg["dir"]).resolve().as_posix()))
     for key, value in sorted(cfg.get("hooks", {}).items()):
         macro = "RECOMP_HOOK_" + key.upper()
         if isinstance(value, list):
@@ -58,8 +61,8 @@ def render_cmake(cfg):
     for key, macro in STRINGS[:5]:
         lines.append('set(%s "%s")' % (macro, game[key]))
     lines.append("set(RECOMP_IMAGE_BASE %s)" % c_hex(game["image_base"]))
-    lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % game["developer_exe"].rsplit("/", 1)[0])
-    lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % game["developer_exe"])
+    lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_exe_path"].parent.as_posix())
+    lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % cfg["developer_exe_path"].as_posix())
     return "\n".join(lines) + "\n"
 
 

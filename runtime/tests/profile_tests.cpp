@@ -1,4 +1,5 @@
 // Real generated dispatch and a pinned-image string-copy fixture; no fake samples.
+#include "game_config.h"
 #include "../profile.h"
 extern "C" {
 #include "funcs.h"
@@ -79,6 +80,14 @@ int main(int argc, char **argv) {
     bool enabled = argc > 1 && strcmp(argv[1], "enabled") == 0;
     CHECK(bool(recomp_profile_enabled) == enabled);
     mem_init();
+    // Game-backed: without the developer's image (the stub game) there is
+    // nothing to profile.
+    if (FILE *image = fopen(RECOMP_DEVELOPER_EXE, "rb"))
+        fclose(image);
+    else {
+        printf("profile_tests: no game image at %s; skipped\n", RECOMP_DEVELOPER_EXE);
+        return 0;
+    }
     if (!loader_load()) {
         fprintf(stderr, "loader: %s\n", loader_error());
         return 1;

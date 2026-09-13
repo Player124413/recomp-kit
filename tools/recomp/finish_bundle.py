@@ -26,9 +26,13 @@ def main():
     parser.add_argument("--name", required=True)
     parser.add_argument("--cc", required=True)
     parser.add_argument("--version", default="")
-    parser.add_argument("--pack", type=Path,
-                        default=Path(os.environ.get("POPM_TEXTURE_PACK_DIR") or ROOT / "build/texture-pack"))
+    parser.add_argument("--build-root", type=Path, default=ROOT / "build",
+                        help="Where this build's outputs live (texture pack, symbols.json)")
+    parser.add_argument("--game-dir", type=Path, required=True, help="The game directory (its mods/core is installed)")
+    parser.add_argument("--pack", type=Path, default=None)
     args = parser.parse_args()
+    if args.pack is None:
+        args.pack = Path(os.environ.get("POPM_TEXTURE_PACK_DIR") or args.build_root / "texture-pack")
     contents = args.bundle / "Contents"
     resources = contents / "Resources"
     resources.mkdir(parents=True, exist_ok=True)
@@ -39,15 +43,17 @@ def main():
     if probes.is_file():
         shutil.copy(probes, resources / "classic-modes.json")
     # The translation index the mod loader reads, when this build has one.
-    fresh = ROOT / "build/recomp/symbols.json"
+    fresh = args.build_root / "recomp/symbols.json"
     if fresh.is_file():
         shutil.copy(fresh, resources / "symbols.json")
     else:
         # A stub build has no translation and therefore no symbol table; the
         # kit never tracks one (spec section 11).
         print("finish_bundle: no symbols.json in this build; mods get no symbol table")
-    subprocess.run([sys.executable, str(ROOT / "tools/recomp/build_core.py"),
-                    "--dest", str(resources / "mods/core"), "--cc", args.cc], check=True, cwd=ROOT)
+    core = args.game_dir / "mods/core"
+    if core.is_dir():
+        subprocess.run([sys.executable, str(ROOT / "tools/recomp/build_core.py"), "--source", str(core),
+                        "--dest", str(resources / "mods/core"), "--cc", args.cc], check=True, cwd=ROOT)
     if (args.pack / "manifest.json").is_file():
         subprocess.run([sys.executable, str(ROOT / "tools/recomp/package_texture_pack.py"),
                         str(args.pack), str(resources / "texture-pack")], check=True, cwd=ROOT)

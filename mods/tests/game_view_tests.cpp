@@ -5,7 +5,7 @@
 #include "../mods_internal.h"
 #include "../../runtime/loader.h"
 #include "../../runtime/memory.h"
-#include "games/populous/tests/entity_codec.hpp"
+#include "tests/entity_codec.hpp" // the game's, from RECOMP_GAME_DIR
 
 #include <stdio.h>
 #include <stdlib.h>

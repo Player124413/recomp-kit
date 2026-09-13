@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build the native app through CMake, regenerating original-game code only when needed."""
+"""Build the native app through CMake, regenerating original-game code only when needed.
+
+The game is a directory holding game.toml (tools/build.py --game-dir). Its
+outputs (the translation, the texture pack, the apps, the logs) go under
+<game-dir>/build when the game lives outside the kit, else under the kit's
+build/. The kit's own default is games/stub, a game that does not exist."""
 
 import argparse
 import json
@@ -17,7 +22,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import game_config  # noqa: E402
 import buildlock  # noqa: E402
 
-# What each --target builds. `plugins` is every mod plugin the tree ships.
+# What each --target builds. `plugins` is every mod plugin the game ships.
 TARGETS = {
     "app": ["recomp_app"],
     "smoke": ["pop_smoke"],
@@ -45,10 +50,25 @@ def preset_name(preset, config, stub=False, target=None):
     return preset if config == "Release" else preset + "-debug"
 
 
-def archive_path(root=ROOT, system=None):
+def build_root_for(game_dir, root=ROOT):
+    """Outputs live beside the game when it is outside the kit, else in the kit's build/."""
+    game_dir = Path(game_dir)
+    try:
+        game_dir.relative_to(root)
+        return Path(root) / "build"
+    except ValueError:
+        return game_dir / "build"
+
+
+def build_dir_for(build_root, preset):
+    """The CMake binary directory: what the presets name inside the kit, beside the game outside it."""
+    return Path(build_root) / "cmake" / preset
+
+
+def archive_path(build_root, system=None):
     """Where CMake writes the translated archive on this platform."""
     name = "recomp_gen.lib" if (system or platform.system()) == "Windows" else "librecomp_gen.a"
-    return Path(root) / "build/recomp" / name
+    return Path(build_root) / "recomp" / name
 
 
 def cmake_tool(name):
@@ -59,15 +79,25 @@ def cmake_tool(name):
     return shutil.which(name) or name
 
 
-def configure(preset, extra=()):
-    subprocess.run([cmake_tool("cmake"), "--preset", preset, "-DPython3_EXECUTABLE=" + sys.executable]
-                   + list(extra), cwd=ROOT, check=True)
+def game_defines(game_dir, build_root):
+    """The two cache paths every configure needs."""
+    return ["-DRECOMP_GAME_DIR=%s" % Path(game_dir).as_posix(), "-DPOP_BUILD_ROOT=%s" % Path(build_root).as_posix()]
 
 
-def build(preset, targets, jobs, extra=()):
+def configure(preset, extra=(), build_dir=None):
+    """Configure a preset; `build_dir` overrides the preset's binary directory."""
+    command = [cmake_tool("cmake"), "--preset", preset, "-DPython3_EXECUTABLE=" + sys.executable]
+    if build_dir is not None:
+        command += ["-B", str(build_dir)]
+    subprocess.run(command + list(extra), cwd=ROOT, check=True)
+
+
+def build(preset, targets, jobs, extra=(), build_dir=None):
     """`extra` goes after the targets: a leading "--" hands the rest to the native tool."""
-    subprocess.run([cmake_tool("cmake"), "--build", "--preset", preset, "--parallel", str(jobs), "--target"]
-                   + list(targets) + list(extra), cwd=ROOT, check=True)
+    command = [cmake_tool("cmake"), "--build"]
+    command += [str(build_dir)] if build_dir is not None else ["--preset", preset]
+    command += ["--parallel", str(jobs), "--target"] + list(targets) + list(extra)
+    subprocess.run(command, cwd=ROOT, check=True)
 
 
 def devicectl_list():
@@ -91,11 +121,11 @@ def pick_device(devices):
     sys.exit("Pass --device <identifier>; paired iPads: %s" % (names or "none"))
 
 
-def ios_app_bundle(app_name, root=ROOT):
-    """The signed bundle under build/ios; Xcode adds a configuration directory (Release-iphoneos)."""
-    found = sorted((Path(root) / "build/ios").glob("**/%s.app" % app_name))
+def ios_app_bundle(app_name, build_root):
+    """The signed bundle under <build root>/ios; Xcode adds a configuration directory (Release-iphoneos)."""
+    found = sorted((Path(build_root) / "ios").glob("**/%s.app" % app_name))
     if not found:
-        sys.exit("No %s.app under build/ios; did the iOS build succeed?" % app_name)
+        sys.exit("No %s.app under %s/ios; did the iOS build succeed?" % (app_name, build_root))
     return found[-1]
 
 
@@ -109,14 +139,13 @@ def install_and_launch(app, bundle_id, device, console):
     subprocess.run(launch, check=True)
 
 
-def publish_generated(root, translate):
+def publish_generated(build_root, translate):
     """Stage a translation, then publish gen/ and symbols.json by rename.
 
     `translate(stage_dir)` writes the sources and raises on failure; the
     published tree is untouched in that case. Publishing is renames only, so
     a reader under the same lock never sees half a generation."""
-    root = Path(root)
-    recomp = root / "build/recomp"
+    recomp = Path(build_root) / "recomp"
     recomp.mkdir(parents=True, exist_ok=True)
     gen, old = recomp / "gen", recomp / "gen.old"
     stage = recomp / ("gen.new.%d" % os.getpid())
@@ -125,7 +154,7 @@ def publish_generated(root, translate):
     try:
         translate(stage)
         # x86.h sits beside the generated sources so #include "x86.h" resolves.
-        shutil.copy(root / "runtime/x86.h", stage / "x86.h")
+        shutil.copy(ROOT / "runtime/x86.h", stage / "x86.h")
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
@@ -141,20 +170,18 @@ def publish_generated(root, translate):
     shutil.rmtree(old, ignore_errors=True)
 
 
-
-
-def run_translator(stage, game="populous"):
+def run_translator(stage, game_dir, build_root):
     subprocess.run([sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
-                    "--game", str(ROOT / "games" / game),
-                    "--report", str(ROOT / "build/recomp/translate-report.json")], cwd=ROOT, check=True)
+                    "--game", str(game_dir),
+                    "--report", str(Path(build_root) / "recomp/translate-report.json")], cwd=ROOT, check=True)
 
 
-def texture_pack(game):
+def texture_pack(game_dir, build_root):
     """Compile the redistributable material-detail layer when its inputs are newer.
     Original-game replacement textures remain optional, locally prepared pack entries.
     A game without artwork has no texture pack."""
-    detail = ROOT / "build/texture-pack/terrain-detail.popt"
-    artwork = ROOT / "games" / game / "assets/terrain/materials-v1.png"
+    detail = Path(build_root) / "texture-pack/terrain-detail.popt"
+    artwork = Path(game_dir) / "assets/terrain/materials-v1.png"
     compiler = ROOT / "tools/recomp/terrain_detail.py"
     if not artwork.is_file():
         return
@@ -171,7 +198,8 @@ def parse_args(argv, system=None):
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
     parser.add_argument("--config", choices=("Release", "Debug"), default="Release")
-    parser.add_argument("--game", default="populous", help="Directory under games/ whose game.toml configures the build")
+    parser.add_argument("--game-dir", type=Path, default=ROOT / "games/stub",
+                        help="Absolute directory holding the game.toml this build is for (default: the kit's stub game)")
     parser.add_argument("--stub", action="store_true",
                         help="Link the hosts against a stub translation (no game code; CI's build)")
     parser.add_argument("--device", default=None, help="devicectl identifier of the iPad (ios target)")
@@ -184,45 +212,54 @@ def parse_args(argv, system=None):
         parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
     if args.stub and (args.config == "Debug" or args.regenerate):
         parser.error("--stub cannot be combined with --config Debug or --regenerate")
-    if not (ROOT / "games" / args.game / "game.toml").is_file():
-        parser.error("No game config at games/%s/game.toml" % args.game)
+    if not args.game_dir.is_absolute():
+        parser.error("--game-dir must be absolute: %s" % args.game_dir)
+    if not (args.game_dir / "game.toml").is_file():
+        parser.error("No game config at %s/game.toml" % args.game_dir)
+    if args.target == "plugins" and not (args.game_dir / "mods/CMakeLists.txt").is_file():
+        parser.error("%s has no mods/CMakeLists.txt; nothing to build for --target plugins" % args.game_dir)
     if args.target in MACOS_ONLY and not args.stub and (system or platform.system()) != "Darwin":
         parser.error("The %s host currently builds on macOS; use --target fixture, gen or plugins elsewhere"
                      % args.target)
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
+    args.build_root = build_root_for(args.game_dir)
     return args, parser
 
 
 def main():
     """Check inputs, translate under the build lock when needed, then configure and build."""
     args, parser = parse_args(sys.argv[1:])
-    cfg = game_config.load(ROOT / "games" / args.game)
+    cfg = game_config.load(args.game_dir)
     # Regenerating needs the game and its listings.
-    if args.regenerate and not (ROOT / cfg["game"]["developer_exe"]).is_file():
+    if args.regenerate and not cfg["developer_exe_path"].is_file():
         parser.error("Prepare your own game installation with tools/setup.py first")
     preset = preset_name(args.preset, args.config, stub=args.stub, target=args.target)
+    build_dir = build_dir_for(args.build_root, preset)
+    defines = game_defines(args.game_dir, args.build_root)
     try:
-        with buildlock.BuildLock(ROOT, "tools/build.py"):
+        # The lock lives at <build root>/recomp/.lock: BuildLock joins build/recomp/.lock onto its argument.
+        with buildlock.BuildLock(args.build_root.parent, "tools/build.py"):
             if args.target in NEEDS_GEN and args.regenerate:
-                if not (ROOT / cfg["translate"]["listings"] / "functions.tsv").is_file():
+                if not (cfg["listings_path"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
-                publish_generated(ROOT, lambda stage: run_translator(stage, args.game))
+                publish_generated(args.build_root, lambda stage: run_translator(stage, args.game_dir, args.build_root))
             if args.target == "ios":
-                if not args.stub and not (ROOT / "build/recomp/gen/table.c").is_file():
-                    parser.error("No translation in build/recomp/gen; run tools/build.py --regenerate on macOS first")
-                configure(preset, ["-DRECOMP_GAME=" + args.game, "-DRECOMP_IOS_TEAM=" + args.team])
+                if not args.stub and not (args.build_root / "recomp/gen/table.c").is_file():
+                    parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"
+                                 % args.build_root)
+                configure(preset, defines + ["-DRECOMP_IOS_TEAM=" + args.team], build_dir=build_dir)
                 extra = ["--", "CODE_SIGNING_ALLOWED=NO"] if args.stub else ["--", "-allowProvisioningUpdates"]
-                build(preset, TARGETS["ios"], args.jobs, extra)
+                build(preset, TARGETS["ios"], args.jobs, extra, build_dir=build_dir)
                 if not args.stub and not args.no_install:
-                    app = ios_app_bundle(cfg["game"]["app_name"])
+                    app = ios_app_bundle(cfg["game"]["app_name"], args.build_root)
                     device = args.device or pick_device(devicectl_list())
                     install_and_launch(app, cfg["game"]["bundle_id"], device, args.console)
             else:
                 if args.target == "app":
-                    texture_pack(args.game)
-                configure(preset, ["-DRECOMP_GAME=" + args.game])
-                build(preset, TARGETS[args.target], args.jobs)
+                    texture_pack(args.game_dir, args.build_root)
+                configure(preset, defines, build_dir=build_dir)
+                build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
     except TimeoutError as error:

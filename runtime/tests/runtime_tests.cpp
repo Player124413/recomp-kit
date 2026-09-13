@@ -9,6 +9,7 @@
 #include "../memory.h"
 #include "../win32.h"
 #include "../../platform/os.h"
+#include "game_config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,7 +151,7 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
 #endif
     const char *cmd = POP_VENV_PYTHON
         " -c \""
-        "import pefile;pe=pefile.PE('original/gog/D3DPopTB.exe');b=pe.OPTIONAL_HEADER.ImageBase;"
+        "import pefile;pe=pefile.PE('" RECOMP_DEVELOPER_EXE "');b=pe.OPTIONAL_HEADER.ImageBase;"
         "print('IMAGE %x %x %x' % (b, pe.OPTIONAL_HEADER.SizeOfImage, "
         "b+pe.OPTIONAL_HEADER.AddressOfEntryPoint));"
         "[print('%s %x %x %x' % (s.Name.decode().rstrip(chr(0)), b+s.VirtualAddress, "
@@ -185,7 +186,7 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
 static void test_loader() {
     section("loader");
     bool ok = loader_load(nullptr);
-    if (!check(ok, "loader_load(original/gog/D3DPopTB.exe): %s", ok ? "loaded" : loader_error())) {
+    if (!check(ok, "loader_load(%s): %s", RECOMP_DEVELOPER_EXE, ok ? "loaded" : loader_error())) {
         printf("cannot continue without the image\n");
         exit(1);
     }
@@ -231,7 +232,7 @@ static void test_loader() {
     }
 
     // Section content actually landed in the arena.
-    FILE *f = fopen("original/gog/D3DPopTB.exe", "rb");
+    FILE *f = fopen(RECOMP_DEVELOPER_EXE, "rb");
     check(f != nullptr, "opened the image for a byte-level spot check");
     if (f) {
         // .text raw data starts at file offset 0x400 and maps at 0x401000.
@@ -550,10 +551,10 @@ static void test_files(X86 *c) {
     // Guest-visible paths.
     uint32_t pathbuf = scratch_block(300);
     uint32_t n = call_import(c, "KERNEL32.dll", "GetModuleFileNameA", {0, pathbuf, 260});
-    check(gm_str(pathbuf) == "C:\\Populous\\D3DPopTB.exe",
+    check(gm_str(pathbuf) == RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE,
           "GetModuleFileNameA -> \"%s\" (%u chars)", gm_str(pathbuf).c_str(), n);
     call_import(c, "KERNEL32.dll", "GetCurrentDirectoryA", {260, pathbuf});
-    check(gm_str(pathbuf) == "C:\\Populous", "GetCurrentDirectoryA -> \"%s\"",
+    check(gm_str(pathbuf) == RECOMP_GUEST_ROOT, "GetCurrentDirectoryA -> \"%s\"",
           gm_str(pathbuf).c_str());
 }
 
@@ -2837,6 +2838,15 @@ int main(int argc, char **argv) {
     os_setenv("POPM_REGISTRY", "build/recomp/registry-test.json");
     if (!getenv("POPM_LOG"))
         os_setenv("POPM_LOG", "1");
+    // The suite loads the developer's game image; without one (the kit's
+    // stub game, a checkout with no original/) there is nothing to test.
+    if (FILE *image = fopen(RECOMP_DEVELOPER_EXE, "rb"))
+        fclose(image);
+    else {
+        printf("runtime_tests: no game image at %s; the game-backed checks were skipped\n",
+               RECOMP_DEVELOPER_EXE);
+        return 0;
+    }
 
     test_loader();
     X86 *c = loader_context();

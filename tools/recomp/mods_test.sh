@@ -5,41 +5,43 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 # Absolute, resolved before the cd: the lock re-execs this script by name.
 SELF=$ROOT/tools/recomp/$(basename "$0")
 cd "$ROOT"
+GAME=${RECOMP_GAME_DIR:?set RECOMP_GAME_DIR to the game directory}
+BUILD=${POP_BUILD_ROOT:-$ROOT/build}
 
 # The whole run under the build lock, not just the builds inside it. This
-# script owns build/recomp/mods and build/recomp/profile-mods-test by fixed
+# script owns $BUILD/recomp/mods and $BUILD/recomp/profile-mods-test by fixed
 # name for its whole run, and two copies of it clobber each other: one run's
-# `rm -rf build/recomp/mods` deletes the log another is asserting on, and the
+# `rm -rf $BUILD/recomp/mods` deletes the log another is asserting on, and the
 # failure lands on whichever check was reading at the time. That happened -
 # "F10 opened the drawn settings page" failed against a log a second run had
 # just truncated, while the surviving log contained the line. Serialising is
 # the fix; the builds inside see BUILDLOCK_HELD and do not take it again.
 BUILDLOCK_SH="$ROOT/tools/recomp/buildlock.sh"
 . "$BUILDLOCK_SH"
-buildlock_acquire "$ROOT" "tools/recomp/mods_test.sh" "$SELF" "$@"
+buildlock_acquire "$(dirname "$BUILD")" "tools/recomp/mods_test.sh" "$SELF" "$@"
 
-PROFILE=build/recomp/profile-mods-test
+PROFILE=$BUILD/recomp/profile-mods-test
 # A record path of this script's own. Every host defaults to
 # $RECORD, so any other pop_smoke on this tree - a gate run,
 # an agent's one-off, a make target - writes the same file and the .tmp beside
 # it, and this script would assert against whichever finished last. The build
 # lock above serialises the scripts that take it; a path of its own does not
 # need the other run to have agreed to anything.
-RECORD=build/recomp/mods/mods-test-run.json
-rm -rf "$PROFILE" build/recomp/mods
-mkdir -p "$PROFILE" build/recomp/mods
+RECORD=$BUILD/recomp/mods/mods-test-run.json
+rm -rf "$PROFILE" $BUILD/recomp/mods
+mkdir -p "$PROFILE" $BUILD/recomp/mods
 
 PY=${PY:-$ROOT/.venv/bin/python}
-"$PY" tools/build.py --target plugins
-"$PY" tools/build.py --target smoke
+"$PY" tools/build.py --game-dir "$GAME" --target plugins
+"$PY" tools/build.py --game-dir "$GAME" --target smoke
 
 POPM_MODS_DIR=mods/examples POPM_PROFILE_DIR="$PROFILE" \
-POP_RECOMP_SCRIPT=tools/recomp/smoke/mods.script \
-POP_HOST_DUMP_DIR=build/recomp/mods/frames \
+POP_RECOMP_SCRIPT=$GAME/smoke/mods.script \
+POP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames \
 POPM_RUN_RECORD="$RECORD" \
-    build/recomp/pop_smoke > build/recomp/mods/run.log 2>&1 || {
-        echo "mods_test: the smoke run failed; see build/recomp/mods/run.log" >&2
-        tail -40 build/recomp/mods/run.log >&2
+    $BUILD/recomp/pop_smoke > $BUILD/recomp/mods/run.log 2>&1 || {
+        echo "mods_test: the smoke run failed; see $BUILD/recomp/mods/run.log" >&2
+        tail -40 $BUILD/recomp/mods/run.log >&2
         exit 1
     }
 
@@ -49,10 +51,10 @@ value() { sed -n "s/^$1 //p" "$2"; }
 
 echo "== example mods =="
 check "all five example mods loaded" \
-      "[ \$(grep -c '^mods: loaded example\\.' build/recomp/mods/run.log) -eq 5 ]"
-check "none was rejected" "! grep -q '^mods: rejected' build/recomp/mods/run.log"
+      "[ \$(grep -c '^mods: loaded example\\.' $BUILD/recomp/mods/run.log) -eq 5 ]"
+check "none was rejected" "! grep -q '^mods: rejected' $BUILD/recomp/mods/run.log"
 check "the overlay file was read through the game's file shim" \
-      "grep -q 'readfile data\\\\mods-example.txt: ok' build/recomp/mods/run.log"
+      "grep -q 'readfile data\\\\mods-example.txt: ok' $BUILD/recomp/mods/run.log"
 check "the before-hook logger counted turns" \
       "[ \"\$(value turns $PROFILE/example-logger.txt)\" -gt 0 ]"
 check "the replace hook ran" \
@@ -60,13 +62,13 @@ check "the replace hook ran" \
 check "and substituted its constant at least once" \
       "[ \"\$(value substituted $PROFILE/example-constant.txt)\" -gt 0 ]"
 check "the Lua mod decoded entities" \
-      "grep -qE 'luawalk saw [1-9][0-9]* entities of [1-9]' build/recomp/mods/run.log"
+      "grep -qE 'luawalk saw [1-9][0-9]* entities of [1-9]' $BUILD/recomp/mods/run.log"
 # The loader prints the mod's NAME, which is "Settings example" too, so
 # grepping for that alone passed whether or not the registration worked. These
 # check what the mod itself reported after a POP_OK.
 check "the settings mod registered its menu entry" \
       "grep -q 'settingsmenu: menu entry \"Settings example\" registered' \
-       build/recomp/mods/run.log && \
+       $BUILD/recomp/mods/run.log && \
        [ \"\$(value menu_registered $PROFILE/example-settingsmenu.txt)\" = 1 ]"
 # hud_rows is read at exit through the live API, so this also says the API is
 # still usable there: a revoked context would have written -1.
@@ -76,16 +78,16 @@ check "the setting it registered from code reached the store" \
 check "the mod's API is still live inside its own pop_mod_exit" \
       "[ \"\$(value ui_scale_at_exit $PROFILE/example-settingsmenu.txt)\" = 3 ]"
 check "F10 opened the drawn settings page" \
-      "grep -q 'mods: settings page opened' build/recomp/mods/run.log"
+      "grep -q 'mods: settings page opened' $BUILD/recomp/mods/run.log"
 # The dumps are written as smoke_<tag>_present.ppm. Naming them <tag>.ppm
 # compared two files that do not exist, which cmp reports as a difference: the
 # check passed without ever looking at a frame. Both files have to be there.
 check "both frames were dumped" \
-      "[ -s build/recomp/mods/frames/smoke_before_page_present.ppm ] && \
-       [ -s build/recomp/mods/frames/smoke_settings_page_present.ppm ]"
+      "[ -s $BUILD/recomp/mods/frames/smoke_before_page_present.ppm ] && \
+       [ -s $BUILD/recomp/mods/frames/smoke_settings_page_present.ppm ]"
 check "the page frame differs from the frame before it" \
-      "! cmp -s build/recomp/mods/frames/smoke_before_page_present.ppm \
-                build/recomp/mods/frames/smoke_settings_page_present.ppm"
+      "! cmp -s $BUILD/recomp/mods/frames/smoke_before_page_present.ppm \
+                $BUILD/recomp/mods/frames/smoke_settings_page_present.ppm"
 # A write that moved the value, and the same value read back: writing back
 # what was already there would pass whether or not the write worked, and
 # finding the key in the profile only proves the manifest declared it.
@@ -93,7 +95,7 @@ check "a settings write reads back as what was written" \
       "[ \"\$(value ui_scale_written $PROFILE/example-settingsmenu.txt)\" = 3 ] && \
        [ \"\$(value ui_scale_readback $PROFILE/example-settingsmenu.txt)\" = 3 ] && \
        grep -q 'settingsmenu: ui_scale written 3, read back 3' \
-            build/recomp/mods/run.log"
+            $BUILD/recomp/mods/run.log"
 check "and the written value, not the manifest default, is in the profile" \
       "grep -q 'example.settingsmenu/ui_scale' $PROFILE/mod-settings.json && \
        ! grep -q '\"example.settingsmenu/ui_scale\": 2' $PROFILE/mod-settings.json"
@@ -110,14 +112,14 @@ check "the run record captured the input stream by content" \
 # may survive - a bracketed one, a TBD, or a literal ellipsis standing in for
 # code the reader was supposed to be given.
 echo "== the documentation =="
-grep -o 'api->[a-z_0-9]*' docs/MODDING.md | sed 's/^api->//' | sort -u \
-    > build/recomp/mods/doc-calls.txt
+grep -o 'api->[a-z_0-9]*' "$GAME/docs/MODDING.md" | sed 's/^api->//' | sort -u \
+    > $BUILD/recomp/mods/doc-calls.txt
 grep -o '(\*[a-z_0-9]*)' mods/pop_mod_api.h | tr -d '(*)' | sort -u \
-    > build/recomp/mods/api-calls.txt
+    > $BUILD/recomp/mods/api-calls.txt
 check "every api call the documentation names exists" \
-      "[ -z \"\$(comm -23 build/recomp/mods/doc-calls.txt build/recomp/mods/api-calls.txt)\" ]"
+      "[ -z \"\$(comm -23 $BUILD/recomp/mods/doc-calls.txt $BUILD/recomp/mods/api-calls.txt)\" ]"
 check "no placeholder survived into the documentation" \
-      "! grep -qE '\\[[Tt]he |TBD|\\.\\.\\.' docs/MODDING.md"
+      "! grep -qE '\\[[Tt]he |TBD|\\.\\.\\.' $GAME/docs/MODDING.md"
 
 # ---------------------------------------------------------------------------
 # The recorded identity is what the run LOADED, not what is on disk when it
@@ -147,11 +149,11 @@ trap 'rm -f "$PROBE"' EXIT INT TERM
 ( sleep 20; rm -f "$PROBE" ) &
 prober=$!
 POPM_MODS_DIR=mods/examples POPM_PROFILE_DIR="$PROFILE" \
-POP_RECOMP_SCRIPT=tools/recomp/smoke/mods.script \
-POP_HOST_DUMP_DIR=build/recomp/mods/frames2 \
+POP_RECOMP_SCRIPT=$GAME/smoke/mods.script \
+POP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames2 \
 POPM_RUN_RECORD="$RECORD" \
-    build/recomp/pop_smoke > build/recomp/mods/run2.log 2>&1 || {
-        echo "mods_test: the second smoke run failed; see build/recomp/mods/run2.log" >&2
+    $BUILD/recomp/pop_smoke > $BUILD/recomp/mods/run2.log 2>&1 || {
+        echo "mods_test: the second smoke run failed; see $BUILD/recomp/mods/run2.log" >&2
         wait $prober 2>/dev/null || true
         exit 1
     }
@@ -210,12 +212,12 @@ for spelling in 1 ""; do
     rm -f $RECORD
     POPM_NO_MODS="$spelling" POPM_MODS_DIR=mods/examples \
     POPM_PROFILE_DIR="$PROFILE" \
-    POP_RECOMP_SCRIPT=tools/recomp/smoke/nomods.script \
-    POP_HOST_DUMP_DIR=build/recomp/mods/frames-off \
+    POP_RECOMP_SCRIPT=$GAME/smoke/nomods.script \
+    POP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames-off \
     POPM_RUN_RECORD="$RECORD" \
-        build/recomp/pop_smoke > build/recomp/mods/run-off.log 2>&1 || {
-            echo "mods_test: the mods-off run failed; see build/recomp/mods/run-off.log" >&2
-            tail -20 build/recomp/mods/run-off.log >&2
+        $BUILD/recomp/pop_smoke > $BUILD/recomp/mods/run-off.log 2>&1 || {
+            echo "mods_test: the mods-off run failed; see $BUILD/recomp/mods/run-off.log" >&2
+            tail -20 $BUILD/recomp/mods/run-off.log >&2
             exit 1
         }
     check "POPM_NO_MODS=[$spelling] still writes a record" \

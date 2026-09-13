@@ -1,5 +1,6 @@
 import importlib.util
 import contextlib
+import os
 import io
 import json
 from pathlib import Path
@@ -35,13 +36,16 @@ class ProbeTests(unittest.TestCase):
 
     def test_candidates_and_frozen_entry(self):
         self.assertEqual(len(probe.SIZES)*2, 24)
-        script = probe.probe_script().splitlines()
+        game = os.environ.get("RECOMP_GAME_DIR")
+        if not game or not (Path(game) / "smoke/display-ref.script").is_file():
+            self.skipTest("RECOMP_GAME_DIR does not name a game with smoke scripts")
+        script = probe.probe_script(Path(game) / "smoke").splitlines()
         self.assertEqual(sum(line.startswith("dumpc ") for line in script), 1)
         self.assertEqual(script[-1], "quit")
         self.assertIn("click left 605 448", script)
         self.assertNotIn("click left 236 148", script)
         self.assertIn("await turn>=1 within 60000", script)
-        selection = probe.commands(probe.ROOT / "tools/recomp/smoke/mode-select.script")
+        selection = probe.commands(Path(game) / "smoke/mode-select.script")
         self.assertEqual(script[1:1+len(selection)], selection)
 
     def test_success_is_not_just_exit_zero_or_boot_mode(self):
@@ -134,6 +138,7 @@ class ProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
             root = Path(tmp)
             stack.enter_context(patch.object(probe, "ROOT", root))
+            stack.enter_context(patch.dict(os.environ, {"RECOMP_GAME_DIR": str(root)}))
             stack.enter_context(patch.object(probe, "probe_script", return_value="quit\n"))
             stack.enter_context(patch.object(probe, "command_output", return_value="Apple M5 Max"))
             run = stack.enter_context(patch.object(probe.subprocess, "run", side_effect=child))
@@ -186,6 +191,7 @@ class ProbeTests(unittest.TestCase):
                     ppm.write_bytes(f"P6\n{w} {h}\n255\n".encode() + b'\xff\0\0'*(w*h))
                     return SimpleNamespace(returncode=0)
                 stack.enter_context(patch.object(probe, "ROOT", root))
+                stack.enter_context(patch.dict(os.environ, {"RECOMP_GAME_DIR": str(root)}))
                 stack.enter_context(patch.object(probe, "probe_script", return_value="quit\n"))
                 stack.enter_context(patch.object(probe, "command_output", return_value=chip))
                 stack.enter_context(patch.object(probe.subprocess, "run", side_effect=child))

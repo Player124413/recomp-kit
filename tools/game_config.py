@@ -32,4 +32,8 @@ def load(game_dir):
         cfg["globals"] = tomllib.load(fh).get("globals", {})
     cfg["dir"] = game_dir
     cfg["source"] = str(source)
+    # Developer inputs live beside game.toml: a game repository holds its own
+    # ignored original/ and analysis/ directories.
+    cfg["developer_exe_path"] = (game_dir / game["developer_exe"]).resolve()
+    cfg["listings_path"] = (game_dir / translate.get("listings", "analysis")).resolve()
     return cfg

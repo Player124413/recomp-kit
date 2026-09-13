@@ -20,18 +20,22 @@ MODES = {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--modes', nargs='+', choices=MODES, default=list(MODES))
-    parser.add_argument('--core', type=Path, default=ROOT/'build/recomp/mods/core')
+    parser.add_argument('--game-dir', type=Path, default=os.environ.get('RECOMP_GAME_DIR'),
+                        required='RECOMP_GAME_DIR' not in os.environ,
+                        help='the directory holding game.toml and smoke/ (default $RECOMP_GAME_DIR)')
+    parser.add_argument('--core', type=Path, default=None, help='default <game>/build/recomp/mods/core')
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
-    binary = ROOT/'build/recomp/pop_smoke'
+    binary = args.game_dir/'build/recomp/pop_smoke'
+    args.core = args.core or args.game_dir/'build/recomp/mods/core'
     if not binary.is_file() or not args.core.is_dir():
         parser.error('Build the smoke host and core mods first; see docs/testing.md')
-    parent = ROOT/'build/presentation-checks'
+    parent = args.game_dir/'build/presentation-checks'
     parent.mkdir(parents=True, exist_ok=True)
     out = args.out.resolve() if args.out else Path(tempfile.mkdtemp(prefix='run-', dir=parent))
     if args.out:
         out.mkdir(parents=True, exist_ok=False)
-    script = (ROOT/'tools/recomp/smoke/gate-c.script').read_text()
+    script = (args.game_dir/'smoke/gate-c.script').read_text()
     # Keep the measured selection/walk and simulation assertions. Capture the
     # actual composed texture as well; ordinary dump includes guest readbacks.
     script = script.replace('dump selected\n', 'dump selected\ndumpc selected_native\n')

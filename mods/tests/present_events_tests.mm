@@ -78,17 +78,23 @@ int main(int argc, char **argv) {
     if (argc != 2)
         return 2;
     const fs::path root = argv[1];
+    // The luawalk example is the game's; the test runner names the game directory.
+    const char *game_env = getenv("RECOMP_GAME_DIR");
+    if (!game_env || !*game_env) {
+        fprintf(stderr, "present_events_tests: RECOMP_GAME_DIR is not set\n");
+        return 2;
+    }
+    const fs::path game = game_env;
     std::string pattern = (root / "build/recomp/present-events-XXXXXX").string();
     if (!mkdtemp(pattern.data()))
         return 2;
     const fs::path scratch = pattern;
     fs::create_directories(scratch / "mods/luawalk");
     fs::create_directories(scratch / "profile");
-    fs::copy_file(root / "games/populous/mods/examples/luawalk/mod.toml",
-                  scratch / "mods/luawalk/mod.toml");
+    fs::copy_file(game / "mods/examples/luawalk/mod.toml", scratch / "mods/luawalk/mod.toml");
     {
         std::ofstream script(scratch / "mods/luawalk/main.lua");
-        script << read(root / "games/populous/mods/examples/luawalk/main.lua") << R"(
+        script << read(game / "mods/examples/luawalk/main.lua") << R"(
 pop.on_frame("after", function()
   pop.log("frame event after seal")
 end)

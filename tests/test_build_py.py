@@ -21,9 +21,9 @@ class BuildPyTests(unittest.TestCase):
         self.assertEqual(build_py.preset_name("linux", "Debug"), "linux-debug")
 
     def test_archive_path_per_platform(self):
-        root = Path("/r")
-        self.assertEqual(build_py.archive_path(root, "Darwin"), root / "build/recomp/librecomp_gen.a")
-        self.assertEqual(build_py.archive_path(root, "Windows"), root / "build/recomp/recomp_gen.lib")
+        root = Path("/r/build")
+        self.assertEqual(build_py.archive_path(root, "Darwin"), root / "recomp/librecomp_gen.a")
+        self.assertEqual(build_py.archive_path(root, "Windows"), root / "recomp/recomp_gen.lib")
 
     def test_macos_hosts_are_refused_elsewhere(self):
         with self.assertRaises(SystemExit):
@@ -44,11 +44,34 @@ class BuildPyTests(unittest.TestCase):
         self.assertEqual(command[command.index("--parallel") + 1], "6")
         self.assertEqual(command[command.index("--target") + 1:], ["pop_smoke"])
 
-    def test_game_defaults_to_populous_and_is_validated(self):
+    def test_game_dir_defaults_to_the_stub_and_is_validated(self):
         args, _ = build_py.parse_args([], system="Darwin")
-        self.assertEqual(args.game, "populous")
+        self.assertEqual(args.game_dir, build_py.ROOT / "games/stub")
+        self.assertEqual(args.build_root, build_py.ROOT / "build")
         with self.assertRaises(SystemExit):
-            build_py.parse_args(["--game", "no-such-game"], system="Darwin")
+            build_py.parse_args(["--game-dir", "/no/such/game"], system="Darwin")
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--game-dir", "games/stub"], system="Darwin")  # relative
+        with self.assertRaises(SystemExit):
+            build_py.parse_args(["--target", "plugins"], system="Darwin")  # the stub has no mods
+
+    def test_build_root_follows_an_external_game_dir(self):
+        self.assertEqual(build_py.build_root_for(build_py.ROOT / "games/stub"), build_py.ROOT / "build")
+        self.assertEqual(build_py.build_root_for(Path("/tmp/populous-recomp")), Path("/tmp/populous-recomp/build"))
+        self.assertEqual(build_py.build_dir_for(Path("/tmp/pr/build"), "macos"), Path("/tmp/pr/build/cmake/macos"))
+
+    def test_configure_passes_the_build_dir_and_the_cache_paths(self):
+        with patch.object(build_py.subprocess, "run") as run:
+            build_py.configure("macos", build_py.game_defines(Path("/g"), Path("/g/build")),
+                               build_dir=Path("/g/build/cmake/macos"))
+        command = run.call_args[0][0]
+        self.assertEqual(command[command.index("-B") + 1], "/g/build/cmake/macos")
+        self.assertIn("-DRECOMP_GAME_DIR=/g", command)
+        self.assertIn("-DPOP_BUILD_ROOT=/g/build", command)
+        with patch.object(build_py.subprocess, "run") as run:
+            build_py.build("macos", ["pop_smoke"], 2, build_dir=Path("/g/build/cmake/macos"))
+        command = run.call_args[0][0]
+        self.assertEqual(command[command.index("--build") + 1], "/g/build/cmake/macos")
 
     def test_stub_selects_the_stub_preset_and_rejects_debug(self):
         args, _ = build_py.parse_args(["--stub"], system="Linux")

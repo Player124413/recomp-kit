@@ -12,6 +12,7 @@ function(pop_mac_bundle target)
     COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/recomp/finish_bundle.py
             --bundle ${POP_BUILD_DIR}/${RECOMP_APP_NAME}.app
             --name ${RECOMP_APP_NAME} --cc ${CMAKE_C_COMPILER} --version ${POP_RECOMP_VERSION}
+            --build-root ${POP_BUILD_ROOT} --game-dir ${RECOMP_GAME_DIR}
     WORKING_DIRECTORY ${POP_ROOT}
     COMMENT "Finishing ${RECOMP_APP_NAME}.app"
     VERBATIM)

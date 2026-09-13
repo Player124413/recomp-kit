@@ -1,4 +1,4 @@
-"""translate.py takes its inputs from games/<id>/game.toml."""
+"""translate.py takes its inputs from a game directory's game.toml."""
 
 import importlib.util
 from pathlib import Path
@@ -16,18 +16,18 @@ spec.loader.exec_module(translate)
 
 class ConfigureTests(unittest.TestCase):
     def test_configure_sets_paths_and_volatile_reads(self):
-        cfg = game_config.load(ROOT / "games/populous")
+        stub = (ROOT / "games/stub").resolve()
+        cfg = game_config.load(stub)
         translate.configure(cfg)
-        self.assertEqual(Path(translate.LISTINGS), ROOT / "analysis/decompiled/D3DPopTB.exe/functions")
-        self.assertEqual(Path(translate.FUNCS_TSV), ROOT / "analysis/decompiled/D3DPopTB.exe/functions.tsv")
-        self.assertEqual(Path(translate.BINARY), ROOT / "original/gog/D3DPopTB.exe")
-        self.assertEqual(Path(translate.CURATED), ROOT / "games/populous/globals.toml")
-        self.assertEqual(translate.ANIMATION_COUNTER, 0x897981)
-        self.assertEqual(len(translate.VISUAL_ANIMATION_READS), 16)
-        self.assertIn(0x468F27, translate.VISUAL_ANIMATION_READS)
+        self.assertEqual(Path(translate.LISTINGS), stub / "analysis/STUB.EXE/functions")
+        self.assertEqual(Path(translate.FUNCS_TSV), stub / "analysis/STUB.EXE/functions.tsv")
+        self.assertEqual(Path(translate.BINARY), stub / "original/STUB.EXE")
+        self.assertEqual(Path(translate.CURATED), stub / "globals.toml")
+        self.assertEqual(translate.ANIMATION_COUNTER, 0x500000)
+        self.assertEqual(len(translate.VISUAL_ANIMATION_READS), 0)
 
     def test_visual_animation_read_rewrites_the_configured_counter(self):
-        cfg = game_config.load(ROOT / "games/populous")
+        cfg = game_config.load(ROOT / "games/stub")
         cfg["translate"]["animation_counter"] = 0x1234
         cfg["translate"]["volatile_reads"] = [0x10]
         translate.configure(cfg)

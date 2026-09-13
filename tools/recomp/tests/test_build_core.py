@@ -99,7 +99,7 @@ class BuildCoreTests(unittest.TestCase):
 
     def test_cli_refuses_an_install_root_outside_build(self):
         result = subprocess.run([sys.executable, str(ROOT / "tools/recomp/build_core.py"),
-                                 "--dest", str(self.tmp / "elsewhere"), "--cc", CC],
+                                 "--source", str(self.source), "--dest", str(self.tmp / "elsewhere"), "--cc", CC],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn("unsupported install root", result.stderr)

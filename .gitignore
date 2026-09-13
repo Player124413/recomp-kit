@@ -40,3 +40,6 @@ __pycache__/
 *.smk
 *.bik
 /dist/
+# A game directory's developer inputs, wherever it lives.
+original/
+analysis/

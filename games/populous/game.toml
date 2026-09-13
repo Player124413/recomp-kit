@@ -51,6 +51,13 @@ mouse_device_right = 0x00d0599c
 # host/smoke_main.cpp: the camera record the smoke script inspects
 camera = 0x0074a350
 
+[setup]
+# tools/setup.py: what a supported installation must contain, and the
+# annotation metadata imported into Ghidra before the listings are exported.
+required_dirs = ["data", "levels", "objects", "sound"]
+annotations_url = "https://github.com/hrttf111/pop3-rev.git"
+annotations_revision = "60408e4e99b76ab2e5461897c8e1b33756360eaa"
+
 [bundle]
 # Left out of the iOS bundle: installers, GOG Galaxy, intro movies, Windows DLLs.
 exclude = ["__redist", "commonappdata", "app", "Fmv", "*.dll", "*.cmd", "dxcfg.*"]

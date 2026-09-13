@@ -1,6 +1,7 @@
 // layout_tests.cpp - resource and profile resolution for the three layouts
 // (resources/ beside the executable, a macOS bundle, a developer checkout)
 // and the environment override. Label nogame.
+#include "game_config.h"
 #include "../../platform/os.h"
 #include "../../runtime/layout.h"
 
@@ -55,12 +56,12 @@ int main() {
     CHECK(!root.empty());
     // 1. resources/ beside the executable (Windows and Linux archives).
     mkdir_p(root + "/portable/resources/mods/core");
-    touch(root + "/portable/PopRecomp");
-    host_layout_set_exe_path_for_test((root + "/portable/PopRecomp").c_str());
+    touch(root + "/portable/" RECOMP_APP_NAME);
+    host_layout_set_exe_path_for_test((root + "/portable/" RECOMP_APP_NAME).c_str());
     CHECK(host_layout().resources_dir == root + "/portable/resources");
     CHECK(!host_layout().developer);
     CHECK(host_resource("mods/core") == root + "/portable/resources/mods/core");
-    CHECK(host_layout().profile_dir.find("PopRecomp") != std::string::npos);
+    CHECK(host_layout().profile_dir.find(RECOMP_APP_NAME) != std::string::npos);
     CHECK(host_layout().profile_dir.find(root) ==
           std::string::npos); // per-user, not beside the exe
     // 2. A macOS bundle.

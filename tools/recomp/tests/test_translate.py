@@ -36,11 +36,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import game_config  # noqa: E402
-BINARY = os.path.join(ROOT, game_config.load(os.path.join(ROOT, "games/populous"))["game"]["developer_exe"])
-GEN = os.path.join(ROOT, "build/recomp/gen")
-LIB_A = os.path.join(ROOT, "build/recomp/librecomp_gen.a")
-DYLIB = os.path.join(ROOT, "build/recomp/librecomp_test.dylib")
-LOCKFILE = os.path.join(ROOT, "build/recomp/.lock")
+# The game under test and its build root come from the environment: this is
+# a game-backed suite, run from a game repository (tools/test.py --translate).
+GAME_DIR = os.environ.get("RECOMP_GAME_DIR")
+if not GAME_DIR:
+    sys.exit("test_translate.py: set RECOMP_GAME_DIR to the game directory (and POP_BUILD_ROOT to its build root)")
+BUILD_ROOT = os.environ.get("POP_BUILD_ROOT") or os.path.join(GAME_DIR, "build")
+BINARY = str(game_config.load(GAME_DIR)["developer_exe_path"])
+GEN = os.path.join(BUILD_ROOT, "recomp/gen")
+LIB_A = os.path.join(BUILD_ROOT, "recomp/librecomp_gen.a")
+DYLIB = os.path.join(BUILD_ROOT, "recomp/librecomp_test.dylib")
+LOCKFILE = os.path.join(BUILD_ROOT, "recomp/.lock")
 BUILDLOCK = os.path.join(ROOT, "tools/recomp/buildlock.py")
 
 
@@ -205,10 +211,11 @@ class X86(C.Structure):
 def build(verbose=True):
     if verbose:
         print("== building librecomp_gen.a ==")
-    subprocess.check_call([sys.executable, os.path.join(ROOT, "tools/build.py"), "--target", "gen"])
+    subprocess.check_call([sys.executable, os.path.join(ROOT, "tools/build.py"), "--game-dir", GAME_DIR,
+                           "--target", "gen"])
     if verbose:
         print("== linking test dylib ==")
-    synth = generate_synthetic(os.path.join(ROOT, "build/recomp/synth.c"))
+    synth = generate_synthetic(os.path.join(BUILD_ROOT, "recomp/synth.c"))
     subprocess.check_call([
         "xcrun", "clang", "-O1", "-g", "-std=c11", "-Wall", "-Wextra",
         "-Wno-unused", "-I", GEN, "-I", ROOT,

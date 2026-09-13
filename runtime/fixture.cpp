@@ -24,6 +24,7 @@
 // Headless by construction: it links the DirectX shims with
 // -DRECOMP_NULL_HOST, so every host callback is a strong no-op.  No window,
 // no device, no audio stream, no input device is ever opened.
+#include "game_config.h"
 #include "guest.h"
 #include "layout.h"
 #include "loader.h"
@@ -112,7 +113,7 @@ const uint32_t UNIT_STRIDE = 179;
 const uint32_t UNIT_COUNT = 2000;
 
 std::string g_out_dir = "build/recomp/parity/native";
-std::string g_data_dir = "original/gog";
+std::string g_data_dir = RECOMP_DEVELOPER_GAME_DIR;
 
 // ---------------------------------------------------------------------------
 // Small helpers

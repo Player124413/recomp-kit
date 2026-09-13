@@ -29,15 +29,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import game_config  # noqa: E402
 
-DEFAULT_GAME_DIR = os.path.join(ROOT, "games/populous")
-
 FUNCS_PER_CHUNK = 200
 
 # Set by configure(): the game's listings, binary and curated symbols, and the
 # audited reads of its animation counter (game.toml [translate].volatile_reads:
 # reads that only select a visual phase or blink, never interpolation,
-# simulation stamps, FPS measurement or input timing). Importing the module
-# configures the default game so existing tools and tests keep their behaviour.
+# simulation stamps, FPS measurement or input timing). Nothing is configured
+# until configure() runs: main() does it from --game, tests do it themselves.
 LISTINGS = FUNCS_TSV = BINARY = CURATED = None
 ANIMATION_COUNTER = 0
 VISUAL_ANIMATION_READS = frozenset()
@@ -46,16 +44,13 @@ VISUAL_ANIMATION_READS = frozenset()
 def configure(cfg):
     """Point the translator at one game's listings, binary and audited reads."""
     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
-    listings = os.path.join(ROOT, cfg["translate"]["listings"])
+    listings = str(cfg["listings_path"])
     LISTINGS = os.path.join(listings, "functions")
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
-    BINARY = os.path.join(ROOT, cfg["game"]["developer_exe"])
+    BINARY = str(cfg["developer_exe_path"])
     CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
     ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
-
-
-configure(game_config.load(DEFAULT_GAME_DIR))
 
 
 def visual_animation_read(addr, body):
@@ -2348,7 +2343,7 @@ def load_functions(only=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(ROOT, "build/recomp/gen"))
+    ap.add_argument("--out", required=True, help="where the generated sources go (build/recomp/gen)")
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--eager-flags", action="store_true",
                     help="compute every flag at every instruction (debug)")
@@ -2359,7 +2354,7 @@ def main():
     ap.add_argument("--allow-table-gaps", metavar="REASON", default=None,
                     help="accept jump-table entries that dispatch nowhere, "
                          "recording the reason in the report")
-    ap.add_argument("--game", default=DEFAULT_GAME_DIR, help="games/<id> directory")
+    ap.add_argument("--game", required=True, help="the directory holding game.toml")
     args = ap.parse_args()
     configure(game_config.load(args.game))
 

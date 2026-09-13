@@ -72,7 +72,7 @@ char *word(char **p) {
 // in a script becomes a silent zero and a run tests the wrong thing: `move abc
 // def` moved the pointer to the top-left corner for as long as nobody looked.
 // Every verb goes through one of these three now. Checked before the rule went
-// in: no line of any script under tools/recomp/smoke/ is rejected by it, so it
+// in: no line of any of the game's smoke scripts is rejected by it, so it
 // changes what is accepted and not what runs.
 bool whole(const char *s, long *out) {
     if (!s || !*s)

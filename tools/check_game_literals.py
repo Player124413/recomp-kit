@@ -14,7 +14,7 @@ DIRECTORIES = ("runtime", "dx", "host", "platform")
 SUFFIXES = {".c", ".cpp", ".h", ".hpp", ".mm", ".in"}
 TOKENS = ("D3DPopTB", "C:\\\\Populous", "PopRecomp", '"Populous', '"populous"', "original/gog",
           "0x4a45a3", "0x4a47c1", "0x4a47a4", "0x98e7cc", "0x98e7e0",
-          "0x005d5718", "0x005d571c", "0x00591b6c", "0x591b6c", "0xd0595c", "0xd0599c",
+          "0x005d5718", "0x005d571c", "0x00591b6c", "0x591b6c", "0xd0595c", "0xd0599c", "0x00d0595c", "0x00d0599c",
           "0x0089d188", "0x0089d184", "0x8e0428", "0x74a350")
 # The Populous parity fixture pins guest frames and addresses on purpose. It
 # moves under games/populous/ in M2; until then it is the one exemption.

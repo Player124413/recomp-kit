@@ -3,7 +3,7 @@
 and stamp it with the executable's SHA-256 so a device can tell a rebuilt
 bundle from the copy it already made.
 
-    tools/stage_game_files.py --game-dir games/populous --source original/gog --dest App.app/game
+    tools/stage_game_files.py --game-dir /abs/path/to/<game> --source <game>/original/gog --dest App.app/game
 """
 
 import argparse

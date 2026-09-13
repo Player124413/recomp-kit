@@ -12,32 +12,34 @@ spec = importlib.util.spec_from_file_location("project_setup", Path(__file__).pa
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)
 
+EXE = "GAME.EXE"
+
 
 class SetupTests(unittest.TestCase):
     def test_missing_executable_has_actionable_error(self):
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "D3DPopTB.exe was not found"):
-                setup.validate_game(Path(directory))
+            with self.assertRaisesRegex(ValueError, "GAME.EXE was not found"):
+                setup.validate_game(Path(directory), EXE, "0" * 64)
 
     def test_wrong_executable_is_rejected_before_linking(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "D3DPopTB.exe").write_bytes(b"synthetic invalid input")
-            with self.assertRaisesRegex(ValueError, "Unsupported D3DPopTB.exe"):
-                setup.validate_game(root)
-            self.assertEqual(sorted(p.name for p in root.iterdir()), ["D3DPopTB.exe"])
+            (root / EXE).write_bytes(b"synthetic invalid input")
+            with self.assertRaisesRegex(ValueError, "Unsupported GAME.EXE"):
+                setup.validate_game(root, EXE, "0" * 64)
+            self.assertEqual(sorted(p.name for p in root.iterdir()), [EXE])
 
     def test_existing_installation_is_never_replaced(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             first, second = root / "first", root / "second"
             first.mkdir(); second.mkdir()
-            with patch.object(setup, "ROOT", root / "project"):
-                setup.link_game(first)
-                setup.link_game(first)  # Re-running setup for the same game is safe.
-                with self.assertRaisesRegex(ValueError, "already points elsewhere"):
-                    setup.link_game(second)
-                self.assertEqual((setup.ROOT / "original/gog").resolve(), first.resolve())
+            destination = root / "project/original/gog"
+            setup.link_game(first, destination)
+            setup.link_game(first, destination)  # Re-running setup for the same game is safe.
+            with self.assertRaisesRegex(ValueError, "already points elsewhere"):
+                setup.link_game(second, destination)
+            self.assertEqual(destination.resolve(), first.resolve())
 
     def test_dangling_installation_link_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -45,34 +47,32 @@ class SetupTests(unittest.TestCase):
             (root / "original").mkdir()
             link = root / "original/gog"
             link.symlink_to(root / "missing", target_is_directory=True)
-            with patch.object(setup, "ROOT", root):
-                with self.assertRaisesRegex(ValueError, "already points elsewhere"):
-                    setup.link_game(root / "replacement")
-                self.assertTrue(link.is_symlink())
-                self.assertEqual(link.readlink(), root / "missing")
+            with self.assertRaisesRegex(ValueError, "already points elsewhere"):
+                setup.link_game(root / "replacement", link)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(link.readlink(), root / "missing")
 
     def test_game_data_names_must_be_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data = b"synthetic supported executable"
-            (root / "D3DPopTB.exe").write_bytes(data)
-            for name in ("data", "levels", "objects", "sound"):
+            (root / EXE).write_bytes(data)
+            for name in ("data", "levels"):
                 (root / name).write_text("a file is not an installation directory")
-            with patch.object(setup, "EXE_SHA256", hashlib.sha256(data).hexdigest()):
-                with self.assertRaisesRegex(ValueError, "missing data/"):
-                    setup.validate_game(root)
+            with self.assertRaisesRegex(ValueError, "missing data/"):
+                setup.validate_game(root, EXE, hashlib.sha256(data).hexdigest(), ("data", "levels"))
 
     def test_dirty_annotation_checkout_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            metadata = root / "analysis/pop3-rev"
+            metadata = root / "analysis/annotations"
             metadata.mkdir(parents=True)
             subprocess.run(["git", "init", str(metadata)], check=True, capture_output=True)
             work = metadata / "local-work.txt"
             work.write_text("keep these annotation edits")
-            with patch.object(setup, "ROOT", root), patch.object(setup, "run") as run:
+            with patch.object(setup, "run") as run:
                 with self.assertRaisesRegex(ValueError, "local changes"):
-                    setup.prepare_annotations()
+                    setup.prepare_annotations(root / "analysis", "https://example.invalid/x.git", "0" * 40)
                 run.assert_not_called()
                 self.assertEqual(work.read_text(), "keep these annotation edits")
 
@@ -81,9 +81,12 @@ class SetupTests(unittest.TestCase):
             root = Path(directory)
             (root / "Ghidra").mkdir()
             (root / "Ghidra/application.properties").write_text("application.version=0.0\n")
+            cfg = {"game": {"app_name": "X", "sha256": "0" * 64},
+                   "developer_exe_path": root / "original/GAME.EXE",
+                   "listings_path": root / "analysis/decompiled/GAME.EXE"}
             with patch.object(setup, "run") as run:
                 with self.assertRaisesRegex(ValueError, "Use Ghidra"):
-                    setup.export_listings(root, None, root / "metadata.xml")
+                    setup.export_listings(root, None, root / "metadata.xml", cfg)
                 run.assert_not_called()
 
 

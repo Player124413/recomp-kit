@@ -15,7 +15,7 @@ import buildlock  # noqa: E402
 PROTOTYPE = re.compile(r"^void fn_[0-9a-f]{8}", re.M)
 
 
-def snapshot(destination, gen=ROOT / "build/recomp/gen", attempts=5, pause=5.0):
+def snapshot(destination, gen, attempts=5, pause=5.0):
     """Copy gen/ and check that every prototype in funcs.h has a definition in the chunks.
     Returns the function count; raises RuntimeError when no consistent copy could be taken."""
     for attempt in range(1, attempts + 1):
@@ -49,10 +49,11 @@ def snapshot(destination, gen=ROOT / "build/recomp/gen", attempts=5, pause=5.0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
+    parser.add_argument("--build-root", type=Path, required=True, help="the game's build root (holds recomp/gen)")
     args = parser.parse_args()
     try:
-        with buildlock.BuildLock(ROOT, "snapshot_gen.py"):
-            count = snapshot(args.destination.resolve())
+        with buildlock.BuildLock(args.build_root.parent, "snapshot_gen.py"):
+            count = snapshot(args.destination.resolve(), args.build_root / "recomp/gen")
     except (RuntimeError, TimeoutError) as error:
         parser.exit(1, "snapshot_gen: %s\n" % error)
     print("snapshot: %d functions in %s" % (count, args.destination))

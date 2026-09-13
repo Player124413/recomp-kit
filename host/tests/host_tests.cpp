@@ -1,3 +1,4 @@
+#include "game_config.h"
 #include "../texture_pack.h"
 #include "../../runtime/display_seam.h"
 #include "../../dx/passes.h"
@@ -766,10 +767,10 @@ static void test_script_parsing() {
     CHECK_EQ(steps[11].threshold, 840.0);
     CHECK(steps[11].at_least);
     // This host test binary has no mod runtime/game view linked or loaded.
-    const uint32_t saved_turn = rd32(0x0089d188u);
-    const uint32_t saved_command = rd32(0x0089d184u);
-    wr32(0x0089d188u, 820);
-    wr32(0x0089d184u, 839);
+    const uint32_t saved_turn = rd32(RECOMP_GLOBAL_SIMULATION_TURN_ADDR);
+    const uint32_t saved_command = rd32(RECOMP_GLOBAL_COMMAND_FRAME_ADDR);
+    wr32(RECOMP_GLOBAL_SIMULATION_TURN_ADDR, 820);
+    wr32(RECOMP_GLOBAL_COMMAND_FRAME_ADDR, 839);
     CHECK_EQ(host_script_counter_metric("turn", rd32), 820.0);
     CHECK_EQ(host_script_counter_metric("command_frame", rd32), 839.0);
     CHECK_EQ(host_script_counter_metric("unknown", rd32), -1.0);
@@ -777,14 +778,14 @@ static void test_script_parsing() {
                                    steps[11].threshold, steps[11].at_least));
     // The next completed present can skip the requested command frame.
     for (uint32_t actual : {840u, 842u}) {
-        wr32(0x0089d184u, actual);
+        wr32(RECOMP_GLOBAL_COMMAND_FRAME_ADDR, actual);
         CHECK(host_dumpat_should_fire(1, 1, host_script_counter_metric(steps[11].name, rd32),
                                       steps[11].threshold, steps[11].at_least));
     }
-    wr32(0x0089d188u, 860);
+    wr32(RECOMP_GLOBAL_SIMULATION_TURN_ADDR, 860);
     CHECK_EQ(host_script_counter_metric("turn", rd32), 860.0);
-    wr32(0x0089d188u, saved_turn);
-    wr32(0x0089d184u, saved_command);
+    wr32(RECOMP_GLOBAL_SIMULATION_TURN_ADDR, saved_turn);
+    wr32(RECOMP_GLOBAL_COMMAND_FRAME_ADDR, saved_command);
 
     // Five malformed forms for each of the five verbs. The categories the
     // brief names are missing operand, non-integer, unknown enum, extra token
@@ -1032,11 +1033,11 @@ static void test_game_path() {
     CHECK(game_path_resolve(nullptr).source == GamePathSource::None);
     // The real game, when present, is accepted and remembered.
     OsStat st;
-    if (os_stat("original/gog/D3DPopTB.exe", &st) == 0) {
-        CHECK(game_path_is_supported("original/gog/D3DPopTB.exe", nullptr));
-        CHECK(game_path_save("original/gog/D3DPopTB.exe"));
+    if (os_stat(RECOMP_DEVELOPER_EXE, &st) == 0) {
+        CHECK(game_path_is_supported(RECOMP_DEVELOPER_EXE, nullptr));
+        CHECK(game_path_save(RECOMP_DEVELOPER_EXE));
         GamePath g = game_path_resolve(nullptr);
-        CHECK(g.source == GamePathSource::Saved && g.exe == "original/gog/D3DPopTB.exe");
+        CHECK(g.source == GamePathSource::Saved && g.exe == RECOMP_DEVELOPER_EXE);
     }
     os_unsetenv("POPM_PROFILE_DIR");
     host_layout_set_exe_path_for_test(nullptr);
@@ -7659,7 +7660,7 @@ static void test_t9_guest_pointer_resolution() {
     auto reason = [&](HostGuestPointer p, const char *expected) {
         CHECK(strcmp(host_guest_pointer_failure_name(p.failure), expected) == 0);
     };
-    put(object, 0x00591b6c); // 0052cbe0 constructs the object, not a pointer slot.
+    put(object, RECOMP_HOOK_MOUSE_VTABLE); // 0052cbe0 constructs the object, not a pointer slot.
     put(object + 0x1c, 0x800);
     put(object + 0x20, 123);
     put(object + 0x24, 234);
@@ -7669,7 +7670,7 @@ static void test_t9_guest_pointer_resolution() {
     reason(p, "ready");
     CHECK_EQ(p.object, 0x100);
     CHECK_EQ(p.context, 0x800);
-    CHECK_EQ(p.vtable, 0x00591b6c);
+    CHECK_EQ(p.vtable, RECOMP_HOOK_MOUSE_VTABLE);
     CHECK_EQ(p.x, 123);
     CHECK_EQ(p.y, 234);
     // Fresh this pointers and fresh contents on each invocation.
@@ -7715,7 +7716,7 @@ static void test_t9_guest_pointer_resolution() {
     reason(resolve(), "vtable-mismatch");
     put(object, 0x00591b70);
     reason(resolve(), "vtable-mismatch");
-    put(object, 0x00591b6c);
+    put(object, RECOMP_HOOK_MOUSE_VTABLE);
     put(object + 0x40, 0);
     reason(resolve(), "bounds-invalid");
     // The cap is generous, not the boot mode: 800x600 Classic bounds are valid
@@ -7770,13 +7771,13 @@ static void test_t9_guest_pointer_resolution() {
 // off-frame pointer must not be corrected from: both produced a target at the
 // bottom-right corner, which is what the user saw as the cursor snapping away.
 static void test_t9_pointer_survives_layout_rescale() {
-    constexpr uint32_t base = 0x00d0595c;
+    constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     uint8_t saved[0x48];
     memcpy(saved, gm_ptr(base), sizeof saved);
     host_gate_reset();
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
-    wr32(base, 0x00591b6c);
+    wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
     wr32(base + 0x40, 639);
     wr32(base + 0x44, 479);
     wr32(base + 0x20, 320);
@@ -7807,13 +7808,13 @@ static void test_t9_pointer_survives_layout_rescale() {
 }
 
 static void test_t9_pointer_loop_gives_up_when_unanswered() {
-    constexpr uint32_t base = 0x00d0595c;
+    constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     uint8_t saved[0x48];
     memcpy(saved, gm_ptr(base), sizeof saved);
     host_gate_reset();
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
-    wr32(base, 0x00591b6c);
+    wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
     wr32(base + 0x40, 639);
     wr32(base + 0x44, 479);
     wr32(base + 0x20, 100);
@@ -7854,14 +7855,14 @@ static bool near(uint32_t got, uint32_t want) {
 }
 
 static void test_t9_pointer_closed_loop() {
-    constexpr uint32_t base = 0x00d0595c;
+    constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     uint8_t saved[0x48];
     memcpy(saved, gm_ptr(base), sizeof saved);
     for (bool captured : {false, true}) {
         host_gate_reset();
         host_input_reset();
         memset(gm_ptr(base), 0, 0x48);
-        wr32(base, 0x00591b6c); // Constructed cursor with no attached context.
+        wr32(base, RECOMP_HOOK_MOUSE_VTABLE); // Constructed cursor with no attached context.
         wr32(base + 0x40, 639);
         wr32(base + 0x44, 479);
         wr32(base + 0x20, 100);
@@ -7985,7 +7986,7 @@ static void test_t9_pointer_closed_loop() {
     host_gate_reset();
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
-    wr32(base, 0x00591b6c);
+    wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
     wr32(base + 0x40, 639);
     wr32(base + 0x44, 479);
     wr32(base + 0x20, 100);
@@ -8525,13 +8526,13 @@ static void test_native_frame_metrics() {
     CHECK(p.snapshot(2.5, 3).intervals_ms.back() > 299);
 }
 static void test_wide_cursor_bound() {
-    constexpr uint32_t base = 0xd0595c;
+    constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     uint8_t saved[0x48];
     memcpy(saved, gm_ptr(base), sizeof saved);
     host_gate_reset();
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
-    wr32(base, 0x591b6c);
+    wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
     wr32(base + 0x40, 640);
     wr32(base + 0x44, 480);
     auto in = t9_layout(nullptr);
@@ -8565,7 +8566,7 @@ static void test_wide_cursor_bound() {
     // Keep main's damping/foreign-write handling while converging on the hit.
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
-    wr32(base, 0x591b6c);
+    wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
     wr32(base + 0x40, 639);
     wr32(base + 0x44, 479);
     wr32(base + 0x20, 100);
@@ -8592,7 +8593,7 @@ static void test_wide_cursor_bound() {
     memcpy(gm_ptr(base), saved, sizeof saved);
 }
 static void test_pointer_reaches_scrolling_edges() {
-    constexpr uint32_t base = 0xd0595c;
+    constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     uint8_t saved[0x48];
     memcpy(saved, gm_ptr(base), sizeof saved);
     const int sizes[][2] = {{640, 480},   {800, 600},   {1024, 768}, {1280, 720},
@@ -8607,7 +8608,7 @@ static void test_pointer_reaches_scrolling_edges() {
                         host_input_reset();
                         host_pointer_set_mode(width, height);
                         memset(gm_ptr(base), 0, 0x48);
-                        wr32(base, 0x591b6c);
+                        wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
                         const int right = width - 1 + inclusive, bottom = height - 1 + inclusive;
                         wr32(base + 0x40, right);
                         wr32(base + 0x44, bottom);

@@ -5,8 +5,9 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--binary',type=Path,default=ROOT/'build/recomp/pop_smoke')
-    p.add_argument('--core',type=Path,default=ROOT/'build/recomp/mods/core')
+    p.add_argument('--game-dir',type=Path,default=os.environ.get('RECOMP_GAME_DIR'),required='RECOMP_GAME_DIR' not in os.environ,help='the directory holding game.toml and smoke/ (default $RECOMP_GAME_DIR)')
+    p.add_argument('--binary',type=Path,default=None,help='default <game>/build/recomp/pop_smoke')
+    p.add_argument('--core',type=Path,default=None,help='default <game>/build/recomp/mods/core')
     p.add_argument('--size',default='3840x2160')
     p.add_argument('--submit-draws',type=int,default=256,help='Early GPU submission interval for native scenes; 0 disables')
     p.add_argument('--readback-timings',action='store_true',help='Diagnostic GPU/readback timing CSV; excludes this run from unprofiled comparisons')
@@ -20,7 +21,9 @@ def main():
     o=a.out.resolve();o.mkdir(parents=True,exist_ok=False)
     for n in ('profile','user-mods'): (o/n).mkdir()
     (o/'profile/mod-settings.json').write_text(json.dumps({'host.display/rendering':0,'host.display/wide_view':1,'host.display/frame_limit':3,'host.display/performance_overlay':0}))
-    script=(ROOT/'tools/recomp/smoke/gate-c.script').read_text().split('# Let the selected shaman finish')[0]
+    a.binary=a.binary or a.game_dir/'build/recomp/pop_smoke'
+    a.core=a.core or a.game_dir/'build/recomp/mods/core'
+    script=(a.game_dir/'smoke/gate-c.script').read_text().split('# Let the selected shaman finish')[0]
     script='\n'.join(l for l in script.splitlines() if not l.startswith(('dump','simdump','peek','watch','#')))
     script=script.replace('camera 5386 55651','camera 5386 55651\nwatch 0 1')
     script+='\nwait 30000\nexpect draws>0\nexpect watch_selected>0\nexpect watch_moved>256\nquit\n'

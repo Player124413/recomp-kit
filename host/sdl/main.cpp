@@ -348,7 +348,8 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy) 
     const double now = (double(os_monotonic_ns()) / 1e9);
     if (trace && now - last_trace >= 0.1) {
         last_trace = now;
-        const auto guest = host_guest_pointer_resolve(g_mem, GUEST_SIZE, 0x00d0595c);
+        const auto guest =
+            host_guest_pointer_resolve(g_mem, GUEST_SIZE, RECOMP_HOOK_MOUSE_DEVICE_PTR);
         fprintf(stderr,
                 "[pointer-game] drawable %d,%d hit %d at %d,%d delivered %d guest %d,%d bounds "
                 "%d,%d,%d,%d\n",

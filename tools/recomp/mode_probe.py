@@ -22,8 +22,16 @@ def commands(path):
             if line.split("#", 1)[0].strip()]
 
 
-def probe_script():
-    smoke = ROOT / "tools/recomp/smoke"
+def game_dir():
+    """The game under probe: RECOMP_GAME_DIR names the directory holding game.toml and smoke/."""
+    value = os.environ.get("RECOMP_GAME_DIR")
+    if not value:
+        raise SystemExit("mode_probe: set RECOMP_GAME_DIR to the game directory")
+    return Path(value)
+
+
+def probe_script(smoke=None):
+    smoke = smoke or game_dir() / "smoke"
     ref = commands(smoke / "display-ref.script")
     # Exact frozen level-entry segment: stop before resolution-dependent
     # gameplay clicks. Dump once, after a real simulation turn is observed.
@@ -160,7 +168,7 @@ def main():
             if target not in targets: targets.append(target)
     if os.environ.get("BUILDLOCK_HELD") != "1":
         parser.error("use tools/recomp/mode_probe.sh (requires the worktree build lock)")
-    work = ROOT / "build/recomp/mode-probe"
+    work = game_dir() / "build/recomp/mode-probe"
     work.mkdir(parents=True, exist_ok=True)
     script = probe_script()
     rows = []

@@ -1,4 +1,5 @@
 // CPU-only parser checks, executable without Metal or CoreAudio.
+#include "game_config.h"
 #include "../script.h"
 #include <cassert>
 #include <cstdlib>
@@ -97,10 +98,15 @@ int main() {
     assert(parse("simdump turn_820\n") == 1 && steps[0].op == HOST_SCRIPT_SIMDUMP);
     assert(parse("simdump ../bad\n") == -1);
     assert(parse("PLACEHOLDER_MEASURED_CAMERA_INPUT\n") == -1);
+    // The game's own scripts, when the build has a game with scripts.
     for (const char *path :
-         {"tools/recomp/smoke/gate-c-fixture.script", "tools/recomp/smoke/gate-c.script"}) {
+         {RECOMP_GAME_DIR "/smoke/gate-c-fixture.script", RECOMP_GAME_DIR "/smoke/gate-c.script"}) {
         std::ifstream f(path);
-        assert(f);
+        if (!f) {
+            fprintf(stderr,
+                    "script_environment_tests: no %s; the game's scripts were not checked\n", path);
+            continue;
+        }
         std::stringstream text;
         text << f.rdbuf();
         assert(text.str().find("PLACEHOLDER") == std::string::npos);

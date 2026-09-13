@@ -23,16 +23,20 @@ endforeach()
 set(POP_ROOT ${CMAKE_SOURCE_DIR})
 set(POP_TRANSLATE AUTO CACHE STRING "AUTO, ON, OFF or STUB: how targets that need generated code get it")
 set_property(CACHE POP_TRANSLATE PROPERTY STRINGS AUTO ON OFF STUB)
+# Where every output goes: the translation, the texture pack, the apps and the
+# logs. A game outside the kit keeps them beside itself (tools/build.py passes
+# <game-dir>/build); the kit's own builds use build/.
+set(POP_BUILD_ROOT ${POP_ROOT}/build CACHE PATH "Root of build outputs (build/recomp, build/ios, ...)")
 # A stub build (no game code) keeps its outputs apart from a real build so it
 # can never overwrite the archive or the bundle a player runs.
 if(IOS AND POP_TRANSLATE STREQUAL "STUB")
-  set(POP_BUILD_DIR ${POP_ROOT}/build/ios-stub)
+  set(POP_BUILD_DIR ${POP_BUILD_ROOT}/ios-stub)
 elseif(POP_TRANSLATE STREQUAL "STUB")
-  set(POP_BUILD_DIR ${POP_ROOT}/build/stub)
+  set(POP_BUILD_DIR ${POP_BUILD_ROOT}/stub)
 elseif(IOS)
-  set(POP_BUILD_DIR ${POP_ROOT}/build/ios)
+  set(POP_BUILD_DIR ${POP_BUILD_ROOT}/ios)
 else()
-  set(POP_BUILD_DIR ${POP_ROOT}/build)
+  set(POP_BUILD_DIR ${POP_BUILD_ROOT})
 endif()
 set(POP_OUT ${POP_BUILD_DIR}/recomp)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${POP_OUT})
@@ -43,11 +47,14 @@ if(NOT Python3_EXECUTABLE)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 endif()
 
-# The game this build is for. games/<RECOMP_GAME>/game.toml is rendered into
+# The game this build is for: a directory holding game.toml, rendered into
 # generated/game_config.h (C macros) and generated/game_config.cmake (build
-# names) at configure time; editing the toml reconfigures.
-set(RECOMP_GAME "populous" CACHE STRING "Directory under games/ whose game.toml configures this build")
-set(RECOMP_GAME_DIR ${POP_ROOT}/games/${RECOMP_GAME})
+# names) at configure time; editing the toml reconfigures. The kit's own
+# default is the stub game; real games live in their own repositories.
+set(RECOMP_GAME_DIR ${POP_ROOT}/games/stub CACHE PATH "Directory holding the game.toml this build is for")
+if(NOT IS_ABSOLUTE ${RECOMP_GAME_DIR})
+  message(FATAL_ERROR "RECOMP_GAME_DIR must be absolute: ${RECOMP_GAME_DIR}")
+endif()
 if(NOT EXISTS ${RECOMP_GAME_DIR}/game.toml)
   message(FATAL_ERROR "No game config at ${RECOMP_GAME_DIR}/game.toml")
 endif()
@@ -108,7 +115,8 @@ add_subdirectory(platform)
 add_subdirectory(runtime)
 add_subdirectory(dx)
 add_subdirectory(mods)
-if(NOT IOS)
-  add_subdirectory(games/populous/mods)
+# The game's own mods (core plugins, examples, smoke probe), when it has any.
+if(NOT IOS AND EXISTS ${RECOMP_GAME_DIR}/mods/CMakeLists.txt)
+  add_subdirectory(${RECOMP_GAME_DIR}/mods ${CMAKE_BINARY_DIR}/game-mods)
 endif()
 add_subdirectory(host)

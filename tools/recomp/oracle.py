@@ -44,9 +44,11 @@ from unicorn.x86_const import (
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import game_config  # noqa: E402
-DEFAULT_GAME_DIR = os.path.join(ROOT, "games/populous")
-DEFAULT_EXE = os.path.join(ROOT, game_config.load(DEFAULT_GAME_DIR)["game"]["developer_exe"])
-DEFAULT_DATA = os.path.dirname(DEFAULT_EXE)
+# The game comes from --game (or RECOMP_GAME_DIR for callers that import the
+# module); the defaults below are None until then.
+DEFAULT_GAME_DIR = os.environ.get("RECOMP_GAME_DIR")
+DEFAULT_EXE = str(game_config.load(DEFAULT_GAME_DIR)["developer_exe_path"]) if DEFAULT_GAME_DIR else None
+DEFAULT_DATA = os.path.dirname(DEFAULT_EXE) if DEFAULT_EXE else None
 
 REG_NAMES = ["EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"]
 UC_REGS = [UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBX,
@@ -705,8 +707,9 @@ def run(out_dir, frames=32, exe_path=DEFAULT_EXE, data_dir=DEFAULT_DATA,
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--frames", type=int, default=32)
-    ap.add_argument("--out", default=os.path.join(ROOT, "build/recomp/parity/oracle"))
-    ap.add_argument("--game", default=DEFAULT_GAME_DIR, help="games/<id> directory")
+    ap.add_argument("--out", default=None, help="defaults to <game>/build/recomp/parity/oracle")
+    ap.add_argument("--game", default=DEFAULT_GAME_DIR, required=DEFAULT_GAME_DIR is None,
+                    help="the directory holding game.toml (default: $RECOMP_GAME_DIR)")
     ap.add_argument("--exe", default=None, help="defaults to the game's developer_exe")
     ap.add_argument("--data", default=None, help="defaults to the directory of --exe")
     ap.add_argument("--stub", action="append", default=[], metavar="ADDR",
@@ -714,7 +717,9 @@ def main():
                          "(EAX = 0, return address left on the stack)")
     args = ap.parse_args()
     if args.exe is None:
-        args.exe = os.path.join(ROOT, game_config.load(args.game)["game"]["developer_exe"])
+        args.exe = str(game_config.load(args.game)["developer_exe_path"])
+    if args.out is None:
+        args.out = os.path.join(args.game, "build/recomp/parity/oracle")
     if args.data is None:
         args.data = os.path.dirname(args.exe)
     m = run(args.out, args.frames, args.exe, args.data,

@@ -204,7 +204,7 @@ void write_dump(const char *name) {
 // from the last whatever the player does. The game's own record can say it.
 //
 // The entity table is 2000 records of 179 bytes at 0x8e0428, and the field
-// offsets are the ones games/populous/tests/entity_codec.hpp encodes and decodes: flags at
+// offsets are the ones the game's tests/entity_codec.hpp encodes and decodes: flags at
 // +12, kind at +42, state at +44, owner at +47, and the position at +61 as
 // three 16-bit words, x then z then altitude. A blue brave is owner 0, kind 1.
 const uint32_t kEntityBase = RECOMP_GLOBAL_ENTITY_BASE_ADDR;
@@ -1329,7 +1329,7 @@ void run_step(const HostScriptStep &step) {
             ++g_mode_faults;
             break;
         }
-        if (!load_sub_script("tools/recomp/smoke/mode-select.script")) {
+        if (!load_sub_script(RECOMP_GAME_DIR "/smoke/mode-select.script")) {
             ++g_mode_faults;
             break;
         }

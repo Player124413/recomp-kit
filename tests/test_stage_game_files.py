@@ -44,12 +44,17 @@ class StageTests(unittest.TestCase):
             stage.stage(src, dest, "Game.exe", [])
             self.assertEqual(stage.stage(src, dest, "Game.exe", []), 0)
 
-    def test_populous_config_lists_exclusions(self):
+    def test_config_lists_exclusions(self):
         sys.path.insert(0, str(ROOT / "tools"))
         import game_config
-        cfg = game_config.load(ROOT / "games/populous")
-        self.assertIn("__redist", cfg["bundle"]["exclude"])
-        self.assertIn("Fmv", cfg["bundle"]["exclude"])
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            toml = (ROOT / "games/stub/game.toml").read_text().replace('exclude = []', 'exclude = ["__redist", "*.dll"]')
+            (game / "game.toml").write_text(toml)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            cfg = game_config.load(game)
+        self.assertEqual(cfg["bundle"]["exclude"], ["__redist", "*.dll"])
+        self.assertEqual(game_config.load(ROOT / "games/stub")["bundle"]["exclude"], [])
 
 
 if __name__ == "__main__":
