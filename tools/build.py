@@ -175,10 +175,13 @@ def publish_generated(build_root, translate):
     shutil.rmtree(old, ignore_errors=True)
 
 
-def run_translator(stage, game_dir, build_root):
-    subprocess.run([sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
-                    "--game", str(game_dir),
-                    "--report", str(Path(build_root) / "recomp/translate-report.json")], cwd=ROOT, check=True)
+def run_translator(stage, game_dir, build_root, allow_table_gaps=None):
+    command = [sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
+               "--game", str(game_dir),
+               "--report", str(Path(build_root) / "recomp/translate-report.json")]
+    if allow_table_gaps:
+        command += ["--allow-table-gaps", allow_table_gaps]
+    subprocess.run(command, cwd=ROOT, check=True)
 
 
 def texture_pack(game_dir, build_root):
@@ -199,6 +202,8 @@ def texture_pack(game_dir, build_root):
 def parse_args(argv, system=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--regenerate", action="store_true", help="Regenerate and compile translated C")
+    parser.add_argument("--allow-table-gaps", metavar="REASON", default=None,
+                        help="Accept jump-table sites the translator cannot decode (passed to translate.py)")
     parser.add_argument("--target", choices=sorted(TARGETS), default="app")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
@@ -248,7 +253,9 @@ def main():
             if args.target in NEEDS_GEN and args.regenerate:
                 if not (cfg["listings_path"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
-                publish_generated(args.build_root, lambda stage: run_translator(stage, args.game_dir, args.build_root))
+                publish_generated(args.build_root,
+                                  lambda stage: run_translator(stage, args.game_dir, args.build_root,
+                                                               args.allow_table_gaps))
             if args.target == "ios":
                 if not args.stub and not (args.build_root / "recomp/gen/table.c").is_file():
                     parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"

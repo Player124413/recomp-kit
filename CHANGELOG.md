@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build: `tools/build.py --regenerate --allow-table-gaps "<reason>"` passes
+  the waiver and its reason to the translator. Omitting the flag keeps
+  jump-table gap checks unchanged.
 - Touch: a tap's synthesized click now stays pressed until the game has
   presented two frames after the press (`TouchMapper::frames_presented`, fed
   by the SDL host from the present count), as well as for the 90 ms it
