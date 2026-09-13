@@ -33,6 +33,7 @@
 #include "../present.h"
 #include "../window_presentation.h"
 #include "keymap.h"
+#include "platform_ui.h"
 #include "version.h"
 #include "../../dx/dx.h"
 #include "../../runtime/loader.h"
@@ -622,6 +623,8 @@ void post_drawable_size();
 // One SDL event, translated into both of the input paths the game reads: the
 // DirectInput device state, and the Win32 message queue.
 void handle_event(const SDL_Event &event) {
+    if (platform_ui_handle_lifecycle(event))
+        return;
     const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
@@ -1051,15 +1054,21 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    GamePath game = game_path_resolve(exe_flag);
+    std::string game_error;
+    GamePath game = platform_ui_resolve_game(exe_flag, &game_error);
+    if (!game_error.empty()) {
+        // Before SDL_Init on purpose: the message box brings up what it needs,
+        // and on a device with no console this is the only place the reason shows.
+        fprintf(stderr, RECOMP_APP_NAME ": %s\n", game_error.c_str());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, RECOMP_APP_NAME, game_error.c_str(),
+                                 nullptr);
+        return 2;
+    }
     if (game.source == GamePathSource::Checkout &&
         os_chdir(host_layout().checkout_root.c_str()) != 0)
         fprintf(stderr, "[host] could not enter %s\n", host_layout().checkout_root.c_str());
 
-    // A click that brings the window forward reaches the game in the same
-    // event, rather than being swallowed as the activating click.
-    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
-    SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
+    platform_ui_init_hints();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_Init failed: %s\n", SDL_GetError());
         return 3;
@@ -1077,15 +1086,12 @@ int main(int argc, char **argv) {
     if (vulkan && !SDL_Vulkan_LoadLibrary(gpu::vulkan_loader_path()))
         fprintf(stderr, RECOMP_APP_NAME ": SDL_Vulkan_LoadLibrary: %s\n", SDL_GetError());
     const SDL_WindowFlags surface_flag = vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_METAL;
-    g_window = SDL_CreateWindow(RECOMP_GAME_NAME, g_mode_w * scale, g_mode_h * scale,
-                                surface_flag | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-                                    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+    g_window = platform_ui_create_window(RECOMP_GAME_NAME, g_mode_w, g_mode_h, scale, surface_flag,
+                                         &g_window_mode);
     if (!g_window) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 3;
     }
-    SDL_SetWindowMinimumSize(g_window, g_mode_w, g_mode_h);
-    SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     g_surface = gpu::native_surface_for_window(g_window);
     if (!g_surface) {
         fprintf(stderr, RECOMP_APP_NAME ": no %s surface for the window: %s\n",

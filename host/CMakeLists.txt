@@ -105,7 +105,8 @@ if(TARGET recomp_gen)
   add_dependencies(pop_smoke core_mods smoke_probe)
 
   pop_host(recomp_app GEN UI_LAYER OPT 2
-    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${HOST}/game_path.cpp ${HOST}/present.cpp
+    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${HOST}/sdl/platform_ui_desktop.cpp
+            ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
             ${HOST}/input.cpp ${HOST}/input_gate.cpp ${POP_AUDIO_SOURCES}
