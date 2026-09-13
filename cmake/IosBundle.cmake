@@ -36,9 +36,17 @@ function(pop_ios_bundle target)
       COMMENT "Extracting the app icon from the game executable"
       VERBATIM)
   endif()
-  # classic-modes.json is the one resource the host reads at startup.
+  # classic-modes.json is one resource the host reads at startup; the
+  # translation's symbol table is the other (the mod foundation's settings
+  # store initialises only after it loads).
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/tools/recomp/baseline/classic-modes.json
             $<TARGET_BUNDLE_CONTENT_DIR:${target}>/classic-modes.json
     VERBATIM)
+  if(EXISTS ${POP_ROOT}/build/recomp/symbols.json)
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/build/recomp/symbols.json
+              $<TARGET_BUNDLE_CONTENT_DIR:${target}>/symbols.json
+      VERBATIM)
+  endif()
 endfunction()

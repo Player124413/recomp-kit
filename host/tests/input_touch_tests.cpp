@@ -88,15 +88,15 @@ static void test_drag_is_left_drag() {
     TouchMapper m;
     std::vector<TouchAction> out;
     m.finger_down({1, 10, 10}, 0, &out);
-    m.finger_motion({1, 15, 10}, 20 * MS, &out);
+    m.finger_motion({1, 20, 10}, 20 * MS, &out);
     CHECK(out.empty()); // under the travel threshold
-    m.finger_motion({1, 30, 10}, 40 * MS, &out);
+    m.finger_motion({1, 45, 10}, 40 * MS, &out);
     CHECK(out.size() == 3); // Motion to start, Button down, Motion to here
     CHECK(out[0].kind == TouchAction::Motion && out[0].x == 10 && out[0].place);
     CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down);
-    CHECK(out[2].kind == TouchAction::Motion && out[2].x == 30);
+    CHECK(out[2].kind == TouchAction::Motion && out[2].x == 45);
     out.clear();
-    m.finger_up({1, 40, 10}, 60 * MS, &out);
+    m.finger_up({1, 55, 10}, 60 * MS, &out);
     CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion &&
           out[1].kind == TouchAction::Button && !out[1].down);
 }

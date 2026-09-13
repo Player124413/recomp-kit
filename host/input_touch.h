@@ -10,7 +10,7 @@
 #include <vector>
 
 // Gesture thresholds, in window points and nanoseconds.
-constexpr double kTouchTapTravel = 12.0;
+constexpr double kTouchTapTravel = 20.0; // a resting finger drifts a few points
 constexpr uint64_t kTouchLongPressNs = 350ull * 1000000ull;
 constexpr double kTouchPanStep = 24.0;
 // A synthesized click stays pressed this long: a game that samples its mouse

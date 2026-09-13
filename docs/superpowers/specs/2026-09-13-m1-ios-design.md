@@ -134,8 +134,8 @@ pixel size.
 
 | Gesture | Emits |
 |---|---|
-| Tap (release within 350 ms, travel under 12 px) | motion to point, left down, left up |
-| Long press (held 350 ms, travel under 12 px) | motion to point, right down, right up |
+| Tap (release within 350 ms, travel under 20 px) | motion to point, left down, left up |
+| Long press (held 350 ms, travel under 20 px) | motion to point, right down, right up |
 | One-finger drag (travel over 12 px) | left down at start, motion while moving, left up at release |
 | Two-finger drag | arrow-key down/up pulses matching the dominant direction, one pulse per 24 px |
 | Two-finger tap | Escape down, Escape up |
