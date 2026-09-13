@@ -24,6 +24,10 @@ struct TouchPoint {
 
 struct TouchAction {
     enum Kind { Motion, Button, Key } kind;
+    // Motion only: also place the game's own cursor here. True for a press
+    // and for a left drag; false while the right button is held, when the
+    // game is in its camera mode and reads relative movement instead.
+    bool place = true;
     double x = 0, y = 0; // Motion, Button
     int button = 0;      // Button: 0 left, 1 right
     bool down = false;   // Button, Key

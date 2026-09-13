@@ -77,6 +77,7 @@ static void test_long_press_then_drag_is_a_right_drag() {
     out.clear();
     m.finger_motion({1, 120, 90}, 500 * MS, &out);
     CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 120);
+    CHECK(!out[0].place); // camera mode: relative movement, no cursor placement
     out.clear();
     m.finger_up({1, 130, 95}, 900 * MS, &out);
     CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion &&
@@ -91,7 +92,7 @@ static void test_drag_is_left_drag() {
     CHECK(out.empty()); // under the travel threshold
     m.finger_motion({1, 30, 10}, 40 * MS, &out);
     CHECK(out.size() == 3); // Motion to start, Button down, Motion to here
-    CHECK(out[0].kind == TouchAction::Motion && out[0].x == 10);
+    CHECK(out[0].kind == TouchAction::Motion && out[0].x == 10 && out[0].place);
     CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down);
     CHECK(out[2].kind == TouchAction::Motion && out[2].x == 30);
     out.clear();

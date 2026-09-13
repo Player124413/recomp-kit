@@ -659,6 +659,8 @@ void push_touch_action_now(const TouchAction &a) {
             e.motion.x = (float)a.x;
             e.motion.y = (float)a.y;
             SDL_PushEvent(&e);
+            if (!a.place)
+                return;
             SDL_Event place{};
             place.type = SDL_EVENT_USER;
             place.user.windowID = ours;

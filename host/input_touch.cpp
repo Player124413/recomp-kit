@@ -5,9 +5,10 @@
 #include <math.h>
 
 namespace {
-void motion(std::vector<TouchAction> *out, double x, double y) {
+void motion(std::vector<TouchAction> *out, double x, double y, bool place = true) {
     TouchAction a;
     a.kind = TouchAction::Motion;
+    a.place = place;
     a.x = x;
     a.y = y;
     out->push_back(a);
@@ -97,7 +98,7 @@ void TouchMapper::finger_motion(TouchPoint p, uint64_t, std::vector<TouchAction>
             f.y = p.y;
         }
     if (fingers_.size() == 1 && right_held_) {
-        motion(out, fingers_[0].x, fingers_[0].y); // a right-button drag
+        motion(out, fingers_[0].x, fingers_[0].y, false); // a right-button drag: deltas only
         return;
     }
     if (fingers_.size() == 1 && max_fingers_ == 1 && !long_fired_) {
@@ -144,7 +145,7 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
     const bool moved = dist(lifted.x0, lifted.y0, lifted.x, lifted.y) > kTouchTapTravel;
     if (max_fingers_ == 1) {
         if (right_held_) {
-            motion(out, lifted.x, lifted.y);
+            motion(out, lifted.x, lifted.y, false);
             if (now - right_down_ >= kTouchClickHoldNs) {
                 button(out, 1, false, lifted.x, lifted.y);
             } else {
