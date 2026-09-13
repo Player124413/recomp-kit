@@ -83,6 +83,72 @@ def test_android_install_does_not_guess_between_devices(tmp_path, monkeypatch):
     assert calls == [["/sdk/adb", "devices"]]
 
 
+def test_android_push_stages_only_included_game_files(tmp_path, monkeypatch):
+    source = tmp_path / "original/gog/app"
+    files = {
+        "Stub.exe": b"test executable", "Data/sprites.bin": b"sprites",
+        "AUDIO/Music/track.mp3": b"music", "model.txt": b"model",
+        "BINKS/intro.bik": b"video", "__support/helper.exe": b"installer",
+        "sound.dll": b"dll", "Data/unused.dll": b"dll",
+    }
+    for name, data in files.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    cfg = {"game": {"executable": "Stub.exe", "bundle_id": "dev.recompkit.stub"},
+           "developer_exe_path": source / "Stub.exe",
+           "bundle": {"exclude": ["BINKS", "__support", "*.dll"]}}
+    output = tmp_path / "build"
+    staged = output / "android/game"
+    staged.mkdir(parents=True)
+    (staged / "stale.dll").write_bytes(b"old staging must not bypass exclusions")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if "push" in command:
+            assert command == ["/sdk/adb", "-s", "tablet", "push", str(staged),
+                               "/sdcard/Android/data/dev.recompkit.stub/files/"]
+            assert sorted(p.relative_to(staged).as_posix() for p in staged.rglob("*") if p.is_file()) == [
+                ".stamp", "AUDIO/Music/track.mp3", "Data/sprites.bin", "Stub.exe", "model.txt"]
+            for name in ("Stub.exe", "Data/sprites.bin", "AUDIO/Music/track.mp3", "model.txt"):
+                assert (staged / name).read_bytes() == files[name]
+            import hashlib
+            assert (staged / ".stamp").read_text().strip() == hashlib.sha256(files["Stub.exe"]).hexdigest()
+        return subprocess.CompletedProcess(command, 0, "List of devices attached\ntablet\tdevice\n")
+
+    monkeypatch.setattr(build.shutil, "which", lambda name: "/sdk/adb")
+    monkeypatch.setattr(build.subprocess, "run", run)
+    build.android_install_and_launch(output / "app-debug.apk", "dev.recompkit.stub",
+                                     game_cfg=cfg, build_root=output)
+    assert [command[3] for command in calls[1:]] == ["install", "shell", "push", "shell"]
+    assert calls[2][4:] == ["mkdir", "-p", "/sdcard/Android/data/dev.recompkit.stub/files"]
+    assert calls[-1][4:7] == ["am", "start", "-n"]
+
+
+def test_android_push_without_device_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(build.shutil, "which", lambda name: "/sdk/adb")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "List of devices attached\n")
+
+    monkeypatch.setattr(build.subprocess, "run", run)
+    with pytest.raises(ValueError, match="No Android device attached.*--push-game"):
+        build.android_install_and_launch(tmp_path / "app-debug.apk", "dev.recompkit.stub",
+                                         game_cfg={}, build_root=tmp_path)
+    assert calls == [["/sdk/adb", "devices"]]
+
+
+@pytest.mark.parametrize("extra", [["--target", "app"], ["--target", "android", "--no-install"]])
+def test_push_game_rejects_options_that_cannot_push(extra, capsys):
+    with pytest.raises(SystemExit) as error:
+        build.parse_args(extra + ["--push-game"])
+    assert error.value.code == 2
+    assert "--push-game requires --target android without --no-install" in capsys.readouterr().err
+
+
 def test_app_target_allowed_on_linux():
     args, _ = build.parse_args(
         ["--target", "app", "--game-dir", str(build.ROOT / "games/stub")], system="Linux")

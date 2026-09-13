@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import game_config  # noqa: E402
 import buildlock  # noqa: E402
 import package_desktop  # noqa: E402
+import stage_game_files  # noqa: E402
 
 # What each --target builds. `plugins` is every mod plugin the game ships.
 TARGETS = {
@@ -193,8 +194,34 @@ def android_apk(build_root, cfg, *, gen_dir):
     return apk
 
 
-def android_install_and_launch(apk, bundle_id, device=None, console=False):
-    """Install and launch on one ready adb device; skip cleanly when none is attached."""
+def android_push_game(command, cfg, build_root):
+    """Stage the configured install, then push game/ without deleting device saves.
+
+    Recreate only our generated staging directory so exclusions also apply to
+    files staged by an earlier build. The shared stager uses excluded() and
+    writes the executable hash to .stamp, just as it does for an iOS bundle.
+    """
+    source = cfg["developer_exe_path"].parent
+    executable = cfg["game"]["executable"]
+    if not (source / executable).is_file():
+        raise FileNotFoundError("Prepare your own game installation with tools/setup.py before --push-game")
+    staged = Path(build_root) / "android/game"
+    if staged.exists():
+        shutil.rmtree(staged)
+    count = stage_game_files.stage(source, staged, executable, cfg["bundle"]["exclude"])
+    destination = "/sdcard/Android/data/%s/files" % cfg["game"]["bundle_id"]
+    print("Staged %d game files in %s; pushing to %s/game" % (count, staged, destination), flush=True)
+    subprocess.run(command + ["shell", "mkdir", "-p", destination], check=True)
+    # Push game/ into its parent on every run: never create game/game/.
+    subprocess.run(command + ["push", str(staged), destination + "/"], check=True)
+
+
+def android_install_and_launch(apk, bundle_id, device=None, console=False, *, game_cfg=None, build_root=None):
+    """Install, optionally push game data, then launch on one ready adb device.
+
+    An explicit data push requires a device; a build alone may skip device
+    actions. The APK is installed first so Android owns the external files path.
+    """
     adb = shutil.which("adb")
     if not adb and os.environ.get("ANDROID_HOME"):
         name = "adb.exe" if platform.system() == "Windows" else "adb"
@@ -202,12 +229,16 @@ def android_install_and_launch(apk, bundle_id, device=None, console=False):
         if candidate.is_file():
             adb = str(candidate)
     if not adb:
+        if game_cfg is not None:
+            raise ValueError("adb unavailable; --push-game requires Android platform-tools and a ready device")
         print("adb unavailable; skipped Android install, launch and logcat.")
         return
     result = subprocess.run([adb, "devices"], check=True, capture_output=True, text=True)
     devices = [fields[0] for line in result.stdout.splitlines()
                if len(fields := line.split()) == 2 and fields[1] == "device"]
     if not devices:
+        if game_cfg is not None:
+            raise ValueError("No Android device attached; --push-game requires a ready device in adb devices")
         print("No Android device attached; skipped install, launch and logcat.")
         return
     if device is not None and device not in devices:
@@ -216,6 +247,8 @@ def android_install_and_launch(apk, bundle_id, device=None, console=False):
         raise ValueError("Pass --device <adb serial>; ready Android devices: %s" % ", ".join(devices))
     command = [adb, "-s", device or devices[0]]
     subprocess.run(command + ["install", "-r", str(apk)], check=True)
+    if game_cfg is not None:
+        android_push_game(command, game_cfg, build_root)
     subprocess.run(command + ["shell", "am", "start", "-n", bundle_id + "/dev.recompkit.RecompActivity"], check=True)
     if console:
         subprocess.run(command + ["logcat"], check=True)
@@ -293,8 +326,12 @@ def parse_args(argv, system=None):
     parser.add_argument("--team", default=os.environ.get("RECOMP_IOS_TEAM", ""),
                         help="Apple team id for automatic signing (ios target; default $RECOMP_IOS_TEAM)")
     parser.add_argument("--no-install", action="store_true", help="Build the mobile app without installing it")
+    parser.add_argument("--push-game", action="store_true",
+                        help="Android: push the configured game install minus [bundle].exclude before launch")
     parser.add_argument("--console", action="store_true", help="After launching on the device, stream its console")
     args = parser.parse_args(argv)
+    if args.push_game and (args.target != "android" or args.no_install):
+        parser.error("--push-game requires --target android without --no-install")
     if args.target == "ios" and not args.stub and not args.team:
         parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
     if args.stub and (args.config == "Debug" or args.regenerate):
@@ -352,7 +389,9 @@ def main():
                 if args.target == "android":
                     apk = android_apk(args.build_root, cfg, gen_dir=build_dir)
                     if not args.no_install:
-                        android_install_and_launch(apk, cfg["game"]["bundle_id"], args.device, args.console)
+                        android_install_and_launch(apk, cfg["game"]["bundle_id"], args.device, args.console,
+                                                   game_cfg=cfg if args.push_game else None,
+                                                   build_root=args.build_root)
                 system = platform.system()
                 if args.target == "app" and not args.stub and system in {"Linux", "Windows"}:
                     # The desktop Ninja presets write OUTPUT_NAME into POP_OUT.

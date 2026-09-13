@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Android reads game data from SDL's external files directory under `game/`,
+  reads `switches.txt` beside it, and defaults to a writable `profile/` there.
+  Missing data logs the expected executable and `adb push` command, then exits.
+  Enable fullscreen touch/keypad behavior and background audio/presenter
+  suspension; end the process after SDL teardown when the game exits.
+  `--push-game` stages the configured install using `[bundle].exclude`, then
+  pushes before launch, and fails clearly without a ready Android device.
+
 - Build `--target android` through the NDK preset, then package its
   `libmain.so` with an SDLActivity subclass and the matching FetchContent
   Java sources. Add a Gradle 9.7.1 wrapper and AGP 9.1.1 templates for

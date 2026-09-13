@@ -1354,13 +1354,50 @@ int main(int argc, char **argv) {
         }
     }
     std::string game_error;
+#ifdef __ANDROID__
+    (void)exe_flag; // The mobile app always uses its own external data root.
+    // SDL's Java glue has initialized the app-specific external files path
+    // before SDL_main. Resolve it before host_layout caches a profile path.
+    const char *external = SDL_GetAndroidExternalStoragePath();
+    GamePath game;
+    if (!external || !*external) {
+        game_error =
+            "Android external files storage is unavailable: " + std::string(SDL_GetError());
+    } else {
+        const std::string data_root = external;
+        recomp_env_apply_file((data_root + "/switches.txt").c_str());
+        const char *profile = recomp_env("PROFILE_DIR");
+        if (!profile || !*profile)
+            os_setenv("RECOMP_PROFILE_DIR", (data_root + "/profile").c_str());
+        game = game_path_resolve(nullptr, data_root.c_str());
+        if (game.exe.empty())
+            game_error =
+                "Missing game data: expected " + data_root +
+                "/game/" RECOMP_EXECUTABLE
+                ". From the game checkout run tools/build.py --target android --push-game. "
+                "It stages the included files in build/android/game, then runs: "
+                "adb push build/android/game \"" +
+                data_root + "/\"";
+        else
+            SDL_Log("[android] game data: %s", game.exe.c_str());
+    }
+#else
     GamePath game = platform_ui_resolve_game(exe_flag, &game_error);
+#endif
     if (!game_error.empty()) {
+#ifdef __ANDROID__
+        // The kit page needs a running presenter and initialized mod rows;
+        // before boot, log the actionable path instead of opening a picker.
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s", game_error.c_str());
+        SDL_Quit();
+        platform_ui_process_exit(2);
+#else
         // Before SDL_Init on purpose: the message box brings up what it needs,
         // and on a device with no console this is the only place the reason shows.
         fprintf(stderr, RECOMP_APP_NAME ": %s\n", game_error.c_str());
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, RECOMP_APP_NAME, game_error.c_str(),
                                  nullptr);
+#endif
         return 2;
     }
     if (game.source == GamePathSource::Checkout &&
