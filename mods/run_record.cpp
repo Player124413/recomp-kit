@@ -406,7 +406,10 @@ __attribute__((constructor)) void capture_build() {
 
     const uint64_t seed = 1469598103934665603ull;
     bool missing = false;
-    uint64_t archive = hash_file("build/recomp/librecomp_gen.a", seed, &missing);
+    // The translated archive lives under the checkout's build/recomp (a game
+    // repository's, or the kit's for its stub); never relative to the working
+    // directory, which is the kit even when the game lives elsewhere.
+    uint64_t archive = hash_file(host_state_file("librecomp_gen.a").c_str(), seed, &missing);
     uint64_t symbols = hash_file(host_resource("symbols.json").c_str(), seed, &missing);
     if (!missing) {
         g_archive_hash = archive;
