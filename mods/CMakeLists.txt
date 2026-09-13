@@ -34,7 +34,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(recomp_mods PUBLIC atomic)
 endif()
 
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
 add_library(recomp_mods_testing OBJECT ${POP_MODS_SOURCES})
 target_include_directories(recomp_mods_testing PUBLIC ${POP_ROOT} ${POP_ROOT}/runtime)
 target_link_libraries(recomp_mods_testing PUBLIC lua recomp_runtime_testing)
@@ -49,7 +49,7 @@ endif()
 # Plugin fixtures the loader tests load. Every .c becomes a module of the same
 # name; old_cpu is built with the older header AHEAD of the real one so its
 # sizeof(pop_cpu_v1) really is the older value.
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
 file(GLOB POP_FIXTURE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/*.c)
 add_custom_target(mod_fixtures)
 foreach(src ${POP_FIXTURE_SOURCES})
@@ -73,7 +73,7 @@ endforeach()
 endif()
 
 # Where resources and the profile live, for every layout an executable can have.
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
 add_executable(layout_tests ${POP_ROOT}/runtime/layout.cpp tests/layout_tests.cpp)
 target_include_directories(layout_tests PRIVATE ${POP_ROOT})
 target_link_libraries(layout_tests PRIVATE recomp_platform)
@@ -84,7 +84,7 @@ add_test(NAME layout_tests COMMAND layout_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(layout_tests PROPERTIES LABELS nogame)
 endif()
 
-if(TARGET recomp_gen AND NOT IOS)
+if(TARGET recomp_gen AND NOT IOS AND NOT ANDROID)
   add_library(mods_api_header_test OBJECT tests/api_header_test.c)
   target_compile_definitions(mods_api_header_test PRIVATE POPM_TESTING=1)
   target_include_directories(mods_api_header_test PRIVATE ${POP_ROOT} ${POP_ROOT}/runtime ${POP_GEN_DIR})

@@ -96,6 +96,26 @@
       }
     },
     {
+      "name": "android",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/cmake/android",
+      "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+      "cacheVariables": {
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-29",
+        "ANDROID_STL": "c++_static",
+        "POP_TRANSLATE": "ON"
+      }
+    },
+    {
+      "name": "android-stub",
+      "inherits": "android",
+      "binaryDir": "${sourceDir}/build/cmake/android-stub",
+      "cacheVariables": {
+        "POP_TRANSLATE": "STUB"
+      }
+    },
+    {
       "name": "ios",
       "generator": "Xcode",
       "binaryDir": "${sourceDir}/build/cmake/ios",
@@ -157,6 +177,14 @@
     {
       "name": "windows-stub",
       "configurePreset": "windows-stub"
+    },
+    {
+      "name": "android",
+      "configurePreset": "android"
+    },
+    {
+      "name": "android-stub",
+      "configurePreset": "android-stub"
     },
     {
       "name": "ios",

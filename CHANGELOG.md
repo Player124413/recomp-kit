@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add `android` and `android-stub` NDK presets for arm64-v8a, API 29 and
+  static libc++. Build the SDL host as `libmain.so` with static SDL3 and
+  NDK Vulkan/log libraries, omit desktop tests and add an Android stub CI
+  build. Read arm64 Linux/Android page-fault writes from the kernel's ESR
+  signal-frame record. APK packaging and device execution are not implemented here.
+
 - Package successful desktop app builds under `build/package`: a Linux
   folder and architecture-named tarball, or a Windows folder. Include the
   kit notices, display-mode baseline, available translation symbol index

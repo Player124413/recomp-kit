@@ -11,6 +11,9 @@
 
 #include <atomic>
 #include <signal.h>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <sys/ucontext.h>
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -101,7 +104,7 @@ struct sigaction g_old_segv, g_old_bus;
 // there is no x86 instruction at the fault to decode. The syndrome register is
 // the hardware's own classification of the same access and is exact.
 bool fault_was_write(void *ctx) {
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__APPLE__)
     ucontext_t *uc = (ucontext_t *)ctx;
     if (!uc || !uc->uc_mcontext)
         return false;
@@ -111,6 +114,32 @@ bool fault_was_write(void *ctx) {
     if (ec != 0x24 && ec != 0x25)
         return false;
     return (esr & (1u << 6)) != 0;
+#elif defined(__aarch64__) && (defined(__linux__) || defined(__ANDROID__))
+    ucontext_t *uc = (ucontext_t *)ctx;
+    if (!uc)
+        return false;
+    const uint8_t *p = (const uint8_t *)uc->uc_mcontext.__reserved;
+    const uint8_t *end = p + sizeof uc->uc_mcontext.__reserved;
+    while (end - p >= 8) {
+        struct {
+            uint32_t magic;
+            uint32_t size;
+        } header;
+        memcpy(&header, p, sizeof header);
+        if (header.magic == 0 || header.size < 8 || header.size > (size_t)(end - p))
+            break;
+        // ESR_MAGIC identifies the kernel's esr_context record.
+        if (header.magic == 0x45535201 && header.size >= 16) {
+            uint64_t esr;
+            memcpy(&esr, p + 8, sizeof esr);
+            const uint64_t ec = (esr >> 26) & 0x3f;
+            if (ec != 0x24 && ec != 0x25)
+                return false;
+            return (esr & (1u << 6)) != 0;
+        }
+        p += header.size;
+    }
+    return false;
 #else
     (void)ctx;
     return false;

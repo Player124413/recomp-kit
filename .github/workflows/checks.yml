@@ -29,6 +29,26 @@ jobs:
       - name: Check repository boundaries and documentation links
         run: .venv/bin/python tools/check_repo.py
 
+  android-stub:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install CMake and Ninja
+        run: |
+          python3 -m venv .ci
+          .ci/bin/python -m pip install cmake==4.1.2 ninja==1.13.0
+          echo "$PWD/.ci/bin" >> "$GITHUB_PATH"
+      - name: Install the pinned Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Configure the arm64 Android stub (API 29)
+        run: cmake --preset android-stub
+      - name: Link the shared SDL app against the stub translation
+        run: cmake --build --preset android-stub --target recomp_app
+      - name: Check the SDLActivity library name
+        run: test -s build/cmake/android-stub/host/libmain.so
+
   native-compile:
     # Game files and generated code are never available in CI. The *-stub
     # presets link every host against tools/gen_stub_translation.py's link-only
