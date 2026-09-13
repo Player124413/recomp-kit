@@ -155,6 +155,30 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
     reset_gesture();
 }
 
+void TouchMapper::finger_cancel(int64_t id, std::vector<TouchAction> *out) {
+    for (size_t i = 0; i < fingers_.size(); ++i)
+        if (fingers_[i].id == id) {
+            fingers_.erase(fingers_.begin() + (long)i);
+            break;
+        }
+    if (!fingers_.empty())
+        return;
+    if (dragging_)
+        button(out, 0, false, 0, 0);
+    reset_gesture();
+}
+
+void TouchMapper::cancel_all(std::vector<TouchAction> *out) {
+    if (release_pending_) {
+        release_pending_ = false;
+        button(out, release_button_, false, release_x_, release_y_);
+    }
+    if (dragging_)
+        button(out, 0, false, 0, 0);
+    fingers_.clear();
+    reset_gesture();
+}
+
 void TouchMapper::tick(uint64_t now, std::vector<TouchAction> *out) {
     if (release_pending_ && now >= release_due_) {
         release_pending_ = false;

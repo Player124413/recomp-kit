@@ -37,6 +37,11 @@ class TouchMapper {
     void finger_up(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
     // Fires time-based gestures (long press). Call once per pump.
     void tick(uint64_t now_ns, std::vector<TouchAction> *out);
+    // The system took the finger away (SDL_EVENT_FINGER_CANCELED): forget it
+    // without a click; a drag it was holding is released.
+    void finger_cancel(int64_t id, std::vector<TouchAction> *out);
+    // Focus loss or backgrounding: every finger is gone. Releases anything held.
+    void cancel_all(std::vector<TouchAction> *out);
     // Toggled by a four-finger tap; the host shows or hides the keyboard.
     bool text_input_wanted() const {
         return text_input_;
