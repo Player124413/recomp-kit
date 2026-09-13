@@ -944,6 +944,15 @@ bool host_gate_pointer_place(int32_t x, int32_t y) {
         return false;
     x = std::clamp(x, 0, std::max(0, g_layout.drawable_w - 1));
     y = std::clamp(y, 0, std::max(0, g_layout.drawable_h - 1));
+    // A finger the mapper put on the window's last point lands a pixel or two
+    // short of the drawable's last row or column once scaled (1666 of 1668 on
+    // an iPad), and the hit test hands only that last pixel the guest's edge,
+    // which is the row the game scrolls from. Treat the last few pixels as it.
+    constexpr int kEdgeSlack = 3;
+    if (x >= g_layout.drawable_w - 1 - kEdgeSlack)
+        x = std::max(0, g_layout.drawable_w - 1);
+    if (y >= g_layout.drawable_h - 1 - kEdgeSlack)
+        y = std::max(0, g_layout.drawable_h - 1);
     // The same mapping pointer_correction() converges toward: the drawable
     // position scaled into the game's screen, or in enhanced gameplay the
     // layout's own guest coordinate for the scene and sidebar.
