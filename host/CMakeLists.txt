@@ -43,7 +43,7 @@ pop_test_binary(compositor_tests)
 add_test(NAME compositor_tests COMMAND compositor_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(compositor_tests PROPERTIES LABELS gpu)
 
-add_executable(input_touch_tests ${HOST}/input_touch.cpp ${HOST}/tests/input_touch_tests.cpp)
+add_executable(input_touch_tests ${HOST}/input_touch.cpp ${HOST}/touch_overlay_layout.cpp ${HOST}/tests/input_touch_tests.cpp)
 target_include_directories(input_touch_tests PRIVATE ${POP_ROOT})
 target_compile_options(input_touch_tests PRIVATE ${POP_WARN_WERROR})
 pop_link_sdl(input_touch_tests)
@@ -97,7 +97,8 @@ set(POP_AUDIO_SOURCES ${HOST}/audio/mixer.cpp ${HOST}/audio/sdl_sink.cpp ${HOST}
                       ${HOST}/audio_math.cpp ${HOST}/audio_capture.cpp)
 set(POP_CORE_LIBS recomp_platform recomp_runtime recomp_snapshot recomp_dx recomp_mods lua host_common gpu_backend)
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
-                        ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${HOST}/d3d_render.cpp
+                        ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${HOST}/touch_overlay.cpp
+                        ${HOST}/touch_overlay_layout.cpp ${HOST}/d3d_render.cpp
                         ${HOST}/indexed_frame.cpp)
 
 # The host's platform file: desktop or iPadOS (host/sdl/platform_ui.h).

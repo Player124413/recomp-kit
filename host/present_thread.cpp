@@ -5,6 +5,7 @@
 #include "present_frame.h"
 #include "present_test.h"
 #include "performance_overlay.h"
+#include "touch_overlay.h"
 #include "d3d_render.h"
 #include "input_gate.h"
 #include "../dx/passes.h"
@@ -45,6 +46,7 @@ extern "C" __attribute__((weak)) void host_present_mode(int *w, int *h, int *bpp
 }
 
 static std::atomic<bool> g_present_suspended{false};
+static std::atomic<bool> g_present_touch_overlay{false};
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -188,6 +190,7 @@ struct Service : std::enable_shared_from_this<Service> {
                 int(f.completion_fallback), int(f.released));
     }
     PerformanceOverlay performance_overlay;
+    TouchOverlay touch_overlay;
     std::array<LayoutSnapshot, 3> layouts;
     unsigned layout_slot = 0;
     bool layout_valid = false;
@@ -772,6 +775,9 @@ struct Service : std::enable_shared_from_this<Service> {
                 performance_overlay.draw(device, cb, drawable, drawable_desc.width,
                                          drawable_desc.height, snapshot, ts, mods_display_overlay(),
                                          mods_display_fps());
+                if (g_present_touch_overlay.load())
+                    touch_overlay.draw(device, cb, drawable, drawable_desc.width,
+                                       drawable_desc.height);
             }
             host_stats_note_phase(
                 HOST_PHASE_COMPOSITE,
@@ -1569,6 +1575,28 @@ extern "C" uint64_t host_display_epoch() {
 
 void host_present_suspend(bool suspended) {
     g_present_suspended.store(suspended);
+    if (!suspended)
+        return;
+    // Going to the background: the GPU completes nothing there, so any command
+    // buffer still in flight when the process is frozen stays in flight, and
+    // on resume the worker would wait on completions that never come. Give the
+    // worker up to a second to see the flag and let the in-flight work finish.
+    auto s = active.load();
+    if (!s)
+        return;
+    std::unique_lock lock(s->mutex);
+    s->wake.notify_all();
+    s->completed.wait_for(lock, std::chrono::seconds(1), [&] {
+        s->sweep();
+        return s->flights.empty() && s->pending_commands == 0;
+    });
+}
+
+void host_present_set_touch_overlay(bool shown) {
+    g_present_touch_overlay.store(shown);
+}
+bool host_present_touch_overlay(void) {
+    return g_present_touch_overlay.load();
 }
 bool host_present_suspended(void) {
     return g_present_suspended.load();

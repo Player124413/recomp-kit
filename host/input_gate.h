@@ -194,6 +194,10 @@ HitResult host_gate_pointer_event(int32_t x, int32_t y, double dx, double dy, in
 
 // Wake the guest mouse reader for remaining correction, under the baton.
 void host_gate_pointer_tick();
+// True when there is no pending pointer target, or the guest's own cursor has
+// reached it. A touch click waits for this: the game hit-tests against the
+// cursor it integrates from relative motion, not against a placed position.
+bool host_gate_pointer_settled(void);
 
 // Window motion production path: map, filter and deliver DirectInput once.
 // x/y are backing pixels. Device dx/dy are deliberately ignored: the window

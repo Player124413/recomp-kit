@@ -1,5 +1,6 @@
 // input_touch_tests.cpp - the gesture table, one case per row.
 #include "../input_touch.h"
+#include "../touch_overlay_layout.h"
 
 #include <SDL3/SDL_scancode.h>
 #include <stdio.h>
@@ -108,7 +109,32 @@ static void test_second_finger_cancels_pending_tap() {
     CHECK(out.empty()); // no long press once a second finger joined
 }
 
+static void test_overlay_layout_spans_the_bottom_edge() {
+    std::vector<TouchKey> keys;
+    touch_overlay_layout(2420, 1668, &keys);
+    CHECK(keys.size() == 8);
+    CHECK(keys.front().x == 0);
+    CHECK(keys.back().x + keys.back().w == 2420);
+    CHECK(keys.front().y + keys.front().h == 1668);
+    CHECK(keys.front().scancode == SDL_SCANCODE_ESCAPE);
+    CHECK(keys.back().scancode == SDL_SCANCODE_RETURN);
+    CHECK(touch_overlay_height(2420) == keys.front().h);
+}
+
+static void test_overlay_hit_matches_layout() {
+    std::vector<TouchKey> keys;
+    touch_overlay_layout(2420, 1668, &keys);
+    for (const TouchKey &k : keys)
+        CHECK(touch_overlay_hit(2420, 1668, k.x + k.w / 2.0, k.y + k.h / 2.0) == k.scancode);
+    CHECK(touch_overlay_hit(2420, 1668, 1210, 800) == 0);                     // mid screen
+    CHECK(touch_overlay_hit(2420, 1668, 10, 1668 - keys.front().h - 1) == 0); // just above the bar
+    CHECK(touch_overlay_hit(2420, 1668, -1, 1660) == 0);                      // outside
+    CHECK(touch_overlay_hit(0, 0, 0, 0) == 0);
+}
+
 int main() {
+    test_overlay_layout_spans_the_bottom_edge();
+    test_overlay_hit_matches_layout();
     test_tap_is_left_click();
     test_long_press_is_right_click();
     test_drag_is_left_drag();

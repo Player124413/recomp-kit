@@ -934,6 +934,18 @@ extern "C" void host_input_pointer_correction(int32_t *dx, int32_t *dy) {
     *dy = cy;
 }
 
+bool host_gate_pointer_settled(void) {
+    if (!g_pointer_target_valid)
+        return true;
+    const auto hit = host_gate_hit_test(nullptr, g_target_window_x, g_target_window_y);
+    if (hit.kind == HitResult::HIT_NONE)
+        return true;
+    int32_t dx = 0, dy = 0;
+    if (!pointer_correction(hit, &dx, &dy, false))
+        return true; // no readable guest pointer: nothing to wait for
+    return dx == 0 && dy == 0;
+}
+
 void host_gate_pointer_tick() {
     if (!g_pointer_target_valid)
         return;

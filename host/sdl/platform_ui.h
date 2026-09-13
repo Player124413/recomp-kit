@@ -29,3 +29,7 @@ SDL_Window *platform_ui_create_window(const char *title, int mode_w, int mode_h,
 // (background: pause audio and presentation; foreground: resume). Desktop:
 // always false.
 bool platform_ui_handle_lifecycle(const SDL_Event &e);
+
+// Whether the on-screen key bar (host/touch_overlay_layout.h) should show:
+// iOS without a hardware keyboard. Desktop: never.
+bool platform_ui_touch_overlay_wanted();

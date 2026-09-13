@@ -35,3 +35,7 @@ SDL_Window *platform_ui_create_window(const char *title, int mode_w, int mode_h,
 bool platform_ui_handle_lifecycle(const SDL_Event &) {
     return false;
 }
+
+bool platform_ui_touch_overlay_wanted() {
+    return false;
+}

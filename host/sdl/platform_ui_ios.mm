@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <stdio.h>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -91,20 +92,33 @@ SDL_Window *platform_ui_create_window(const char *title, int, int, int,
 bool platform_ui_handle_lifecycle(const SDL_Event &e) {
     switch (e.type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        fprintf(stderr, "[ios] will enter background: suspending presentation and audio\n");
+        host_present_suspend(true);
+        host_audio_pause(true);
+        return true;
     case SDL_EVENT_DID_ENTER_BACKGROUND:
+        fprintf(stderr, "[ios] did enter background\n");
         host_present_suspend(true);
         host_audio_pause(true);
         return true;
     case SDL_EVENT_WILL_ENTER_FOREGROUND:
+        fprintf(stderr, "[ios] will enter foreground\n");
+        return true;
     case SDL_EVENT_DID_ENTER_FOREGROUND:
+        fprintf(stderr, "[ios] did enter foreground: resuming audio and presentation\n");
         host_audio_pause(false);
         host_present_suspend(false);
         return true;
     case SDL_EVENT_TERMINATING:
+        fprintf(stderr, "[ios] terminating\n");
         host_present_suspend(true);
         host_audio_pause(true);
         return true;
     default:
         return false;
     }
+}
+
+bool platform_ui_touch_overlay_wanted() {
+    return !SDL_HasKeyboard();
 }

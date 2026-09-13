@@ -30,6 +30,9 @@
 #include "../input.h"
 #include "../input_gate.h"
 #include "../input_touch.h"
+#include "../touch_overlay_layout.h"
+
+#include <map>
 #include "../midi.h"
 #include "../present.h"
 #include "../window_presentation.h"
@@ -624,11 +627,46 @@ void post_drawable_size();
 
 TouchMapper g_touch;
 
+// Touch clicks wait for the game's cursor. Populous hit-tests against the
+// pointer it integrates from relative motion, so a press in the same instant
+// as the move lands where the cursor WAS. Buttons queue here until the gate
+// reports the cursor settled at the target, or kTouchClickDeadlineNs passes.
+constexpr uint64_t kTouchClickDeadlineNs = 150ull * 1000000ull;
+struct DeferredTouch {
+    TouchAction action;
+    uint64_t due_ns;
+};
+std::vector<DeferredTouch> g_deferred_touch;
+void push_touch_action_now(const TouchAction &a);
+
+void flush_deferred_touch(bool force) {
+    const uint64_t now = SDL_GetTicksNS();
+    while (!g_deferred_touch.empty()) {
+        const DeferredTouch &d = g_deferred_touch.front();
+        if (!force && now < d.due_ns && !host_gate_pointer_settled())
+            return; // in order: the first one not ready blocks the rest
+        push_touch_action_now(d.action);
+        g_deferred_touch.erase(g_deferred_touch.begin());
+    }
+}
+
 // Replays the mapper's actions as SDL events on our window, so the existing
-// mouse and key handling sees touch exactly as it sees a pointer.
+// mouse and key handling sees touch exactly as it sees a pointer. Buttons go
+// through the deferral queue; motion and keys go straight out.
 void push_touch_actions(const std::vector<TouchAction> &actions) {
-    const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
+    const uint64_t now = SDL_GetTicksNS();
     for (const TouchAction &a : actions) {
+        if (a.kind == TouchAction::Button || !g_deferred_touch.empty())
+            g_deferred_touch.push_back({a, now + kTouchClickDeadlineNs});
+        else
+            push_touch_action_now(a);
+    }
+    flush_deferred_touch(false);
+}
+
+void push_touch_action_now(const TouchAction &a) {
+    const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
+    {
         SDL_Event e{};
         e.common.timestamp = SDL_GetTicksNS();
         switch (a.kind) {
@@ -659,6 +697,27 @@ void push_touch_actions(const std::vector<TouchAction> &actions) {
         }
         SDL_PushEvent(&e);
     }
+}
+
+// Fingers that landed on the key bar hold a key until they lift; they never
+// reach the gesture mapper.
+std::map<int64_t, int> g_overlay_fingers;
+bool g_touch_overlay_on = false;
+
+int touch_overlay_key_at(const SDL_TouchFingerEvent &f) {
+    if (!g_touch_overlay_on)
+        return 0;
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    return touch_overlay_hit(dw, dh, f.x * dw, f.y * dh);
+}
+
+void push_touch_key(int scancode, bool down) {
+    TouchAction a;
+    a.kind = TouchAction::Key;
+    a.scancode = scancode;
+    a.down = down;
+    push_touch_action_now(a);
 }
 
 TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
@@ -746,9 +805,24 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_FINGER_MOTION: {
         std::vector<TouchAction> actions;
         const uint64_t now = SDL_GetTicksNS();
-        if (event.type == SDL_EVENT_FINGER_DOWN)
+        const int64_t finger = (int64_t)event.tfinger.fingerID;
+        auto held = g_overlay_fingers.find(finger);
+        if (held != g_overlay_fingers.end()) {
+            // A key-bar finger: release its key when it lifts, ignore its motion.
+            if (event.type == SDL_EVENT_FINGER_UP) {
+                push_touch_key(held->second, false);
+                g_overlay_fingers.erase(held);
+            }
+            break;
+        }
+        if (event.type == SDL_EVENT_FINGER_DOWN) {
+            if (const int key = touch_overlay_key_at(event.tfinger)) {
+                g_overlay_fingers[finger] = key;
+                push_touch_key(key, true);
+                break;
+            }
             g_touch.finger_down(touch_point(event.tfinger), now, &actions);
-        else if (event.type == SDL_EVENT_FINGER_UP)
+        } else if (event.type == SDL_EVENT_FINGER_UP)
             g_touch.finger_up(touch_point(event.tfinger), now, &actions);
         else
             g_touch.finger_motion(touch_point(event.tfinger), now, &actions);
@@ -813,10 +887,18 @@ int service(double seconds) {
 // The housekeeping every turn does once the events are in.
 void after_events() {
     {
-        // Time-based gestures (a long press) fire from the clock, not an event.
+        // Time-based gestures (a long press) fire from the clock, not an event,
+        // and deferred clicks go out once the game's cursor has caught up.
         std::vector<TouchAction> actions;
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
+        flush_deferred_touch(false);
+        // The key bar follows the hardware keyboard: attached, no bar.
+        const bool want_bar = platform_ui_touch_overlay_wanted();
+        if (want_bar != g_touch_overlay_on) {
+            g_touch_overlay_on = want_bar;
+            host_present_set_touch_overlay(want_bar);
+        }
     }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
