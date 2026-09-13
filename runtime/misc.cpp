@@ -7,6 +7,7 @@
 #include "layout.h"
 #include "memory.h"
 #include "win32.h"
+#include "loader.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <set>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -1262,21 +1264,227 @@ void m_mixerNoDriver(X86 *c) {
     set_eax(c, 6); // MMSYSERR_NODRIVER
 }
 
-// VERSION.dll: the executable's version resource is not served, so a game
-// that reads its own version string falls back to whatever it keeps in data.
+// VERSION.dll: the executable's own version resource, read out of the mapped
+// image. A game that shows its version asks for its own module's
+// VS_VERSIONINFO; any other file has none here. GetFileVersionInfoA hands the
+// block over as it is in the image (UTF-16 strings), and VerQueryValueA walks
+// it: "\" is VS_FIXEDFILEINFO, "\VarFileInfo\Translation" the language table,
+// "\StringFileInfo\<lang><codepage>\<name>" a string, narrowed to ANSI in
+// place the first time it is asked for, which is what the A entry point
+// returns a pointer to.
+namespace {
+struct VersionResource {
+    uint32_t addr = 0; // guest address of the VS_VERSIONINFO block in the image
+    uint32_t size = 0;
+};
+
+VersionResource find_version_resource() {
+    VersionResource none;
+    uint32_t base = loader_image_base();
+    if (!base || !gm_valid(base, 0x40))
+        return none;
+    uint32_t pe = rd32(base + 0x3c);
+    if (!gm_valid(base + pe, 24 + 96 + 16 + 8) || rd32(base + pe) != 0x00004550u)
+        return none;
+    uint32_t rsrc = rd32(base + pe + 24 + 96 + 2 * 8);
+    if (!rsrc)
+        return none;
+    // Three levels: type, name, language; the leaf names the data.
+    auto walk = [&](uint32_t dir, int32_t want_id, uint32_t *entry_out) -> bool {
+        if (!gm_valid(dir, 16))
+            return false;
+        uint32_t named = rd16(dir + 12), ids = rd16(dir + 14);
+        for (uint32_t k = 0; k < named + ids; ++k) {
+            uint32_t e = dir + 16 + 8 * k;
+            if (!gm_valid(e, 8))
+                return false;
+            uint32_t name = rd32(e), data = rd32(e + 4);
+            if (want_id < 0 || name == (uint32_t)want_id) {
+                *entry_out = data;
+                return true;
+            }
+        }
+        return false;
+    };
+    uint32_t root = base + rsrc, e1 = 0, e2 = 0, e3 = 0;
+    if (!walk(root, 16 /* RT_VERSION */, &e1) || !(e1 & 0x80000000u))
+        return none;
+    if (!walk(root + (e1 & 0x7fffffffu), -1, &e2) || !(e2 & 0x80000000u))
+        return none;
+    if (!walk(root + (e2 & 0x7fffffffu), -1, &e3) || (e3 & 0x80000000u))
+        return none;
+    uint32_t leaf = root + e3;
+    if (!gm_valid(leaf, 8))
+        return none;
+    VersionResource r;
+    r.addr = base + rd32(leaf);
+    r.size = rd32(leaf + 4);
+    if (!r.size || !gm_valid(r.addr, r.size))
+        return none;
+    return r;
+}
+
+// Whether `name` names the game's own executable: the same file however the
+// caller spelled the directory.
+bool names_own_executable(const std::string &name) {
+    std::string leaf = name;
+    size_t cut = leaf.find_last_of("\\/");
+    if (cut != std::string::npos)
+        leaf = leaf.substr(cut + 1);
+    std::string exe = loader_exe_path();
+    cut = exe.find_last_of("\\/");
+    if (cut != std::string::npos)
+        exe = exe.substr(cut + 1);
+    if (exe.empty())
+        exe = RECOMP_EXECUTABLE;
+    return os_strcasecmp(leaf.c_str(), exe.c_str()) == 0;
+}
+
+// One block of a VS_VERSIONINFO tree, as it lies in guest memory.
+struct VerBlock {
+    uint32_t at = 0, length = 0, value_length = 0, type = 0;
+    std::string key; // narrowed
+    uint32_t value = 0, children = 0, end = 0;
+};
+
+bool read_block(uint32_t at, uint32_t limit, VerBlock *b) {
+    if (!gm_valid(at, 6) || at + 6 > limit)
+        return false;
+    b->at = at;
+    b->length = rd16(at);
+    b->value_length = rd16(at + 2);
+    b->type = rd16(at + 4);
+    if (b->length < 6 || at + b->length > limit)
+        return false;
+    b->end = at + b->length;
+    uint32_t p = at + 6;
+    b->key.clear();
+    while (p + 2 <= b->end) {
+        uint16_t w = rd16(p);
+        p += 2;
+        if (!w)
+            break;
+        b->key.push_back(w < 256 ? (char)w : '?');
+    }
+    p = (p + 3) & ~3u;
+    b->value = p;
+    uint32_t vbytes = b->type == 1 ? b->value_length * 2 : b->value_length;
+    b->children = (p + vbytes + 3) & ~3u;
+    return true;
+}
+
+bool find_child(const VerBlock &parent, const char *key, VerBlock *out) {
+    for (uint32_t p = parent.children; p < parent.end;) {
+        VerBlock c;
+        if (!read_block(p, parent.end, &c))
+            return false;
+        if (os_strcasecmp(c.key.c_str(), key) == 0) {
+            *out = c;
+            return true;
+        }
+        p = (c.end + 3) & ~3u;
+    }
+    return false;
+}
+
+std::set<uint32_t> &narrowed() {
+    static std::set<uint32_t> s;
+    return s;
+}
+} // namespace
+
 void v_GetFileVersionInfoSizeA(X86 *c) {
+    std::string name = gm_str(arg(c, 0));
     uint32_t handle_out = arg(c, 1);
-    if (handle_out)
+    if (handle_out && gm_valid(handle_out, 4))
         wr32(handle_out, 0);
-    set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
-    set_eax(c, 0);
+    VersionResource r = names_own_executable(name) ? find_version_resource() : VersionResource();
+    if (!r.size) {
+        set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
+        set_eax(c, 0);
+        return;
+    }
+    set_last_error(0);
+    set_eax(c, r.size);
 }
+
+// GetFileVersionInfoA(name, handle, len, data)
 void v_GetFileVersionInfoA(X86 *c) {
-    set_last_error(1813);
-    set_eax(c, 0);
+    std::string name = gm_str(arg(c, 0));
+    uint32_t len = arg(c, 2), data = arg(c, 3);
+    VersionResource r = names_own_executable(name) ? find_version_resource() : VersionResource();
+    if (!r.size) {
+        set_last_error(1813);
+        set_eax(c, 0);
+        return;
+    }
+    if (!data || !gm_valid(data, len) || len < r.size) {
+        set_last_error(122); // ERROR_INSUFFICIENT_BUFFER
+        set_eax(c, 0);
+        return;
+    }
+    memcpy(g_mem + data, g_mem + r.addr, r.size);
+    narrowed().clear();
+    set_eax(c, 1);
 }
+
+// VerQueryValueA(block, subblock, ppBuffer, puLen)
 void v_VerQueryValueA(X86 *c) {
-    set_eax(c, 0);
+    uint32_t block = arg(c, 0), sub = arg(c, 1), pbuf = arg(c, 2), plen = arg(c, 3);
+    if (!block || !gm_valid(block, 6) || !sub || !pbuf || !gm_valid(pbuf, 4)) {
+        set_eax(c, 0);
+        return;
+    }
+    std::string path = gm_str(sub);
+    VerBlock root;
+    if (!read_block(block, block + rd16(block), &root)) {
+        set_eax(c, 0);
+        return;
+    }
+    // Split on backslashes; a leading one names the root.
+    std::vector<std::string> parts;
+    std::string cur;
+    for (char ch : path) {
+        if (ch == '\\' || ch == '/') {
+            if (!cur.empty())
+                parts.push_back(cur);
+            cur.clear();
+        } else
+            cur.push_back(ch);
+    }
+    if (!cur.empty())
+        parts.push_back(cur);
+    VerBlock b = root;
+    for (const std::string &part : parts) {
+        VerBlock child;
+        if (!find_child(b, part.c_str(), &child)) {
+            set_eax(c, 0);
+            return;
+        }
+        b = child;
+    }
+    uint32_t out_len = b.value_length;
+    if (parts.empty()) {
+        // VS_FIXEDFILEINFO, whatever the header's own length says.
+        out_len = b.value_length ? b.value_length : 0x34;
+    } else if (b.type == 1) {
+        // A string, narrowed in place the first time so the A caller reads
+        // an ANSI string where the block held UTF-16.
+        if (narrowed().insert(b.value).second) {
+            uint32_t n = b.value_length;
+            for (uint32_t i = 0; i < n; ++i) {
+                uint16_t w = rd16(b.value + 2 * i);
+                wr8(b.value + i, (uint8_t)(w < 256 ? w : '?'));
+            }
+            for (uint32_t i = n; i < 2 * n; ++i)
+                wr8(b.value + i, 0);
+        }
+        out_len = b.value_length; // characters, as Windows counts them
+    }
+    wr32(pbuf, b.value);
+    if (plen && gm_valid(plen, 4))
+        wr32(plen, out_len);
+    set_eax(c, 1);
 }
 
 // mciGetErrorStringA(error, buffer, length): the one MCI answer given above.

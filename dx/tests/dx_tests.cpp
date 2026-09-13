@@ -2857,6 +2857,21 @@ static void test_dshow_graph_playback() {
     if (!ctl || !ev || !seek || !aud || !pos)
         return;
 
+    // The graph has no filters to list, and says so the way a graph does: an
+    // enumerator whose Next fetches nothing. A game that walks the filters for
+    // its log then walks nothing instead of reporting a failed enumeration.
+    uint32_t penum = sc(0x1ed0), pfilter = sc(0x1ed4), pfetched = sc(0x1ed8);
+    CHECK_EQ(call_method(graph, 5, {penum}), S_OK_); // IFilterGraph::EnumFilters
+    uint32_t en = rd32(penum);
+    CHECK(en != 0);
+    if (en) {
+        wr32(pfetched, 99);
+        CHECK_EQ(call_method(en, 3, {1, pfilter, pfetched}), 1u); // Next -> S_FALSE
+        CHECK_EQ(rd32(pfetched), 0u);
+        CHECK_EQ(call_method(en, 5, {}), S_OK_); // Reset
+        call_method(en, 2);                      // Release
+    }
+
     // The completion event: a real handle, not yet signalled.
     CHECK_EQ(call_method(ev, 14, {0}), S_OK_);  // SetNotifyFlags(0)
     CHECK_EQ(call_method(ev, 7, {out}), S_OK_); // GetEventHandle

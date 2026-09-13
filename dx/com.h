@@ -80,6 +80,7 @@ enum ComIface : uint16_t {
     IF_MEDIASEEKING,     // IMediaSeeking
     IF_BASICAUDIO,       // IBasicAudio
     IF_MEDIAPOSITION,    // IMediaPosition
+    IF_ENUMFILTERS,      // IEnumFilters over the graph's (empty) filter list
     IF_COUNT
 };
 
@@ -106,6 +107,7 @@ enum ComKind : uint16_t {
     K_AUDIODATA,    // a guest buffer wrapped for sampling
     K_STREAMSAMPLE, // one sample: fills an audio data object from a stream
     K_GRAPH,        // the filter graph a multimedia stream plays through
+    K_ENUMFILTERS,  // an enumerator over that graph's filters
 };
 
 // ---------------------------------------------------------------------------

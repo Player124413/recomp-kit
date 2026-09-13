@@ -151,6 +151,8 @@ const uint8_t IID_IMediaEventEx_[16] =
     IID_BYTES(0x56a868c0, 0x0ad4, 0x11ce, 0xb0, 0x3a, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70);
 const uint8_t IID_IMediaSeeking_[16] =
     IID_BYTES(0x36b73880, 0xc2c8, 0x11cf, 0x8b, 0x46, 0x00, 0x80, 0x5f, 0x6c, 0xef, 0x60);
+const uint8_t IID_IEnumFilters_[16] =
+    IID_BYTES(0x56a86893, 0x0ad4, 0x11ce, 0xb0, 0x3a, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70);
 const uint8_t TIME_FORMAT_MEDIA_TIME_[16] =
     IID_BYTES(0x7b785574, 0x8c82, 0x11cf, 0xbc, 0x0c, 0x00, 0xaa, 0x00, 0xac, 0x74, 0xf6);
 
@@ -1275,10 +1277,89 @@ DX_STUB(DISP_GetTypeInfo, E_NOTIMPL)
 DX_STUB(DISP_GetIDsOfNames, E_NOTIMPL)
 DX_STUB(DISP_Invoke, E_NOTIMPL)
 
+// --- IEnumFilters: the graph has no filters, and an enumerator that fetches
+// nothing is how a graph says so. A game that lists the filters for its log
+// walks an empty list rather than reporting a failed enumeration.
+void EF_Next(X86 *c) {
+    ComObj *e = com_this_arg(c, IF_ENUMFILTERS);
+    uint32_t out = arg(c, 2), fetched = arg(c, 3);
+    if (!e) {
+        com_ret(c, E_FAIL);
+        return;
+    }
+    if (out && gm_valid(out, 4))
+        wr32(out, 0);
+    if (fetched && gm_valid(fetched, 4))
+        wr32(fetched, 0);
+    com_ret(c, S_FALSE);
+}
+void EF_Skip(X86 *c) {
+    com_ret(c, S_FALSE);
+}
+void EF_Reset(X86 *c) {
+    com_ret(c, S_OK);
+}
+void EF_Clone(X86 *c) {
+    ComObj *e = com_this_arg(c, IF_ENUMFILTERS);
+    uint32_t out = arg(c, 1);
+    if (!e) {
+        com_ret(c, E_FAIL);
+        return;
+    }
+    ComObj *twin = com_new(K_ENUMFILTERS);
+    if (!twin) {
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    twin->dsh_owner = e->dsh_owner;
+    uint32_t v = com_view(twin, IF_ENUMFILTERS);
+    if (!v || !out || !gm_valid(out, 4)) {
+        com_release(twin);
+        com_ret(c, v ? E_POINTER : E_OUTOFMEMORY);
+        return;
+    }
+    wr32(out, v);
+    com_ret(c, S_OK);
+}
+
+const ComMethod g_enumfilters[] = {
+    {"QueryInterface", 3, com_QueryInterface},
+    {"AddRef", 1, com_AddRef},
+    {"Release", 1, com_Release},
+    {"Next", 4, EF_Next},
+    {"Skip", 2, EF_Skip},
+    {"Reset", 1, EF_Reset},
+    {"Clone", 2, EF_Clone},
+};
+
 // --- IGraphBuilder: there are no filters to build with.
 DX_STUB(GB_AddFilter, E_NOTIMPL)
 DX_STUB(GB_RemoveFilter, E_NOTIMPL)
-DX_STUB(GB_EnumFilters, E_NOTIMPL)
+
+void GB_EnumFilters(X86 *c) {
+    GraphThis t = graph_this(c);
+    uint32_t out = arg(c, 1);
+    if (!t.g) {
+        com_ret(c, E_FAIL);
+        return;
+    }
+    if (out && gm_valid(out, 4))
+        wr32(out, 0);
+    ComObj *e = com_new(K_ENUMFILTERS);
+    if (!e) {
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    e->dsh_owner = t.g->id;
+    uint32_t v = com_view(e, IF_ENUMFILTERS);
+    if (!v || !out || !gm_valid(out, 4)) {
+        com_release(e);
+        com_ret(c, v ? E_POINTER : E_OUTOFMEMORY);
+        return;
+    }
+    wr32(out, v);
+    com_ret(c, S_OK);
+}
 DX_STUB(GB_FindFilterByName, E_NOTIMPL)
 DX_STUB(GB_ConnectDirect, E_NOTIMPL)
 DX_STUB(GB_Reconnect, E_NOTIMPL)
@@ -1950,6 +2031,8 @@ void dshow_register() {
     com_define(IF_BASICAUDIO, "QUARTZ.dll", "IBasicAudio", g_basicaudio, std::size(g_basicaudio));
     com_define(IF_MEDIAPOSITION, "QUARTZ.dll", "IMediaPosition", g_mediaposition,
                std::size(g_mediaposition));
+    com_define(IF_ENUMFILTERS, "QUARTZ.dll", "IEnumFilters", g_enumfilters,
+               std::size(g_enumfilters));
 
     com_bind(IF_MMSTREAM, K_MMSTREAM);
     com_bind(IF_MEDIASTREAM, K_MEDIASTREAM);
@@ -1962,6 +2045,7 @@ void dshow_register() {
     com_bind(IF_MEDIASEEKING, K_GRAPH);
     com_bind(IF_BASICAUDIO, K_GRAPH);
     com_bind(IF_MEDIAPOSITION, K_GRAPH);
+    com_bind(IF_ENUMFILTERS, K_ENUMFILTERS);
 
     com_register_iid(IF_MMSTREAM, IID_IAMMultiMediaStream_);
     com_register_iid(IF_MMSTREAM, IID_IMultiMediaStream_);
@@ -1979,6 +2063,7 @@ void dshow_register() {
     com_register_iid(IF_MEDIASEEKING, IID_IMediaSeeking_);
     com_register_iid(IF_BASICAUDIO, IID_IBasicAudio_);
     com_register_iid(IF_MEDIAPOSITION, IID_IMediaPosition_);
+    com_register_iid(IF_ENUMFILTERS, IID_IEnumFilters_);
 
     com_set_destructor(K_MMSTREAM, mmstream_destroy);
     com_set_destructor(K_STREAMSAMPLE, sample_destroy);

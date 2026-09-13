@@ -77,9 +77,9 @@ class ProbeTests(unittest.TestCase):
     def test_surface_refusals_are_diagnostic_not_automatic_mode_failures(self):
         # Reduced from the orchestrator's successful 800x600x16 capture. A
         # rejected optional PVRC candidate precedes real mode/gameplay evidence.
-        legacy = ("[popm] ddraw: CreateSurface FourCC 'PVRC' (43525650) is not an "
+        legacy = ("[recomp] ddraw: CreateSurface FourCC 'PVRC' (43525650) is not an "
                   "advertised pixel format: DDERR_INVALIDPIXELFORMAT\n")
-        com = ("[popm] dx: DDRAW.dll!IDirectDraw::CreateSurface failed: "
+        com = ("[recomp] dx: DDRAW.dll!IDirectDraw::CreateSurface failed: "
                "DDERR_INVALIDPIXELFORMAT (0x88760091)\n")
         evidence = ("display mode: 800x600 16bpp\n"
                     "Classic dumpc completed frame=1213 class=2 guest=800x600 drawable=800x600\n" +
@@ -92,7 +92,7 @@ class ProbeTests(unittest.TestCase):
                                              rmask=0, gmask=0, bmask=0, amask=0),
                        display_mode=[640, 480, 16])
         def diagnostic(row):
-            return "[popm] ddraw: CreateSurface failure " + json.dumps(row) + "\n"
+            return "[recomp] ddraw: CreateSurface failure " + json.dumps(row) + "\n"
         with tempfile.TemporaryDirectory() as tmp:
             ppm = Path(tmp) / "dump.ppm"
             ppm.write_bytes(b"P6\n800 600\n255\n" + bytes([0,0,255])*800*600)
@@ -125,7 +125,7 @@ class ProbeTests(unittest.TestCase):
                     # Detail alone must fail too: the generic COM logger deduplicates.
                     self.assertEqual(check(diagnostic(row) + evidence)[0], "fail")
                     self.assertIn(row["surface"], check(diagnostic(row) + evidence)[2])
-            self.assertEqual(check("[popm] ddraw: CreateSurface failure {bad json}\n" + evidence)[0], "fail")
+            self.assertEqual(check("[recomp] ddraw: CreateSurface failure {bad json}\n" + evidence)[0], "fail")
             self.assertEqual(check(diagnostic(refusal) + com + evidence.replace("class=2", "class=0"))[0], "fail")
             ppm.unlink()
             self.assertEqual(check(diagnostic(refusal) + com + evidence)[0], "fail")
@@ -137,7 +137,7 @@ class ProbeTests(unittest.TestCase):
         def child(command, *, cwd, env, stdout, **kwargs):
             self.assertEqual(command, [str(cwd / "build/recomp/pop_smoke")])
             self.assertEqual(Path(env["RECOMP_SCRIPT"]).parent, Path(env["RECOMP_HOST_DUMP_DIR"]))
-            stdout.write("[popm] ddraw: CreateSurface failure " + json.dumps(refusal) + "\n")
+            stdout.write("[recomp] ddraw: CreateSurface failure " + json.dumps(refusal) + "\n")
             return SimpleNamespace(returncode=1)
         with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
             root = Path(tmp)

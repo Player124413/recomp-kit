@@ -496,6 +496,63 @@ static void test_memory_shims_2(X86 *c) {
           "GetEnvironmentStrings returns a separate ANSI block");
 }
 
+// The executable's own version resource, as VERSION.dll would serve it: a
+// game that shows its version reads it from here. The test finds RT_VERSION
+// in the mapped image's resource directory itself, so it knows whether the
+// image has one before it asks the shims.
+static bool image_has_version_resource() {
+    uint32_t base = loader_image_base();
+    uint32_t pe = rd32(base + 0x3c);
+    uint32_t rsrc = rd32(base + pe + 24 + 96 + 2 * 8);
+    if (!rsrc)
+        return false;
+    uint32_t dir = base + rsrc;
+    uint32_t named = rd16(dir + 12), ids = rd16(dir + 14);
+    for (uint32_t k = 0; k < named + ids; ++k)
+        if (rd32(dir + 16 + 8 * k) == 16) // RT_VERSION
+            return true;
+    return false;
+}
+
+static void test_version_resource(X86 *c) {
+    section("VERSION.dll");
+    uint32_t name = put_str(RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE);
+    uint32_t handle = scratch_block(4);
+    uint32_t size = call_import(c, "VERSION.dll", "GetFileVersionInfoSizeA", {name, handle});
+    if (!image_has_version_resource()) {
+        check(size == 0 && get_last_error() == 1813,
+              "an image without a version resource: size 0, ERROR_RESOURCE_TYPE_NOT_FOUND");
+        return;
+    }
+    check(size > 0x34, "GetFileVersionInfoSizeA reports the resource (%u bytes)", size);
+    uint32_t block = scratch_block(size + 16);
+    check(call_import(c, "VERSION.dll", "GetFileVersionInfoA", {name, 0, size, block}) == 1,
+          "GetFileVersionInfoA copies it");
+    uint32_t pval = scratch_block(4), plen = scratch_block(4);
+    uint32_t root = put_str("\\");
+    check(call_import(c, "VERSION.dll", "VerQueryValueA", {block, root, pval, plen}) == 1 &&
+              rd32(plen) == 0x34 && rd32(rd32(pval)) == 0xFEEF04BDu,
+          "VerQueryValueA(\"\\\\\") finds VS_FIXEDFILEINFO by its signature");
+    uint32_t tr = put_str("\\VarFileInfo\\Translation");
+    check(call_import(c, "VERSION.dll", "VerQueryValueA", {block, tr, pval, plen}) == 1 &&
+              rd32(plen) >= 4,
+          "the translation table is there");
+    uint32_t lang = rd32(rd32(pval));
+    char key[64];
+    snprintf(key, sizeof key, "\\StringFileInfo\\%04x%04x\\FileDescription", lang & 0xffff,
+             lang >> 16);
+    uint32_t sk = put_str(key);
+    check(call_import(c, "VERSION.dll", "VerQueryValueA", {block, sk, pval, plen}) == 1 &&
+              rd32(plen) > 1 && !gm_str(rd32(pval)).empty(),
+          "a string value is found through its translation: \"%s\"", gm_str(rd32(pval)).c_str());
+    uint32_t bogus = put_str("\\StringFileInfo\\040904b0\\NoSuchKey");
+    check(call_import(c, "VERSION.dll", "VerQueryValueA", {block, bogus, pval, plen}) == 0,
+          "an absent key is refused");
+    uint32_t other = put_str("C:\\somewhere\\else.exe");
+    check(call_import(c, "VERSION.dll", "GetFileVersionInfoSizeA", {other, handle}) == 0,
+          "another file has no version resource here");
+}
+
 static void test_files(X86 *c) {
     section("file layer");
     // Mixed case, backslashes, and a relative path: the real file is
@@ -3174,6 +3231,7 @@ int main(int argc, char **argv) {
     test_heap_shims(c);
     test_memory_shims_2(c);
     test_files(c);
+    test_version_resource(c);
     test_pinned_clock(c);
     test_cadence_trace(c);
     test_misc_shims(c);

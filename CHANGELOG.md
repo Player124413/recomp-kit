@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- VERSION.dll serves the executable's own version resource out of the mapped
+  image: `GetFileVersionInfoSizeA`/`GetFileVersionInfoA` for the game's module
+  name, `VerQueryValueA` for `\`, `\VarFileInfo\Translation` and
+  `\StringFileInfo\<lang>\<name>` (strings narrowed in place for the A
+  caller). Any other file still has none. A game's "Version" label fills in.
+- DirectShow: `IFilterGraph::EnumFilters` returns an enumerator over the
+  graph's (empty) filter list instead of E_NOTIMPL, so a game that lists its
+  filters for its log walks nothing rather than logging a failure.
+- The runtime's log lines are tagged `[recomp]`, not with a game's initials.
 - File seam: a handle opened for writing on an existing file goes through the
   read tier and is promoted to the write tier by its first WriteFile or
   SetEndOfFile, continuing at the offset it had reached. Classifying the open

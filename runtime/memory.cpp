@@ -28,7 +28,7 @@ void log_msg(int level, const char *fmt, ...) {
         return;
     va_list ap;
     va_start(ap, fmt);
-    fputs("[popm] ", stderr);
+    fputs("[recomp] ", stderr);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
@@ -42,7 +42,7 @@ bool log_once(const char *key, const char *fmt, ...) {
         return true;
     va_list ap;
     va_start(ap, fmt);
-    fputs("[popm] ", stderr);
+    fputs("[recomp] ", stderr);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
     va_end(ap);
@@ -137,7 +137,7 @@ void mem_init() {
     }
     void *p = os_vm_reserve(GUEST_SIZE);
     if (!p) {
-        fprintf(stderr, "[popm] fatal: cannot map %u bytes of guest memory\n", GUEST_SIZE);
+        fprintf(stderr, "[recomp] fatal: cannot map %u bytes of guest memory\n", GUEST_SIZE);
         abort();
     }
     g_mem = (uint8_t *)p;
