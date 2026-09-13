@@ -42,6 +42,7 @@
 #include "../../runtime/win32.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h> // on iOS this supplies the UIKit entry point and renames main
 #include <SDL3/SDL_vulkan.h>
 
 #include <math.h>

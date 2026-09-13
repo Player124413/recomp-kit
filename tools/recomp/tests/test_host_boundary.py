@@ -1,6 +1,7 @@
 """The host's platform boundary: Objective-C++ and Apple frameworks live only
-under host/gpu/metal/. Everything else in the host is portable C++
-over gpu/gpu.h, SDL3 and the platform layer."""
+under host/gpu/metal/ and in the host's own platform file for iPadOS,
+host/sdl/platform_ui_ios.mm (see host/sdl/platform_ui.h). Everything else in
+the host is portable C++ over gpu/gpu.h, SDL3 and the platform layer."""
 import re
 import unittest
 from pathlib import Path
@@ -10,8 +11,12 @@ HOST = ROOT / "host"
 APPLE = re.compile(r"#import\b|<Metal/|<AppKit/|<Cocoa/|<AVFoundation/|<AudioToolbox/|<CoreText/|<CoreVideo/|<QuartzCore/")
 
 
+PLATFORM_FILES = {"host/sdl/platform_ui_ios.mm"}
+
+
 def outside_metal(path: Path) -> bool:
-    return "gpu/metal" not in path.as_posix()
+    relative = path.relative_to(ROOT).as_posix()
+    return "gpu/metal" not in relative and relative not in PLATFORM_FILES
 
 
 class HostBoundary(unittest.TestCase):
