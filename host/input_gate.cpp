@@ -6,6 +6,8 @@
 #include "../runtime/guest.h"
 #include "../runtime/display_seam.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <algorithm>
 #include <cmath>
@@ -960,6 +962,14 @@ bool host_gate_pointer_place(int32_t x, int32_t y) {
     }
     tx = std::clamp(tx, int64_t(p.left), int64_t(p.right));
     ty = std::clamp(ty, int64_t(p.top), int64_t(p.bottom));
+    static const bool trace = getenv("POPM_TRACE_POINTER") != nullptr;
+    if (trace)
+        fprintf(stderr,
+                "[place] drawable %d,%d of %dx%d hit %d at %d,%d -> pair %lld,%lld bounds "
+                "%d,%d,%d,%d classic %d cls %d\n",
+                x, y, g_layout.drawable_w, g_layout.drawable_h, int(hit.kind), hit.gx, hit.gy,
+                (long long)tx, (long long)ty, p.left, p.top, p.right, p.bottom,
+                int(g_layout.classic), int(g_layout.cls));
     wr32(p.object + 0x20, uint32_t(tx));
     wr32(p.object + 0x24, uint32_t(ty));
     // Tell the closed loop where the pair now is, so it neither fights the
