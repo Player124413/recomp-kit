@@ -474,6 +474,11 @@ void Device_GetDeviceData(X86 *c) {
             if (trace && ofs >= DIMS_OFF_rgbButtons)
                 fprintf(stderr, "[dinput-button] ofs %u data %08x seq %u\n", ofs, data,
                         d->sequence);
+            // Axis deltas matter most while the right button is held: that is
+            // the camera mode, which reads them and nothing else.
+            if (trace && ofs < DIMS_OFF_rgbButtons && (d->last_buttons[1] & 0x80u))
+                fprintf(stderr, "[dinput-axis] ofs %u delta %d seq %u (right held)\n", ofs,
+                        int32_t(data), d->sequence);
         }
     }
     wr32(inout, n);
