@@ -30,10 +30,16 @@ MOD_TEST_SUITE(symbols_verify_the_image) {
 
     // A symbols file whose digest does not match the mapped image is refused:
     // every address in it means something only for that build.
-    system("mkdir -p build/recomp/symbols-test && "
-           "sed 's/815ba8a5/deadbeef/' build/recomp/symbols.json "
-           "> build/recomp/symbols-test/wrong.json");
-    MOD_CHECK(!mods_symbols_load("build/recomp/symbols-test/wrong.json"));
+    const std::string recomp = mods_test_build_path("recomp");
+    system(("mkdir -p " + recomp +
+            "/symbols-test && "
+            "sed 's/\"exe_sha256\": \"[0-9a-f]\\{8\\}/\"exe_sha256\": \"deadbeef/' " +
+            recomp +
+            "/symbols.json "
+            "> " +
+            recomp + "/symbols-test/wrong.json")
+               .c_str());
+    MOD_CHECK(!mods_symbols_load(mods_test_build_path("recomp/symbols-test/wrong.json").c_str()));
     MOD_CHECK(strstr(mods_symbols_error(), "does not match") != nullptr);
     MOD_CHECK(mods_symbols_load(nullptr)); // and the good one reloads
 }

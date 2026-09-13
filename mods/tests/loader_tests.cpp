@@ -31,7 +31,7 @@ extern "C" PopModStatus mods_record_status(const char *id);
 namespace {
 
 const char *TREE = nullptr; // the mods tree this suite builds
-std::string g_fixtures = "build/recomp/mods-fixtures";
+std::string g_fixtures = mods_test_build_path("recomp/mods-fixtures");
 
 // Enters a hooked function the way a generated call site does. The events
 // layer hooks the turn scheduler, so this is how a turn event is made to fire
@@ -244,14 +244,15 @@ void two_case_conflict() {
 // Keep the existing first-run record test first in reverse registration order.
 MOD_TEST_SUITE(loader_packaged_core_display) {
     fresh();
-    os_setenv("POPM_CORE_MODS_DIR", "build/recomp/mods/core");
+    os_setenv("POPM_CORE_MODS_DIR", mods_test_build_path("recomp/mods/core").c_str());
     MOD_CHECK(mods_load_all());
     MOD_CHECK(loaded("core.display"));
     MOD_CHECK_EQ(mods_record_status("core.display"), POP_OK);
     if (!loaded("core.display"))
         fprintf(stderr, "core.display: %s\n", reason("core.display").c_str());
     // A no-load open proves the loader opened the installed artifact itself.
-    void *lib = os_dlopen_noload(("build/recomp/mods/core/display/" + plug("display")).c_str());
+    void *lib = os_dlopen_noload(
+        (mods_test_build_path("recomp/mods/core/display/") + plug("display")).c_str());
     MOD_CHECK(lib != nullptr);
     if (lib)
         os_dlclose(lib);
@@ -978,6 +979,10 @@ MOD_TEST_SUITE(loader_api_is_live_through_pop_mod_exit) {
         int64_t out = 0;
         MOD_CHECK_EQ(saved_get(api, "level", &out), POP_E_STATE);
     }
+    // Off again: the image stays mapped (h is never closed) and the suites
+    // that load this fixture later assert about their own values.
+    if (enable)
+        *enable = 0;
 }
 
 namespace {
@@ -1386,7 +1391,7 @@ MOD_TEST_SUITE(loader_an_empty_run_still_writes_its_record) {
     // The path the loader writes to. Removed first and confirmed gone, so
     // what is found afterwards was written by THIS shutdown and is not
     // something an earlier one left behind.
-    const std::string record = "build/recomp/mods/run.json";
+    const std::string record = mods_test_build_path("recomp/mods/run.json");
     os_unlink(record.c_str());
     OsStat st;
     MOD_CHECK(os_stat(record.c_str(), &st) != 0);

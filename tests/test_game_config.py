@@ -47,6 +47,7 @@ class LoadTests(unittest.TestCase):
             self.assertIn('#define RECOMP_DEVELOPER_EXE "%s"' % (game / "original/STUB.EXE").resolve().as_posix(),
                           header)
             self.assertIn('#define RECOMP_GAME_DIR "%s"' % game.resolve().as_posix(), header)
+            self.assertIn('#define RECOMP_KIT_DIR "%s"' % ROOT.resolve().as_posix(), header)
 
     def test_missing_key_is_an_error_naming_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:

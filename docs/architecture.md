@@ -53,7 +53,7 @@ requests for the guest thread rather than directly executing guest functions.
 Classic renders at the selected game resolution and aspect-fits the image.
 Enhanced can render the world at drawable resolution with separately scaled UI.
 Wide view expands the world only when the drawable is wider than the selected
-game canvas. [Display settings](DISPLAY.md) describes the visible behavior.
+game canvas. The game's own docs (populous-recomp's `docs/DISPLAY.md`) describe the visible behavior.
 
 ## Timing, input and settings
 

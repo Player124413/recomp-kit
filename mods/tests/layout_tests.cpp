@@ -106,7 +106,19 @@ int main() {
     CHECK(host_layout().resources_dir == root + "/co/build/Y.app/Contents/Resources");
     CHECK(host_resource("mods/core") == root + "/co/build/Y.app/Contents/Resources/mods/core");
     CHECK(host_layout().profile_dir == root + "/co/build/recomp/profile");
-    // 6. A flat bundle (iOS): Info.plist beside the executable, no Contents/MacOS.
+    // 7. A game repository: game.toml above the executable, the kit elsewhere.
+    mkdir_p(root + "/game/build/recomp");
+    touch(root + "/game/game.toml");
+    touch(root + "/game/build/recomp/pop_headless");
+    host_layout_set_exe_path_for_test((root + "/game/build/recomp/pop_headless").c_str());
+    CHECK(host_layout().developer);
+    CHECK(host_layout().checkout_root == root + "/game");
+    CHECK(host_resource("symbols.json") == root + "/game/build/recomp/symbols.json");
+    CHECK(host_resource("mods/core") == root + "/game/build/recomp/mods/core");
+    CHECK(host_resource("classic-modes.json") ==
+          std::string(RECOMP_KIT_DIR) + "/tools/recomp/baseline/classic-modes.json");
+    CHECK(host_layout().profile_dir == root + "/game/build/recomp/profile");
+    // 8. A flat bundle (iOS): Info.plist beside the executable, no Contents/MacOS.
     mkdir_p(root + "/Flat.app");
     touch(root + "/Flat.app/Info.plist");
     touch(root + "/Flat.app/Flat");

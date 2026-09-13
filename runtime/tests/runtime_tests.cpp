@@ -293,7 +293,8 @@ static void test_loader() {
           "initial ESP %08x is inside the stack", loader_context()->r[R_ESP]);
 
     // A wrong image must be refused.
-    check(!loader_load("original/gog/popTB.exe"), "a different EXE is refused: %s", loader_error());
+    check(!loader_load(RECOMP_DEVELOPER_GAME_DIR "/popTB.exe"), "a different EXE is refused: %s",
+          loader_error());
     check(loader_load(nullptr), "reloaded the correct image");
 }
 
@@ -500,7 +501,7 @@ static void test_files(X86 *c) {
     check(h != 0xffffffffu, "CreateFileA(\"DaTa\\\\VcOnFiG0.dat\") -> handle %08x", h);
 
     OsStat st{};
-    os_stat("original/gog/data/VCONFIG0.DAT", &st);
+    os_stat(RECOMP_DEVELOPER_GAME_DIR "/data/VCONFIG0.DAT", &st);
     uint32_t size = call_import(c, "KERNEL32.dll", "GetFileSize", {h, 0});
     check(size == (uint32_t)st.size, "GetFileSize reports %u, host file is %lld", size,
           (long long)st.size);
@@ -509,7 +510,7 @@ static void test_files(X86 *c) {
     check(call_import(c, "KERNEL32.dll", "ReadFile", {h, buf, 64, read_count, 0}) == 1,
           "ReadFile of 64 bytes succeeded");
     check(rd32(read_count) == 64, "ReadFile reported 64 bytes");
-    FILE *f = fopen("original/gog/data/VCONFIG0.DAT", "rb");
+    FILE *f = fopen(RECOMP_DEVELOPER_GAME_DIR "/data/VCONFIG0.DAT", "rb");
     uint8_t host[64];
     size_t got = f ? fread(host, 1, 64, f) : 0;
     if (f)

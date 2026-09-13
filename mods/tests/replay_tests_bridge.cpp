@@ -218,8 +218,9 @@ PopModStatus capture_log(const PopModApi *, const char *message) {
 // refusing to install, because a hook that installed and then wrote nothing
 // would look like a candidate that was never called.
 MOD_TEST_SUITE(capture_fixture_fails_closed) {
-    void *library = os_dlopen(
-        ("build/recomp/mods-fixtures/capture_mod" + std::string(os_plugin_extension())).c_str());
+    void *library = os_dlopen((mods_test_build_path("recomp/mods-fixtures/capture_mod") +
+                               std::string(os_plugin_extension()))
+                                  .c_str());
     MOD_CHECK(library != nullptr);
     if (!library)
         return;
@@ -238,7 +239,7 @@ MOD_TEST_SUITE(capture_fixture_fails_closed) {
     std::string keep = saved ? saved : "";
     os_unsetenv("POPM_TESTING");
     os_setenv("POPM_CAPTURE_TARGET", "0x00401000");
-    os_setenv("POPM_CAPTURE_OUT", "build/recomp/should-not-exist.json");
+    os_setenv("POPM_CAPTURE_OUT", mods_test_build_path("recomp/should-not-exist.json").c_str());
     capture_last_log[0] = 0;
     MOD_CHECK_EQ(init(&api), POP_E_STATE);
     MOD_CHECK(strstr(capture_last_log, "POPM_TESTING") != nullptr);
@@ -255,7 +256,7 @@ MOD_TEST_SUITE(capture_fixture_fails_closed) {
     // here, so the address form is the one this case can reach; the symbol
     // form is exercised by the capture run itself.
     os_setenv("POPM_CAPTURE_TARGET", "0xnot-an-address");
-    os_setenv("POPM_CAPTURE_OUT", "build/recomp/should-not-exist.json");
+    os_setenv("POPM_CAPTURE_OUT", mods_test_build_path("recomp/should-not-exist.json").c_str());
     capture_last_log[0] = 0;
     MOD_CHECK_EQ(init(&api), POP_E_STATE);
     MOD_CHECK(strstr(capture_last_log, "not an address") != nullptr);

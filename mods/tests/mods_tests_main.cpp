@@ -52,7 +52,8 @@ const char *mod_test_dir(const char *suite) {
     static std::map<std::string, std::string> kept;
     std::string &path = kept[suite];
     const char *root = getenv("POPM_TEST_DIR");
-    path = std::string(root && *root ? root : "build/recomp/mods-test") + "/" + suite;
+    path = std::string(root && *root ? root : mods_test_build_path("recomp/mods-test").c_str()) +
+           "/" + suite;
     std::string cmd = "rm -rf '" + path + "' && mkdir -p '" + path + "'";
     if (system(cmd.c_str()) != 0)
         fprintf(stderr, "mod_test_dir: cannot prepare %s\n", path.c_str());

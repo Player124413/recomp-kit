@@ -39,6 +39,7 @@ def render_header(cfg):
     lines.append("#define RECOMP_DEVELOPER_EXE %s" % c_string(cfg["developer_exe_path"].as_posix()))
     lines.append("#define RECOMP_DEVELOPER_GAME_DIR %s" % c_string(cfg["developer_exe_path"].parent.as_posix()))
     lines.append("#define RECOMP_GAME_DIR %s" % c_string(Path(cfg["dir"]).resolve().as_posix()))
+    lines.append("#define RECOMP_KIT_DIR %s" % c_string(Path(__file__).resolve().parents[1].as_posix()))
     for key, value in sorted(cfg.get("hooks", {}).items()):
         macro = "RECOMP_HOOK_" + key.upper()
         if isinstance(value, list):

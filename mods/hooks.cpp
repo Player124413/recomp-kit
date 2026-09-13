@@ -262,7 +262,7 @@ void x86_from_cpu(X86 *c, const pop_cpu_v1 *in, uint32_t bound) {
 }
 
 // The after phase: only eax and edx, because the frame the callback would
-// have been editing is gone. pop_mod_api.h and docs/MODDING.md both say so.
+// have been editing is gone. pop_mod_api.h and the game's docs/MODDING.md both say so.
 void x86_results_only(X86 *c, const pop_cpu_v1 *in, uint32_t bound) {
     if (offsetof(pop_cpu_v1, eax) + 4 <= bound)
         c->r[R_EAX] = in->eax;

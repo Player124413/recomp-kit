@@ -41,9 +41,11 @@ HostLayout compute() {
     const std::string dir = parent(exe);
     // A checkout above the executable makes this a developer run whatever the
     // executable's own shape (build/recomp/pop_smoke or build/PopRecomp.app).
+    // The checkout is the game's directory (its game.toml; outputs under its
+    // build/) or, for the kit's own stub builds, the kit itself.
     std::string up = dir;
     for (int depth = 0; depth < 12 && !up.empty(); ++depth) {
-        if (exists(up + "/tools/recomp/baseline/classic-modes.json")) {
+        if (exists(up + "/game.toml") || exists(up + "/tools/recomp/baseline/classic-modes.json")) {
             l.checkout_root = up;
             l.developer = true;
             break;
@@ -87,18 +89,21 @@ std::string host_resource(const char *rel) {
     const HostLayout &l = host_layout();
     if (l.resources_dir.empty())
         return "";
-    if (l.developer && strcmp(rel, "symbols.json") == 0) {
-        // A regenerated translation's index, else the tracked translation's.
-        std::string fresh = l.checkout_root + "/build/recomp/symbols.json";
-        return exists(fresh) ? fresh : l.checkout_root + "/translation/symbols.json";
-    }
+    if (l.developer && strcmp(rel, "symbols.json") == 0)
+        return l.checkout_root +
+               "/build/recomp/symbols.json"; // the regenerated translation's index
     if (l.developer && l.resources_dir == l.checkout_root) {
         if (strcmp(rel, "mods/core") == 0)
             return l.checkout_root + "/build/recomp/mods/core";
         if (strcmp(rel, "texture-pack") == 0)
             return l.checkout_root + "/build/texture-pack";
-        if (strcmp(rel, "classic-modes.json") == 0)
-            return l.checkout_root + "/tools/recomp/baseline/classic-modes.json";
+        if (strcmp(rel, "classic-modes.json") == 0) {
+            // The kit's committed probe list, wherever the kit is relative to the game.
+            const std::string own = l.checkout_root + "/tools/recomp/baseline/classic-modes.json";
+            return exists(own)
+                       ? own
+                       : std::string(RECOMP_KIT_DIR) + "/tools/recomp/baseline/classic-modes.json";
+        }
     }
     return l.resources_dir + "/" + rel;
 }

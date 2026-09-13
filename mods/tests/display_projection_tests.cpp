@@ -91,9 +91,9 @@ PopModApi fake_api() {
 MOD_TEST_SUITE(display_projection_fixture) {
     // Compiled as C by the same toolchain as all loader fixtures, then loaded
     // through its public ABI; this exercises the shipping hook callbacks.
-    void *lib = os_dlopen(
-        ("build/recomp/mods-fixtures/display_projection" + std::string(os_plugin_extension()))
-            .c_str());
+    void *lib = os_dlopen((mods_test_build_path("recomp/mods-fixtures/display_projection") +
+                           std::string(os_plugin_extension()))
+                              .c_str());
     MOD_CHECK(lib != nullptr);
     if (!lib) {
         fprintf(stderr, "%s\n", os_dlerror());

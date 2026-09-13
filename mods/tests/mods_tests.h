@@ -23,6 +23,19 @@ int mod_test_failures();
     } name_##_reg_instance;                                                                        \
     static void name_##_run()
 
+// The build root this suite's artifacts live under: the game's build/ when
+// the tests run for a game outside the kit (POP_BUILD_ROOT from CTest), else
+// the kit's own build/ relative to the working directory.
+#include <stdlib.h>
+#include <string>
+inline std::string mods_test_build_root() {
+    const char *root = getenv("POP_BUILD_ROOT");
+    return root && *root ? root : "build";
+}
+inline std::string mods_test_build_path(const char *rel) {
+    return mods_test_build_root() + "/" + rel;
+}
+
 #define MOD_CHECK(x)                                                                               \
     do {                                                                                           \
         if (x)                                                                                     \

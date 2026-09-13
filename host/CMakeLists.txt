@@ -154,7 +154,7 @@ if(TARGET recomp_gen)
               ${HOST}/page_overlay.cpp ${POP_PRESENT_SOURCES} ${HOST}/input.cpp ${HOST}/input_gate.cpp
       LIBS recomp_platform recomp_runtime_testing recomp_snapshot recomp_dx recomp_mods_testing lua gpu_backend
       FRAMEWORKS ${FW_FOUNDATION} ${FW_METAL})
-    add_test(NAME present_events_tests COMMAND present_events_tests ${POP_ROOT} WORKING_DIRECTORY ${POP_ROOT})
+    add_test(NAME present_events_tests COMMAND present_events_tests ${POP_BUILD_ROOT}/.. WORKING_DIRECTORY ${POP_ROOT})
     set_tests_properties(present_events_tests PROPERTIES LABELS mods ENVIRONMENT RECOMP_GAME_DIR=${RECOMP_GAME_DIR})
   endif()
 endif()

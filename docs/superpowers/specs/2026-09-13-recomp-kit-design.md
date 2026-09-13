@@ -1,5 +1,8 @@
 # recomp-kit design
 
+> Amended 2026-09-13 by `2026-09-13-game-repo-split-design.md`: games live in their own
+> repositories with the kit as a submodule; `games/` in the kit holds only the stub game.
+
 Date: 2026-09-13
 Status: approved 2026-09-13
 
