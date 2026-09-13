@@ -20,6 +20,24 @@
   and a `NEG` of a bounded index - decode exactly instead of falling back to a
   forward read that found nothing or the wrong entries
   (`tools/recomp/tests/test_jumptables.py`).
+- Translator: a pushed immediate that decodes as a thunk is an entry candidate:
+  the CRT's `atexit` is handed ten-byte `MOV ECX,obj / JMP dtor` stubs that no
+  function-start signal accepts, and called into nothing at exit without it.
+- Runtime: `game_path_resolve` uses the absolute `RECOMP_DEVELOPER_EXE` from
+  wherever the app runs, and a guest root of more than one component
+  (`C:\GOG Games\<name>`) resolves in `normalise_components`, so a game
+  repository's build finds and opens its own game without a dialog.
+- Runtime: `runtime/gdi32.cpp`, a fourth shim table: DIB sections in guest
+  memory, memory DCs, `GetObjectA`, colour tables, logical palettes, `BitBlt`
+  and `PatBlt` between DIBs, `GetDIBits`, text accepted and not drawn.
+- Runtime: boot-path shims with their argument counts: the CRT locale probes,
+  `GetEnvironmentVariableA`, `GlobalMemoryStatus`, `SetErrorMode`,
+  `GetLogicalDrives`, `SHGetSpecialFolderPathA` (per-user folders under the
+  guest root), `IsWindowUnicode`, `GetSystemMetrics`, `LoadCursorA`,
+  `CreateIconIndirect`/`DestroyIcon`, the mixer API (no driver),
+  `mciGetErrorStringA`, `VERSION.dll` (no version resource).
+- dx: `CoCreateInstance` for `CLSID_DirectSound` (every other class is
+  `REGDB_E_CLASSNOTREG`) and `IDirectSound::Initialize` succeeds.
 - Translator: a literal transfer to a block the sweep withdrew (padding after a
   call that never returns) becomes `recomp_unknown_call(c, addr); return;` rather
   than a dangling dispatch, so a listing that ends on a `throw` translates. The
