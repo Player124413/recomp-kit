@@ -129,14 +129,14 @@ struct Channel {
 // The first few of each reason are printed with the detail that identifies
 // them; after that only the totals move.
 // ---------------------------------------------------------------------------
-// POPM_AUDIO_TRACE=N also covers this module: the first N calls print their
+// RECOMP_AUDIO_TRACE=N also covers this module: the first N calls print their
 // raw arguments. The QMixer SDK's argument order is not recoverable from the
 // game's binary alone - the decompilation does not reach these call sites -
 // so what the game actually passes is the only evidence there is.
 int qm_trace_budget() {
     static int budget = -1;
     if (budget < 0) {
-        const char *v = getenv("POPM_AUDIO_TRACE");
+        const char *v = recomp_env("AUDIO_TRACE");
         budget = v ? (int)strtol(v, nullptr, 0) : 0;
     }
     return budget;
@@ -463,7 +463,7 @@ void stop_channel(Channel *ch) {
 // buffer to submit and then pulls the next straight into the host's queue, so
 // a sound starts with one playing and one waiting, which is what a double
 // buffer is. Asking for two per pull made that four again.
-// POPM_QMIX_CHUNKS overrides the per-pull count so its effect stays
+// RECOMP_QMIX_CHUNKS overrides the per-pull count so its effect stays
 // measurable. It overrides that count and nothing else: the pump's top-up
 // threshold below is one buffer either way, so setting it to four does not
 // restore the whole of what this replaced.
@@ -471,7 +471,7 @@ uint32_t stream_chunks() {
     static uint32_t n = 0;
     if (!n) {
         n = 1;
-        if (const char *e = getenv("POPM_QMIX_CHUNKS")) {
+        if (const char *e = recomp_env("QMIX_CHUNKS")) {
             uint32_t v = (uint32_t)strtoul(e, nullptr, 10);
             if (v >= 1 && v <= QSTREAM_CHUNKS)
                 n = v;
@@ -480,9 +480,9 @@ uint32_t stream_chunks() {
     return n;
 }
 
-// POPM_QMIX_GATE=queue puts the refill gate back on host_audio_queued_bytes.
+// RECOMP_QMIX_GATE=queue puts the refill gate back on host_audio_queued_bytes.
 //
-// Here for the same reason POPM_QMIX_CHUNKS is: the switch to the voice query
+// Here for the same reason RECOMP_QMIX_CHUNKS is: the switch to the voice query
 // is justified by the contract - queued_bytes counts only what THIS caller
 // appended and a play resets it, while QMixer plays on a named channel and
 // refills behind it - but a contract argument is not a measurement, and I
@@ -498,7 +498,7 @@ int &gate_cache() {
 bool gate_reads_queue() {
     int &v = gate_cache();
     if (v < 0) {
-        const char *e = getenv("POPM_QMIX_GATE");
+        const char *e = recomp_env("QMIX_GATE");
         v = (e && strcmp(e, "queue") == 0) ? 1 : 0;
     }
     return v != 0;

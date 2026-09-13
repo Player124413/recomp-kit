@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <functional>
+#include "../../platform/os.h"
 
 namespace {
 class SdlSink final : public AudioSink {
@@ -24,19 +25,19 @@ class SdlSink final : public AudioSink {
             return false;
         }
         render_ = std::move(render);
-        // POP_AUDIO_FRAMES asks the device for that many frames per period
+        // RECOMP_AUDIO_FRAMES asks the device for that many frames per period
         // (SDL's default is the backend's: 480 on WASAPI, 1024 on Core Audio).
         // A diagnostic for crackle reports: a larger period gives the render
         // thread more slack at the cost of latency.
-        if (const char *frames = getenv("POP_AUDIO_FRAMES"); frames && *frames)
+        if (const char *frames = recomp_env("AUDIO_FRAMES"); frames && *frames)
             SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames);
         // The backlog kept queued ahead of the device, in frames. A device
         // with a 10 ms period whose thread wakes 30 ms late (measured under
         // CrossOver) drains an exactly-filled stream and plays silence; a
-        // 2048-frame backlog (43 ms at 48 kHz) rides that out. POP_AUDIO_AHEAD
+        // 2048-frame backlog (43 ms at 48 kHz) rides that out. RECOMP_AUDIO_AHEAD
         // overrides it; 0 renders just in time, for A/B runs.
         ahead_frames_ = 2048;
-        if (const char *ahead = getenv("POP_AUDIO_AHEAD"); ahead && *ahead)
+        if (const char *ahead = recomp_env("AUDIO_AHEAD"); ahead && *ahead)
             ahead_frames_ = uint32_t(strtoul(ahead, nullptr, 10));
         SDL_AudioSpec spec;
         spec.format = SDL_AUDIO_F32;

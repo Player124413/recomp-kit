@@ -27,6 +27,7 @@
 #include <map>
 #include <vector>
 #include <mutex>
+#include "../platform/os.h"
 
 // ---------------------------------------------------------------------------
 // IIDs
@@ -144,7 +145,7 @@ namespace {
 // accepts. ONE table, read by both, because a mode the game was offered and
 // then refused is a contradiction that costs a run to find.
 //
-// POPM_DDRAW_MODES replaces it with a comma-separated list of WxHxB, as in
+// RECOMP_DDRAW_MODES replaces it with a comma-separated list of WxHxB, as in
 // "640x480x8,1280x960x16". Unset, or set to nothing, keeps the modes below.
 // The original modes retain both depths; higher native modes are RGB565.
 //
@@ -161,7 +162,7 @@ namespace {
 //
 // The variable restricts the list from the moment the process starts, and this
 // game does not ask what is available before its first SetDisplayMode: it
-// boots straight into 640x480x8. POPM_DDRAW_MODES="800x600x16" therefore has
+// boots straight into 640x480x8. RECOMP_DDRAW_MODES="800x600x16" therefore has
 // that first call refused, and the guest, which does not check, walks into a
 // SIGBUS at EIP 004a45a3. Measured, not guessed.
 //
@@ -255,12 +256,12 @@ const std::vector<Mode> &modes() {
     std::vector<Mode> &v = mode_table();
     if (!v.empty())
         return v;
-    const char *spec = getenv("POPM_DDRAW_MODES");
+    const char *spec = recomp_env("DDRAW_MODES");
     if (spec && *spec) {
         std::vector<Mode> parsed;
         if (parse_modes(spec, &parsed) && !parsed.empty()) {
             v.swap(parsed);
-            LOGW("ddraw: POPM_DDRAW_MODES offers %zu mode%s instead of the "
+            LOGW("ddraw: RECOMP_DDRAW_MODES offers %zu mode%s instead of the "
                  "built-in list; SetDisplayMode accepts the same set",
                  v.size(), v.size() == 1 ? "" : "s");
             const bool has8 = has_mode(v, 640, 480, 8);
@@ -275,7 +276,7 @@ const std::vector<Mode> &modes() {
                                      : (!has8 ? "640x480x8" : "640x480x16"));
             return v;
         }
-        LOGW("ddraw: POPM_DDRAW_MODES=\"%s\" is not a comma-separated list of "
+        LOGW("ddraw: RECOMP_DDRAW_MODES=\"%s\" is not a comma-separated list of "
              "WxHxB with a depth of 8 or 16; keeping the built-in modes",
              spec);
     }
@@ -1298,7 +1299,7 @@ void ddraw_reset_access_counts(void) {
     g_clean_base = host_d3d_clean_read_count();
 }
 
-// Forget the parsed mode table so the next reader re-reads POPM_DDRAW_MODES.
+// Forget the parsed mode table so the next reader re-reads RECOMP_DDRAW_MODES.
 // The table is read once and kept, because the environment does not change
 // under a running game; a test that varies the variable is the one case that
 // needs it dropped.
@@ -3998,7 +3999,7 @@ void set_display_mode(X86 *c, uint32_t w, uint32_t h, uint32_t bpp) {
     }
     // AFTER the acceptance check, with the rest of the state changes. A
     // refused SetDisplayMode is a no-op, and a refusal is not hypothetical:
-    // POPM_DDRAW_MODES without 640x480x8 has the game's very first call
+    // RECOMP_DDRAW_MODES without 640x480x8 has the game's very first call
     // refused, and the game does not check the return. Forgetting the cursor
     // there would leave it drawing in the mode it still has with a pointer
     // the shim has thrown away.

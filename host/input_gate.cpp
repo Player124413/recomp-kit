@@ -13,6 +13,7 @@
 #include <cmath>
 #include <mutex>
 #include <utility>
+#include "../platform/os.h"
 
 // Drawable pixels at either edge that still count as the edge row/column: an
 // iPadOS pointer stops half a point short of the left edge (drawable x 1), and
@@ -984,7 +985,7 @@ bool host_gate_pointer_place(int32_t x, int32_t y) {
     }
     tx = std::clamp(tx, int64_t(p.left), int64_t(p.right));
     ty = std::clamp(ty, int64_t(p.top), int64_t(p.bottom));
-    static const bool trace = getenv("POPM_TRACE_POINTER") != nullptr;
+    static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
     if (trace)
         fprintf(stderr,
                 "[place] drawable %d,%d of %dx%d hit %d at %d,%d -> pair %lld,%lld bounds "

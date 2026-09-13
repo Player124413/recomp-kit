@@ -40,8 +40,8 @@ import game_config  # noqa: E402
 # a game-backed suite, run from a game repository (tools/test.py --translate).
 GAME_DIR = os.environ.get("RECOMP_GAME_DIR")
 if not GAME_DIR:
-    sys.exit("test_translate.py: set RECOMP_GAME_DIR to the game directory (and POP_BUILD_ROOT to its build root)")
-BUILD_ROOT = os.environ.get("POP_BUILD_ROOT") or os.path.join(GAME_DIR, "build")
+    sys.exit("test_translate.py: set RECOMP_GAME_DIR to the game directory (and RECOMP_BUILD_ROOT to its build root)")
+BUILD_ROOT = os.environ.get("RECOMP_BUILD_ROOT") or os.path.join(GAME_DIR, "build")
 BINARY = str(game_config.load(GAME_DIR)["developer_exe_path"])
 GEN = os.path.join(BUILD_ROOT, "recomp/gen")
 LIB_A = os.path.join(BUILD_ROOT, "recomp/librecomp_gen.a")

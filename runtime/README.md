@@ -216,11 +216,11 @@ paths resolve against the guest current directory, which starts at
 
 | variable | effect |
 | --- | --- |
-| `POPM_LOG` | `0` silent, `1` warnings and one-shot notices (default), `2` traces every import call |
-| `POPM_REGISTRY` | registry backing file (default `build/recomp/registry.json`) |
-| `POPM_CREATETHREAD=skip` | record `CreateThread` without running the thread body |
-| `POPM_CREATETHREAD=sync` | run a thread body to completion inside `CreateThread` (pre-scheduler behaviour, for bisection) |
-| `POPM_IMPORT_STATS=1` | at exit, classify every import as called / not reached / logging-only |
+| `RECOMP_LOG` | `0` silent, `1` warnings and one-shot notices (default), `2` traces every import call |
+| `RECOMP_REGISTRY` | registry backing file (default `build/recomp/registry.json`) |
+| `RECOMP_CREATETHREAD=skip` | record `CreateThread` without running the thread body |
+| `RECOMP_CREATETHREAD=sync` | run a thread body to completion inside `CreateThread` (pre-scheduler behaviour, for bisection) |
+| `RECOMP_IMPORT_STATS=1` | at exit, classify every import as called / not reached / logging-only |
 
 ## Tests
 

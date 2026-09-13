@@ -345,7 +345,7 @@ void drain_input() {
 void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy) {
     HitResult hit;
     const bool delivered = host_gate_window_motion(x, y, drawable_dx, drawable_dy, &hit);
-    static const bool trace = getenv("POPM_TRACE_POINTER") != nullptr;
+    static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
     static double last_trace = 0;
     const double now = (double(os_monotonic_ns()) / 1e9);
     if (trace && now - last_trace >= 0.1) {
@@ -412,7 +412,7 @@ void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
     PendingInput e;
     e.kind = PendingInput::MOTION;
     view_point_to_drawable(motion.x, motion.y, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
-    static const bool trace = getenv("POPM_TRACE_POINTER") != nullptr;
+    static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
     static double last_trace = 0;
     const double now = (double(os_monotonic_ns()) / 1e9);
     if (trace && now - last_trace >= 0.1) {
@@ -451,7 +451,7 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
     y = hit.gy;
     if (!down && !(g_buttons & ~(1u << button)))
         host_gate_end_drag();
-    static const bool trace_buttons = getenv("POPM_TRACE_POINTER") != nullptr;
+    static const bool trace_buttons = recomp_env("TRACE_POINTER") != nullptr;
     const bool consumed = host_gate_button(button, down, x, y);
     if (trace_buttons)
         fprintf(stderr, "[pointer-button] button %d %s at %d,%d consumed %d captured %d\n", button,
@@ -1425,9 +1425,9 @@ int main(int argc, char **argv) {
     // there would freeze the game at the moment the music starts.
     host_midi_startup(win32_midi_soundfont_path().c_str());
 
-    // POP_HOST_AUDIO_CAPTURE=<path.wav> writes the mixer's own output for
+    // RECOMP_HOST_AUDIO_CAPTURE=<path.wav> writes the mixer's own output for
     // the whole run.
-    const char *capture = getenv("POP_HOST_AUDIO_CAPTURE");
+    const char *capture = recomp_env("HOST_AUDIO_CAPTURE");
     if (capture && *capture)
         host_audio_capture_begin(capture);
 

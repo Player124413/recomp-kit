@@ -22,16 +22,20 @@ class ProbeTests(unittest.TestCase):
                     mode = f"{w}x{h}x{bpp}"
                     case = probe.ROOT / "build/recomp/mode-probe" / mode
                     env = probe.probe_environment((w, h, bpp), case / "probe.script", case,
-                        dict(PATH="/usr/bin", POP_SMOKE_DRAWABLE="0x0",
-                             POPM_DDRAW_MODES="800x600x16", POP_SMOKE_CLASSIC_PROBE="bad",
-                             POP_HOST_TEST="1", POP_RECOMP_TEST="1"))
+                        dict(PATH="/usr/bin", RECOMP_SMOKE_DRAWABLE="0x0",
+                             RECOMP_DDRAW_MODES="800x600x16", RECOMP_SMOKE_CLASSIC_PROBE="bad",
+                             RECOMP_HOST_TEST="1", RECOMP_TEST="1",
+                             RECOMP_GAME_DIR="/games/one", RECOMP_DEVELOPER_EXE="/games/one/x.exe"))
+                    # Every switch the caller's shell had is dropped; what names the
+                    # game and the toolchain (RECOMP_GAME_DIR, RECOMP_DEVELOPER_EXE) stays.
                     self.assertEqual(env, dict(PATH="/usr/bin",
-                        POPM_CORE_MODS_DIR=str(case / "absent-core"),POPM_MODS_DIR=str(case / "absent-user"),
-                        POPM_PROFILE_DIR=str(case / "profile"),POPM_REGISTRY=str(case / "registry.json"),
-                        POPM_RUN_RECORD=str(case / "run.json"),
-                        POP_RECOMP_PIN_CLOCK="1", POP_RECOMP_SCRIPT=str(case / "probe.script"),
-                        POP_HOST_DUMP_DIR=str(case), POP_SMOKE_CLASSIC_PROBE=mode,
-                        POPM_DDRAW_MODES="640x480x8,640x480x16" +
+                        RECOMP_GAME_DIR="/games/one", RECOMP_DEVELOPER_EXE="/games/one/x.exe",
+                        RECOMP_CORE_MODS_DIR=str(case / "absent-core"),RECOMP_MODS_DIR=str(case / "absent-user"),
+                        RECOMP_PROFILE_DIR=str(case / "profile"),RECOMP_REGISTRY=str(case / "registry.json"),
+                        RECOMP_RUN_RECORD=str(case / "run.json"),
+                        RECOMP_PIN_CLOCK="1", RECOMP_SCRIPT=str(case / "probe.script"),
+                        RECOMP_HOST_DUMP_DIR=str(case), RECOMP_SMOKE_CLASSIC_PROBE=mode,
+                        RECOMP_DDRAW_MODES="640x480x8,640x480x16" +
                             ("," + mode if (w, h) != (640, 480) else "")))
 
     def test_candidates_and_frozen_entry(self):
@@ -132,7 +136,7 @@ class ProbeTests(unittest.TestCase):
                        hresult="0x80070057", display_mode=[640, 480, 8])
         def child(command, *, cwd, env, stdout, **kwargs):
             self.assertEqual(command, [str(cwd / "build/recomp/pop_smoke")])
-            self.assertEqual(Path(env["POP_RECOMP_SCRIPT"]).parent, Path(env["POP_HOST_DUMP_DIR"]))
+            self.assertEqual(Path(env["RECOMP_SCRIPT"]).parent, Path(env["RECOMP_HOST_DUMP_DIR"]))
             stdout.write("[popm] ddraw: CreateSurface failure " + json.dumps(refusal) + "\n")
             return SimpleNamespace(returncode=1)
         with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
@@ -175,7 +179,7 @@ class ProbeTests(unittest.TestCase):
                 targets = [(w,h,bpp) for w,h in probe.SIZES for bpp in (8,16)]
                 survivors = {(640,480,16), (800,600,16)} if count==2 else set(targets[:count])
                 def child(command, *, cwd, env, stdout, **kwargs):
-                    target = tuple(map(int, env["POP_SMOKE_CLASSIC_PROBE"].split("x")))
+                    target = tuple(map(int, env["RECOMP_SMOKE_CLASSIC_PROBE"].split("x")))
                     if target not in survivors:
                         if failure=="launch": raise FileNotFoundError("missing test executable")
                         if failure=="crash": return SimpleNamespace(returncode=-11)
@@ -187,7 +191,7 @@ class ProbeTests(unittest.TestCase):
                                  f"Classic dumpc completed frame=31 class=2 guest={w}x{h} drawable={w}x{h}\n" +
                                  "\n".join(f"EXPECT {name} ok wanted > 0 got 1" for name in
                                            ("textures", "draws", "turn", "scene_nonblack")))
-                    ppm = Path(env["POP_HOST_DUMP_DIR"]) / "smoke_classic_composite.ppm"
+                    ppm = Path(env["RECOMP_HOST_DUMP_DIR"]) / "smoke_classic_composite.ppm"
                     ppm.write_bytes(f"P6\n{w} {h}\n255\n".encode() + b'\xff\0\0'*(w*h))
                     return SimpleNamespace(returncode=0)
                 stack.enter_context(patch.object(probe, "ROOT", root))

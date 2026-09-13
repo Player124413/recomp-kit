@@ -143,6 +143,9 @@ int os_strcasecmp(const char *a, const char *b);
 // ---------------------------------------------------------------------------
 int os_setenv(const char *name, const char *value);
 int os_unsetenv(const char *name);
+// The kit's switches: `recomp_env("PIN_CLOCK")` reads RECOMP_PIN_CLOCK.  The
+// prefix names the kit, never a game; a switch is unset when NULL.
+const char *recomp_env(const char *name);
 
 #ifdef __cplusplus
 }

@@ -50,7 +50,7 @@ double now_seconds() {
 // semantics host_millis() has when no source is installed.
 // --- the pinned clock -------------------------------------------------------
 //
-// POP_RECOMP_PIN_CLOCK=1, or =<start>:<step>, replaces the millisecond clock
+// RECOMP_PIN_CLOCK=1, or =<start>:<step>, replaces the millisecond clock
 // the guest reads with a counter that moves one fixed step per PRESENTED
 // FRAME. Nothing else moves it, so two runs of the same script see the same
 // time at the same point in the game whatever the machine was doing.
@@ -110,7 +110,7 @@ uint32_t g_clock_stalls = 0;
 const uint32_t kStallPolls = 256;
 
 void arm_clock_pin() {
-    const char *spec = getenv("POP_RECOMP_PIN_CLOCK");
+    const char *spec = recomp_env("PIN_CLOCK");
     if (!spec || !*spec || !strcmp(spec, "0"))
         return;
     uint32_t start = 100, step = 50;
@@ -120,7 +120,7 @@ void arm_clock_pin() {
         unsigned long b = (end && *end == ':') ? strtoul(end + 1, nullptr, 10) : 0;
         if (!end || *end != ':' || !b) {
             fprintf(stderr,
-                    "[host] POP_RECOMP_PIN_CLOCK wants 1 or <start>:<step> "
+                    "[host] RECOMP_PIN_CLOCK wants 1 or <start>:<step> "
                     "with a step above zero, not \"%s\"; the clock is "
                     "not pinned\n",
                     spec);
@@ -424,7 +424,7 @@ bool boot_load(const BootOptions &opts) {
     mem_init();
     const char *exe = g_opt.exe;
     if (!exe)
-        exe = getenv("POP_RECOMP_EXE");
+        exe = recomp_env("EXE");
     if (!loader_load(exe))
         return false;
     dx_register_shims();
@@ -435,12 +435,12 @@ bool boot_load(const BootOptions &opts) {
     // Before the source is installed, because arming it is what decides what
     // the source will answer.
     arm_clock_pin();
-    // POP_HOST_TIMING_TRACE=<path> records the cadence: how often the guest
+    // RECOMP_HOST_TIMING_TRACE=<path> records the cadence: how often the guest
     // asks the time, and how often anything ticks. Wired here rather than in
     // each host because every host boots through this function, and a trace
     // that only some hosts could produce would be a trace nobody could
     // compare. See host_set_cadence_trace in the runtime for the format.
-    if (const char *trace = getenv("POP_HOST_TIMING_TRACE"))
+    if (const char *trace = recomp_env("HOST_TIMING_TRACE"))
         if (*trace)
             host_set_cadence_trace(trace);
     host_set_time_source(boot_time_source);
@@ -459,7 +459,7 @@ bool boot_load(const BootOptions &opts) {
     // Mods load HERE: after the image is mapped, so symbols and guest memory
     // are real, and before the entry point, so a hook is installed before the
     // code it hooks can run.
-    const bool mods_enabled = g_opt.load_mods && !getenv("POPM_NO_MODS");
+    const bool mods_enabled = g_opt.load_mods && !recomp_env("NO_MODS");
     bool page_enabled = false;
     if (mods_enabled) {
         // The host-only APIs belong to the thread that boots.
@@ -471,7 +471,7 @@ bool boot_load(const BootOptions &opts) {
         if (!mods_load_all())
             LOGW("boot: the mod loader reported a failure");
         // The host display rows exist even when the built-in mod root is
-        // empty. POPM_NO_MODS still leaves the page and its input unregistered.
+        // empty. RECOMP_NO_MODS still leaves the page and its input unregistered.
         page_enabled = true;
         g_loader_ran = true;
     }
@@ -661,6 +661,6 @@ void boot_print_import_stats(FILE *out, bool abnormal) {
     (void)out;
     // The loader registers an atexit hook that prints this on a normal exit,
     // so only the paths that leave through _exit have to print it themselves.
-    if (abnormal && getenv("POPM_IMPORT_STATS"))
+    if (abnormal && recomp_env("IMPORT_STATS"))
         imports_dump_report(stderr);
 }

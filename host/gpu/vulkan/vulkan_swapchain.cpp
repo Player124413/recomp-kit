@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../../platform/os.h"
 
 namespace gpu {
 
@@ -26,7 +27,7 @@ static VkPresentModeKHR choose_present_mode(VulkanDevice &d, VkSurfaceKHR surfac
     };
     VkPresentModeKHR want =
         has(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
-    if (const char *e = getenv("POP_VULKAN_PRESENT_MODE"); e && *e) {
+    if (const char *e = recomp_env("VULKAN_PRESENT_MODE"); e && *e) {
         if (strcmp(e, "fifo") == 0)
             want = VK_PRESENT_MODE_FIFO_KHR;
         else if (strcmp(e, "mailbox") == 0 && has(VK_PRESENT_MODE_MAILBOX_KHR))
@@ -92,7 +93,7 @@ static bool build_swapchain(VulkanDevice &d, VulkanDevice::Chain &c, int width, 
     sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     // FIFO is vsync and caps the frame rate at the display's refresh; the
     // presenter paces frames itself, so MAILBOX (uncapped, no tearing) is the
-    // first choice and FIFO the fallback every driver has. POP_VULKAN_PRESENT_MODE
+    // first choice and FIFO the fallback every driver has. RECOMP_VULKAN_PRESENT_MODE
     // = fifo | mailbox | immediate overrides, for diagnosis.
     sci.presentMode = choose_present_mode(d, c.surface);
     sci.clipped = VK_TRUE;

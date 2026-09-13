@@ -58,7 +58,7 @@ std::string gm_str(uint32_t a, size_t max_len = 0x8000);
 uint32_t gm_put_str(uint32_t a, const char *s, uint32_t cap);
 
 // ---------------------------------------------------------------------------
-// Logging. POPM_LOG=0 silences everything, 1 (default) prints warnings and
+// Logging. RECOMP_LOG=0 silences everything, 1 (default) prints warnings and
 // one-shot notices, 2 traces every import call.
 // ---------------------------------------------------------------------------
 int log_level();

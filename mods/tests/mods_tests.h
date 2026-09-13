@@ -71,6 +71,6 @@ inline std::string mods_test_build_path(const char *rel) {
     } while (0)
 
 // A scratch directory of this suite's own, created empty. Rooted at
-// POPM_TEST_DIR (default build/recomp/mods-test), so two suites - or two tasks
+// RECOMP_TEST_DIR (default build/recomp/mods-test), so two suites - or two tasks
 // in two worktrees - never share a path and none reads another's leftovers.
 const char *mod_test_dir(const char *suite);

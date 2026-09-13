@@ -269,7 +269,7 @@ that path is corrupting the guest stack.
 
 ## Diagnosing a silent run
 
-`POPM_AUDIO_TRACE=N` prints the first N audio events: every `Lock`, `Unlock`,
+`RECOMP_AUDIO_TRACE=N` prints the first N audio events: every `Lock`, `Unlock`,
 `GetCurrentPosition` and submission on a playing buffer, with the offsets, the
 lengths and the peak of what was written. It is off by default and costs
 nothing when off.
@@ -284,7 +284,7 @@ reaching the host. `build/recomp/pop_headless` boots into the same intro, so
 all of this can be read off a headless run:
 
 ```
-POPM_AUDIO_TRACE=200 POP_RECOMP_MAX_SECONDS=25 build/recomp/pop_headless
+RECOMP_AUDIO_TRACE=200 RECOMP_MAX_SECONDS=25 build/recomp/pop_headless
 ```
 
 ## Tests

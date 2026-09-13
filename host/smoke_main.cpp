@@ -54,6 +54,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "../platform/os.h"
 
 namespace {
 
@@ -110,7 +111,7 @@ std::vector<uint8_t> g_prev_sample;
 // is what tells a finished screen from a screen on its way in.
 double g_moved = 0.0;
 uint32_t g_still_since_ms = 0;
-// Set by POP_SMOKE_TRACE: print the continuous metrics once a second, which is
+// Set by RECOMP_SMOKE_TRACE: print the continuous metrics once a second, which is
 // how the thresholds in the script were chosen.
 bool g_trace = false;
 uint32_t g_trace_next_ms = 0;
@@ -592,10 +593,10 @@ double metric(const char *name, int32_t entity_id = -1) {
         return watch_toward_target();
     if (!strcmp(name, "watch_state_changes"))
         return watch_state_changes();
-    // Read the guest even in display-gate controls with POPM_NO_MODS set.
+    // Read the guest even in display-gate controls with RECOMP_NO_MODS set.
     // command_frame (0089d184) can advance several times per present;
     // turn (0089d188) is coarser. The loaded game view is diagnostic only.
-    const bool cross_check = !getenv("POPM_NO_MODS") && mods_symbols_count() != 0;
+    const bool cross_check = !recomp_env("NO_MODS") && mods_symbols_count() != 0;
     return host_script_counter_metric(name, guest_u32, cross_check ? mods_simulation_turn : nullptr,
                                       cross_check ? mods_command_frame : nullptr);
 }
@@ -1110,7 +1111,7 @@ void probe_pixel(const HostScriptStep &step);
 // Execute one smoke-script operation through the same input and display interfaces as play.
 // Trace input notification counts so a swallowed event is distinguishable from a game response.
 void run_step(const HostScriptStep &step) {
-    // Under POP_SMOKE_TRACE, every input step says what it did and whether the
+    // Under RECOMP_SMOKE_TRACE, every input step says what it did and whether the
     // shim announced it. A step that produces no announcement was swallowed,
     // and this is the line that names which one.
     const uint32_t notify_before = produces_input(step.op) ? host_input_notify_count() : 0;
@@ -1165,7 +1166,7 @@ void run_step(const HostScriptStep &step) {
             ++g_semantic_click_failures;
             break;
         }
-        if (getenv("POP_SMOKE_WINDOW_INPUT"))
+        if (recomp_env("SMOKE_WINDOW_INPUT"))
             g_window_gestures = true;
         run_step(mapped); // normal selection/order, press, hold and release
         break;
@@ -1954,7 +1955,7 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
 
     // Drawable mode completes at the eligible seal, not an interim primary
     // surface refresh. Both paths publish BODY records before firing dumpat.
-    if (!getenv("POP_SMOKE_DRAWABLE")) {
+    if (!recomp_env("SMOKE_DRAWABLE")) {
         ++g_completed_presents;
         capture_landmarks(true);
         fire_dumpat(host_frame_class(host_frame_current()), false);
@@ -1988,7 +1989,7 @@ HostFrameCapture fire_dumpat(HostScreenClass cls, bool at_seal) {
                                   g_completed_presents,        boot_guest_millis(),
                                   host_frame_current().id,     host_clock_description()};
     if (!host_dumpat_fire(g_dumpat, sample, host_dump_dir(),
-                          getenv("POP_SMOKE_SIM_REGIONS") != nullptr,
+                          recomp_env("SMOKE_SIM_REGIONS") != nullptr,
                           [](const char *name) { return write_simdump(name); }))
         return {};
     const std::string base = std::string(host_dump_dir()) + "/smoke_" + g_dumpat.name;
@@ -2042,7 +2043,7 @@ HostFrameCapture capture_at_seal(HostScreenClass cls) {
 }
 
 void write_composite_dump(const char *name) {
-    if (getenv("POP_SMOKE_CLASSIC_PROBE") || getenv("POP_SMOKE_DRAWABLE")) {
+    if (recomp_env("SMOKE_CLASSIC_PROBE") || recomp_env("SMOKE_DRAWABLE")) {
         HostCompletedComposite frame;
         if (!host_present_copy_composite(&frame)) {
             fprintf(stderr, "[smoke] Classic dumpc FAILED: no completed composition\n");
@@ -2214,14 +2215,14 @@ extern "C" uint32_t host_audio_voice_remaining_bytes(int32_t channel) {
 int main(int argc, char **argv) {
     if (argc > 0 && argv[0])
         g_argv0 = argv[0];
-    g_trace = getenv("POP_SMOKE_TRACE") != nullptr;
-    const char *script_path = getenv("POP_RECOMP_SCRIPT");
+    g_trace = recomp_env("SMOKE_TRACE") != nullptr;
+    const char *script_path = recomp_env("SCRIPT");
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--script") && i + 1 < argc)
             script_path = argv[++i];
     }
     if (!script_path) {
-        fprintf(stderr, "smoke: POP_RECOMP_SCRIPT=<file> or --script <file>\n");
+        fprintf(stderr, "smoke: RECOMP_SCRIPT=<file> or --script <file>\n");
         return 2;
     }
     FILE *f = fopen(script_path, "rb");
@@ -2259,16 +2260,16 @@ int main(int argc, char **argv) {
         }
         D3DRenderer::setShared(g_renderer);
         int drawable_w = 640, drawable_h = 480;
-        if (const char *size = getenv("POP_SMOKE_DRAWABLE")) {
+        if (const char *size = recomp_env("SMOKE_DRAWABLE")) {
             char trailing = 0;
             if (sscanf(size, "%dx%d%c", &drawable_w, &drawable_h, &trailing) != 2 ||
                 drawable_w <= 0 || drawable_h <= 0 || drawable_w > 16384 || drawable_h > 16384) {
-                fprintf(stderr, "smoke: invalid POP_SMOKE_DRAWABLE: %s\n", size);
+                fprintf(stderr, "smoke: invalid RECOMP_SMOKE_DRAWABLE: %s\n", size);
                 return 2;
             }
         }
         host_present_start_offscreen(drawable_w, drawable_h);
-        if (getenv("POP_SMOKE_DRAWABLE"))
+        if (recomp_env("SMOKE_DRAWABLE"))
             host_present_set_capture_factory(capture_at_seal);
         host_input_set_notify(dinput_host_input_changed);
 
@@ -2292,7 +2293,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "smoke: %s\n", loader_error());
             return 2;
         }
-        if (getenv("POP_SMOKE_CLASSIC_PROBE")) {
+        if (recomp_env("SMOKE_CLASSIC_PROBE")) {
             // The probe deliberately tests candidates before any survive the
             // committed list. The native compatibility hooks stay active; the
             // probe environment isolates user settings and external plugins.
@@ -2303,11 +2304,11 @@ int main(int argc, char **argv) {
                 return 2;
             int w = 0, h = 0, bpp = 0;
             char extra = 0;
-            const char *target = getenv("POP_SMOKE_CLASSIC_PROBE");
+            const char *target = recomp_env("SMOKE_CLASSIC_PROBE");
             if (sscanf(target, "%dx%dx%d%c", &w, &h, &bpp, &extra) != 3 || w <= 0 || h <= 0 ||
                 (bpp != 8 && bpp != 16))
                 return 2;
-            if (!ddraw_set_modes(getenv("POPM_DDRAW_MODES")))
+            if (!ddraw_set_modes(recomp_env("DDRAW_MODES")))
                 return 2;
             host_present_resize(w, h);
             printf("[smoke] Classic probe active: %dx%dx%d\n", w, h, bpp);
@@ -2365,7 +2366,7 @@ int main(int argc, char **argv) {
                g_mode_want_w, g_mode_want_h, g_mode_want_bpp);
         ++failed;
     }
-    if (getenv("POP_SMOKE_DRAWABLE") &&
+    if (recomp_env("SMOKE_DRAWABLE") &&
         (g_completed_captures.load() != g_dumpat.fired || g_capture_failures.load())) {
         fprintf(stderr,
                 "smoke: anchored composite FAILED: %u requested, %u completed, %u write failures\n",

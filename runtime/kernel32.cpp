@@ -1231,13 +1231,13 @@ void k_UnmapViewOfFile(X86 *c) {
 // -------------------------------------------------------------------------
 // Modules, environment, misc process state
 // -------------------------------------------------------------------------
-// The command line is the executable's path, plus the switches POPM_GUEST_ARGS
+// The command line is the executable's path, plus the switches RECOMP_GUEST_ARGS
 // names: a game's own -debugout or -nointro, the way its players and its
 // developers steered it.  Read once, when the CRT first asks.
 void k_GetCommandLineA(X86 *c) {
     if (!g_cmdline_addr) {
         std::string line = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
-        if (const char *extra = getenv("POPM_GUEST_ARGS"); extra && *extra)
+        if (const char *extra = recomp_env("GUEST_ARGS"); extra && *extra)
             line += std::string(" ") + extra;
         g_cmdline_addr = guest_strdup(line.c_str());
     }
@@ -1478,7 +1478,7 @@ static uint32_t native_frame_clock(X86 *c) {
     if (caller != RECOMP_HOOK_FRAME_CLOCK_BEGIN && caller != RECOMP_HOOK_FRAME_CLOCK_WAIT &&
         caller != RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP)
         return 0;
-    if (getenv("POP_RECOMP_PIN_CLOCK") || getenv("POPM_PIN_CLOCK"))
+    if (recomp_env("PIN_CLOCK"))
         return 0;
     const int requested = mods_display_fps();
     if (caller == RECOMP_HOOK_FRAME_CLOCK_BEGIN) { // before 1000 / DrawFrameRateLimit
@@ -1798,8 +1798,8 @@ void k_WaitForMultipleObjects(X86 *c) {
 // left alone - nothing it waits for is another thread's to produce, and
 // yielding on every clock read would cost a context switch per read.
 //
-//   POPM_CREATETHREAD=skip   record a thread without running it
-//   POPM_CREATETHREAD=sync   run the body to completion in CreateThread
+//   RECOMP_CREATETHREAD=skip   record a thread without running it
+//   RECOMP_CREATETHREAD=sync   run the body to completion in CreateThread
 //                            (the pre-scheduler behaviour, for bisection)
 // -------------------------------------------------------------------------
 const uint32_t STILL_ACTIVE_ = 0x103;
@@ -2973,7 +2973,7 @@ bool thread_prepare_context(GuestThread *t) {
     return true;
 }
 
-// The pre-scheduler path, kept for POPM_CREATETHREAD=sync: runs a thread body
+// The pre-scheduler path, kept for RECOMP_CREATETHREAD=sync: runs a thread body
 // to completion on the caller's context.
 jmp_buf g_sync_thread_jmp;
 bool g_in_sync_thread = false;
@@ -3048,9 +3048,9 @@ void k_CreateThread(X86 *c) {
     handles()[h].thread_param = param;
     handles()[h].exit_code = STILL_ACTIVE_;
 
-    const char *mode = getenv("POPM_CREATETHREAD");
+    const char *mode = recomp_env("CREATETHREAD");
     if (mode && strcmp(mode, "skip") == 0) {
-        LOGW("CreateThread(%08x): skipped (POPM_CREATETHREAD=skip)", start);
+        LOGW("CreateThread(%08x): skipped (RECOMP_CREATETHREAD=skip)", start);
         handles()[h].thread_ran = true;
         handles()[h].exit_code = 0;
         if (ptid)
@@ -3060,7 +3060,7 @@ void k_CreateThread(X86 *c) {
     }
     if (mode && strcmp(mode, "sync") == 0) {
         LOGW("CreateThread(%08x, param=%08x): running synchronously to completion "
-             "(POPM_CREATETHREAD=sync)",
+             "(RECOMP_CREATETHREAD=sync)",
              start, param);
         handles()[h].exit_code = 0;
         if (ptid)
@@ -3160,7 +3160,7 @@ void k_ResumeThread(X86 *c) {
         set_eax(c, (uint32_t)was);
         return;
     }
-    if (o->thread_suspended && !o->thread_ran) { // POPM_CREATETHREAD=sync
+    if (o->thread_suspended && !o->thread_ran) { // RECOMP_CREATETHREAD=sync
         LOGW("ResumeThread(%08x): running the suspended thread body synchronously", h);
         o->thread_suspended = false;
         run_thread_body(c, h);

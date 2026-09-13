@@ -32,6 +32,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include "../platform/os.h"
 
 // Minimal hosts can link the service without the app's present.mm. Unknown
 // mode keeps first-write acquisition on the service's last guest dimensions.
@@ -877,10 +878,10 @@ std::shared_ptr<Service> begin(bool fake, bool automatic, bool offscreen) {
         fprintf(stderr, "presenter: no GPU device installed; call host_present_set_device first\n");
         abort();
     }
-    if (const char *mode = getenv("POP_HOST_PRESENT_PACING"))
+    if (const char *mode = recomp_env("HOST_PRESENT_PACING"))
         s->duration_pacing = strcmp(mode, "immediate") != 0;
     if (!fake)
-        if (const char *path = getenv("POP_PRESENT_ACK_TRACE")) {
+        if (const char *path = recomp_env("PRESENT_ACK_TRACE")) {
             s->ack_trace = fopen(path, "w");
             if (s->ack_trace)
                 fprintf(s->ack_trace, "frame_id,screen_class,repeat,event,observed_s,event_s,"
@@ -889,7 +890,7 @@ std::shared_ptr<Service> begin(bool fake, bool automatic, bool offscreen) {
                 fprintf(stderr, "presenter: cannot open acknowledgement trace %s\n", path);
         }
     if (!fake)
-        if (const char *path = getenv("POP_FRAME_TIMINGS")) {
+        if (const char *path = recomp_env("FRAME_TIMINGS")) {
             s->timings = fopen(path, "w");
             if (s->timings) {
                 setvbuf(s->timings, nullptr, _IOFBF, 65536);
@@ -957,7 +958,7 @@ void host_present_start(void *native_surface, int w, int h) {
     // Match the swapchain's three drawables so that delay does not cap a 120 Hz
     // producer near 80 FPS. Keep smaller queues available for comparisons.
     s->flight_limit = 3;
-    if (const char *value = getenv("POP_HOST_PRESENT_FRAMES")) {
+    if (const char *value = recomp_env("HOST_PRESENT_FRAMES")) {
         if (!strcmp(value, "1"))
             s->flight_limit = 1;
         else if (!strcmp(value, "2"))

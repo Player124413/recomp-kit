@@ -178,9 +178,9 @@ int main(int argc, char **argv) {
         CHECK(sched_current_holder_slot() == main_slot);
         CHECK(main_slot->top.load() == 0xfffffffe);
         recomp_hook_ptrs[index_] = sync_worker;
-        os_setenv("POPM_CREATETHREAD", "sync");
+        os_setenv("RECOMP_CREATETHREAD", "sync");
         import_call(&c, "CreateThread", {0, 0, target, 0, 0, 0});
-        os_unsetenv("POPM_CREATETHREAD");
+        os_unsetenv("RECOMP_CREATETHREAD");
         CHECK(sync_ran);
         CHECK(recomp_profile_depth() == 1);
         CHECK(main_slot->top.load() == 0xfffffffe);

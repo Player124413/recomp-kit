@@ -21,7 +21,7 @@
 #include <stdio.h>
 
 struct BootOptions {
-    // Image to load. Null means POP_RECOMP_EXE, then the loader's default.
+    // Image to load. Null means RECOMP_EXE, then the loader's default.
     const char *exe = nullptr;
     // Name used in the run header, e.g. "headless" -> "== headless run ==".
     const char *name = "host";
@@ -40,7 +40,7 @@ struct BootOptions {
     bool signal_handlers = true;
 
     // Load mods/ after the guest image is mapped and before the entry point.
-    // A host sets this false, or the environment sets POPM_NO_MODS=1, to run
+    // A host sets this false, or the environment sets RECOMP_NO_MODS=1, to run
     // exactly as the game ran before the foundation existed - which is what
     // parity Gate A does.
     bool load_mods = true;
@@ -100,7 +100,7 @@ double boot_elapsed();
 // from a tick: it dispatches to the time source, which is what called it.
 uint32_t boot_millis();
 
-// The clock the GUEST sees. It is boot_millis() unless POP_RECOMP_PIN_CLOCK
+// The clock the GUEST sees. It is boot_millis() unless RECOMP_PIN_CLOCK
 // pinned it, in which case it is the pinned counter instead. A host that times
 // its own actions against the game's behaviour - the smoke script does - has
 // to use this one: on a pinned run the wall clock and the guest's clock are no

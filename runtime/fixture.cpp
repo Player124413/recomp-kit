@@ -8,15 +8,15 @@
 // non-deterministic inputs.  It never runs the PE entry point, because the
 // oracle does not either.
 //
-//   POP_RECOMP_FIXTURE=frames:32   how many outer frames to run (default 32)
-//   POP_RECOMP_TRACE*              read by the entry/exit recorder that
+//   RECOMP_FIXTURE=frames:32   how many outer frames to run (default 32)
+//   RECOMP_TRACE*              read by the entry/exit recorder that
 //                                  a local trace harness links into the
 //                                  traced build; this file only announces the
 //                                  phase boundaries through parity_trace_phase
-//   POP_RECOMP_OUT=<dir>           snapshot directory
+//   RECOMP_OUT=<dir>           snapshot directory
 //                                  (default build/recomp/parity/native)
-//   POP_RECOMP_DATA=<dir>          game data root (default original/gog)
-//   POP_RECOMP_EXE=<path>          image to load (default the loader's)
+//   RECOMP_DATA=<dir>          game data root (default original/gog)
+//   RECOMP_EXE=<path>          image to load (default the loader's)
 //
 // Snapshots are written after startup ("startup") and after every frame
 // ("frameNN"), one file per compared region plus a JSON manifest.
@@ -42,6 +42,7 @@
 
 #include <string>
 #include <vector>
+#include "../platform/os.h"
 
 // ---------------------------------------------------------------------------
 // Pins. Every value here mirrors the deterministic adapter in
@@ -141,7 +142,7 @@ bool g_mods_ever_live = false;
 // Repeated cleanup must preserve the first populated run record and never unload an active callback.
 void fixture_mods_teardown() {
     // A run that never had a lifecycle records here, because nothing else
-    // will: a POPM_NO_MODS fixture run does not reach the loader at all, and
+    // will: a RECOMP_NO_MODS fixture run does not reach the loader at all, and
     // Gate A's runs would otherwise be the only ones with no metadata.
     // Writing a record touches no guest memory, so it cannot move parity.
     //
@@ -679,17 +680,17 @@ int main(int argc, char **argv) {
     (void)argv;
 
     uint32_t frames = 32;
-    if (const char *spec = getenv("POP_RECOMP_FIXTURE")) {
+    if (const char *spec = recomp_env("FIXTURE")) {
         if (strncmp(spec, "frames:", 7) == 0)
             frames = (uint32_t)strtoul(spec + 7, nullptr, 0);
         else {
-            fprintf(stderr, "fixture: POP_RECOMP_FIXTURE must be frames:N\n");
+            fprintf(stderr, "fixture: RECOMP_FIXTURE must be frames:N\n");
             return 2;
         }
     }
-    if (const char *d = getenv("POP_RECOMP_OUT"))
+    if (const char *d = recomp_env("OUT"))
         g_out_dir = d;
-    if (const char *d = getenv("POP_RECOMP_DATA"))
+    if (const char *d = recomp_env("DATA"))
         g_data_dir = d;
 
     // --- pins -------------------------------------------------------------
@@ -703,7 +704,7 @@ int main(int argc, char **argv) {
     // the writer because this is where they are decided.
 
     mem_init();
-    if (!loader_load(getenv("POP_RECOMP_EXE"))) {
+    if (!loader_load(recomp_env("EXE"))) {
         fprintf(stderr, "fixture: loader_load: %s\n", loader_error());
         return 2;
     }
@@ -717,9 +718,9 @@ int main(int argc, char **argv) {
     // The fixture is a host too, and mods load here for the same reason they
     // load in boot.cpp: after the image is mapped, before any guest code runs.
     // This binary has its own main and never calls boot.cpp, so nothing else
-    // would load them. POPM_NO_MODS=1 - what Gate A sets - skips it entirely,
+    // would load them. RECOMP_NO_MODS=1 - what Gate A sets - skips it entirely,
     // which is how this stays byte-identical to the pre-foundation fixture.
-    if (!getenv("POPM_NO_MODS")) {
+    if (!recomp_env("NO_MODS")) {
         mods_host_set_main_thread();
         // This thread IS the run thread: it drives translated code directly and
         // never goes near run_entry, so nothing else would say so. Registering
@@ -838,7 +839,7 @@ int main(int argc, char **argv) {
     // every other ending reaches, so the ordinary path is not a special case.
     fixture_mods_teardown();
 
-    if (getenv("POPM_IMPORT_STATS"))
+    if (recomp_env("IMPORT_STATS"))
         imports_dump_report(stderr);
     return completed == frames ? 0 : 1;
 }

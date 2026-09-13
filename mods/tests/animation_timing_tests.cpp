@@ -168,7 +168,7 @@ MOD_TEST_SUITE(animation_real_guest_cadence) {
     }
     // Original and pinned fixture hosts retain per-render animation verbatim.
     const auto original = run(120, 0, false);
-    for (const char *pin : {"POPM_PIN_CLOCK", "POP_RECOMP_PIN_CLOCK"}) {
+    for (const char *pin : {"RECOMP_PIN_CLOCK"}) {
         os_setenv(pin, "1000,8");
         const auto pinned = run(120, 0, true);
         os_unsetenv(pin);

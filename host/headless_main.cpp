@@ -24,13 +24,13 @@
 //   3. The run report, printed on every path a run can end on.
 //
 // Environment:
-//   POP_RECOMP_MAX_FRAMES=N     stop after N presented frames (default 200)
-//   POP_RECOMP_MAX_SECONDS=S    stop after S wall-clock seconds (default 180)
-//   POP_RECOMP_FRAMES=DIR       frame directory (default build/recomp/frames)
-//   POP_RECOMP_FRAME_EVERY=N    write every Nth frame (default 1; 0 writes none)
-//   POP_RECOMP_EXE=PATH         image to load (default the loader's)
-//   POP_RECOMP_NO_ACTIVATE=1    do not synthesise activation (diagnostics)
-//   POPM_LOG, POPM_IMPORT_STATS  as documented in runtime/README.md
+//   RECOMP_MAX_FRAMES=N     stop after N presented frames (default 200)
+//   RECOMP_MAX_SECONDS=S    stop after S wall-clock seconds (default 180)
+//   RECOMP_FRAMES=DIR       frame directory (default build/recomp/frames)
+//   RECOMP_FRAME_EVERY=N    write every Nth frame (default 1; 0 writes none)
+//   RECOMP_EXE=PATH         image to load (default the loader's)
+//   RECOMP_NO_ACTIVATE=1    do not synthesise activation (diagnostics)
+//   RECOMP_LOG, RECOMP_IMPORT_STATS  as documented in runtime/README.md
 #include "audio.h"
 #include "audio_capture.h"
 #include "../platform/os.h"
@@ -63,7 +63,7 @@ double g_max_seconds = 180.0;
 // Every tenth frame, not every frame. A default run presents about 500, and
 // at 900 KB a frame writing all of them costs nearly half a gigabyte to say
 // something a handful of frames already say. Ten still lands several frames in
-// each phase, and POP_RECOMP_FRAME_EVERY=1 is there for a run that needs them
+// each phase, and RECOMP_FRAME_EVERY=1 is there for a run that needs them
 // all.
 uint32_t g_frame_every = 10;
 std::string g_frames_dir = "build/recomp/frames";
@@ -80,7 +80,7 @@ uint32_t g_last_distinct = 0, g_last_nonbg = 0, g_last_src = 0, g_last_pal = 0;
 uint32_t g_best_distinct = 0, g_best_nonbg = 0, g_best_src = 0, g_best_pal = 0;
 // What the run saw, whether or not any frame was written. Writing frames is a
 // convenience; whether the guest drew anything is a fact about the run, and
-// POP_RECOMP_FRAME_EVERY=0 must not turn a good run into a failed one.
+// RECOMP_FRAME_EVERY=0 must not turn a good run into a failed one.
 uint32_t g_seen_max_distinct = 0, g_seen_max_nonbg = 0;
 int g_mode_w = 0, g_mode_h = 0, g_mode_bpp = 0;
 uint32_t g_mode_sets = 0;
@@ -355,7 +355,7 @@ extern "C" void host_d3d_texture_destroyed(uint32_t handle) {
 // rendering at all would freeze them, which is the stall that used to wedge
 // the intro movie.
 //
-// POP_HOST_AUDIO_CAPTURE=<path.wav> writes it to a file. Without it the mix is
+// RECOMP_HOST_AUDIO_CAPTURE=<path.wav> writes it to a file. Without it the mix is
 // still rendered and still measured, because the measurements are what say
 // whether it was right.
 // ---------------------------------------------------------------------------
@@ -371,7 +371,7 @@ void audio_offline_begin() {
         return;
     }
     g_audio_offline = true;
-    const char *capture = getenv("POP_HOST_AUDIO_CAPTURE");
+    const char *capture = recomp_env("HOST_AUDIO_CAPTURE");
     // Measured either way. A path only decides whether it is also written.
     host_audio_capture_begin(capture && *capture ? capture : nullptr);
     printf("[headless] audio rendered offline at %.0f Hz%s%s\n", kAudioRate,
@@ -547,15 +547,15 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    if (const char *v = getenv("POP_RECOMP_MAX_FRAMES"))
+    if (const char *v = recomp_env("MAX_FRAMES"))
         g_max_frames = (uint32_t)strtoul(v, nullptr, 0);
-    if (const char *v = getenv("POP_RECOMP_MAX_SECONDS"))
+    if (const char *v = recomp_env("MAX_SECONDS"))
         g_max_seconds = strtod(v, nullptr);
-    if (const char *v = getenv("POP_RECOMP_FRAME_EVERY"))
+    if (const char *v = recomp_env("FRAME_EVERY"))
         g_frame_every = (uint32_t)strtoul(v, nullptr, 0);
-    if (const char *v = getenv("POP_RECOMP_FRAMES"))
+    if (const char *v = recomp_env("FRAMES"))
         g_frames_dir = v;
-    if (getenv("POP_RECOMP_NO_ACTIVATE"))
+    if (recomp_env("NO_ACTIVATE"))
         g_activate = false;
 
     mkdir_p(g_frames_dir);

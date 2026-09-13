@@ -90,7 +90,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         if (has_inst(s))
             inst_ext.push_back(s);
     std::vector<const char *> layers;
-    if (const char *v = getenv("POP_GPU_VALIDATE"); v && *v == '1') {
+    if (const char *v = recomp_env("GPU_VALIDATE"); v && *v == '1') {
         uint32_t ln = 0;
         vkEnumerateInstanceLayerProperties(&ln, nullptr);
         std::vector<VkLayerProperties> lp(ln);
@@ -99,7 +99,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
             if (strcmp(l.layerName, "VK_LAYER_KHRONOS_validation") == 0)
                 layers.push_back("VK_LAYER_KHRONOS_validation");
         if (layers.empty())
-            fprintf(stderr, "gpu/vulkan: POP_GPU_VALIDATE set but no validation layer found\n");
+            fprintf(stderr, "gpu/vulkan: RECOMP_GPU_VALIDATE set but no validation layer found\n");
     }
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ici.flags = inst_flags;
@@ -240,7 +240,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     pci.queueFamilyIndex = family;
     if (vkCreateCommandPool(d->device_, &pci, nullptr, &d->transfer_pool_) != VK_SUCCESS)
         return nullptr;
-    if (const char *t = getenv("POP_GPU_TRACE"); t && *t == '1')
+    if (const char *t = recomp_env("GPU_TRACE"); t && *t == '1')
         d->trace_ = true;
     if (!d->init_pipeline_layout())
         return nullptr;

@@ -21,11 +21,11 @@
  * page, cannot happen while the arena is inaccessible.
  *
  * Configuration, all through the environment so no rebuild is needed:
- *   POPM_CAPTURE_TARGET  entry symbol name, or an address as 0x...
- *   POPM_CAPTURE_OUT     where to write the corpus
- *   POPM_CAPTURE_PAGES   page bound (default 4096)
- *   POPM_CAPTURE_CALLS   shim call bound (default 10000)
- *   POPM_CAPTURE_LIVE_FLAGS
+ *   RECOMP_CAPTURE_TARGET  entry symbol name, or an address as 0x...
+ *   RECOMP_CAPTURE_OUT     where to write the corpus
+ *   RECOMP_CAPTURE_PAGES   page bound (default 4096)
+ *   RECOMP_CAPTURE_CALLS   shim call bound (default 10000)
+ *   RECOMP_CAPTURE_LIVE_FLAGS
  *       Which of CF,ZF,SF,OF,PF,AF replay may compare, as a bit mask in that
  *       order. The default is 0 and that is not laziness: pop_mod_api.h:55-60
  *       says those six are kept only where the translator's liveness analysis
@@ -80,9 +80,9 @@ static void capture_wrap(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocatio
     g_done = 1;
 
     entry = *cpu;
-    pages = env_u32("POPM_CAPTURE_PAGES", 4096);
-    calls = env_u32("POPM_CAPTURE_CALLS", 10000);
-    live = env_u32("POPM_CAPTURE_LIVE_FLAGS", 0);
+    pages = env_u32("RECOMP_CAPTURE_PAGES", 4096);
+    calls = env_u32("RECOMP_CAPTURE_CALLS", 10000);
+    live = env_u32("RECOMP_CAPTURE_LIVE_FLAGS", 0);
 
     if (!pop_capture_begin(pages, calls)) {
         api->log(api, "capture: tracking would not arm; delegating uncaptured");
@@ -104,18 +104,18 @@ static void capture_wrap(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocatio
 }
 
 PopModStatus pop_mod_init(const PopModApi *api) {
-    const char *target = getenv("POPM_CAPTURE_TARGET");
-    const char *out = getenv("POPM_CAPTURE_OUT");
+    const char *target = getenv("RECOMP_CAPTURE_TARGET");
+    const char *out = getenv("RECOMP_CAPTURE_OUT");
     g_api = api;
 
     if (!pop_capture_available()) {
         api->log(api, "capture: refused, the host was not built for testing "
-                      "(POPM_TESTING is not set)");
+                      "(RECOMP_TESTING is not set)");
         return POP_E_STATE;
     }
     if (!target || !*target || !out || !*out) {
-        api->log(api, "capture: refused, POPM_CAPTURE_TARGET and "
-                      "POPM_CAPTURE_OUT must both name something");
+        api->log(api, "capture: refused, RECOMP_CAPTURE_TARGET and "
+                      "RECOMP_CAPTURE_OUT must both name something");
         return POP_E_STATE;
     }
     snprintf(g_out, sizeof g_out, "%s", out);
@@ -124,11 +124,11 @@ PopModStatus pop_mod_init(const PopModApi *api) {
         char *end = NULL;
         g_target = (uint32_t)strtoul(target, &end, 16);
         if (end == target || *end) {
-            api->log(api, "capture: refused, POPM_CAPTURE_TARGET is not an address");
+            api->log(api, "capture: refused, RECOMP_CAPTURE_TARGET is not an address");
             return POP_E_STATE;
         }
     } else if (api->symbol(api, target, &g_target) != POP_OK) {
-        api->log(api, "capture: refused, POPM_CAPTURE_TARGET names no entry symbol");
+        api->log(api, "capture: refused, RECOMP_CAPTURE_TARGET names no entry symbol");
         return POP_E_NOSYMBOL;
     }
     return api->hook_install(api, g_target, capture_wrap, POP_HOOK_WRAP, 0, &g_hook);

@@ -63,8 +63,9 @@ std::string &record_path() {
     return s;
 }
 
+// `name` is a kit switch without its RECOMP_ prefix.
 const char *env_or(const char *name, const char *dflt) {
-    const char *v = getenv(name);
+    const char *v = recomp_env(name);
     return v && *v ? v : dflt;
 }
 
@@ -137,10 +138,10 @@ __attribute__((constructor)) void capture_initial() {
     };
     std::string settings = host_layout().profile_dir + "/mod-settings.json";
     initial_settings() = slurp(settings.c_str());
-    pin_script() = env_or("POP_RECOMP_SCRIPT", "");
+    pin_script() = env_or("SCRIPT", "");
     input_script() = slurp(pin_script().empty() ? nullptr : pin_script().c_str());
-    pin_fixture() = env_or("POP_RECOMP_FIXTURE", "");
-    // POPM_RUN_RECORD overrides the path every host passes in.
+    pin_fixture() = env_or("FIXTURE", "");
+    // RECOMP_RUN_RECORD overrides the path every host passes in.
     //
     // The hosts name one fixed file, so two runs at once write the same path
     // and the same .tmp beside it, and a reader between another run's write
@@ -151,9 +152,9 @@ __attribute__((constructor)) void capture_initial() {
     // A lock would serialise the scripts that agree to take one; this does not
     // depend on agreement, because a run given its own path cannot be reached
     // by a run that was not. The paths differ, so the .tmp files differ too.
-    record_path() = env_or("POPM_RUN_RECORD", "");
-    pin_threads() = env_or("POPM_CREATETHREAD", "");
-    pin_frames() = env_or("POP_RECOMP_MAX_FRAMES", "");
+    record_path() = env_or("RUN_RECORD", "");
+    pin_threads() = env_or("CREATETHREAD", "");
+    pin_frames() = env_or("MAX_FRAMES", "");
 }
 
 // JSON string escaping, for EVERY string this file writes. Lossless: a
@@ -392,8 +393,8 @@ uint64_t hash_tree(const std::string &dir, uint64_t h, bool *missing, int depth)
 // directory recursion running before main.
 __attribute__((constructor)) void capture_build() {
     // PRESENCE disables, whatever the value, because that is what the hosts
-    // do: boot.cpp and fixture.cpp both ask !getenv("POPM_NO_MODS"). Asking
-    // whether the value was non-empty made POPM_NO_MODS="" a run with mods
+    // do: boot.cpp and fixture.cpp both ask !recomp_env("NO_MODS"). Asking
+    // whether the value was non-empty made RECOMP_NO_MODS="" a run with mods
     // off that recorded itself as a run with mods on - the one field whose
     // whole job is to tell those two apart.
     //
@@ -401,8 +402,8 @@ __attribute__((constructor)) void capture_build() {
     // its own options (boot.cpp's g_opt.load_mods), and that is not visible
     // from here, at process start, before any host has been constructed. The
     // mods array is what says whether any mod actually loaded.
-    g_mods_enabled = getenv("POPM_NO_MODS") == nullptr;
-    mods_dir() = env_or("POPM_MODS_DIR", "mods");
+    g_mods_enabled = recomp_env("NO_MODS") == nullptr;
+    mods_dir() = env_or("MODS_DIR", "mods");
 
     const uint64_t seed = 1469598103934665603ull;
     bool missing = false;
@@ -577,7 +578,7 @@ bool mods_write_run_record(const char *path) {
     // main, after every constructor in this file has already run. Captured
     // early it would read "monotonic" for every run including the pinned ones.
     //
-    // It replaces a clock_ms field read from POP_RECOMP_CLOCK_MS, which no
+    // It replaces a clock_ms field read from RECOMP_CLOCK_MS, which no
     // host, runtime file or tool ever read. Recording it made the pins block
     // claim something it could not support: two runs with the same empty
     // clock_ms looked like two runs whose clocks agreed, when one may have

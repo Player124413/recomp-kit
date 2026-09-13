@@ -31,7 +31,7 @@ const pop_pagetrack::Touch *find(const pop_pagetrack::Touch *t, size_t n, uint32
 } // namespace
 
 MOD_TEST_SUITE(pagetrack_read_and_write_sets_are_exact) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     const size_t page = pop_pagetrack::page_size();
     MOD_CHECK(page >= 4096);
@@ -101,7 +101,7 @@ MOD_TEST_SUITE(pagetrack_read_and_write_sets_are_exact) {
 }
 
 MOD_TEST_SUITE(pagetrack_refuses_beyond_its_bound) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     const size_t page = pop_pagetrack::page_size();
 
@@ -122,13 +122,13 @@ MOD_TEST_SUITE(pagetrack_refuses_beyond_its_bound) {
 }
 
 MOD_TEST_SUITE(pagetrack_needs_testing_mode) {
-    unsetenv("POPM_TESTING");
+    unsetenv("RECOMP_TESTING");
     mem_init();
     // Not a test-mode process: tracking refuses rather than protecting the
     // arena of a run that is not expecting it.
     MOD_CHECK(!pop_pagetrack::begin(4096));
     MOD_CHECK(!pop_pagetrack::active());
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
 }
 
 // Many threads taking the first touch of many pages at the same moment.
@@ -143,7 +143,7 @@ MOD_TEST_SUITE(pagetrack_needs_testing_mode) {
 // and every thread starts from one release of a spin barrier rather than from
 // its own creation, which would stagger them apart.
 MOD_TEST_SUITE(pagetrack_survives_concurrent_first_touches) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     const size_t page = pop_pagetrack::page_size();
     const uint32_t base = 0x05000000u & ~(uint32_t)(page - 1);
@@ -220,7 +220,7 @@ MOD_TEST_SUITE(pagetrack_survives_concurrent_first_touches) {
 // Every worker faults on every page. Separate bytes avoid a C++ data race on
 // the guest contents; a barrier at each page makes the protection faults race.
 MOD_TEST_SUITE(pagetrack_same_pages_accept_concurrent_readers_and_writers) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     const size_t page = pop_pagetrack::page_size();
     const uint32_t base = 0x09000000u;
@@ -283,7 +283,7 @@ void recover_foreign_fault(int, siginfo_t *, void *) {
 } // namespace
 
 MOD_TEST_SUITE(pagetrack_end_drains_a_handler_before_restoring_permissions) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     const size_t page = pop_pagetrack::page_size();
     const uint32_t base = 0x0a000000u;
@@ -333,7 +333,7 @@ MOD_TEST_SUITE(pagetrack_end_drains_a_handler_before_restoring_permissions) {
 }
 
 MOD_TEST_SUITE(pagetrack_repeat_fault_on_a_granted_page_is_foreign) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     foreign_page_size = pop_pagetrack::page_size();
     foreign_page = g_mem + 0x0b000000u;
@@ -375,7 +375,7 @@ void recover_retry_bound_fault(int, siginfo_t *info, void *) {
 } // namespace
 
 MOD_TEST_SUITE(pagetrack_retry_thread_exhaustion_is_rejected) {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     // Exercise the actual 256-slot table, without changing the production
     // limit. Keep every worker alive until end() so pthread IDs cannot be

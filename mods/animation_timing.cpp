@@ -4,12 +4,13 @@
 #include "../runtime/win32.h"
 #include <cstdlib>
 #include <cstdio>
+#include "../platform/os.h"
 
 namespace {
 AnimationClock animation_clock;
 bool installed = false;
 bool timing_enabled() {
-    return mods_display_fps() != 0 && !getenv("POP_RECOMP_PIN_CLOCK") && !getenv("POPM_PIN_CLOCK");
+    return mods_display_fps() != 0 && !recomp_env("PIN_CLOCK");
 }
 
 void frame_time(const PopModApi *, pop_cpu_v1 *, PopHookInvocation *, void *) {
@@ -53,7 +54,7 @@ void animate_units(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *inv
     }
     // Optional bounded diagnostics for comparing live 40/60/120 FPS runs.
     static FILE *trace = []() -> FILE * {
-        const char *path = getenv("POP_ANIMATION_TRACE");
+        const char *path = recomp_env("ANIMATION_TRACE");
         FILE *file = path ? fopen(path, "w") : nullptr;
         if (file) {
             setvbuf(file, nullptr, _IOLBF, 0);

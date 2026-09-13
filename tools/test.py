@@ -66,11 +66,11 @@ def mods(preset, env, jobs, game_dir, build_root):
         output = build_root / "tests"
         output.mkdir(parents=True, exist_ok=True)
         case = Path(tempfile.mkdtemp(prefix="mod-fixture-", dir=output))
-        fixture_env = dict(env, POPM_NO_MODS="1", POP_RECOMP_FIXTURE="frames:32",
-                           POP_RECOMP_OUT=str(case / "snapshots"),
-                           POPM_PROFILE_DIR=str(case / "profile"),
-                           POPM_REGISTRY=str(case / "registry.json"),
-                           POPM_RUN_RECORD=str(case / "run.json"))
+        fixture_env = dict(env, RECOMP_NO_MODS="1", RECOMP_FIXTURE="frames:32",
+                           RECOMP_OUT=str(case / "snapshots"),
+                           RECOMP_PROFILE_DIR=str(case / "profile"),
+                           RECOMP_REGISTRY=str(case / "registry.json"),
+                           RECOMP_RUN_RECORD=str(case / "run.json"))
         print("Mod fixture diagnostics: %s" % case, flush=True)
         with (case / "fixture.log").open("w") as log:
             result = subprocess.run([str(build_root / "recomp/pop_fixture")], cwd=ROOT, env=fixture_env,
@@ -79,15 +79,20 @@ def mods(preset, env, jobs, game_dir, build_root):
         snapshot = case / "snapshots/frame32._data_00598000.bin"
         if not snapshot.is_file():
             raise RuntimeError("The entity fixture was not captured; inspect %s" % case)
-        ctest(build_dir, "mods", dict(env, POPM_TEST_GAME_VIEW_SNAPSHOT=str(snapshot)))
+        ctest(build_dir, "mods", dict(env, RECOMP_TEST_GAME_VIEW_SNAPSHOT=str(snapshot)))
+
+
+def probe_module():
+    spec = importlib.util.spec_from_file_location("mode_probe", ROOT / "tools/recomp/mode_probe.py")
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    return probe
 
 
 def gameplay(jobs, game_dir, build_root):
     """Replay native Options and movement in a unique profile; retain diagnostics under the build root."""
     run([sys.executable, "tools/build.py", "--game-dir", game_dir, "--target", "smoke", "--jobs", jobs])
-    spec = importlib.util.spec_from_file_location("mode_probe", ROOT / "tools/recomp/mode_probe.py")
-    probe = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(probe)
+    probe = probe_module()
     output = build_root / "gameplay"
     output.mkdir(parents=True, exist_ok=True)
     case = Path(tempfile.mkdtemp(prefix="options-", dir=output))
@@ -109,11 +114,11 @@ def gameplay(jobs, game_dir, build_root):
     path = case / "input.script"
     path.write_text(script)
     env = probe.probe_environment((640, 480, 16), path, case)
-    env.pop("POP_SMOKE_CLASSIC_PROBE", None)
-    env.update(POP_SMOKE_DRAWABLE="1280x960",
-               POPM_DDRAW_MODES="640x480x8,640x480x16,800x600x16,3840x2160x16",
-               POPM_CORE_MODS_DIR=str(build_root / "recomp/mods/core"),
-               POPM_TEXTURE_PACK_DIR=str(pack))
+    env.pop("RECOMP_SMOKE_CLASSIC_PROBE", None)
+    env.update(RECOMP_SMOKE_DRAWABLE="1280x960",
+               RECOMP_DDRAW_MODES="640x480x8,640x480x16,800x600x16,3840x2160x16",
+               RECOMP_CORE_MODS_DIR=str(build_root / "recomp/mods/core"),
+               RECOMP_TEXTURE_PACK_DIR=str(pack))
     print("Gameplay diagnostics: %s" % case, flush=True)
     with (case / "smoke.log").open("w") as log:
         result = subprocess.run([str(build_root / "recomp/pop_smoke")], cwd=ROOT, env=env,
@@ -130,7 +135,7 @@ def gameplay(jobs, game_dir, build_root):
 def integration(env, game_dir, build_root):
     """The host integration script: roots, plugins, headless, smoke and fixture runs against the game."""
     run([str(ROOT / "host/tests/integration_tests.sh")],
-        dict(env, RECOMP_GAME_DIR=str(game_dir), POP_BUILD_ROOT=str(build_root)))
+        dict(env, RECOMP_GAME_DIR=str(game_dir), RECOMP_BUILD_ROOT=str(build_root)))
 
 
 def main():
@@ -159,8 +164,7 @@ def main():
                      "or run `ctest --test-dir <build dir> -L nogame` for the portable suites")
     if game_backed and not build_py.archive_path(build_root).is_file():
         parser.error("Build the game with tools/build.py before running this suite")
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("POPM_", "POP_RECOMP_", "POP_SMOKE_", "POP_HOST_"))}
+    env = probe_module().without_switches(os.environ)
     env["PY"] = sys.executable
     try:
         if args.gameplay:

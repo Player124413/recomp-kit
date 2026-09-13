@@ -68,7 +68,7 @@ std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max);
 // If `value` points at an object whose vtable carries MSVC RTTI, the class's
 // mangled name; otherwise an empty string.
 std::string win32_describe_pointer(uint32_t value);
-// Forget the command line handed out so far (tests change POPM_GUEST_ARGS).
+// Forget the command line handed out so far (tests change RECOMP_GUEST_ARGS).
 void win32_reset_command_line_for_test();
 // Dwords on the stack from `esp` over `bytes` that lie in [lo, hi) and sit right
 // after a CALL instruction: the return addresses a frame-pointer-less chain
@@ -465,7 +465,7 @@ void host_pump_timers(X86 *c);
 
 // ---------------------------------------------------------------------------
 // Registry: backed by build/recomp/registry.json (path overridable with
-// POPM_REGISTRY). Flushed on write.
+// RECOMP_REGISTRY). Flushed on write.
 // ---------------------------------------------------------------------------
 void registry_load();
 void registry_flush();

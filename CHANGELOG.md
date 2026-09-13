@@ -6,6 +6,22 @@
   sizes, Shift/Ctrl/Alt that hold, latch or lock, HIDE/KEYS tabs, settings on the
   F10 page persisted per game; replaces the eight-key strip. `POPM_KEYPAD=1` forces
   it on for a desktop check.
+- Switches: every environment switch the kit reads is `RECOMP_<NAME>`, read
+  through one function, `recomp_env` in `platform/os.h`. The spellings from the
+  kit's origin as one game's port - `POPM_<NAME>`, `POP_RECOMP_<NAME>`,
+  `POP_HOST_<NAME>`, `POP_SMOKE_<NAME>`, `POP_GPU_<NAME>`, `POP_VULKAN_<NAME>`,
+  `POP_REPLACE_<NAME>`, `POP_PLATFORM_TEST`, `POP_TEST_DIR`, `POP_CC`,
+  `POP_BUILD_ROOT` and the rest - are gone, not aliased: `POPM_PIN_CLOCK` and
+  `POP_RECOMP_PIN_CLOCK` are both `RECOMP_PIN_CLOCK`, `POPM_TEST_DIR` (mods
+  tests) is `RECOMP_TEST_DIR`, `POP_TEST_DIR` (platform tests) is
+  `RECOMP_PLATFORM_TEST_DIR`, and the tools' `POP_BUILD_ROOT` is
+  `RECOMP_BUILD_ROOT`. `tools/test.py` and the mode probe drop a caller's
+  `RECOMP_*` switches from a child's environment while keeping the names that
+  locate the game and toolchain (`mode_probe.without_switches`). Smoke scripts,
+  test fixtures and docs use the new names; a game repository's scripts must
+  too. Still to move: the CMake variables (`POP_ROOT`, `POP_BUILD_ROOT`,
+  `POP_OUT`, `POP_WARN_STRICT`, ...) and the `POPM_TESTING` compile macro,
+  which share the old prefix but are not read from the environment.
 - Translator: instruction forms a Visual C++ 6 executable uses that the first
   corpus did not: `LOOP`, `INT3`, `CLC`/`STC`, `PUSHF`/`POPF`, 16-bit `PUSH`/`POP`,
   word- and dword-width `CMPS`/`SCAS` with every REP prefix, `FPTAN`,

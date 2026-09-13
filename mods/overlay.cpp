@@ -214,7 +214,7 @@ void mods_overlay_reset() {
         init_owner = 0;
         init_thread = {};
         if (profile().empty()) {
-            profile() = host_layout().profile_dir; // honours POPM_PROFILE_DIR
+            profile() = host_layout().profile_dir; // honours RECOMP_PROFILE_DIR
         }
         dir = profile();
     }

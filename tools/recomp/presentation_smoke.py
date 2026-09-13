@@ -52,12 +52,12 @@ def main():
             'host.display/frame_limit': 0, 'host.display/performance_overlay': 0,
         }))
         env = os.environ.copy()
-        env.pop('POPM_NO_MODS', None)
-        env.update(LANDMARK=landmark, POP_RECOMP_PIN_CLOCK='1', POP_SMOKE_WINDOW_INPUT='1',
-                   POP_SMOKE_DRAWABLE=size, POP_SMOKE_SIM_REGIONS='1',
-                   POPM_CORE_MODS_DIR=str(args.core.resolve()), POPM_MODS_DIR=str(run/'user-mods'),
-                   POPM_PROFILE_DIR=str(run/'profile'), POPM_RUN_RECORD=str(run/'run.json'),
-                   POP_HOST_DUMP_DIR=str(run/'frames'), POP_RECOMP_SCRIPT=str(out/'input.script'))
+        env.pop('RECOMP_NO_MODS', None)
+        env.update(LANDMARK=landmark, RECOMP_PIN_CLOCK='1', RECOMP_SMOKE_WINDOW_INPUT='1',
+                   RECOMP_SMOKE_DRAWABLE=size, RECOMP_SMOKE_SIM_REGIONS='1',
+                   RECOMP_CORE_MODS_DIR=str(args.core.resolve()), RECOMP_MODS_DIR=str(run/'user-mods'),
+                   RECOMP_PROFILE_DIR=str(run/'profile'), RECOMP_RUN_RECORD=str(run/'run.json'),
+                   RECOMP_HOST_DUMP_DIR=str(run/'frames'), RECOMP_SCRIPT=str(out/'input.script'))
         print('RUN', name, flush=True)
         with (run/'smoke.log').open('w') as log:
             try:

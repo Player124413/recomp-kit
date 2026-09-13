@@ -968,12 +968,12 @@ D3DRenderer::Impl::Impl(gpu::Device *device) : device_(device) {
         fprintf(stderr, "[host] surface upload pipeline failed\n");
         return;
     }
-    const char *upload_mode = getenv("POP_HOST_SURFACE_UPLOAD");
+    const char *upload_mode = recomp_env("HOST_SURFACE_UPLOAD");
     cpu_surface_upload_ = upload_mode && !strcmp(upload_mode, "cpu");
     readback_pipeline_ = device_->compute_pipeline("guest_readback");
     readback_fused_pipeline_ = device_->compute_pipeline("guest_readback_fused");
     brightness_pipeline_ = device_->compute_pipeline("native_brightness");
-    const char *kernel = getenv("POP_HOST_READBACK_KERNEL");
+    const char *kernel = recomp_env("HOST_READBACK_KERNEL");
     // Keep the established path unless explicitly testing the candidate:
     // repeated gameplay runs have not shown a throughput benefit yet.
     tiled_readback_ = kernel && strcmp(kernel, "tiled") == 0;
@@ -981,20 +981,20 @@ D3DRenderer::Impl::Impl(gpu::Device *device) : device_(device) {
         fprintf(stderr, "[host] readback pipeline failed\n");
         return;
     }
-    const char *submit = getenv("POP_HOST_D3D_SUBMIT_DRAWS");
+    const char *submit = recomp_env("HOST_D3D_SUBMIT_DRAWS");
     if (submit && *submit) {
         char *end = nullptr;
         unsigned long value = strtoul(submit, &end, 10);
         if (end && !*end && value <= 65536)
             submit_draws_ = (uint32_t)value;
     }
-    if (const char *workers = getenv("POP_HOST_READBACK_WORKERS")) {
+    if (const char *workers = recomp_env("HOST_READBACK_WORKERS")) {
         char *end = nullptr;
         unsigned long value = strtoul(workers, &end, 10);
         if (end && !*end && value >= 1 && value <= 4)
             readback_workers_ = (uint32_t)value;
     }
-    if (const char *path = getenv("POP_HOST_READBACK_TIMINGS")) {
+    if (const char *path = recomp_env("HOST_READBACK_TIMINGS")) {
         readback_timings_ = fopen(path, "w");
         if (readback_timings_)
             fprintf(readback_timings_,
@@ -1002,7 +1002,7 @@ D3DRenderer::Impl::Impl(gpu::Device *device) : device_(device) {
                     "workers,kernel,last_render_gpu_ms,readback_gpu_ms,wait_ms,copy_ms,sample_"
                     "stage_ms,brightness_stage_ms\n");
     }
-    cull_enabled_ = getenv("POP_HOST_D3D_NOCULL") == nullptr;
+    cull_enabled_ = recomp_env("HOST_D3D_NOCULL") == nullptr;
 
     // Bound wherever a draw is untextured, because the fragment function's
     // texture argument has to be something.
@@ -1013,9 +1013,9 @@ D3DRenderer::Impl::Impl(gpu::Device *device) : device_(device) {
     std::string packPath = host_resource("texture-pack");
     if (packPath.empty())
         packPath = "build/texture-pack";
-    if (const char *packEnv = getenv("POPM_TEXTURE_PACK_DIR"))
+    if (const char *packEnv = recomp_env("TEXTURE_PACK_DIR"))
         packPath = packEnv;
-    if (const char *mb = getenv("POPM_TEXTURE_BUDGET_MB")) {
+    if (const char *mb = recomp_env("TEXTURE_BUDGET_MB")) {
         char *end = nullptr;
         auto value = strtoul(mb, &end, 10);
         if (end != mb && !*end && value >= 32 && value <= 1024)
@@ -1400,14 +1400,14 @@ void D3DRenderer::Impl::rebuildIndexCache() {
 }
 
 void D3DRenderer::Impl::flushSurface(const HostD3DSurface *surface, const char *why) {
-    // POP_HOST_TRACE_FLUSH=1 prints one line per flush that actually wrote
+    // RECOMP_HOST_TRACE_FLUSH=1 prints one line per flush that actually wrote
     // something, naming what asked for it. Read against the guest's own blit
     // sequence for a frame, that says whether a software blit landed before or
     // after the write-back that could overwrite it - which is the difference
     // between a panel that is drawn and a panel that is black.
     static int trace = -1;
     if (trace < 0)
-        trace = getenv("POP_HOST_TRACE_FLUSH") ? 1 : 0;
+        trace = recomp_env("HOST_TRACE_FLUSH") ? 1 : 0;
     // Any surface may be asked about. The one the mirror's contents belong to
     // is the one that gets them, whether or not it is still the render target.
     if (!surface || !pending_id_ || surface->id != pending_id_)
@@ -2498,7 +2498,7 @@ void D3DRenderer::Impl::draw(const HostD3DDraw *cmd, uint32_t revision) {
     // what the original asked for in the Wine trace.
     static int draw_trace = -1;
     if (draw_trace < 0)
-        draw_trace = getenv("POP_HOST_TRACE_D3D") ? 1 : 0;
+        draw_trace = recomp_env("HOST_TRACE_D3D") ? 1 : 0;
     static bool told_draw = false;
     if (draw_trace && !told_draw) {
         told_draw = true;
@@ -2804,14 +2804,14 @@ std::shared_ptr<OwnedTexture> D3DRenderer::Impl::makeTexture(const HostD3DTextur
     if (!t->original)
         hd_.pack.capture(*t, rgba);
 
-    // POP_HOST_TRACE_D3D=1 says what the texels actually are. A texture that
+    // RECOMP_HOST_TRACE_D3D=1 says what the texels actually are. A texture that
     // arrives near-black makes a black scene however the renderer shades it,
     // and that is a different fault in a different file from one that arrives
     // bright and is drawn dark. The first few are written out so they can be
     // looked at rather than only summarised.
     static int trace = -1;
     if (trace < 0)
-        trace = getenv("POP_HOST_TRACE_D3D") ? 1 : 0;
+        trace = recomp_env("HOST_TRACE_D3D") ? 1 : 0;
     if (trace) {
         static uint32_t seen = 0;
         uint32_t peak = 0;

@@ -611,14 +611,14 @@ static void test_boot_shims(X86 *c) {
     check(call_import(c, "USER32.dll", "LoadCursorA", {0, 0x7f00}) != 0,
           "LoadCursorA(IDC_ARROW) hands out a handle");
     // The command line is the executable's path, plus whatever switches the
-    // developer asks for through POPM_GUEST_ARGS: a game's own -debugout or
+    // developer asks for through RECOMP_GUEST_ARGS: a game's own -debugout or
     // -nointro, which are how it is told to write its log or skip its intro.
-    os_setenv("POPM_GUEST_ARGS", "-debugout -nointro");
+    os_setenv("RECOMP_GUEST_ARGS", "-debugout -nointro");
     win32_reset_command_line_for_test();
     std::string cmdline = gm_str(call_import(c, "KERNEL32.dll", "GetCommandLineA", {}));
     check(cmdline == std::string(RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE) + " -debugout -nointro",
-          "GetCommandLineA appends POPM_GUEST_ARGS: \"%s\"", cmdline.c_str());
-    os_unsetenv("POPM_GUEST_ARGS");
+          "GetCommandLineA appends RECOMP_GUEST_ARGS: \"%s\"", cmdline.c_str());
+    os_unsetenv("RECOMP_GUEST_ARGS");
     win32_reset_command_line_for_test();
     uint32_t ms = scratch_block(32);
     wr32(ms, 32);
@@ -1245,7 +1245,7 @@ static void test_native_draw_waits(X86 *c) {
     check(call_import(c, "KERNEL32.dll", "GetTickCount", {}) == 1000 && rd32(0x98e7cc) == 1016 &&
               rd32(0x98e7e0) == 1025 && c->r[R_EDI] == 60,
           "unrelated clock calls cannot alter draw pacing");
-    for (const char *pin : {"POP_RECOMP_PIN_CLOCK", "POPM_PIN_CLOCK"}) {
+    for (const char *pin : {"RECOMP_PIN_CLOCK"}) {
         os_setenv(pin, "1000,8");
         g_fake_ret = 0x4a47a4;
         call_import(c, "KERNEL32.dll", "GetTickCount", {});
@@ -3109,9 +3109,9 @@ int main(int argc, char **argv) {
         freopen(os_null_device(), "w", stdout);
         freopen(os_null_device(), "w", stderr);
     }
-    os_setenv("POPM_REGISTRY", "build/recomp/registry-test.json");
-    if (!getenv("POPM_LOG"))
-        os_setenv("POPM_LOG", "1");
+    os_setenv("RECOMP_REGISTRY", "build/recomp/registry-test.json");
+    if (!recomp_env("LOG"))
+        os_setenv("RECOMP_LOG", "1");
     // The suite loads the developer's game image; without one (the kit's
     // stub game, a checkout with no original/) there is nothing to test.
     if (FILE *image = fopen(RECOMP_DEVELOPER_EXE, "rb"))

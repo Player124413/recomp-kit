@@ -68,7 +68,7 @@ every mod plugin. `--preset` and `--config Debug` pick the CMake preset; the
 CMake tree lives in `<build root>/cmake/<preset>` and every artifact keeps its
 documented path under that build root: the game's `build/` when the game lives
 outside the kit, the kit's `build/` for the stub. Your default writable profile
-stays there too. `POPM_PROFILE_DIR` selects a separate profile for an
+stays there too. `RECOMP_PROFILE_DIR` selects a separate profile for an
 interactive run. Keep the app in the checkout; moving it requires explicitly
 configuring its game path.
 

@@ -33,7 +33,7 @@ static void identity(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *i
 
 PopModStatus pop_mod_init(const PopModApi *api) {
     uint32_t addr = 0;
-    const char *name = getenv("POPM_IDENTITY_TARGET");
+    const char *name = getenv("RECOMP_IDENTITY_TARGET");
     g_api = api;
     if (!name || !*name)
         name = "level_startup_thunk";
@@ -46,7 +46,7 @@ PopModStatus pop_mod_exit(void) {
     /* Both destinations on purpose: the log line is what Gate R greps out of a
      * run it drives, and the file is what survives a run whose output another
      * gate has already consumed. */
-    const char *dir = getenv("POPM_PROFILE_DIR");
+    const char *dir = getenv("RECOMP_PROFILE_DIR");
     char path[512];
     FILE *f;
     fprintf(stderr, "[identity-t19] hits %u\n", g_hits);

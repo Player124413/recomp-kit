@@ -242,9 +242,9 @@ class VulkanDevice final : public Device {
     bool core13_ = false;
     bool full_subgroups_ = false; // computeFullSubgroups enabled
     bool failed_ = false;
-    bool trace_ = false;     // POP_GPU_TRACE=1
+    bool trace_ = false;     // RECOMP_GPU_TRACE=1
     uint32_t one_shots_ = 0; // trace: synchronous transfers since the last commit
-    // POP_GPU_TRACE per-second summary: where the CPU waited on the GPU.
+    // RECOMP_GPU_TRACE per-second summary: where the CPU waited on the GPU.
     struct TraceSecond {
         double started = 0;
         uint32_t commits = 0, one_shots = 0, waits = 0, acquires = 0, sets = 0, draws = 0;

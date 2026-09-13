@@ -8,7 +8,7 @@ struct GamePath {
     std::string exe; // "" when nothing resolved
     GamePathSource source = GamePathSource::None;
 };
-// Order: `flag`, POP_RECOMP_EXE, the checkout's original/gog above the
+// Order: `flag`, RECOMP_EXE, the checkout's original/gog above the
 // executable (developer mode), <profile_dir>/game-path.txt when its file
 // exists and hashes to the supported digest.
 GamePath game_path_resolve(const char *flag);

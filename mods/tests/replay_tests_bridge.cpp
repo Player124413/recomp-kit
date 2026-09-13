@@ -108,7 +108,7 @@ MOD_TEST_SUITE(replay_real_translated_leaf) {
 // the dispatcher, which is the only evidence that what a capture discovers is
 // what a replay needs.
 MOD_TEST_SUITE(capture_a_real_call_and_replay_it) {
-    os_setenv("POPM_TESTING", "1");
+    os_setenv("RECOMP_TESTING", "1");
     sched_set_guest_thread(true);
     mods_hooks_reset();
     mem_init();
@@ -235,33 +235,33 @@ MOD_TEST_SUITE(capture_fixture_fails_closed) {
     api.log = capture_log;
 
     // A host that was not built for testing: refused before anything is read.
-    const char *saved = getenv("POPM_TESTING");
+    const char *saved = recomp_env("TESTING");
     std::string keep = saved ? saved : "";
-    os_unsetenv("POPM_TESTING");
-    os_setenv("POPM_CAPTURE_TARGET", "0x00401000");
-    os_setenv("POPM_CAPTURE_OUT", mods_test_build_path("recomp/should-not-exist.json").c_str());
+    os_unsetenv("RECOMP_TESTING");
+    os_setenv("RECOMP_CAPTURE_TARGET", "0x00401000");
+    os_setenv("RECOMP_CAPTURE_OUT", mods_test_build_path("recomp/should-not-exist.json").c_str());
     capture_last_log[0] = 0;
     MOD_CHECK_EQ(init(&api), POP_E_STATE);
-    MOD_CHECK(strstr(capture_last_log, "POPM_TESTING") != nullptr);
+    MOD_CHECK(strstr(capture_last_log, "RECOMP_TESTING") != nullptr);
 
     // Configured for testing but told neither what to capture nor where.
-    os_setenv("POPM_TESTING", keep.empty() ? "1" : keep.c_str());
-    os_unsetenv("POPM_CAPTURE_TARGET");
-    os_unsetenv("POPM_CAPTURE_OUT");
+    os_setenv("RECOMP_TESTING", keep.empty() ? "1" : keep.c_str());
+    os_unsetenv("RECOMP_CAPTURE_TARGET");
+    os_unsetenv("RECOMP_CAPTURE_OUT");
     capture_last_log[0] = 0;
     MOD_CHECK_EQ(init(&api), POP_E_STATE);
-    MOD_CHECK(strstr(capture_last_log, "POPM_CAPTURE_TARGET") != nullptr);
+    MOD_CHECK(strstr(capture_last_log, "RECOMP_CAPTURE_TARGET") != nullptr);
 
     // A target that is neither an address nor a symbol. api.symbol is null
     // here, so the address form is the one this case can reach; the symbol
     // form is exercised by the capture run itself.
-    os_setenv("POPM_CAPTURE_TARGET", "0xnot-an-address");
-    os_setenv("POPM_CAPTURE_OUT", mods_test_build_path("recomp/should-not-exist.json").c_str());
+    os_setenv("RECOMP_CAPTURE_TARGET", "0xnot-an-address");
+    os_setenv("RECOMP_CAPTURE_OUT", mods_test_build_path("recomp/should-not-exist.json").c_str());
     capture_last_log[0] = 0;
     MOD_CHECK_EQ(init(&api), POP_E_STATE);
     MOD_CHECK(strstr(capture_last_log, "not an address") != nullptr);
-    os_unsetenv("POPM_CAPTURE_TARGET");
-    os_unsetenv("POPM_CAPTURE_OUT");
+    os_unsetenv("RECOMP_CAPTURE_TARGET");
+    os_unsetenv("RECOMP_CAPTURE_OUT");
 
     MOD_CHECK_EQ(os_dlclose(library), 0);
 }
@@ -294,7 +294,7 @@ std::string slurp(const char *path) {
 }
 } // namespace
 MOD_TEST_SUITE(capture_corpus_has_every_field_replay_needs) {
-    os_setenv("POPM_TESTING", "1");
+    os_setenv("RECOMP_TESTING", "1");
     mem_init();
     imports_init();
     MOD_CHECK(pop_capture_available() == 1);
@@ -380,7 +380,7 @@ MOD_TEST_SUITE(capture_corpus_has_every_field_replay_needs) {
 // same arguments are indistinguishable in either order, so a reordering test
 // built on them could not fail whatever the code did.
 MOD_TEST_SUITE(capture_to_file_and_replay_with_intercepted_shims) {
-    os_setenv("POPM_TESTING", "1");
+    os_setenv("RECOMP_TESTING", "1");
     sched_set_guest_thread(true);
     mods_hooks_reset();
     mem_init();
@@ -494,21 +494,21 @@ MOD_TEST_SUITE(capture_to_file_and_replay_with_intercepted_shims) {
 #ifdef POPM_TESTING
 // Replays a corpus captured from a live run.
 //
-// POPM_REPLAY_CORPUS names the file; without it the suite captures a small one
+// RECOMP_REPLAY_CORPUS names the file; without it the suite captures a small one
 // of its own first, so it always exercises the same path and never passes by
 // being skipped. With it, this is the check that a corpus taken from the real
 // game replays: load it, run the original at its own recorded target through
 // the dispatch table with the recorded shim calls served in the shims' place,
 // and require every live register and every written page to match.
 MOD_TEST_SUITE(replay_a_captured_corpus_at_its_own_target) {
-    os_setenv("POPM_TESTING", "1");
+    os_setenv("RECOMP_TESTING", "1");
     sched_set_guest_thread(true);
     mods_hooks_reset();
     mem_init();
     imports_init();
 
     std::string path;
-    const char *named = getenv("POPM_REPLAY_CORPUS");
+    const char *named = recomp_env("REPLAY_CORPUS");
     if (named && *named) {
         path = named;
         std::fprintf(stderr, "[replay] using the corpus at %s\n", path.c_str());
@@ -585,7 +585,7 @@ MOD_TEST_SUITE(replay_a_captured_corpus_at_its_own_target) {
 
 namespace {
 std::pair<std::string, std::string> loader_rule_corpus(const char *suite) {
-    os_setenv("POPM_TESTING", "1");
+    os_setenv("RECOMP_TESTING", "1");
     sched_set_guest_thread(true);
     mods_hooks_reset();
     mem_init();

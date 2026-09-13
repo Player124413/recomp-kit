@@ -60,7 +60,7 @@ HostLayout compute() {
         l.resources_dir = dir; // a flat bundle (iOS): resources beside the executable
     else if (l.developer)
         l.resources_dir = l.checkout_root;
-    const char *env = getenv("POPM_PROFILE_DIR");
+    const char *env = recomp_env("PROFILE_DIR");
     if (env && *env)
         l.profile_dir = env;
     else if (l.developer)

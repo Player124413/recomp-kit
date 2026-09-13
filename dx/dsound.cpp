@@ -21,6 +21,7 @@
 #include <string.h>
 #include <time.h>
 #include <iterator>
+#include "../platform/os.h"
 
 #define IID_BYTES(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7)                                         \
     {(uint8_t)((a) & 0xff),                                                                        \
@@ -356,7 +357,7 @@ void write_wave_format(const ComObj *b, uint32_t wfx) {
 }
 
 // ---------------------------------------------------------------------------
-// POPM_AUDIO_TRACE=N prints the first N audio events - every Lock, Unlock,
+// RECOMP_AUDIO_TRACE=N prints the first N audio events - every Lock, Unlock,
 // GetCurrentPosition and submission on a playing buffer, with the offsets, the
 // lengths and the peak of what was written. A stream that goes quiet is
 // always one of a small number of things, and they are told apart by which of
@@ -364,7 +365,7 @@ void write_wave_format(const ComObj *b, uint32_t wfx) {
 // writing nothing, or the write not reaching the host. Nothing here is on by
 // default and nothing here costs anything when it is off.
 // ---------------------------------------------------------------------------
-// POPM_AUDIO_DUMP=<path> writes every run the guest puts into a streaming ring
+// RECOMP_AUDIO_DUMP=<path> writes every run the guest puts into a streaming ring
 // to a raw file, in the order it wrote them. Concatenated that way the file is
 // the decoded stream itself, which is what makes it comparable against a
 // reference decode of the same source: a chunk dropped, repeated or joined at
@@ -374,7 +375,7 @@ FILE *audio_dump_file() {
     static bool tried = false;
     if (!tried) {
         tried = true;
-        if (const char *path = getenv("POPM_AUDIO_DUMP"))
+        if (const char *path = recomp_env("AUDIO_DUMP"))
             f = fopen(path, "wb");
     }
     return f;
@@ -383,7 +384,7 @@ FILE *audio_dump_file() {
 int audio_trace_budget() {
     static int budget = -1;
     if (budget < 0) {
-        const char *v = getenv("POPM_AUDIO_TRACE");
+        const char *v = recomp_env("AUDIO_TRACE");
         budget = v ? (int)strtol(v, nullptr, 0) : 0;
     }
     return budget;

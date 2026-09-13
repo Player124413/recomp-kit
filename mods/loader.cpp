@@ -540,10 +540,10 @@ bool mods_load_all() {
         LOGW("mods: %s", mods_symbols_error());
         return false;
     }
-    // Runtime observation is always on, including POPM_NO_MODS.
+    // Runtime observation is always on, including RECOMP_NO_MODS.
     if (!mods_sprite_hooks_init())
         return false;
-    if (getenv("POPM_NO_MODS"))
+    if (recomp_env("NO_MODS"))
         return true;
     // Every module asks mods_api_for; from here on it is this loader that
     // answers, through the one seam.

@@ -420,7 +420,7 @@ std::string bytes_to_hex(const std::vector<uint8_t> &b) {
 } // namespace
 
 std::string registry_path() {
-    if (const char *e = getenv("POPM_REGISTRY"))
+    if (const char *e = recomp_env("REGISTRY"))
         return e;
     return host_state_file("registry.json");
 }

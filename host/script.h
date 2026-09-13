@@ -116,7 +116,7 @@
 //                             if the mode never arrived - the same shape as an
 //                             armed dump that never fired.
 //
-//                             The offered list comes from POPM_DDRAW_MODES,
+//                             The offered list comes from RECOMP_DDRAW_MODES,
 //                             and a list missing EITHER 640x480x8 or
 //                             640x480x16 crashes the game. The front end runs
 //                             at 640x480 in both depths and selects them

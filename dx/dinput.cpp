@@ -15,6 +15,7 @@
 
 #include <string.h>
 #include <iterator>
+#include "../platform/os.h"
 
 #define IID_BYTES(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7)                                         \
     {(uint8_t)((a) & 0xff),                                                                        \
@@ -470,7 +471,7 @@ void Device_GetDeviceData(X86 *c) {
             wr32(a + DIDOD_OFF_dwData, data);
             wr32(a + DIDOD_OFF_dwTimeStamp, now);
             wr32(a + DIDOD_OFF_dwSequence, ++d->sequence);
-            static const bool trace = getenv("POPM_TRACE_POINTER") != nullptr;
+            static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
             if (trace && ofs >= DIMS_OFF_rgbButtons)
                 fprintf(stderr, "[dinput-button] ofs %u data %08x seq %u\n", ofs, data,
                         d->sequence);

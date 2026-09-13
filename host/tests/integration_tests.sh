@@ -16,7 +16,7 @@ buildlock_acquire "$(dirname "${POP_BUILD_ROOT:-$ROOT/build}")" "host integratio
 PY=${PY:-$ROOT/.venv/bin/python}
 GAME=${RECOMP_GAME_DIR:?set RECOMP_GAME_DIR to the game directory}
 BUILD=${POP_BUILD_ROOT:-$ROOT/build}
-unset POPM_CORE_MODS_DIR POPM_NO_MODS
+unset RECOMP_CORE_MODS_DIR RECOMP_NO_MODS
 "$PY" -m unittest "$ROOT/tools/recomp/tests/test_build_core.py"
 
 OUT=$BUILD/recomp/integration
@@ -30,8 +30,8 @@ check() { if eval "$2"; then echo "  [ok] $1"; else echo "  [FAIL] $1"; fail=1; 
 
 echo "== headless host =="
 "$PY" tools/build.py --game-dir "$GAME" --target headless >/dev/null
-POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/headless" \
-POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
+RECOMP_MODS_DIR="$GAME/mods" RECOMP_PROFILE_DIR="$OUT/headless" \
+RECOMP_MAX_FRAMES=60 RECOMP_FRAME_EVERY=0 \
     $BUILD/recomp/pop_headless > "$OUT/headless.log" 2>&1 || true
 check "the headless reports the packaged core root" \
       "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=$GAME/mods' $OUT/headless.log"
@@ -70,9 +70,9 @@ check "a guest ExitProcess inside a hooked call still tore down completely" \
 
 echo "== smoke host =="
 "$PY" tools/build.py --game-dir "$GAME" --target smoke >/dev/null
-POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/smoke" \
-POP_RECOMP_SCRIPT=$GAME/smoke/integration.script \
-POP_HOST_DUMP_DIR="$OUT/smoke-frames" \
+RECOMP_MODS_DIR="$GAME/mods" RECOMP_PROFILE_DIR="$OUT/smoke" \
+RECOMP_SCRIPT=$GAME/smoke/integration.script \
+RECOMP_HOST_DUMP_DIR="$OUT/smoke-frames" \
     $BUILD/recomp/pop_smoke > "$OUT/smoke.log" 2>&1 || true
 check "the smoke reports the packaged core root" \
       "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=$GAME/mods' $OUT/smoke.log"
@@ -102,9 +102,9 @@ echo "== parity fixture =="
 # Exercise default core discovery directly, without the Python oracle or a
 # user-root opt-in. A fixture that retains its old opt-in guard fails this.
 (
-    unset POPM_MODS_DIR
-    POP_RECOMP_FIXTURE=frames:4 POP_RECOMP_OUT="$OUT/fixture-default" \
-    POPM_PROFILE_DIR="$OUT/fixture-default-profile" \
+    unset RECOMP_MODS_DIR
+    RECOMP_FIXTURE=frames:4 RECOMP_OUT="$OUT/fixture-default" \
+    RECOMP_PROFILE_DIR="$OUT/fixture-default-profile" \
         $BUILD/recomp/pop_fixture > "$OUT/fixture-default.log" 2>&1
 ) && fixture_default_ok=1 || fixture_default_ok=0
 check "the fixture with no user-root override completed" "[ $fixture_default_ok -eq 1 ]"
@@ -113,8 +113,8 @@ check "the default fixture reports both roots" \
 # The fixture with the game's user root: the probe mod loads and its hooks
 # run inside the fixture's own startup. (tools/recomp/parity.py, which once
 # drove this, left with the M0 consolidation; the fixture is run directly.)
-POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/fixture" \
-POP_RECOMP_FIXTURE=frames:4 POP_RECOMP_OUT="$OUT/parity" \
+RECOMP_MODS_DIR="$GAME/mods" RECOMP_PROFILE_DIR="$OUT/fixture" \
+RECOMP_FIXTURE=frames:4 RECOMP_OUT="$OUT/parity" \
     $BUILD/recomp/pop_fixture > "$OUT/fixture.log" 2>&1 || true
 check "the fixture reports the packaged core root" \
       "grep -Fq 'mods: roots core=$BUILD/recomp/mods/core user=$GAME/mods' $OUT/fixture.log"
@@ -128,13 +128,13 @@ check "the fixture ran pop_mod_exit too" \
       "[ -s $OUT/fixture/probe.txt ]"
 check "and left no teardown undone" \
       "! grep -q 'did not run' $OUT/fixture.log"
-# POPM_NO_MODS, properly. A `grep -qv` passes on any line that is not the one
+# RECOMP_NO_MODS, properly. A `grep -qv` passes on any line that is not the one
 # looked for, including an error line from a run that failed, so it proved
 # nothing. This requires the run to SUCCEED, then requires no load message and
 # no probe output at all in a profile directory that starts empty.
 rm -rf "$OUT/off-profile"
-if POPM_NO_MODS=1 POPM_MODS_DIR="$GAME/mods" POPM_PROFILE_DIR="$OUT/off-profile" \
-       POP_RECOMP_FIXTURE=frames:4 POP_RECOMP_OUT="$OUT/parity-off" \
+if RECOMP_NO_MODS=1 RECOMP_MODS_DIR="$GAME/mods" RECOMP_PROFILE_DIR="$OUT/off-profile" \
+       RECOMP_FIXTURE=frames:4 RECOMP_OUT="$OUT/parity-off" \
        $BUILD/recomp/pop_fixture > "$OUT/off.log" 2>&1; then off_ok=1; else off_ok=0; fi
 check "the run with mods disabled completed" "[ $off_ok -eq 1 ]"
 check "and loaded no mod" "! grep -q 'mods: loaded' $OUT/off.log"
@@ -147,7 +147,7 @@ check "and it still recorded the run, with an empty mod set" \
        .venv/bin/python -c \"import json,sys; d=json.load(open('$BUILD/recomp/mods/run.json')); sys.exit(0 if d['mods']==[] else 1)\""
 
 echo "== an empty mods directory behaves as if the foundation were not there =="
-# Not the same question as POPM_NO_MODS. Here the runtime IS live and the
+# Not the same question as RECOMP_NO_MODS. Here the runtime IS live and the
 # directory is simply empty, which is what most players will have. Nothing may
 # be loaded, and above all the settings page must not register its keyboard:
 # it consumes F10 unconditionally and every navigation key once open, so a run
@@ -155,9 +155,9 @@ echo "== an empty mods directory behaves as if the foundation were not there =="
 # foundation at all. Checked through the presenter, by pressing F10 for real.
 mkdir -p "$OUT/empty-mods"
 rm -rf "$OUT/empty-profile"
-POPM_CORE_MODS_DIR="$OUT/empty-mods" POPM_MODS_DIR="$OUT/empty-mods" POPM_PROFILE_DIR="$OUT/empty-profile" \
-POP_RECOMP_SCRIPT=$GAME/smoke/integration.script \
-POP_HOST_DUMP_DIR="$OUT/empty-frames" \
+RECOMP_CORE_MODS_DIR="$OUT/empty-mods" RECOMP_MODS_DIR="$OUT/empty-mods" RECOMP_PROFILE_DIR="$OUT/empty-profile" \
+RECOMP_SCRIPT=$GAME/smoke/integration.script \
+RECOMP_HOST_DUMP_DIR="$OUT/empty-frames" \
     $BUILD/recomp/pop_smoke > "$OUT/empty.log" 2>&1 || true
 check "an empty mods directory loaded nothing" \
       "! grep -q 'mods: loaded' $OUT/empty.log"
@@ -170,8 +170,8 @@ check "and F10 did not open the settings page" \
 # recorded with an explicit empty set either way: a run whose metadata is
 # absent cannot be told from a run that was never made.
 rm -f $BUILD/recomp/mods/run.json
-POPM_CORE_MODS_DIR="$OUT/empty-mods" POPM_MODS_DIR="$OUT/empty-mods" POPM_PROFILE_DIR="$OUT/empty-headless" \
-POP_RECOMP_MAX_FRAMES=20 POP_RECOMP_FRAME_EVERY=0 \
+RECOMP_CORE_MODS_DIR="$OUT/empty-mods" RECOMP_MODS_DIR="$OUT/empty-mods" RECOMP_PROFILE_DIR="$OUT/empty-headless" \
+RECOMP_MAX_FRAMES=20 RECOMP_FRAME_EVERY=0 \
     $BUILD/recomp/pop_headless > "$OUT/empty-headless.log" 2>&1 || true
 check "the headless host with an empty directory recorded the run" \
       "[ -s $BUILD/recomp/mods/run.json ]"
@@ -202,7 +202,7 @@ check "the app binary contains the Lua core" \
       "nm -U $BUILD/PopRecomp.app/Contents/MacOS/PopRecomp | grep -q mods_lua_core_init"
 
 echo "== a pinned clock makes a run repeatable =="
-# POP_RECOMP_PIN_CLOCK replaces the millisecond clock the guest reads with a
+# RECOMP_PIN_CLOCK replaces the millisecond clock the guest reads with a
 # counter that moves one step per presented frame. The claim is that two runs
 # of one script then ask QMixer for very nearly the same sounds with the same
 # arguments, which is what a comparison against the original needs.
@@ -228,9 +228,9 @@ echo "== a pinned clock makes a run repeatable =="
 # waits are in the same pinned milliseconds, so a pinned run covers less guest
 # time and makes fewer calls. Only pinned against pinned means anything.
 pin_run() {
-    POPM_MODS_DIR="$GAME/mods" POPM_AUDIO_TRACE=100000 POP_RECOMP_PIN_CLOCK=1 \
-    POP_RECOMP_SCRIPT=$GAME/smoke/level1.script \
-    POP_HOST_DUMP_DIR="$OUT/pin-$1-frames" \
+    RECOMP_MODS_DIR="$GAME/mods" RECOMP_AUDIO_TRACE=100000 RECOMP_PIN_CLOCK=1 \
+    RECOMP_SCRIPT=$GAME/smoke/level1.script \
+    RECOMP_HOST_DUMP_DIR="$OUT/pin-$1-frames" \
         $BUILD/recomp/pop_smoke > "$OUT/pin-$1.log" 2>&1 || true
     grep -o 'QSWaveMix[A-Za-z]*(.*' "$OUT/pin-$1.log" > "$OUT/pin-$1.calls"
     sort "$OUT/pin-$1.calls" > "$OUT/pin-$1.sorted"
@@ -260,12 +260,12 @@ check "and the run said which clock it ran on" \
 # clocks are even the same kind of thing. The headless host is used for it
 # because it tears its mods down through the loader's own shutdown, which is
 # what writes the record; sixty frames is enough and takes seconds.
-POPM_MODS_DIR="$GAME/mods" POP_RECOMP_PIN_CLOCK=1 \
-POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
+RECOMP_MODS_DIR="$GAME/mods" RECOMP_PIN_CLOCK=1 \
+RECOMP_MAX_FRAMES=60 RECOMP_FRAME_EVERY=0 \
     $BUILD/recomp/pop_headless > "$OUT/pin-record.log" 2>&1 || true
 check "a pinned run records the clock it ran on" \
       "grep -Fq '\"clock\": \"pinned start=100 step=50\"' $BUILD/recomp/mods/run.json"
-POPM_MODS_DIR="$GAME/mods" POP_RECOMP_MAX_FRAMES=60 POP_RECOMP_FRAME_EVERY=0 \
+RECOMP_MODS_DIR="$GAME/mods" RECOMP_MAX_FRAMES=60 RECOMP_FRAME_EVERY=0 \
     $BUILD/recomp/pop_headless > "$OUT/unpin-record.log" 2>&1 || true
 check "and an unpinned one records that it did not" \
       "grep -Fq '\"clock\": \"monotonic\"' $BUILD/recomp/mods/run.json"

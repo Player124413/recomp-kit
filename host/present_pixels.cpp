@@ -178,7 +178,7 @@ extern "C" void host_present_point_to_guest(double dw, double dh, int gw, int gh
 extern "C" uint32_t host_dump_every(void) {
     static uint32_t every = 0xffffffffu;
     if (every == 0xffffffffu) {
-        const char *v = getenv("POP_HOST_DUMP_EVERY");
+        const char *v = recomp_env("HOST_DUMP_EVERY");
         every = v ? (uint32_t)strtoul(v, nullptr, 0) : 0;
         if (every) {
             printf("[host] dumping every %u presented frame and its Direct3D "
@@ -193,7 +193,7 @@ extern "C" uint32_t host_dump_every(void) {
 extern "C" const char *host_dump_dir(void) {
     static std::string dir;
     if (dir.empty()) {
-        const char *v = getenv("POP_HOST_DUMP_DIR");
+        const char *v = recomp_env("HOST_DUMP_DIR");
         // build/recomp/live/frames belongs to live runs and to whoever is
         // looking at them. Nothing here ever removes a directory: a dump
         // directory is somebody's evidence, and a harness that tidies one up

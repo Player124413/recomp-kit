@@ -6,7 +6,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SELF=$ROOT/tools/recomp/$(basename "$0")
 cd "$ROOT"
 GAME=${RECOMP_GAME_DIR:?set RECOMP_GAME_DIR to the game directory}
-BUILD=${POP_BUILD_ROOT:-$ROOT/build}
+BUILD=${RECOMP_BUILD_ROOT:-$ROOT/build}
 
 # The whole run under the build lock, not just the builds inside it. This
 # script owns $BUILD/recomp/mods and $BUILD/recomp/profile-mods-test by fixed
@@ -35,10 +35,10 @@ PY=${PY:-$ROOT/.venv/bin/python}
 "$PY" tools/build.py --game-dir "$GAME" --target plugins
 "$PY" tools/build.py --game-dir "$GAME" --target smoke
 
-POPM_MODS_DIR=mods/examples POPM_PROFILE_DIR="$PROFILE" \
-POP_RECOMP_SCRIPT=$GAME/smoke/mods.script \
-POP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames \
-POPM_RUN_RECORD="$RECORD" \
+RECOMP_MODS_DIR=mods/examples RECOMP_PROFILE_DIR="$PROFILE" \
+RECOMP_SCRIPT=$GAME/smoke/mods.script \
+RECOMP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames \
+RECOMP_RUN_RECORD="$RECORD" \
     $BUILD/recomp/pop_smoke > $BUILD/recomp/mods/run.log 2>&1 || {
         echo "mods_test: the smoke run failed; see $BUILD/recomp/mods/run.log" >&2
         tail -40 $BUILD/recomp/mods/run.log >&2
@@ -148,10 +148,10 @@ trap 'rm -f "$PROBE"' EXIT INT TERM
 
 ( sleep 20; rm -f "$PROBE" ) &
 prober=$!
-POPM_MODS_DIR=mods/examples POPM_PROFILE_DIR="$PROFILE" \
-POP_RECOMP_SCRIPT=$GAME/smoke/mods.script \
-POP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames2 \
-POPM_RUN_RECORD="$RECORD" \
+RECOMP_MODS_DIR=mods/examples RECOMP_PROFILE_DIR="$PROFILE" \
+RECOMP_SCRIPT=$GAME/smoke/mods.script \
+RECOMP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames2 \
+RECOMP_RUN_RECORD="$RECORD" \
     $BUILD/recomp/pop_smoke > $BUILD/recomp/mods/run2.log 2>&1 || {
         echo "mods_test: the second smoke run failed; see $BUILD/recomp/mods/run2.log" >&2
         wait $prober 2>/dev/null || true
@@ -178,7 +178,7 @@ check "and says where the build identity came from" \
 # The clock the run ACTUALLY ran on, not an environment variable. This host is
 # boot-based and reads the real monotonic clock, so it must say so; the fixture
 # says "pinned start=100 step=50" and Gate B compares the two per host. The
-# field this replaced was read from POP_RECOMP_CLOCK_MS, which nothing honoured,
+# field this replaced was read from RECOMP_CLOCK_MS, which nothing honoured,
 # so it was empty in every run and matched in every comparison.
 check "and names the clock the run ran on" \
       "grep -q '\"clock\": \"monotonic\"' $RECORD"
@@ -195,8 +195,8 @@ check "no loaded mod had its identity taken at shutdown" \
 # and every check above reads it.
 #
 # BOTH spellings, because the hosts test for the variable's PRESENCE - boot.cpp
-# and fixture.cpp both ask !getenv("POPM_NO_MODS") - while the record used to
-# ask whether its value was non-empty. POPM_NO_MODS= therefore ran with mods
+# and fixture.cpp both ask !getenv("RECOMP_NO_MODS") - while the record used to
+# ask whether its value was non-empty. RECOMP_NO_MODS= therefore ran with mods
 # off and recorded mods_enabled: true, which is the one thing that field is for.
 #
 # nomods.script only boots and stops: the record is written at shutdown whatever
@@ -210,21 +210,21 @@ check "no loaded mod had its identity taken at shutdown" \
 echo "== with mods turned off =="
 for spelling in 1 ""; do
     rm -f $RECORD
-    POPM_NO_MODS="$spelling" POPM_MODS_DIR=mods/examples \
-    POPM_PROFILE_DIR="$PROFILE" \
-    POP_RECOMP_SCRIPT=$GAME/smoke/nomods.script \
-    POP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames-off \
-    POPM_RUN_RECORD="$RECORD" \
+    RECOMP_NO_MODS="$spelling" RECOMP_MODS_DIR=mods/examples \
+    RECOMP_PROFILE_DIR="$PROFILE" \
+    RECOMP_SCRIPT=$GAME/smoke/nomods.script \
+    RECOMP_HOST_DUMP_DIR=$BUILD/recomp/mods/frames-off \
+    RECOMP_RUN_RECORD="$RECORD" \
         $BUILD/recomp/pop_smoke > $BUILD/recomp/mods/run-off.log 2>&1 || {
             echo "mods_test: the mods-off run failed; see $BUILD/recomp/mods/run-off.log" >&2
             tail -20 $BUILD/recomp/mods/run-off.log >&2
             exit 1
         }
-    check "POPM_NO_MODS=[$spelling] still writes a record" \
+    check "RECOMP_NO_MODS=[$spelling] still writes a record" \
           "[ -s $RECORD ]"
-    check "POPM_NO_MODS=[$spelling] records mods_enabled false" \
+    check "RECOMP_NO_MODS=[$spelling] records mods_enabled false" \
           "grep -q '\"mods_enabled\": false' $RECORD"
-    check "POPM_NO_MODS=[$spelling] loaded no mods" \
+    check "RECOMP_NO_MODS=[$spelling] loaded no mods" \
           ".venv/bin/python -c \"import json,sys; d=json.load(open('$RECORD')); sys.exit(0 if d['mods']==[] else 1)\""
 done
 

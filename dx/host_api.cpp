@@ -5,6 +5,7 @@
 // nothing graphical or audible even if a host object file is on the link line.
 #include "host_api.h"
 #include <string.h>
+#include "../platform/os.h"
 
 #ifdef RECOMP_NULL_HOST
 #define HOST_DEFAULT
@@ -131,7 +132,7 @@ DirtyRects subtract(const DirtyRects &from, HostDirtyRect cut) {
 } // namespace
 extern "C" {
 int host_d3d_legacy_writeback(void) {
-    const char *v = getenv("POPM_LEGACY_WRITEBACK");
+    const char *v = recomp_env("LEGACY_WRITEBACK");
     return v && !strcmp(v, "1");
 }
 void host_d3d_mark_dirty(uint32_t s, uint32_t g, HostDirtyRect r) {
@@ -271,6 +272,7 @@ extern "C" HOST_DEFAULT void host_d3d_prepare_cpu_write(const HostD3DSurface *, 
 
 // Recorder queries stay weak even in a null-host build.
 #include "passes.h"
+#include "../platform/os.h"
 extern "C" {
 __attribute__((weak)) int host_frame_legacy(HostFrameHandle) {
     return 0;

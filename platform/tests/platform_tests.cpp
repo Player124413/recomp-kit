@@ -47,7 +47,7 @@ int collect_name(const char *name, void *user) {
 }
 
 std::string scratch_dir() {
-    const char *base = getenv("POP_TEST_DIR");
+    const char *base = recomp_env("PLATFORM_TEST_DIR");
     std::string dir = std::string(base && *base ? base : "build/recomp") + "/platform-test";
     // A stub-only checkout has no build/recomp yet: create every component.
     for (size_t i = dir.find('/'); i != std::string::npos; i = dir.find('/', i + 1))
@@ -175,10 +175,10 @@ void test_process_and_strings() {
     CHECK(strstr(exe, "platform_tests") != nullptr);
     CHECK(os_strcasecmp("Data", "DATA") == 0);
     CHECK(os_strcasecmp("a", "b") < 0);
-    CHECK(os_setenv("POP_PLATFORM_TEST", "yes") == 0);
-    CHECK(getenv("POP_PLATFORM_TEST") && strcmp(getenv("POP_PLATFORM_TEST"), "yes") == 0);
-    CHECK(os_unsetenv("POP_PLATFORM_TEST") == 0);
-    CHECK(getenv("POP_PLATFORM_TEST") == nullptr || getenv("POP_PLATFORM_TEST")[0] == 0);
+    CHECK(os_setenv("RECOMP_PLATFORM_TEST", "yes") == 0);
+    CHECK(recomp_env("PLATFORM_TEST") && strcmp(recomp_env("PLATFORM_TEST"), "yes") == 0);
+    CHECK(os_unsetenv("RECOMP_PLATFORM_TEST") == 0);
+    CHECK(recomp_env("PLATFORM_TEST") == nullptr || recomp_env("PLATFORM_TEST")[0] == 0);
     const char *ext = os_plugin_extension();
     CHECK(ext[0] == '.' && strlen(ext) >= 3);
     char data[4096];
@@ -191,11 +191,27 @@ void test_process_and_strings() {
     os_write_stderr_raw("platform_tests: raw stderr write ok\n", 35);
 }
 
+// The kit's switches are RECOMP_<NAME>; the spellings they had while the kit
+// was one game's port (POPM_<NAME>, POP_RECOMP_<NAME>) are not read.
+void test_switch_names() {
+    os_unsetenv("RECOMP_SWITCH_PROBE");
+    CHECK(recomp_env("SWITCH_PROBE") == nullptr);
+    CHECK(os_setenv("POPM_SWITCH_PROBE", "old") == 0);
+    CHECK(os_setenv("POP_RECOMP_SWITCH_PROBE", "old") == 0);
+    CHECK(recomp_env("SWITCH_PROBE") == nullptr);
+    CHECK(os_setenv("RECOMP_SWITCH_PROBE", "new") == 0);
+    CHECK(recomp_env("SWITCH_PROBE") && strcmp(recomp_env("SWITCH_PROBE"), "new") == 0);
+    os_unsetenv("RECOMP_SWITCH_PROBE");
+    os_unsetenv("POPM_SWITCH_PROBE");
+    os_unsetenv("POP_RECOMP_SWITCH_PROBE");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--child-exit-7") == 0)
         return 7;
+    test_switch_names();
     test_threads();
     test_time();
     test_vm();

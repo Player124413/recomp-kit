@@ -1,6 +1,6 @@
 // vulkan_loader.cpp - find and load the Vulkan loader through volk. Homebrew's
 // loader on macOS is outside the dynamic linker's default search, so a few
-// known paths and POP_VULKAN_LIBRARY are tried before giving up.
+// known paths and RECOMP_VULKAN_LIBRARY are tried before giving up.
 #include "vulkan_device.h"
 
 #include <mutex>
@@ -8,6 +8,7 @@
 #include <string>
 #ifndef _WIN32
 #include <dlfcn.h>
+#include "../../../platform/os.h"
 #endif
 
 namespace gpu {
@@ -33,7 +34,7 @@ static bool try_path(const char *path) {
 bool vulkan_load() {
     std::call_once(g_once, [] {
 #ifndef _WIN32
-        const char *env = getenv("POP_VULKAN_LIBRARY");
+        const char *env = recomp_env("VULKAN_LIBRARY");
         if (env && *env && try_path(env)) {
             g_loaded = true;
             return;

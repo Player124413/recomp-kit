@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <vector>
 #include <string>
+#include "../platform/os.h"
 
 const char *const LOADER_DEFAULT_EXE = RECOMP_DEVELOPER_EXE;
 // The digest of the image actually mapped, recorded by loader_load.
@@ -400,10 +401,10 @@ bool loader_load(const char *exe_path) {
     imports_init();
     win32_init(dirname_of(g_exe_path));
 
-    // POPM_IMPORT_STATS=1 prints the implemented / not-reached / logging-only
+    // RECOMP_IMPORT_STATS=1 prints the implemented / not-reached / logging-only
     // classification at exit, which is how the "not reached" column of the
     // coverage table gets filled in from a real run.
-    if (getenv("POPM_IMPORT_STATS")) {
+    if (recomp_env("IMPORT_STATS")) {
         static bool hooked = false;
         if (!hooked) {
             hooked = true;

@@ -115,7 +115,7 @@ const char *g_why = "";
 } // namespace
 
 int pop_capture_available(void) {
-    const char *t = std::getenv("POPM_TESTING");
+    const char *t = recomp_env("TESTING");
     return (t && *t) ? 1 : 0;
 }
 

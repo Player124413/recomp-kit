@@ -48,7 +48,7 @@ GamePath game_path_resolve(const char *flag) {
         g.source = GamePathSource::Flag;
         return g;
     }
-    if (const char *env = getenv("POP_RECOMP_EXE"); env && *env) {
+    if (const char *env = recomp_env("EXE"); env && *env) {
         g.exe = env;
         g.source = GamePathSource::Environment;
         return g;

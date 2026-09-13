@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 // Whether the mod runtime is live in this process. False until a host says
-// otherwise, so a build with mods disabled - POPM_NO_MODS, or a host that
+// otherwise, so a build with mods disabled - RECOMP_NO_MODS, or a host that
 // sets BootOptions::load_mods false - never registers the page's keyboard and
 // never draws it. That matters beyond the drawing: the page's key handler
 // consumes F10 unconditionally and every key while it is open, so registering

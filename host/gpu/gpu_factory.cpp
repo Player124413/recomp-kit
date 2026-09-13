@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "../../platform/os.h"
 
 namespace gpu {
 
@@ -18,7 +19,7 @@ void metal_release_window_surface(void *surface);
 #endif
 
 static const char *chosen_backend() {
-    const char *want = getenv("POP_GPU_BACKEND");
+    const char *want = recomp_env("GPU_BACKEND");
     if (want && strcmp(want, "vulkan") == 0)
         return vulkan_available() ? "vulkan" : "none";
 #ifdef __APPLE__

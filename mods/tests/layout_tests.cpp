@@ -51,7 +51,7 @@ static void mkdir_p(const std::string &path) {
 }
 
 int main() {
-    os_unsetenv("POPM_PROFILE_DIR");
+    os_unsetenv("RECOMP_PROFILE_DIR");
     std::string root = temp_root();
     CHECK(!root.empty());
     // 1. resources/ beside the executable (Windows and Linux archives).
@@ -85,11 +85,11 @@ int main() {
     CHECK(host_resource("classic-modes.json") ==
           root + "/co/tools/recomp/baseline/classic-modes.json");
     CHECK(host_layout().profile_dir == root + "/co/build/recomp/profile");
-    // 4. POPM_PROFILE_DIR wins everywhere.
-    os_setenv("POPM_PROFILE_DIR", "/elsewhere/profile");
+    // 4. RECOMP_PROFILE_DIR wins everywhere.
+    os_setenv("RECOMP_PROFILE_DIR", "/elsewhere/profile");
     host_layout_set_exe_path_for_test((root + "/co/build/recomp/pop_headless").c_str());
     CHECK(host_layout().profile_dir == "/elsewhere/profile");
-    os_unsetenv("POPM_PROFILE_DIR");
+    os_unsetenv("RECOMP_PROFILE_DIR");
     // 5. Nothing found: empty resources, per-user profile.
     mkdir_p(root + "/bare");
     touch(root + "/bare/exe");

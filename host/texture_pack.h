@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include "../platform/os.h"
 
 // Portable on-disk format: POPRGBA1, LE u32 width,height,levels,flags, then
 // LE u64 source hash. Tightly packed RGBA8 levels, largest first. flags bit0
@@ -90,7 +91,7 @@ struct Pack {
                 continue;
             files.emplace(f.hash, std::move(f));
         }
-        const char *capture = getenv("POPM_TEXTURE_DUMP_DIR");
+        const char *capture = recomp_env("TEXTURE_DUMP_DIR");
         dump_dir = capture ? capture : "";
         if (!files.empty())
             fprintf(stderr, "[hd] indexed %zu textures in %s\n", files.size(), dir.c_str());

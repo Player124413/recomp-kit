@@ -80,7 +80,7 @@ void qmixer_frame_pump(X86 *c);
 // display's frame ends where the guest's message loop pumps, and that fact
 // lives with the display shim rather than inside the audio pump.
 void ddraw_frame_pump(X86 *c);
-// Test only: forget the cached POPM_QMIX_GATE reading.
+// Test only: forget the cached RECOMP_QMIX_GATE reading.
 void qmixer_gate_reset_for_test();
 
 // Diagnostics: live COM objects, surfaces and audio channels.

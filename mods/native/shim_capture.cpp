@@ -3,6 +3,7 @@
 #include "../../runtime/imports.h"
 #include <cstdlib>
 #include <cstring>
+#include "../../platform/os.h"
 
 namespace pop_shimcap {
 namespace {
@@ -130,7 +131,7 @@ bool begin(size_t max_calls) {
         return false;
     if (!max_calls || max_calls > pop_replay::max_calls)
         return false;
-    if (!std::getenv("POPM_TESTING"))
+    if (!recomp_env("TESTING"))
         return false;
     g_state.rejected = false;
     g_state.why = nullptr;

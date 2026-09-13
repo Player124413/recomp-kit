@@ -43,19 +43,30 @@ def probe_script(smoke=None):
                       "expect scene_nonblack>0.01", "quit", ""])
 
 
+# RECOMP_* names that locate the game and the toolchain rather than switch
+# host behaviour; a child keeps these when its caller's switches are dropped.
+TOOL_KEYS = frozenset(("RECOMP_GAME_DIR", "RECOMP_BUILD_ROOT", "RECOMP_DEVELOPER_GAME_DIR", "RECOMP_DEVELOPER_EXE",
+                       "RECOMP_IOS_TEAM", "RECOMP_OVERRIDE_HEADER", "RECOMP_FUNCS_H",
+                       "RECOMP_NO_HOOKS", "RECOMP_IMAGE_BASE"))
+
+
+def without_switches(env):
+    """`env` minus the kit's RECOMP_* switches, so a run is not steered by
+    whatever the caller's shell happened to export."""
+    return {key: value for key, value in env.items()
+            if not key.startswith("RECOMP_") or key in TOOL_KEYS}
+
+
 def probe_environment(target, path, case, inherited=None):
-    env = dict(os.environ if inherited is None else inherited)
-    for key in list(env):
-        if key.startswith(("POPM_", "POP_SMOKE_", "POP_HOST_", "POP_RECOMP_")):
-            del env[key]
+    env = without_switches(os.environ if inherited is None else inherited)
     mode = "x".join(map(str, target))
-    env.update(POPM_DDRAW_MODES=",".join(dict.fromkeys(("640x480x8", "640x480x16", mode))),
-               POP_RECOMP_PIN_CLOCK="1",
-               POP_RECOMP_SCRIPT=str(path), POP_HOST_DUMP_DIR=str(case),
-               POP_SMOKE_CLASSIC_PROBE=mode,
-               POPM_CORE_MODS_DIR=str(case / "absent-core"), POPM_MODS_DIR=str(case / "absent-user"),
-               POPM_PROFILE_DIR=str(case / "profile"), POPM_REGISTRY=str(case / "registry.json"),
-               POPM_RUN_RECORD=str(case / "run.json"))
+    env.update(RECOMP_DDRAW_MODES=",".join(dict.fromkeys(("640x480x8", "640x480x16", mode))),
+               RECOMP_PIN_CLOCK="1",
+               RECOMP_SCRIPT=str(path), RECOMP_HOST_DUMP_DIR=str(case),
+               RECOMP_SMOKE_CLASSIC_PROBE=mode,
+               RECOMP_CORE_MODS_DIR=str(case / "absent-core"), RECOMP_MODS_DIR=str(case / "absent-user"),
+               RECOMP_PROFILE_DIR=str(case / "profile"), RECOMP_REGISTRY=str(case / "registry.json"),
+               RECOMP_RUN_RECORD=str(case / "run.json"))
     return env
 
 
@@ -184,7 +195,7 @@ def main():
         # Every probe starts with empty settings; an earlier run's saved
         # index must not turn the single mode-selection click into a wrap.
         runtime=case / ("runtime-"+str(time.time_ns()))
-        env.update(POPM_PROFILE_DIR=str(runtime / "profile"), POPM_REGISTRY=str(runtime / "registry.json"))
+        env.update(RECOMP_PROFILE_DIR=str(runtime / "profile"), RECOMP_REGISTRY=str(runtime / "registry.json"))
         timed_out = False
         with (case / "smoke.log").open("w") as output:
             try:

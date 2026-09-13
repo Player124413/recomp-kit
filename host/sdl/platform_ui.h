@@ -13,7 +13,7 @@
 // screensaver. iOS: landscape orientations, no synthesized touch->mouse events.
 void platform_ui_init_hints();
 
-// The game executable to load. Desktop: --exe, POP_RECOMP_EXE, checkout, saved
+// The game executable to load. Desktop: --exe, RECOMP_EXE, checkout, saved
 // path (may be empty: the caller shows the picker). iOS: Documents/game/<exe>,
 // seeded from the bundle; empty with *error set when the bundle has no game or
 // the copy failed.

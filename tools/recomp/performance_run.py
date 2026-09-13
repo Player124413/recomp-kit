@@ -29,16 +29,16 @@ def main():
     script+='\nwait 30000\nexpect draws>0\nexpect watch_selected>0\nexpect watch_moved>256\nquit\n'
     (o/'input.script').write_text(script)
     env=os.environ.copy()
-    for k in ('POP_RECOMP_PIN_CLOCK','POPM_PIN_CLOCK','POPM_NO_MODS','POPM_PROFILE','POP_HOST_READBACK_TIMINGS','POP_HOST_READBACK_COUNTERS'):env.pop(k,None)
+    for k in ('RECOMP_PIN_CLOCK','RECOMP_PIN_CLOCK','RECOMP_NO_MODS','RECOMP_PROFILE','RECOMP_HOST_READBACK_TIMINGS','RECOMP_HOST_READBACK_COUNTERS'):env.pop(k,None)
     # Record plugin identity too: core-only optimizations reuse the host binary.
     core_hashes={str(f.relative_to(a.core)):hashlib.sha256(f.read_bytes()).hexdigest()
                  for f in sorted(a.core.rglob('*')) if f.is_file()}
-    env.update(POP_SMOKE_DRAWABLE=a.size,POP_SMOKE_WINDOW_INPUT='1',POP_RECOMP_SCRIPT=str(o/'input.script'),POPM_CORE_MODS_DIR=str(a.core.resolve()),POPM_MODS_DIR=str(o/'user-mods'),POPM_PROFILE_DIR=str(o/'profile'),POPM_RUN_RECORD=str(o/'run.json'),POP_FRAME_TIMINGS=str(o/'frames.csv'))
-    env['POP_HOST_D3D_SUBMIT_DRAWS']=str(max(0,a.submit_draws))
-    env['POP_HOST_READBACK_WORKERS']=str(a.readback_workers)
-    env['POP_HOST_READBACK_KERNEL']=a.readback_kernel
-    if a.readback_timings:env['POP_HOST_READBACK_TIMINGS']=str(o/'readback.csv')
-    if a.readback_counters:env['POP_HOST_READBACK_COUNTERS']='1'
+    env.update(RECOMP_SMOKE_DRAWABLE=a.size,RECOMP_SMOKE_WINDOW_INPUT='1',RECOMP_SCRIPT=str(o/'input.script'),RECOMP_CORE_MODS_DIR=str(a.core.resolve()),RECOMP_MODS_DIR=str(o/'user-mods'),RECOMP_PROFILE_DIR=str(o/'profile'),RECOMP_RUN_RECORD=str(o/'run.json'),RECOMP_FRAME_TIMINGS=str(o/'frames.csv'))
+    env['RECOMP_HOST_D3D_SUBMIT_DRAWS']=str(max(0,a.submit_draws))
+    env['RECOMP_HOST_READBACK_WORKERS']=str(a.readback_workers)
+    env['RECOMP_HOST_READBACK_KERNEL']=a.readback_kernel
+    if a.readback_timings:env['RECOMP_HOST_READBACK_TIMINGS']=str(o/'readback.csv')
+    if a.readback_counters:env['RECOMP_HOST_READBACK_COUNTERS']='1'
     with (o/'smoke.log').open('w') as f:
         child=subprocess.Popen([str(a.binary.resolve())],cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT)
         (o/'pid').write_text(str(child.pid));print('PID',child.pid,flush=True)

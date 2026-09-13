@@ -73,7 +73,7 @@ namespace {
 bool trace_on() {
     static int on = -1;
     if (on < 0)
-        on = getenv("POP_HOST_TRACE_AUDIO") ? 1 : 0;
+        on = recomp_env("HOST_TRACE_AUDIO") ? 1 : 0;
     return on != 0;
 }
 
@@ -378,7 +378,7 @@ bool ensure_engine() {
         return true;
     if (g_disabled)
         return false;
-    if (getenv("POP_HOST_NO_AUDIO")) {
+    if (recomp_env("HOST_NO_AUDIO")) {
         g_disabled = true;
         return false;
     }

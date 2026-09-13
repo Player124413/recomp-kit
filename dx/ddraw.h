@@ -102,13 +102,13 @@ void pump_present_for_test(void);
 // Zeroes the access counters. They are process-wide and cumulative, so a test
 // that wants to count one path's accesses has to start from zero.
 void ddraw_reset_access_counts(void);
-// Forgets the parsed POPM_DDRAW_MODES table, so the next enumeration or
+// Forgets the parsed RECOMP_DDRAW_MODES table, so the next enumeration or
 // SetDisplayMode re-reads the variable. The table is read once and kept - the
 // environment does not change under a running game - so only a test that
 // varies the variable needs it dropped.
 void ddraw_reset_modes(void);
 // Replaces the offered display modes while the game is running: the same
-// syntax POPM_DDRAW_MODES takes, "640x480x8,1280x960x16". A null or empty
+// syntax RECOMP_DDRAW_MODES takes, "640x480x8,1280x960x16". A null or empty
 // spec restores the built-in six. Returns 0 on a malformed spec, leaving the
 // table exactly as it was.
 //

@@ -27,8 +27,8 @@ static void identity(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *i
         ++errors;
 }
 PopModStatus pop_mod_init(const PopModApi *api) {
-    const char *name = getenv("POP_REPLACE_CANDIDATE");
-    const char *mode = getenv("POP_REPLACE_ENABLED");
+    const char *name = getenv("RECOMP_REPLACE_CANDIDATE");
+    const char *mode = getenv("RECOMP_REPLACE_ENABLED");
     PopModStatus status;
     saved = api;
     if (!name || !*name)
@@ -47,7 +47,7 @@ PopModStatus pop_mod_init(const PopModApi *api) {
     return status;
 }
 PopModStatus pop_mod_exit(void) {
-    const char *path = getenv("POP_REPLACE_COUNTS");
+    const char *path = getenv("RECOMP_REPLACE_COUNTS");
     FILE *out = path ? fopen(path, "w") : NULL;
     if (!out)
         return POP_E_NOTFOUND;

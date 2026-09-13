@@ -4379,7 +4379,7 @@ static void test_enum_display_modes() {
     CHECK_EQ(hr, DDERR_INVALIDPARAMS);
 }
 
-// POPM_DDRAW_MODES replaces the offered set, and the SAME table decides what
+// RECOMP_DDRAW_MODES replaces the offered set, and the SAME table decides what
 // SetDisplayMode accepts. That is the whole point of the amendment: a mode the
 // game was offered and then refused, or refused and then offered, is a
 // contradiction the guest cannot recover from, and one table is what makes it
@@ -4431,14 +4431,14 @@ static void test_classic_probe_surface_creation() {
             if (size[0] != 640 || size[1] != 480)
                 list += "," + target;
             std::string path = std::string(root) + "/build/recomp/mode-probe/" + target;
-            os_setenv("POPM_DDRAW_MODES", list.c_str());
-            os_setenv("POPM_NO_MODS", "1");
-            os_setenv("POP_RECOMP_PIN_CLOCK", "1");
-            os_setenv("POP_RECOMP_SCRIPT", (path + "/probe.script").c_str());
-            os_setenv("POP_HOST_DUMP_DIR", path.c_str());
-            os_setenv("POP_SMOKE_CLASSIC_PROBE", target.c_str());
+            os_setenv("RECOMP_DDRAW_MODES", list.c_str());
+            os_setenv("RECOMP_NO_MODS", "1");
+            os_setenv("RECOMP_PIN_CLOCK", "1");
+            os_setenv("RECOMP_SCRIPT", (path + "/probe.script").c_str());
+            os_setenv("RECOMP_HOST_DUMP_DIR", path.c_str());
+            os_setenv("RECOMP_SMOKE_CLASSIC_PROBE", target.c_str());
             ddraw_reset_modes();
-            CHECK_EQ(ddraw_set_modes(getenv("POPM_DDRAW_MODES")), 1);
+            CHECK_EQ(ddraw_set_modes(recomp_env("DDRAW_MODES")), 1);
             cpu_reset();
             CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, sc(0), 0}), DD_OK);
             uint32_t dd = rd32(sc(0));
@@ -4519,7 +4519,7 @@ static void test_configurable_display_modes() {
     };
 
     // A list of two, one of which the built-in table does not contain.
-    os_setenv("POPM_DDRAW_MODES", "640x480x8,1280x960x16");
+    os_setenv("RECOMP_DDRAW_MODES", "640x480x8,1280x960x16");
     ddraw_reset_modes();
     uint32_t dd = fresh_dd();
     enum_modes_now(dd, cb);
@@ -4537,7 +4537,7 @@ static void test_configurable_display_modes() {
     CHECK_EQ(call_method(dd, DD_SetDisplayMode, {800, 600, 16}), DDERR_INVALIDPARAMS);
 
     // A single mode, which is how a display test forces the game's hand.
-    os_setenv("POPM_DDRAW_MODES", "1920x1080x16");
+    os_setenv("RECOMP_DDRAW_MODES", "1920x1080x16");
     ddraw_reset_modes();
     dd = fresh_dd();
     enum_modes_now(dd, cb);
@@ -4560,12 +4560,12 @@ static void test_configurable_display_modes() {
         "640x480x8,junk",        // one bad entry rejects the whole list
     };
     for (const char *spec : bad) {
-        os_setenv("POPM_DDRAW_MODES", spec);
+        os_setenv("RECOMP_DDRAW_MODES", spec);
         ddraw_reset_modes();
         dd = fresh_dd();
         enum_modes_now(dd, cb);
         if (g_enum_count != 10)
-            printf("  POPM_DDRAW_MODES=\"%s\" gave %u modes, wanted the built-in 10\n", spec,
+            printf("  RECOMP_DDRAW_MODES=\"%s\" gave %u modes, wanted the built-in 10\n", spec,
                    g_enum_count);
         CHECK_EQ(g_enum_count, 10u);
         CHECK_EQ(call_method(dd, DD_SetDisplayMode, {800, 600, 16}), DD_OK);
@@ -4576,7 +4576,7 @@ static void test_configurable_display_modes() {
     // game selects 640x480x8 at startup without asking what is available, so
     // a variable that omits it has that call refused and the guest walks into
     // a SIGBUS. Setting the table after boot has no such problem.
-    os_unsetenv("POPM_DDRAW_MODES");
+    os_unsetenv("RECOMP_DDRAW_MODES");
     ddraw_reset_modes();
     dd = fresh_dd();
     CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 8}), DD_OK);
@@ -4600,7 +4600,7 @@ static void test_configurable_display_modes() {
 
     // Unset is the same list as well, which is the state every other test runs in -
     // so this one has to leave it that way.
-    os_unsetenv("POPM_DDRAW_MODES");
+    os_unsetenv("RECOMP_DDRAW_MODES");
     ddraw_reset_modes();
     dd = fresh_dd();
     enum_modes_now(dd, cb);
@@ -7397,14 +7397,14 @@ static void test_qmixer_refill_gate() {
     // queued_bytes reads zero and the pump refills a channel that needs
     // nothing. That is the difference the contract argument rests on, so it
     // is asserted here rather than only described.
-    os_setenv("POPM_QMIX_GATE", "queue");
+    os_setenv("RECOMP_QMIX_GATE", "queue");
     qmixer_gate_reset_for_test();
     g_voice_remaining = 2 * kChunk;
     g_queued_bytes = 0;
     uint32_t old_gate = g_gate_calls;
     qmixer_frame_pump(&g_cpu);
     CHECK(g_gate_calls > old_gate);
-    os_unsetenv("POPM_QMIX_GATE");
+    os_unsetenv("RECOMP_QMIX_GATE");
     qmixer_gate_reset_for_test();
 
     // A play that replaces a sound still playing reports the NEW sound's

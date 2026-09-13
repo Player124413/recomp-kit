@@ -17,6 +17,7 @@
 #include <chrono>
 #include <pthread.h>
 #include <unistd.h>
+#include "../../platform/os.h"
 
 namespace fs = std::filesystem;
 static int checks, failures;
@@ -79,7 +80,7 @@ int main(int argc, char **argv) {
         return 2;
     const fs::path root = argv[1];
     // The luawalk example is the game's; the test runner names the game directory.
-    const char *game_env = getenv("RECOMP_GAME_DIR");
+    const char *game_env = recomp_env("GAME_DIR");
     if (!game_env || !*game_env) {
         fprintf(stderr, "present_events_tests: RECOMP_GAME_DIR is not set\n");
         return 2;
@@ -100,10 +101,10 @@ pop.on_frame("after", function()
 end)
 )";
     }
-    setenv("POPM_MODS_DIR", (scratch / "mods").c_str(), 1);
-    setenv("POPM_CORE_MODS_DIR", (scratch / "absent-core").c_str(), 1);
-    setenv("POPM_PROFILE_DIR", (scratch / "profile").c_str(), 1);
-    unsetenv("POPM_NO_MODS");
+    setenv("RECOMP_MODS_DIR", (scratch / "mods").c_str(), 1);
+    setenv("RECOMP_CORE_MODS_DIR", (scratch / "absent-core").c_str(), 1);
+    setenv("RECOMP_PROFILE_DIR", (scratch / "profile").c_str(), 1);
+    unsetenv("RECOMP_NO_MODS");
     mem_init();
     CHECK(loader_load(nullptr));
     dx_register_shims();

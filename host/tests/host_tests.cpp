@@ -1014,8 +1014,8 @@ static void test_game_path() {
     char dir[512];
     snprintf(dir, sizeof dir, "%s/pop-gamepath-XXXXXX", os_temp_dir());
     CHECK(os_mkdtemp(dir) == 0);
-    os_setenv("POPM_PROFILE_DIR", dir);
-    os_unsetenv("POP_RECOMP_EXE");
+    os_setenv("RECOMP_PROFILE_DIR", dir);
+    os_unsetenv("RECOMP_EXE");
     host_layout_set_exe_path_for_test((std::string(dir) + "/nowhere/exe").c_str()); // no checkout
     // The build's own developer copy (an absolute path from game.toml) is
     // used from wherever the app runs, so a game repository's build finds its
@@ -1046,7 +1046,7 @@ static void test_game_path() {
         GamePath g = game_path_resolve(nullptr);
         CHECK(g.exe == RECOMP_DEVELOPER_EXE);
     }
-    os_unsetenv("POPM_PROFILE_DIR");
+    os_unsetenv("RECOMP_PROFILE_DIR");
     host_layout_set_exe_path_for_test(nullptr);
 }
 
@@ -3273,12 +3273,12 @@ static void test_readback_noninteger_scale(D3DRenderer *renderer) {
 // Both kernels must match the independent CPU pixel/count oracle, including
 // downscaling, fractional native cells and padded threadgroups at 4K edges.
 static void test_readback_kernel_parity(D3DRenderer *original) {
-    const char *saved = getenv("POP_HOST_READBACK_KERNEL");
+    const char *saved = recomp_env("HOST_READBACK_KERNEL");
     std::string old = saved ? saved : "";
     bool had = saved != nullptr;
     original->discard();
     for (const char *mode : {"fused", "tiled"}) {
-        os_setenv("POP_HOST_READBACK_KERNEL", mode);
+        os_setenv("RECOMP_HOST_READBACK_KERNEL", mode);
         D3DRenderer *r = make_renderer();
         CHECK(r != nullptr);
         if (!r)
@@ -3288,9 +3288,9 @@ static void test_readback_kernel_parity(D3DRenderer *original) {
         r->discard();
     }
     if (had)
-        os_setenv("POP_HOST_READBACK_KERNEL", old.c_str());
+        os_setenv("RECOMP_HOST_READBACK_KERNEL", old.c_str());
     else
-        os_unsetenv("POP_HOST_READBACK_KERNEL");
+        os_unsetenv("RECOMP_HOST_READBACK_KERNEL");
     D3DRenderer::setShared(original);
     host_d3d_reset_coherence();
 }
@@ -3299,7 +3299,7 @@ static void test_readback_kernel_parity(D3DRenderer *original) {
 // 16-bit value, palette entries, odd pitches and non-integral 4K scaling.
 // Mutate the source before submission to catch a borrowed-buffer upload.
 static void test_surface_upload_pixels(D3DRenderer *original) {
-    const char *saved = getenv("POP_HOST_SURFACE_UPLOAD");
+    const char *saved = recomp_env("HOST_SURFACE_UPLOAD");
     std::string old = saved ? saved : "";
     bool had = saved != nullptr;
     original->discard();
@@ -3307,7 +3307,7 @@ static void test_surface_upload_pixels(D3DRenderer *original) {
         for (bool wide : {false, true}) {
             Readback reference;
             for (const char *mode : {"cpu", "gpu"}) {
-                os_setenv("POP_HOST_SURFACE_UPLOAD", mode);
+                os_setenv("RECOMP_HOST_SURFACE_UPLOAD", mode);
                 auto r = make_renderer();
                 CHECK(r != nullptr);
                 if (!r)
@@ -3384,16 +3384,16 @@ static void test_surface_upload_pixels(D3DRenderer *original) {
             }
         }
     if (had)
-        os_setenv("POP_HOST_SURFACE_UPLOAD", old.c_str());
+        os_setenv("RECOMP_HOST_SURFACE_UPLOAD", old.c_str());
     else
-        os_unsetenv("POP_HOST_SURFACE_UPLOAD");
+        os_unsetenv("RECOMP_HOST_SURFACE_UPLOAD");
     D3DRenderer::setShared(original);
 }
 
 // Identical ordered draws across automatic submission boundaries must keep
 // native color, depth rejection and guest coverage/writeback byte-for-byte.
 static void test_bounded_submission_pixels(D3DRenderer *original) {
-    const char *saved = getenv("POP_HOST_D3D_SUBMIT_DRAWS");
+    const char *saved = recomp_env("HOST_D3D_SUBMIT_DRAWS");
     std::string old = saved ? saved : "";
     bool had = saved != nullptr;
     original->discard();
@@ -3401,7 +3401,7 @@ static void test_bounded_submission_pixels(D3DRenderer *original) {
         Readback reference;
         std::vector<uint8_t> guest;
         for (int interval : {0, 1, 256}) {
-            os_setenv("POP_HOST_D3D_SUBMIT_DRAWS", std::to_string(interval).c_str());
+            os_setenv("RECOMP_HOST_D3D_SUBMIT_DRAWS", std::to_string(interval).c_str());
             D3DRenderer *r = make_renderer();
             CHECK(r != nullptr);
             if (!r)
@@ -3458,22 +3458,22 @@ static void test_bounded_submission_pixels(D3DRenderer *original) {
         }
     }
     if (had)
-        os_setenv("POP_HOST_D3D_SUBMIT_DRAWS", old.c_str());
+        os_setenv("RECOMP_HOST_D3D_SUBMIT_DRAWS", old.c_str());
     else
-        os_unsetenv("POP_HOST_D3D_SUBMIT_DRAWS");
+        os_unsetenv("RECOMP_HOST_D3D_SUBMIT_DRAWS");
     D3DRenderer::setShared(original);
     host_d3d_reset_coherence();
 }
 
 static void test_parallel_readback_pixels(D3DRenderer *original) {
-    const char *saved = getenv("POP_HOST_READBACK_WORKERS");
+    const char *saved = recomp_env("HOST_READBACK_WORKERS");
     std::string old = saved ? saved : "";
     bool had = saved != nullptr;
     original->discard();
     for (int bpp : {8, 16}) {
         std::vector<uint8_t> partial_reference, full_reference;
         for (int workers : {1, 4}) {
-            os_setenv("POP_HOST_READBACK_WORKERS", std::to_string(workers).c_str());
+            os_setenv("RECOMP_HOST_READBACK_WORKERS", std::to_string(workers).c_str());
             D3DRenderer *r = make_renderer();
             CHECK(r != nullptr);
             if (!r)
@@ -3528,9 +3528,9 @@ static void test_parallel_readback_pixels(D3DRenderer *original) {
         }
     }
     if (had)
-        os_setenv("POP_HOST_READBACK_WORKERS", old.c_str());
+        os_setenv("RECOMP_HOST_READBACK_WORKERS", old.c_str());
     else
-        os_unsetenv("POP_HOST_READBACK_WORKERS");
+        os_unsetenv("RECOMP_HOST_READBACK_WORKERS");
     D3DRenderer::setShared(original);
     host_d3d_reset_coherence();
 }
@@ -3693,9 +3693,9 @@ static void test_same_frame_legacy_pixels(D3DRenderer *renderer) {
         renderer->discard();
         host_d3d_reset_coherence();
         if (legacy)
-            os_setenv("POPM_LEGACY_WRITEBACK", "1");
+            os_setenv("RECOMP_LEGACY_WRITEBACK", "1");
         else
-            os_unsetenv("POPM_LEGACY_WRITEBACK");
+            os_unsetenv("RECOMP_LEGACY_WRITEBACK");
         renderer->setSceneWidth(legacy ? 0 : 256, legacy ? 0 : 192);
         Surface surface(805, 128, 96);
         host_d3d_bind_generation(&surface.desc, 1, 8005);
@@ -3787,7 +3787,7 @@ static void test_same_frame_legacy_pixels(D3DRenderer *renderer) {
         CHECK_EQ(pixels[90 * 128 + 100], 0xffff);
     }
     g_t5_legacy_frame = 0;
-    os_unsetenv("POPM_LEGACY_WRITEBACK");
+    os_unsetenv("RECOMP_LEGACY_WRITEBACK");
     renderer->setSceneWidth(0, 0);
     renderer->discard();
 }
@@ -4998,11 +4998,11 @@ struct PresentFake {
     }
 };
 static void test_windowed_duration_pacing_selector() {
-    const char *saved = getenv("POP_HOST_PRESENT_PACING");
+    const char *saved = recomp_env("HOST_PRESENT_PACING");
     std::string old = saved ? saved : "";
     bool had = saved != nullptr;
     for (bool paced : {false, true}) {
-        os_setenv("POP_HOST_PRESENT_PACING", paced ? "duration" : "immediate");
+        os_setenv("RECOMP_HOST_PRESENT_PACING", paced ? "duration" : "immediate");
         PresentFake fake;
         host_present_test_begin(false, false);
         host_present_test_seal(1, HOST_SCREEN_MENU, false);
@@ -5022,9 +5022,9 @@ static void test_windowed_duration_pacing_selector() {
         host_present_stop();
     }
     if (had)
-        os_setenv("POP_HOST_PRESENT_PACING", old.c_str());
+        os_setenv("RECOMP_HOST_PRESENT_PACING", old.c_str());
     else
-        os_unsetenv("POP_HOST_PRESENT_PACING");
+        os_unsetenv("RECOMP_HOST_PRESENT_PACING");
 }
 static void test_windowed_drawable_handler_and_completion_fallback() {
     for (bool missing : {false, true}) {
@@ -5658,14 +5658,14 @@ static void test_hd_pack_and_classic_isolation(D3DRenderer *original) {
         out.put(0);
     }
     CHECK(pop_hd::inspect(oversized, parsed));
-    const char *env = getenv("POPM_TEXTURE_PACK_DIR");
+    const char *env = recomp_env("TEXTURE_PACK_DIR");
     bool had = env;
     std::string saved = env ? env : "";
-    const char *limit = getenv("POPM_TEXTURE_BUDGET_MB");
+    const char *limit = recomp_env("TEXTURE_BUDGET_MB");
     bool hadLimit = limit;
     std::string savedLimit = limit ? limit : "";
-    os_setenv("POPM_TEXTURE_BUDGET_MB", "32");
-    os_setenv("POPM_TEXTURE_PACK_DIR", dir);
+    os_setenv("RECOMP_TEXTURE_BUDGET_MB", "32");
+    os_setenv("RECOMP_TEXTURE_PACK_DIR", dir);
     auto r = make_renderer();
     CHECK(r != nullptr);
     D3DRenderer::setShared(r);
@@ -5717,13 +5717,13 @@ static void test_hd_pack_and_classic_isolation(D3DRenderer *original) {
     g_t5_legacy_frame = 0;
     D3DRenderer::setShared(original);
     if (had)
-        os_setenv("POPM_TEXTURE_PACK_DIR", saved.c_str());
+        os_setenv("RECOMP_TEXTURE_PACK_DIR", saved.c_str());
     else
-        os_unsetenv("POPM_TEXTURE_PACK_DIR");
+        os_unsetenv("RECOMP_TEXTURE_PACK_DIR");
     if (hadLimit)
-        os_setenv("POPM_TEXTURE_BUDGET_MB", savedLimit.c_str());
+        os_setenv("RECOMP_TEXTURE_BUDGET_MB", savedLimit.c_str());
     else
-        os_unsetenv("POPM_TEXTURE_BUDGET_MB");
+        os_unsetenv("RECOMP_TEXTURE_BUDGET_MB");
     std::filesystem::remove_all(dir);
 }
 
@@ -5758,10 +5758,10 @@ static void test_terrain_material_detail(D3DRenderer *original) {
         for (uint64_t i = 0; i < pop_hd::mip_bytes(256, 256, 9) / 4; ++i)
             out.write((const char *)rgba, 4);
     }
-    const char *env = getenv("POPM_TEXTURE_PACK_DIR");
+    const char *env = recomp_env("TEXTURE_PACK_DIR");
     bool had = env;
     std::string saved = env ? env : "";
-    os_setenv("POPM_TEXTURE_PACK_DIR", dir);
+    os_setenv("RECOMP_TEXTURE_PACK_DIR", dir);
     auto renderer = make_renderer();
     CHECK(renderer != nullptr);
     D3DRenderer::setShared(renderer);
@@ -5830,9 +5830,9 @@ static void test_terrain_material_detail(D3DRenderer *original) {
     g_t5_legacy_frame = 0;
     D3DRenderer::setShared(original);
     if (had)
-        os_setenv("POPM_TEXTURE_PACK_DIR", saved.c_str());
+        os_setenv("RECOMP_TEXTURE_PACK_DIR", saved.c_str());
     else
-        os_unsetenv("POPM_TEXTURE_PACK_DIR");
+        os_unsetenv("RECOMP_TEXTURE_PACK_DIR");
     std::filesystem::remove_all(dir);
 }
 

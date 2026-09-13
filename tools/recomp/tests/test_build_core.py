@@ -14,7 +14,7 @@ spec = importlib.util.spec_from_file_location("build_core", Path(__file__).paren
 build_core = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_core)
 ROOT = Path(__file__).resolve().parents[3]
-CC = os.environ.get("POP_CC") or shutil.which("clang") or shutil.which("cc")
+CC = os.environ.get("RECOMP_CC") or os.environ.get("POP_CC") or shutil.which("clang") or shutil.which("cc")
 PROBE_C = "int core_packaging_probe(void) { return 12; }\n"
 PROBE_TOML = 'id = "core.packaging.probe"\n[plugin]\npath = "probe.dylib"\n'
 
@@ -26,7 +26,7 @@ def tree_digest(root):
             for p in sorted(Path(root).rglob("*")) if p.is_file()}
 
 
-@unittest.skipUnless(CC, "no C compiler on PATH; set POP_CC")
+@unittest.skipUnless(CC, "no C compiler on PATH; set RECOMP_CC")
 class BuildCoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="pop-core-"))

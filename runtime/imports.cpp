@@ -20,7 +20,7 @@ struct Tramp {
     uint32_t calls = 0;
 };
 
-// Deliberately leaked: an atexit hook (POPM_IMPORT_STATS) reads these after
+// Deliberately leaked: an atexit hook (RECOMP_IMPORT_STATS) reads these after
 // static destructors would otherwise have run.
 std::vector<Tramp> &tramps() {
     static auto *v = new std::vector<Tramp>();

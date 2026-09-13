@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
+#include "../../platform/os.h"
 
 namespace {
 
@@ -20,7 +21,7 @@ const char *SNAPSHOT = "build/recomp/parity/native/frame32._data_00598000.bin";
 const uint32_t SNAPSHOT_BASE = 0x00598000u;
 
 bool load_snapshot() {
-    const char *path = getenv("POPM_TEST_GAME_VIEW_SNAPSHOT");
+    const char *path = recomp_env("TEST_GAME_VIEW_SNAPSHOT");
     FILE *f = fopen(path && *path ? path : SNAPSHOT, "rb");
     if (!f)
         return false;

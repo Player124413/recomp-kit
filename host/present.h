@@ -43,10 +43,10 @@ void host_present_point_to_guest(double drawable_w, double drawable_h, int guest
 // ---------------------------------------------------------------------------
 // Frame dumps, for looking at actual pixels instead of describing them.
 //
-// POP_HOST_DUMP_EVERY=N writes every Nth presented frame - what the window
+// RECOMP_HOST_DUMP_EVERY=N writes every Nth presented frame - what the window
 // shows, after everything has been composited into the surface - and the
 // Direct3D render target as it stood at EndScene, to
-// build/recomp/live/frames/. POP_HOST_DUMP_DIR moves that directory.
+// build/recomp/live/frames/. RECOMP_HOST_DUMP_DIR moves that directory.
 // ---------------------------------------------------------------------------
 // 0 when dumping is off.
 uint32_t host_dump_every(void);

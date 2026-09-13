@@ -51,7 +51,7 @@ void mod_test_fail(const char *what, const char *file, int line) {
 const char *mod_test_dir(const char *suite) {
     static std::map<std::string, std::string> kept;
     std::string &path = kept[suite];
-    const char *root = getenv("POPM_TEST_DIR");
+    const char *root = recomp_env("TEST_DIR");
     path = std::string(root && *root ? root : mods_test_build_path("recomp/mods-test").c_str()) +
            "/" + suite;
     std::string cmd = "rm -rf '" + path + "' && mkdir -p '" + path + "'";
@@ -63,7 +63,7 @@ const char *mod_test_dir(const char *suite) {
 int main() {
     // Settings apply now persists immediately. Even suites which only exercise
     // the UI/API must have a scratch profile rather than the player's profile.
-    os_setenv("POPM_PROFILE_DIR", mod_test_dir("default-profile"));
+    os_setenv("RECOMP_PROFILE_DIR", mod_test_dir("default-profile"));
     // Line buffered, always. Redirected to a file or a pipe, stdout is block
     // buffered, and a suite that crashes takes every earlier suite's result
     // down with it - the run then looks as though nothing ran at all, which

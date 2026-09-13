@@ -17,7 +17,7 @@ uint8_t *g_mem = nullptr;
 int log_level() {
     static int lvl = -1;
     if (lvl < 0) {
-        const char *e = getenv("POPM_LOG");
+        const char *e = recomp_env("LOG");
         lvl = e ? atoi(e) : 1;
     }
     return lvl;

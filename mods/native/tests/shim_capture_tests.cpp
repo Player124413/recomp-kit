@@ -79,7 +79,7 @@ uint32_t dispatch(uint32_t tramp, const uint32_t *args, uint32_t argc) {
 }
 
 void prepare() {
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
     mem_init();
     imports_init();
 }
@@ -252,10 +252,10 @@ MOD_TEST_SUITE(shimcap_window_is_exclusive_and_needs_testing_mode) {
     MOD_CHECK(!pop_shimcap::end(nullptr, nullptr, &why));
     MOD_CHECK(why != nullptr && strstr(why, "no capture window") != nullptr);
 
-    unsetenv("POPM_TESTING");
+    unsetenv("RECOMP_TESTING");
     MOD_CHECK(!pop_shimcap::begin(4));
     MOD_CHECK(!pop_shimcap::active());
-    setenv("POPM_TESTING", "1", 1);
+    setenv("RECOMP_TESTING", "1", 1);
 }
 
 MOD_TEST_SUITE(shimcap_restores_the_observer_it_displaced) {

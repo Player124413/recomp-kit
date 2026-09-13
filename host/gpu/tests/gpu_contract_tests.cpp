@@ -198,7 +198,7 @@ static void test_swapchain_from_surface() {
 }
 
 int main() {
-    os_setenv("POP_GPU_BACKEND", POP_GPU_TEST_BACKEND);
+    os_setenv("RECOMP_GPU_BACKEND", POP_GPU_TEST_BACKEND);
     if (strcmp(default_backend_name(), POP_GPU_TEST_BACKEND) != 0) {
         fprintf(stderr, "backend %s is not available here (got %s)\n", POP_GPU_TEST_BACKEND,
                 default_backend_name());

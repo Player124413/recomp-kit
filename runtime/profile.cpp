@@ -8,9 +8,10 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include "../platform/os.h"
 
 extern "C" const int recomp_profile_enabled = [] {
-    const char *value = std::getenv("POPM_PROFILE");
+    const char *value = recomp_env("PROFILE");
     return value && std::strcmp(value, "1") == 0;
 }();
 // Generated table supplies names; runtime-only tests need no generated table.

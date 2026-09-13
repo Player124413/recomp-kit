@@ -133,7 +133,7 @@ void imports_dump_stats(FILE *out);
 void imports_dump_coverage(FILE *out);
 // Classifies every import as implemented-and-called, implemented-but-not-
 // reached, or logging-only. Meaningful after a run of the real guest code;
-// POPM_IMPORT_STATS=1 prints it to stderr when the process exits.
+// RECOMP_IMPORT_STATS=1 prints it to stderr when the process exits.
 void imports_dump_report(FILE *out);
 // Counts across all trampolines. Any of the out pointers may be null.
 void imports_coverage(uint32_t *implemented, uint32_t *logging_only, uint32_t *unknown_argc);

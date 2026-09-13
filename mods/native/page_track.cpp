@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <pthread.h>
 #include <sched.h>
+#include "../../platform/os.h"
 
 namespace pop_pagetrack {
 namespace {
@@ -275,7 +276,7 @@ void test_before_snapshot(void (*hook)(size_t)) {
 bool begin(size_t max_pages) {
     if (g_active.load(std::memory_order_acquire) || !g_mem || !max_pages)
         return false;
-    const char *testing = getenv("POPM_TESTING");
+    const char *testing = recomp_env("TESTING");
     if (!testing || !*testing)
         return false;
 

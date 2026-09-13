@@ -12,7 +12,7 @@ namespace {
 const char *PROFILE = nullptr; // this suite's own, from mod_test_dir
 void fresh() {
     PROFILE = mod_test_dir("settings");
-    os_setenv("POPM_PROFILE_DIR", PROFILE);
+    os_setenv("RECOMP_PROFILE_DIR", PROFILE);
     mods_settings_reset();
     mods_overlay_set_profile_dir(PROFILE);
 }

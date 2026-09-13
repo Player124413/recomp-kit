@@ -65,7 +65,7 @@ in `mod-settings.json`; reopening the menu restores that selection without
 reapplying the preset and overwriting later manual changes.
 
 F10 display/mod settings and the F11 overlay selection save immediately to
-`<profile>/mod-settings.json`, using an atomic replacement. `POPM_PROFILE_DIR`
+`<profile>/mod-settings.json`, using an atomic replacement. `RECOMP_PROFILE_DIR`
 selects a different profile; worktrees have separate default profiles. The
 original GOG files remain the fallback read layer and are not modified.
 
@@ -147,7 +147,7 @@ even if no motion event arrived. Deliver only changed drawable coordinates,
 through the same ordered guest-input queue. Otherwise the game keeps its last
 edge position even while the real mouse moves back into the scene.
 
-`POPM_TRACE_POINTER=1` enables throttled native-coordinate and guest-cursor
+`RECOMP_TRACE_POINTER=1` enables throttled native-coordinate and guest-cursor
 diagnostics. The verified September 9 run in
 `build/fullscreen-edges/live-v4/app.log` recorded top-edge event Y=28 with
 global/window Y=945, then event Y=-738.7 with global/window Y=178.3. The
@@ -361,22 +361,22 @@ been shown and holds the focus gets `WM_ACTIVATEAPP`, `WM_ACTIVATE` and
 `WM_SETFOCUS`. The game's WNDPROC at `004b0870` reads `WM_ACTIVATEAPP`'s wParam
 into the flag `004b2670` returns, and `main_3` calls `update_screen()` only when
 that flag is set. Drawing happens either way, so without activation the game
-runs and draws and never presents. Checked, not assumed: `POP_RECOMP_NO_ACTIVATE=1`
+runs and draws and never presents. Checked, not assumed: `RECOMP_NO_ACTIVATE=1`
 reaches the same point in the same way with one fewer frame presented.
 
 ## Environment
 
 | variable | effect |
 | --- | --- |
-| `POP_RECOMP_MAX_FRAMES` | stop after N presented frames (default 500) |
-| `POP_RECOMP_MAX_SECONDS` | stop after S wall-clock seconds (default 180) |
-| `POP_RECOMP_FRAMES` | frame directory (default `build/recomp/frames`) |
-| `POP_RECOMP_FRAME_EVERY` | write every Nth frame (default 10; 0 writes none) |
-| `POP_RECOMP_EXE` | image to load (default the loader's) |
-| `POP_RECOMP_NO_ACTIVATE` | do not synthesise activation |
-| `POP_RECOMP_PIN_CLOCK` | `1`, or `<start>:<step>`, to pin the guest's clock |
+| `RECOMP_MAX_FRAMES` | stop after N presented frames (default 500) |
+| `RECOMP_MAX_SECONDS` | stop after S wall-clock seconds (default 180) |
+| `RECOMP_FRAMES` | frame directory (default `build/recomp/frames`) |
+| `RECOMP_FRAME_EVERY` | write every Nth frame (default 10; 0 writes none) |
+| `RECOMP_EXE` | image to load (default the loader's) |
+| `RECOMP_NO_ACTIVATE` | do not synthesise activation |
+| `RECOMP_PIN_CLOCK` | `1`, or `<start>:<step>`, to pin the guest's clock |
 
-`POP_RECOMP_PIN_CLOCK` is read by every host that boots through `boot.cpp`,
+`RECOMP_PIN_CLOCK` is read by every host that boots through `boot.cpp`,
 which is the headless host, the smoke host and the windowed app. It replaces
 the millisecond clock the guest reads with a counter that starts at `start`
 and moves `step` per presented frame, defaulting to the parity fixture's own
@@ -405,14 +405,14 @@ anything.
 The run record says which clock a run ran on, in `pins.clock`, so two records
 can be compared knowing whether their clocks were the same kind of thing.
 
-The windowed host reads `POP_RECOMP_EXE` too, and adds:
+The windowed host reads `RECOMP_EXE` too, and adds:
 
 | variable | effect |
 | --- | --- |
-| `POP_HOST_D3D_NOCULL` | ignore `D3DRENDERSTATE_CULLMODE` |
-| `POP_HOST_NO_AUDIO` | never start the audio engine |
+| `RECOMP_HOST_D3D_NOCULL` | ignore `D3DRENDERSTATE_CULLMODE` |
+| `RECOMP_HOST_NO_AUDIO` | never start the audio engine |
 
-`POPM_LOG`, `POPM_IMPORT_STATS`, `POPM_CREATETHREAD` and the rest are the
+`RECOMP_LOG`, `RECOMP_IMPORT_STATS`, `RECOMP_CREATETHREAD` and the rest are the
 runtime's, documented in `runtime/README.md`.
 
 ## What a run looks like, and why the caps are what they are
@@ -438,7 +438,7 @@ colours, which is nearly always a video frame. And the literal last frame is
 blank, because the cap posts `WM_CLOSE` and the game clears the screen on its
 way out.
 
-A frame is about 900 KB, so `POP_RECOMP_FRAME_EVERY` defaults to 10: fifty-odd
+A frame is about 900 KB, so `RECOMP_FRAME_EVERY` defaults to 10: fifty-odd
 frames still land several in each phase. Set it to 1 when you need them all,
 or 0 when you only want the summary.
 

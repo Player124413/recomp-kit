@@ -44,8 +44,8 @@ int main(void) {
     api.symbol = resolve;
     api.hook_install = install;
     api.call_original = original;
-    setenv("POP_REPLACE_CANDIDATE", "candidate", 1);
-    setenv("POP_REPLACE_ENABLED", "1", 1);
+    setenv("RECOMP_REPLACE_CANDIDATE", "candidate", 1);
+    setenv("RECOMP_REPLACE_ENABLED", "1", 1);
     assert(pop_mod_init(&api) == POP_OK);
     assert(observed_before && observed_replace);
     cpu.esp = 0x10000;
