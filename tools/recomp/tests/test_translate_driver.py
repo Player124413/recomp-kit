@@ -187,6 +187,11 @@ def test_computed_returns_use_sorted_call_continuations(tmp_path, monkeypatch):
     assert jump.index("recomp_is_call_return(target)") < jump.index("recomp_unknown_jump(c, target)")
     call = text.split("void recomp_call(", 1)[1].split("void recomp_jump(", 1)[0]
     assert "recomp_is_call_return" not in call
+    assert '#include "thunks.h"' in text
+    assert "int recomp_thunk_target_kind(uint32_t target)" in text
+    assert "return recomp_is_call_return(target) ? 2 : 0;" in text
+    unknown = text.split("void recomp_unknown_jump(", 1)[1]
+    assert "if (recomp_run_thunk(c, target)) return;" in unknown
 
 
 @pytest.mark.parametrize("target,dispatch", [(0x0060100b, True),

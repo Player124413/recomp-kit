@@ -6,6 +6,7 @@
 #include "mods_seam.h"
 #include "intrinsics.h"
 #include "win32.h"
+#include "thunks.h"
 
 #include <setjmp.h>
 #include <stdio.h>
@@ -79,6 +80,8 @@ void recomp_shim_call(X86 *c, uint32_t target) {
 // shim. Almost always a translator bug or an uninitialised function pointer,
 // so it is logged with the target and the guest continues with EAX = 0.
 void recomp_unknown_call(X86 *c, uint32_t target) {
+    if (recomp_run_thunk(c, target))
+        return;
     if (target == GUEST_RETURN_SENTINEL) {
         // The guest returned to the address the runtime pushes for a callback
         // and then called it, or a callback's RET was translated as a call.

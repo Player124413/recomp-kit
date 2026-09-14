@@ -5,10 +5,13 @@
 // range, calls imports_dispatch(). The runtime tests link this stand-in so they
 // can exercise the shims without the generated code.
 #include "../imports.h"
+#include "../thunks.h"
 #include <stdio.h>
 
 extern "C" void recomp_call(X86 *c, uint32_t target) {
     if (imports_dispatch(c, target))
+        return;
+    if (recomp_run_thunk(c, target))
         return;
     fprintf(stderr, "[stub] recomp_call to %08x: no generated function table in this build\n",
             target);

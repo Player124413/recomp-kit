@@ -2564,6 +2564,100 @@ static void test_scheduling(X86 *c) {
     }
 }
 
+static uint32_t thunk_hits, thunk_return, thunk_ecx, thunk_arg;
+static void thunk_probe(X86 *c) {
+    ++thunk_hits;
+    thunk_return = rd32(c->r[R_ESP]);
+    thunk_ecx = c->r[R_ECX];
+    thunk_arg = arg(c, 1);
+    set_eax(c, 0x600d);
+}
+
+static void test_guest_thunks(X86 *c) {
+    section("runtime-generated guest thunks");
+    uint32_t code = heap_alloc(256, true);
+    uint32_t probe = imports_alloc_trampoline("test", "thunk_probe", thunk_probe, 0);
+    uint32_t sp = c->r[R_ESP];
+    thunk_hits = 0;
+    wr8(code, 0xe8);
+    wr32(code + 1, probe - (code + 5));
+    wr32(code + 5, 0x12345678);
+    wr32(code + 9, 0x87654321);
+    recomp_call(c, code);
+    check(thunk_hits == 1 && thunk_return == code + 5,
+          "heap CALL reaches trampoline with return pointing to its record");
+    check(c->r[R_ESP] == sp, "CALL trampoline consumes only its pushed return");
+    c->r[R_ESP] = sp;
+
+    // The shared Delphi stub pops the record address before tail dispatch.
+    wr32(code + 1, 32 - 5);
+    wr8(code + 32, 0x59);
+    wr8(code + 33, 0xe9);
+    wr32(code + 34, probe - (code + 38));
+    c->r[R_ESP] = sp - 4;
+    wr32(sp - 4, g_fake_ret);
+    recomp_call(c, code);
+    check(thunk_hits == 2 && thunk_ecx == code + 5 && thunk_return == g_fake_ret,
+          "CALL/POP/JMP preserves the outer return and supplies the record in ECX");
+    c->r[R_ESP] = sp;
+
+    wr8(code + 64, 0xe9);
+    wr32(code + 65, probe - (code + 69));
+    c->r[R_ESP] = sp - 4;
+    wr32(sp - 4, g_fake_ret);
+    recomp_call(c, code + 64);
+    check(thunk_hits == 3 && thunk_return == g_fake_ret && c->r[R_ESP] == sp,
+          "heap JMP tail-dispatches without pushing another return");
+    c->r[R_ESP] = sp;
+
+    uint32_t cls = put_str("ThunkWindow"), wc = scratch_block(40);
+    uint32_t wndprobe = imports_alloc_trampoline("test", "thunk_wndproc", thunk_probe, 4);
+    wr32(wc + 4, imports_resolve("USER32.dll", "DefWindowProcW"));
+    wr32(wc + 36, cls);
+    call_import(c, "USER32.dll", "RegisterClassA", {wc});
+    uint32_t hwnd = call_import(c, "USER32.dll", "CreateWindowExA",
+                                {0, cls, cls, 0, 0, 0, 64, 64, 0, 0, IMAGE_BASE, 0});
+    wr32(code + 34, wndprobe - (code + 38));
+    call_import(c, "USER32.dll", "SetWindowLongW", {hwnd, uint32_t(-4), code});
+    uint32_t hits = thunk_hits;
+    uint32_t result = call_import(c, "USER32.dll", "SendMessageW", {hwnd, 0x8001, 7, 9});
+    check(result == 0x600d && thunk_hits == hits + 1 && thunk_arg == 0x8001 &&
+              thunk_ecx == code + 5,
+          "SendMessageW executes the heap WNDPROC through the shared dispatch path");
+    call_import(c, "USER32.dll", "DestroyWindow", {hwnd});
+
+    // A loop must be bounded, and an unsuccessful prefix must not leave a PUSH.
+    wr8(code + 96, 0x68);
+    wr32(code + 97, 0x11223344);
+    wr8(code + 101, 0xeb);
+    wr8(code + 102, 0xfe);
+    c->r[R_ESP] = sp - 4;
+    wr32(sp - 4, g_fake_ret);
+    wr32(sp - 8, 0xaabbccdd);
+    hits = thunk_hits;
+    recomp_unknown_call(c, code + 96);
+    check(thunk_hits == hits && c->r[R_ESP] == sp && rd32(sp - 8) == 0xaabbccdd,
+          "bounded failure restores speculative PUSH before the unknown-call fallback");
+    c->r[R_ESP] = sp;
+    // Exercise the remaining opcode forms from a stack-resident thunk.
+    uint32_t at = STACK_LIMIT + 0x100;
+    uint8_t ops[] = {0xb8, 0,    0,    0,    0,    0x89, 0xc2, 0x8b, 0xca,
+                     0xeb, 0x01, 0xcc, 0xff, 0x25, 0,    0,    0,    0};
+    memcpy(g_mem + at, ops, sizeof ops);
+    wr32(at + 1, 0x76543210);
+    wr32(at + 14, code + 128);
+    wr32(code + 128, probe);
+    c->r[R_ESP] = sp - 4;
+    wr32(sp - 4, g_fake_ret);
+    hits = thunk_hits;
+    recomp_call(c, at);
+    check(thunk_hits == hits + 1 && thunk_ecx == 0x76543210 && c->r[R_EDX] == 0x76543210 &&
+              c->r[R_ESP] == sp,
+          "stack thunk executes MOV immediate/register, short JMP and indirect memory JMP");
+    c->r[R_ESP] = sp;
+    heap_free(code);
+}
+
 static void test_callbacks(X86 *c) {
     section("guest callbacks and threads");
     uint32_t fn = imports_alloc_trampoline("test", "guest_callback", fake_guest_fn, 4);
@@ -5045,6 +5139,7 @@ int main(int argc, char **argv) {
     test_native_draw_waits(c);
     test_midi(c);
     test_windows(c);
+    test_guest_thunks(c);
     test_callbacks(c);
     test_scheduling(c);
     test_mod_seams(c);
