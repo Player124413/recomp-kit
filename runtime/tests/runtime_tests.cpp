@@ -3703,6 +3703,53 @@ static void test_kernel32_wide() {
     }
     if (h && h != 0xffffffffu)
         call_import(&c, "KERNEL32.dll", "CloseHandle", {h});
+
+    section("kernel32 wide text and time");
+    gm_put_wstr(s, "caf\xc3\xa9", 64);
+    gm_put_wstr(s + 128, " \xf0\x9f\x98\x80", 64);
+    check(call_import(&c, "KERNEL32.dll", "lstrlenW", {s}) == 4 &&
+              call_import(&c, "KERNEL32.dll", "lstrlenW", {0}) == 0,
+          "lstrlenW counts UTF-16 units");
+    check(call_import(&c, "KERNEL32.dll", "lstrcatW", {s, s + 128}) == s &&
+              gm_wstr(s) == "caf\xc3\xa9 \xf0\x9f\x98\x80",
+          "lstrcatW appends Unicode");
+    check(call_import(&c, "KERNEL32.dll", "lstrlenW", {s}) == 7,
+          "lstrlenW counts both halves of a surrogate pair");
+    check(call_import(&c, "KERNEL32.dll", "FormatMessageW", {0x1000, 0, 5, 0, fd, 64, 0}) == 7 &&
+              gm_wstr(fd) == "Error 5",
+          "FormatMessageW system code");
+    check(call_import(&c, "KERNEL32.dll", "FormatMessageW", {0x1000, 0, 5, 0, fd, 2, 0}) == 0,
+          "FormatMessageW refuses a short buffer");
+    wr32(fd, 0);
+    check(call_import(&c, "KERNEL32.dll", "FormatMessageW", {0x1100, 0, 87, 0, fd, 0, 0}) == 8 &&
+              gm_wstr(rd32(fd)) == "Error 87",
+          "FormatMessageW allocates a LocalFree-compatible buffer");
+    if (rd32(fd))
+        call_import(&c, "KERNEL32.dll", "LocalFree", {rd32(fd)});
+    call_import(&c, "KERNEL32.dll", "OutputDebugStringW", {s});
+    const uint64_t ft = (11644473600ull + 946782246ull) * 10000000ull + 1230000ull;
+    wr32(s, (uint32_t)ft);
+    wr32(s + 4, (uint32_t)(ft >> 32));
+    check(call_import(&c, "KERNEL32.dll", "FileTimeToLocalFileTime", {s, s + 16}) == 1 &&
+              rd32(s) == rd32(s + 16) && rd32(s + 4) == rd32(s + 20),
+          "FileTimeToLocalFileTime identity");
+    check(call_import(&c, "KERNEL32.dll", "FileTimeToSystemTime", {s, fd}) == 1 &&
+              rd16(fd) == 2000 && rd16(fd + 2) == 1 && rd16(fd + 4) == 0 && rd16(fd + 6) == 2 &&
+              rd16(fd + 8) == 3 && rd16(fd + 10) == 4 && rd16(fd + 12) == 6 && rd16(fd + 14) == 123,
+          "FileTimeToSystemTime UTC fields and milliseconds");
+    check(call_import(&c, "KERNEL32.dll", "GetDateFormatW", {0x409, 0, fd, 0, s + 128, 64}) == 11 &&
+              gm_wstr(s + 128) == "2000-01-02",
+          "GetDateFormatW fixed ISO picture");
+    check(call_import(&c, "KERNEL32.dll", "GetDateFormatW", {0x409, 0, fd, 0, 0, 0}) == 11,
+          "GetDateFormatW size includes terminator");
+    check(call_import(&c, "KERNEL32.dll", "FileTimeToDosDateTime", {s, s + 32, s + 34}) == 1 &&
+              rd16(s + 32) == ((20 << 9) | (1 << 5) | 2) &&
+              rd16(s + 34) == ((3 << 11) | (4 << 5) | 3),
+          "FileTimeToDosDateTime packs fields");
+    wr32(s, 0);
+    wr32(s + 4, 0);
+    check(call_import(&c, "KERNEL32.dll", "FileTimeToDosDateTime", {s, s + 32, s + 34}) == 0,
+          "DOS time rejects years before 1980");
     section("kernel32 wide locale");
     check(call_import(&c, "KERNEL32.dll", "GetThreadLocale", {}) == 0x0409, "GetThreadLocale");
     check(call_import(&c, "KERNEL32.dll", "GetUserDefaultUILanguage", {}) == 0x0409,

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <ctime>
 
 namespace {
 // gm_wstr produces valid UTF-8. Count UTF-16 units, including surrogate pairs.
@@ -333,7 +334,161 @@ void k_CreateFileMappingW(X86 *c) {
     create_mapping_named(c, gm_wstr(arg(c, 5)));
 }
 
+uint32_t wstrlen(uint32_t p) {
+    uint32_t n = 0;
+    if (p)
+        while (n < (GUEST_SIZE - std::min(p, GUEST_SIZE)) / 2 && rd16(p + n * 2))
+            ++n;
+    return n;
+}
+void k_lstrlenW(X86 *c) {
+    set_eax(c, wstrlen(arg(c, 0)));
+}
+void k_lstrcatW(X86 *c) {
+    uint32_t dest = arg(c, 0), src = arg(c, 1), n = wstrlen(dest), extra = wstrlen(src);
+    if (dest && gm_valid(dest, n * 2) && extra < (GUEST_SIZE - dest) / 2 - n) {
+        // memmove also preserves raw UTF-16 units when source and destination overlap.
+        if (src)
+            memmove(g_mem + dest + n * 2, g_mem + src, extra * 2);
+        wr16(dest + (n + extra) * 2, 0);
+    }
+    set_eax(c, dest);
+}
+void k_FormatMessageW(X86 *c) {
+    uint32_t flags = arg(c, 0), out = arg(c, 4), cap = arg(c, 5);
+    if (!(flags & 0x1000) || (flags & (0x400 | 0x800)) || !out) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    std::string text = "Error " + std::to_string(arg(c, 2));
+    uint32_t need = wide_units(text) + 1;
+    if (flags & 0x100) { // FORMAT_MESSAGE_ALLOCATE_BUFFER
+        cap = std::max(cap, need);
+        if (cap > GUEST_SIZE / 2 || !gm_valid(out, 4)) {
+            set_eax(c, 0);
+            return;
+        }
+        uint32_t buffer = heap_alloc(cap * 2, true);
+        if (!buffer) {
+            set_last_error(8);
+            set_eax(c, 0);
+            return;
+        }
+        wr32(out, buffer);
+        out = buffer;
+    } else if (cap < need || !gm_valid(out, need * 2)) {
+        set_last_error(122);
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, gm_put_wstr(out, text, cap));
+}
+void k_OutputDebugStringW(X86 *c) {
+    LOGV("OutputDebugStringW: %s", gm_wstr(arg(c, 0)).c_str());
+    set_eax(c, 0);
+}
+// FILETIME is unsigned 100 ns ticks since 1601, SYSTEMTIME is eight WORDs.
+// Keep conversion in UTC and use the platform time seam on every host.
+bool filetime_fields(uint32_t p, struct tm &t, uint16_t &ms) {
+    if (!p || !gm_valid(p, 8))
+        return false;
+    uint64_t ticks = (uint64_t)rd32(p) | ((uint64_t)rd32(p + 4) << 32);
+    if (ticks >> 63)
+        return false;
+    int64_t seconds = (int64_t)(ticks / 10000000ull) - 11644473600ll;
+    ms = (uint16_t)((ticks % 10000000ull) / 10000);
+    return os_gmtime(seconds, &t) == 0;
+}
+void k_FileTimeToLocalFileTime(X86 *c) {
+    uint32_t src = arg(c, 0), dst = arg(c, 1);
+    bool ok = src && dst && gm_valid(src, 8) && gm_valid(dst, 8);
+    if (ok)
+        memmove(g_mem + dst, g_mem + src, 8); // The virtual machine uses UTC.
+    set_eax(c, ok ? 1 : 0);
+}
+void k_FileTimeToSystemTime(X86 *c) {
+    struct tm t{};
+    uint16_t ms = 0;
+    uint32_t out = arg(c, 1);
+    if (!out || !gm_valid(out, 16) || !filetime_fields(arg(c, 0), t, ms)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    const uint16_t fields[] = {(uint16_t)(t.tm_year + 1900), (uint16_t)(t.tm_mon + 1),
+                               (uint16_t)t.tm_wday,          (uint16_t)t.tm_mday,
+                               (uint16_t)t.tm_hour,          (uint16_t)t.tm_min,
+                               (uint16_t)t.tm_sec,           ms};
+    for (uint32_t i = 0; i < 8; ++i)
+        wr16(out + i * 2, fields[i]);
+    set_eax(c, 1);
+}
+void k_FileTimeToDosDateTime(X86 *c) {
+    struct tm t{};
+    uint16_t ms = 0;
+    uint32_t date = arg(c, 1), time = arg(c, 2);
+    if (!date || !time || !gm_valid(date, 2) || !gm_valid(time, 2) ||
+        !filetime_fields(arg(c, 0), t, ms) || t.tm_year < 80 || t.tm_year > 207) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    wr16(date, (uint16_t)(((t.tm_year - 80) << 9) | ((t.tm_mon + 1) << 5) | t.tm_mday));
+    wr16(time, (uint16_t)((t.tm_hour << 11) | (t.tm_min << 5) | (t.tm_sec / 2)));
+    set_eax(c, 1);
+}
+void k_GetDateFormatW(X86 *c) {
+    uint32_t input = arg(c, 2), out = arg(c, 4), cap = arg(c, 5);
+    int year, month, day;
+    if (input) {
+        if (!gm_valid(input, 16)) {
+            set_eax(c, 0);
+            return;
+        }
+        year = rd16(input);
+        month = rd16(input + 2);
+        day = rd16(input + 6);
+    } else {
+        struct tm t{};
+        if (os_localtime((int64_t)(os_wall_time_us() / 1000000), &t) != 0) {
+            set_eax(c, 0);
+            return;
+        }
+        year = t.tm_year + 1900;
+        month = t.tm_mon + 1;
+        day = t.tm_mday;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    char text[32];
+    snprintf(text, sizeof text, "%04d-%02d-%02d", year, month, day);
+    uint32_t need = (uint32_t)strlen(text) + 1;
+    if (cap == 0) {
+        set_eax(c, need);
+        return;
+    }
+    if (!out || cap < need) {
+        set_last_error(122);
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, gm_put_wstr(out, text, cap) + 1);
+}
+
 static const ImportShim g_kernel32_wide[] = {
+    {"KERNEL32.dll", "lstrlenW", 1, k_lstrlenW},
+    {"KERNEL32.dll", "lstrcatW", 2, k_lstrcatW},
+    {"KERNEL32.dll", "FormatMessageW", 7, k_FormatMessageW},
+    {"KERNEL32.dll", "OutputDebugStringW", 1, k_OutputDebugStringW},
+    {"KERNEL32.dll", "GetDateFormatW", 6, k_GetDateFormatW},
+    {"KERNEL32.dll", "FileTimeToLocalFileTime", 2, k_FileTimeToLocalFileTime},
+    {"KERNEL32.dll", "FileTimeToSystemTime", 2, k_FileTimeToSystemTime},
+    {"KERNEL32.dll", "FileTimeToDosDateTime", 3, k_FileTimeToDosDateTime},
+
     {"KERNEL32.dll", "CreateEventW", 4, k_CreateEventW},
     {"KERNEL32.dll", "CreateMutexW", 3, k_CreateMutexW},
     {"KERNEL32.dll", "OpenMutexW", 3, k_OpenMutexW},
