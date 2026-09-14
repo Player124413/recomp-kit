@@ -293,6 +293,40 @@ static void teardown() {
     CHECK(recomp_seh_pending_target() == 0);
 }
 
+static unsigned delay_target_calls;
+static void delay_target(X86 *c) {
+    ++delay_target_calls;
+    CHECK(arg(c, 0) == 17 && arg(c, 1) == 29);
+    CHECK(c->r[R_EAX] == 0x1234 && c->r[R_EDX] == 0x5678 && c->r[R_ECX] == 0x9abc);
+    c->r[R_EAX] = arg(c, 0) + arg(c, 1);
+}
+
+static void delay_load_return() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t original_sp = c.r[R_ESP];
+    uint32_t target = imports_alloc_trampoline("test", "delay_target", delay_target, 2);
+    // A Delphi delay-load adapter restores EDX/ECX, exchanges the resolved
+    // import with saved EAX on the stack, then RETs into that import. The
+    // original caller's return and arguments remain below the popped target.
+    c.r[R_ESP] -= 16;
+    wr32(c.r[R_ESP], target);
+    wr32(c.r[R_ESP] + 4, GUEST_RETURN_SENTINEL);
+    wr32(c.r[R_ESP] + 8, 17);
+    wr32(c.r[R_ESP] + 12, 29);
+    c.r[R_EAX] = 0x1234;
+    c.r[R_EDX] = 0x5678;
+    c.r[R_ECX] = 0x9abc;
+    c.eip = rd32(c.r[R_ESP]);
+    c.r[R_ESP] += 4;
+    recomp_return(&c);
+    CHECK(delay_target_calls == 1);
+    CHECK(c.r[R_EAX] == 46);
+    CHECK(c.r[R_ESP] == original_sp && c.eip == GUEST_RETURN_SENTINEL);
+    recomp_return(&c);
+    CHECK(delay_target_calls == 1); // the original continuation returns once
+}
+
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
@@ -304,6 +338,7 @@ int main(int argc, char **argv) {
         fatal_case(argv[1]);
         return 1;
     }
+    delay_load_return();
     chain_walk();
     unwind_and_leave();
     landing();

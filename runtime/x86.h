@@ -274,11 +274,12 @@ int recomp_is_call_return(uint32_t target);
  * A CALL continuation belongs to the pending host caller, even when it is
  * also an alternate entry. Other entries are tail calls, as in interface
  * adapters that exchange a vtable method onto the guest stack before RET.
- * Unknown returns retain the existing EIP/host-return behaviour. */
+ * Delay-load adapters also RET into resolved import shims. Unknown returns
+ * retain the existing EIP/host-return behaviour. */
 static inline void recomp_return(X86 *c) {
     if (recomp_is_call_return(c->eip))
         return;
-    if (recomp_index_of(c->eip) >= 0)
+    if ((c->eip >= GUEST_SHIM_BASE && c->eip < GUEST_SHIM_END) || recomp_index_of(c->eip) >= 0)
         recomp_call(c, c->eip);
 }
 

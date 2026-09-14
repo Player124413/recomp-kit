@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime: RET into a resolved import shim executes the target and its
+  normal return, preserving Delphi delay-load calls on their first use.
+
 - USER32: SetWindowPos sends WM_WINDOWPOSCHANGED synchronously, with
   WM_MOVE and WM_SIZE delivered by DefWindowProc, so successive dimension
   changes see the window procedure's updated bounds.
