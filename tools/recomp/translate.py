@@ -2970,6 +2970,7 @@ def main():
     entry_strength = {addr: 4 for addr in listed_functions}
     candidate_starts = sorted(listed_functions)
     candidate_entries = set(candidate_starts)
+    scan_aliases = set()
 
     def remember_candidate(target):
         if target not in candidate_entries:
@@ -3123,6 +3124,9 @@ def main():
         # not independently proposed function starts.
         own_interior = home is not None and t in home.addrs
         independent = why != "branch" or protected_source(home)
+        if (t in scan_aliases and t in owner
+                and entry_strength.get(owner[t].addr, 0) > strength):
+            independent = False  # Weaker naming of an established instruction boundary.
         if not own_interior and independent:
             remember_candidate(t)
         entry_strength[t] = strength
@@ -3555,7 +3559,8 @@ def main():
             # instruction is not an entry candidate. Establish that evidence
             # before letting guesses become equal-status sweep boundaries.
             weaker_interiors = set()
-            guesses = (starts | interior | immediate_candidates) - set(relocated)
+            guesses = ((starts | interior | immediate_candidates)
+                       - set(relocated) - protected_entries)
             for t in sorted(reloc_candidates):
                 if (t in owner or image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                         or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
@@ -3567,6 +3572,11 @@ def main():
                 fn.measure(image)
                 if not accepts(fn):
                     continue
+                # A weaker hit at a real instruction boundary is callable,
+                # but is an alias of this stronger body, not a new function
+                # boundary. In particular, a bare pointer to its RET must not
+                # withdraw the method by stopping it one instruction early.
+                scan_aliases.update(fn.addrs & guesses)
                 for i, ins in enumerate(probe):
                     end = fn.fallthrough[i] or ins.addr + 1
                     weaker_interiors.update(a for a in range(ins.addr + 1, end) if a in guesses)
@@ -3574,19 +3584,20 @@ def main():
             interior -= weaker_interiors
             immediate_candidates -= weaker_interiors
             image.interior_candidates.update(weaker_interiors)
-            for t in sorted(starts | interior | reloc_candidates | immediate_candidates):
+            for t in sorted((starts | interior | reloc_candidates | immediate_candidates) - scan_aliases):
                 if (image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                         or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
                     continue
                 remember_candidate(t)
+            # Establish stronger owners before processing their weaker aliases.
+            for t in sorted(reloc_candidates):
+                hook_evidence[t].add("reloc")
+                changed |= resolve(t, owner, why="data")
             for t in sorted(immediate_candidates):
                 hook_evidence[t].add("immediate")
                 if resolve(t, owner, why="immediate"):
                     changed = True
                     immediate_entries[0] += 1
-            for t in sorted(reloc_candidates):
-                hook_evidence[t].add("reloc")
-                changed |= resolve(t, owner, why="data")
 
             # A scan hit is evidence of nothing on its own.  It becomes
             # evidence when the same address is the value of a dword the

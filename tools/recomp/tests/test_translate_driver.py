@@ -782,6 +782,21 @@ def test_bare_scan_hit_inside_relocated_instruction_is_not_a_boundary(tmp_path, 
     assert "void fn_%08x(" % guess not in text
 
 
+def test_bare_pointer_to_relocated_routines_ret_is_an_alias(tmp_path, monkeypatch):
+    """A weaker RET hit cannot withdraw the stronger method preceding it."""
+    import struct
+    entry, method, tail, next_fn, slot = (0x00601000, 0x00601020, 0x00601025,
+                                         0x00601100, 0x00601800)
+    blocks = {entry: b"\xc3", method: b"\xb8\x2a\0\0\0\xc3",
+              next_fn: b"\xc3", slot: struct.pack("<II", method, tail)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
+    assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (tail, method, T.hexlit(tail)) in text
+
+
 def test_speculative_body_keeps_branches_over_cleanup_stub_and_pushed_alias(tmp_path, monkeypatch):
     """A branch skips a stub; its path falls into the PUSH-named epilogue."""
     import struct
