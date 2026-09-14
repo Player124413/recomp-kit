@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build: refresh the generated directory's runtime header on incremental
+  builds, without regenerating translated sources or touching unchanged files.
+
 - Runtime: RET into a resolved import shim executes the target and its
   normal return, preserving Delphi delay-load calls on their first use.
 

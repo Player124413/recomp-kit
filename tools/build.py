@@ -387,6 +387,15 @@ def main():
                 publish_generated(args.build_root,
                                   lambda stage: run_translator(stage, args.game_dir, args.build_root,
                                                                args.allow_table_gaps))
+            # Generated sources include the adjacent runtime header. Refresh
+            # it under the same lock even when their translation is unchanged.
+            header = args.build_root / "recomp/gen/x86.h"
+            if header.parent.is_dir():
+                current = (ROOT / "runtime/x86.h").read_bytes()
+                if not header.is_file() or header.read_bytes() != current:
+                    temporary = header.with_suffix(".h.new")
+                    temporary.write_bytes(current)
+                    temporary.replace(header)
             if args.target == "ios":
                 if not args.stub and not (args.build_root / "recomp/gen/table.c").is_file():
                     parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"

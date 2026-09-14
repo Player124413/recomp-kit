@@ -188,3 +188,30 @@ def test_no_table_gap_flag_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(build.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
     build.run_translator(tmp_path / "stage", tmp_path, tmp_path / "build")
     assert "--allow-table-gaps" not in calls[0]
+
+
+def test_incremental_build_refreshes_runtime_header_without_translation(tmp_path, monkeypatch):
+    args, parser = build.parse_args(["--target", "gen"], system="Darwin")
+    args.build_root = tmp_path / "build"
+    gen = args.build_root / "recomp/gen"
+    gen.mkdir(parents=True)
+    header = gen / "x86.h"
+    header.write_text("stale runtime header\n")
+    table = gen / "table.c"
+    table.write_text("existing translation\n")
+    original_table = table.stat().st_mtime_ns
+    monkeypatch.setattr(build, "parse_args", lambda argv: (args, parser))
+    monkeypatch.setattr(build, "run_translator", lambda *a: pytest.fail("unexpected regeneration"))
+    timestamps = []
+
+    def configure(*a, **kw):
+        assert header.read_bytes() == (build.ROOT / "runtime/x86.h").read_bytes()
+        assert table.read_text() == "existing translation\n"
+        assert table.stat().st_mtime_ns == original_table
+        timestamps.append(header.stat().st_mtime_ns)
+
+    monkeypatch.setattr(build, "configure", configure)
+    monkeypatch.setattr(build, "build", lambda *a, **kw: None)
+    build.main()
+    build.main()
+    assert timestamps[0] == timestamps[1]  # unchanged headers do not rebuild every chunk
