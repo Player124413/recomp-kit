@@ -2936,10 +2936,11 @@ def main():
     # particular, finding an SEH frame in a pointer guess does not establish
     # that guess's entry (which may precede the real function in data).
     protected_entries = set(listed_functions)
-    # Entry evidence, strongest first: original listing (3), explicit seed
-    # or structural table (2), direct edge from a protected body (1), scan
-    # guess or a direct edge from another guess (0). Content earns no rank.
-    entry_strength = {addr: 3 for addr in listed_functions}
+    # Entry evidence, strongest first: original listing (4), explicit seed
+    # or structural table (3), direct edge from protected code (2), relocated
+    # pointer (1), bare scan guess or an edge from another guess (0).
+    # Relocations establish pointers, not code: rank 1 remains speculative.
+    entry_strength = {addr: 4 for addr in listed_functions}
     finally_owners = {}
     interior_entries = [0]
     initterm_found = [0]
@@ -2969,9 +2970,7 @@ def main():
             if image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00":
                 # ADD byte ptr [EAX],AL is data at a speculative function start.
                 return False
-            # A relocated dword is linker evidence of an address, which
-            # outranks this byte-pattern heuristic even for a scan candidate.
-            if fn.addr not in relocated and image.starts_with_utf16_run(fn.addr):
+            if image.starts_with_utf16_run(fn.addr):
                 return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
@@ -3002,8 +3001,8 @@ def main():
         prefix.measure(image)
         return prefix if accepts(prefix) else None
 
-    def truncate_speculative(target):
-        """Remove weaker coverage before admitting a protected entry.
+    def truncate_speculative(target, strength):
+        """Remove weaker coverage before admitting a stronger entry.
 
         A sweep may have decoded through the target, including through its
         first instruction byte. Clear that old coverage as well as its entry
@@ -3015,12 +3014,15 @@ def main():
         covered = {owner[a] for a in range(max(image.base, target - 14), target + 1)
                    if a in owner}
         if not any(fn.addr < target < max(fn.end, fn.fallthrough[-1] or fn.end)
+                   and entry_strength.get(fn.addr, 0) < strength
                    and fn.addr not in protected_entries for fn in covered):
             return False
         changed = False
         for fn in list(parsed):
             end = max(fn.end, fn.fallthrough[-1] or fn.end)
             if not (fn.addr < target < end) or fn.addr in protected_entries:
+                continue
+            if entry_strength.get(fn.addr, 0) >= strength:
                 continue
             if provenance.get(fn.addr) in STRUCTURAL_PROVENANCE:
                 continue
@@ -3062,12 +3064,22 @@ def main():
         """Make `t` an entry point.  Returns True if that changed anything."""
         if t is None:
             return False
-        strength = (2 if why in STRUCTURAL_PROVENANCE else
-                    1 if why == "branch" and home is not None
-                    and home.addr in protected_entries else 0)
-        entry_strength[t] = max(entry_strength.get(t, 0), strength)
-        protected = entry_strength[t] > 0
-        newly_protected = protected and t not in protected_entries
+        strength = (3 if why in STRUCTURAL_PROVENANCE else
+                    2 if why == "branch" and home is not None
+                    and home.addr in protected_entries else 1 if t in relocated else 0)
+        previous_strength = entry_strength.get(t, 0)
+        strength = max(previous_strength, strength)
+        # A relocated pointer can still name text. Reject its content before
+        # it can displace another candidate or become a recovery boundary.
+        established_boundary = t in owner and owner[t].addr in protected_entries
+        if strength == 1 and not established_boundary and (
+                image.starts_with_utf16_run(t)
+                or image.data[t - image.base:t - image.base + 2] == b"\x00\x00"):
+            rejected.add(t)
+            return False
+        entry_strength[t] = strength
+        stronger = strength > previous_strength
+        protected = strength >= 2
         if protected:
             protected_entries.add(t)
         if (why == "branch" and continuation and home is not None
@@ -3079,10 +3091,13 @@ def main():
         # a continuation, not stronger evidence for the speculative entry.
         seh_cleanup = (why == "seh" and t in owner
                        and owner[t] in finally_owners.values())
-        truncated = (truncate_speculative(t)
-                     if newly_protected and t not in finally_owners and not seh_cleanup else False)
+        truncated = (truncate_speculative(t, strength)
+                     if stronger and t not in finally_owners and not seh_cleanup else False)
         if truncated:
             listed = set(owner)
+        if (strength == 1 and t not in owner and image.is_exec(t)
+                and interior_bytes[t - image.base]):
+            return truncated  # a relocation cannot split stronger/equal code
         # An SEH continuation can already belong to a speculative recovered
         # body. Its bad prefix may later withdraw that body. Recover the
         # structurally named suffix independently instead of promoting the
@@ -3098,7 +3113,7 @@ def main():
                                           or prior.addr in protected_entries)
         note_structural(provenance, owner if promote_owner else {}, t, why)
         if t in all_addrs and not separate:
-            return newly_protected or truncated
+            return stronger or truncated
         if home is not None and t in home.addrs:
             return False
         if t in owner and not separate:
@@ -3119,10 +3134,11 @@ def main():
         new_fn = Function(t, name, insns[-1].addr + 1 - t, insns)
         new_fn.measure(image)
         if not protected:
-            stronger = [addr for addr in protected_entries
-                        if t < addr < max(new_fn.end, new_fn.fallthrough[-1] or new_fn.end)]
-            if stronger:
-                new_fn = prefix_before(new_fn, min(stronger))
+            stronger_entries = [addr for addr, rank in entry_strength.items()
+                                if rank > strength and (rank >= 2 or addr not in rejected)
+                                and t < addr < max(new_fn.end, new_fn.fallthrough[-1] or new_fn.end)]
+            if stronger_entries:
+                new_fn = prefix_before(new_fn, min(stronger_entries))
                 if new_fn is None:
                     rejected.add(t)
                     return truncated
@@ -3458,6 +3474,19 @@ def main():
                     changed = True
                     immediate_entries[0] += 1
 
+            # Relocation evidence must reach resolve even when an earlier
+            # bare guess swept across the target's first byte. The resolver
+            # truncates weaker coverage, but preserves listed/seeded code and
+            # applies the same content filter to the relocated candidate.
+            for t, slot in sorted(relocated.items()):
+                if not image.is_exec(t) or any(lo <= t < hi or lo <= slot < hi
+                                              for lo, hi in tr.table_ranges):
+                    continue
+                if t not in owner and not image.plausible_immediate_target(t):
+                    continue
+                hook_evidence[t].add("reloc")
+                changed |= resolve(t, set(owner), why="data")
+
             starts, interior = image.code_pointers(
                 set(owner), interior_bytes=interior_bytes,
                 exclude=tr.table_ranges)
@@ -3647,7 +3676,7 @@ def main():
         if home is None:
             continue  # keep the existing gate failure when there is no owner
         protected_entries.add(target)
-        entry_strength[target] = max(entry_strength.get(target, 0), 1)
+        entry_strength[target] = max(entry_strength.get(target, 0), 2)
         if target in home.addrs:
             grown = home
         else:

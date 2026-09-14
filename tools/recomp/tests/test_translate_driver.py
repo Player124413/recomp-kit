@@ -743,7 +743,8 @@ def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
     return "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
 
 
-def test_wide_string_prefix_does_not_hide_relocated_method(tmp_path, monkeypatch):
+@pytest.mark.parametrize("relocated_string", [False, True])
+def test_wide_string_prefix_does_not_hide_relocated_method(tmp_path, monkeypatch, relocated_string):
     """A MOV-immediate string guess must not hide a relocated vtable method."""
     import struct
     entry, string, method, next_fn, holder = (0x00601000, 0x0060101c, 0x00601030,
@@ -753,7 +754,8 @@ def test_wide_string_prefix_does_not_hide_relocated_method(tmp_path, monkeypatch
               method: b"\x55\x8b\xec\xb8\x2a\x00\x00\x00\x5d\xc3",
               next_fn: b"\xc3", holder: struct.pack("<I", method)}
     img = synthetic_image(blocks, base=0x00600000)
-    img.relocated_pointers = lambda: {method: holder}
+    img.relocated_pointers = lambda: ({method: holder, string: entry + 1}
+                                     if relocated_string else {method: holder})
     text = translate_entry_fixture(tmp_path, monkeypatch, img,
                                    {a: blocks[a] for a in (entry, next_fn)})
     assert "void fn_%08x(" % method in text
@@ -815,7 +817,54 @@ def test_utf16_run_filter_applies_only_to_speculative_entries(tmp_path, monkeypa
         img.relocated_pointers = lambda: {target: entry + 1}
     text = translate_entry_fixture(tmp_path, monkeypatch, img,
                                    {a: blocks[a] for a in (entry, next_fn)})
-    assert ("void fn_%08x(" % target in text) == (evidence != "speculative")
+    assert ("void fn_%08x(" % target in text) == (evidence == "branch")
+
+
+@pytest.mark.parametrize("crossing", [False, True])
+@pytest.mark.parametrize("prefix_evidence", ["bare", "seed", "listed"])
+@pytest.mark.parametrize("guess_first", [False, True])
+def test_relocated_method_outranks_bare_guess_but_not_listing(
+        tmp_path, monkeypatch, crossing, prefix_evidence, guess_first):
+    """Relocations outrank bare guesses in either scan order, below seeds/listings."""
+    import struct
+    entry, guess, method, next_fn, slot = (0x00601000, 0x00601020, 0x00601030,
+                                          0x00601100, 0x00601800)
+    prefix = b"\x90" * 15 + (b"\x00" if crossing else b"\x90")
+    code = b"\x55\x8b\xec\xb8\x2a\x00\x00\x00\x5d\xc3"
+    # Without the MOV immediate, only the data scan sees the prefix, after
+    # the relocated method. The PE bytes always match the synthetic listing.
+    blocks = {entry: (b"\xba" + struct.pack("<I", guess) if guess_first else b"") + b"\xc3",
+              guess: prefix + code, next_fn: b"\xc3", slot: struct.pack("<I", method),
+              slot + 4: struct.pack("<I", guess)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot}
+    listings = {a: blocks[a] for a in (entry, next_fn)}
+    if prefix_evidence == "listed":
+        listings[guess] = blocks[guess]
+    elif prefix_evidence == "seed":
+        img.initterm_tables = lambda parsed: ([], {guess})
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, listings)
+    if prefix_evidence != "bare":
+        assert ("IN AL,DX" in text) == crossing
+        if crossing:
+            assert "void fn_%08x(" % method not in text
+        else:
+            assert "void fn_%08x(X86 *c) { body_%08x" % (method, guess) in text
+    else:
+        assert "void fn_%08x(X86 *c) {\n" % method in text
+        assert "IN AL,DX" not in text
+        assert ("void fn_%08x(" % guess in text) != crossing
+
+
+def test_relocated_alias_keeps_listed_instruction_evidence(tmp_path, monkeypatch):
+    """Text-like bytes at a proven instruction boundary are already code."""
+    import struct
+    entry, target, slot = 0x00601000, 0x00601008, 0x00601800
+    raw = b"\x90" * 8 + "ABCD".encode("utf-16le") + b"\x90\xc3"
+    img = synthetic_image({entry: raw, slot: struct.pack("<I", target)}, base=0x00600000)
+    img.relocated_pointers = lambda: {target: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, {entry: raw})
+    assert "void fn_%08x(X86 *c) { body_%08x" % (target, entry) in text
 
 
 @pytest.mark.parametrize("relocated", [False, True])
