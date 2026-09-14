@@ -369,6 +369,14 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
     assert T.main() == 0
     text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+    if (recovered_owner and recovered_owner not in ("config", "direct")
+            and listed_cleanup and not jump_to_cleanup):
+        # A speculative prefix falling into a separately listed cleanup has
+        # no terminator at its boundary. The new admission rule withdraws it;
+        # the listed cleanup remains independently owned and callable.
+        assert "void fn_%08x(" % entry not in text
+        assert "void fn_%08x(" % cleanup in text
+        return
     assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (cleanup, entry, T.hexlit(cleanup)) in text
     assert text.count("void fn_%08x(" % cleanup) == 1
     body = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
@@ -411,7 +419,7 @@ def test_adopted_epilogue_is_not_split_again_by_seh_resolution(tmp_path, monkeyp
 def test_adopted_body_keeps_interior_handler_entries(tmp_path, monkeypatch):
     test_finally_cleanup_and_epilogue_belong_to_establishing_body(
         tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
-        recovered_owner=True, epilogue_handler="interior")
+        recovered_owner="config", epilogue_handler="interior")
 
 
 def test_retired_cleanup_prefix_remains_an_alternate_entry(tmp_path, monkeypatch):
@@ -743,6 +751,75 @@ def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
     return "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
 
 
+def test_short_string_does_not_hide_relocated_stub(tmp_path, monkeypatch):
+    """A one-character literal and its adjacent method have equal evidence."""
+    import struct
+    entry, string, method, next_fn, slot = (0x00601000, 0x00601028, 0x0060102c,
+                                           0x00601040, 0x00601800)
+    blocks = {entry: b"\x68" + struct.pack("<I", string) + b"\x58\xc3",
+              string: ".\0".encode("utf-16le"), method: b"\x33\xc0\xc3\x90",
+              next_fn: b"\xc3", slot: struct.pack("<I", method)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {string: entry + 1, method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
+
+
+@pytest.mark.parametrize("terminated", [False, True])
+def test_equal_rank_candidates_bound_speculative_sweeps(tmp_path, monkeypatch, terminated):
+    """Boundary handling must not depend on stronger evidence or a text guard."""
+    import struct
+    entry, guess, method, next_fn, slot = (0x00601000, 0x00601020, 0x00601030,
+                                          0x00601100, 0x00601800)
+    # The JMP otherwise pulls the method into the prefix's recursive sweep.
+    # NOP fallthrough at exactly the boundary has no valid terminating edge.
+    prefix = b"\xeb\x0e" if terminated else b"\x90" * 16
+    blocks = {entry: b"\xba" + struct.pack("<I", guess) + b"\xc3", guess: prefix,
+              method: b"\x33\xc0\xc3", next_fn: b"\xc3",
+              slot: struct.pack("<II", guess, method)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {guess: slot, method: slot + 4}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(X86 *c) {\n" % method in text
+    assert ("void fn_%08x(" % guess in text) == terminated
+    if terminated:
+        body = text.split("void fn_%08x(X86 *c) {" % guess)[1].split("\n}", 1)[0]
+        assert "XOR EAX,EAX" not in body
+        assert "CALL_FN(%08x)" % method in body
+
+
+@pytest.mark.parametrize("fault", [None, "element_size", "refcount", "zero_length",
+                                    "embedded_zero", "terminator", "out_of_image"])
+def test_utf16_constant_header_requires_complete_layout(fault):
+    """UnicodeString has codepage/element words, refcount, length, then units."""
+    import struct
+    target = 0x00601020
+    header = struct.pack("<HHII", 1200, 1 if fault == "element_size" else 2,
+                         1 if fault == "refcount" else 0xffffffff,
+                         0 if fault == "zero_length" else
+                         0xffffffff if fault == "out_of_image" else 1)
+    value = (b"\0\0" if fault == "embedded_zero" else b".\0")
+    value += b"x\0" if fault == "terminator" else b"\0\0"
+    img = synthetic_image({target - 12: header + value}, base=0x00600000)
+    assert img.is_utf16_constant(target) == (fault is None)
+
+
+def test_one_character_utf16_constant_is_not_a_relocated_entry(tmp_path, monkeypatch):
+    import struct
+    entry, string, next_fn, slot = 0x00601000, 0x00601028, 0x00601100, 0x00601800
+    # Without the header guard these bytes decode cleanly through the RET.
+    blocks = {entry: b"\xc3", string - 12: struct.pack("<HHII", 1200, 2, 0xffffffff, 1),
+              string: b".\0\0\0\xc0\xc3", next_fn: b"\xc3",
+              slot: struct.pack("<I", string)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {string: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % string not in text
+
+
 @pytest.mark.parametrize("relocated_string", [False, True])
 def test_wide_string_prefix_does_not_hide_relocated_method(tmp_path, monkeypatch, relocated_string):
     """A MOV-immediate string guess must not hide a relocated vtable method."""
@@ -769,7 +846,7 @@ def test_protected_call_target_truncates_earlier_scan_guess(
     """The stronger CALL edge arrives after a weak body already swept its target.
 
     The prefix is NOPs, not UTF-16: only evidence ordering can fix this case.
-    A partial instruction at the cut makes the prefix invalid and withdraws it.
+    Both a partial instruction and unterminated NOP fallthrough withdraw it.
     """
     import struct
     entry, guess, method, caller, next_fn = (0x00601000, 0x00601020, 0x00601030,
@@ -791,12 +868,7 @@ def test_protected_call_target_truncates_earlier_scan_guess(
         assert ("IN AL,DX" in text) == crossing
         return  # a direct edge from another guess earns no stronger rank
     assert "void fn_%08x(X86 *c) {\n" % method in text
-    if crossing:
-        assert "void fn_%08x(" % guess not in text
-    else:
-        prefix = text.split("void fn_%08x(X86 *c) {" % guess)[1].split("\n}", 1)[0]
-        assert "CALL_FN(%08x)" % method in prefix
-        assert "PUSH EBP" not in prefix
+    assert "void fn_%08x(" % guess not in text  # NOP fallthrough is not a terminator.
     assert "IN AL,DX" not in text
 
 
@@ -853,7 +925,7 @@ def test_relocated_method_outranks_bare_guess_but_not_listing(
     else:
         assert "void fn_%08x(X86 *c) {\n" % method in text
         assert "IN AL,DX" not in text
-        assert ("void fn_%08x(" % guess in text) != crossing
+        assert "void fn_%08x(" % guess not in text  # Neither NOP prefix terminates.
 
 
 def test_relocated_alias_keeps_listed_instruction_evidence(tmp_path, monkeypatch):

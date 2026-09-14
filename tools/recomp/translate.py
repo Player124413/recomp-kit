@@ -787,6 +787,26 @@ class Image(object):
                        for i in range(off, off + 8, 2))
                    for off in range(len(head) - 7))
 
+    def is_utf16_constant(self, va):
+        """Recognize a complete Delphi UnicodeString constant, including short text.
+
+        The 12-byte header contains codepage and element-size words, a signed
+        reference count, and a unit count. Validate the entire payload before
+        treating the address as data; malformed headers are not evidence.
+        """
+        off = va - self.base
+        if off < 12 or off > len(self.data) - 2:
+            return False
+        if (int.from_bytes(self.data[off - 10:off - 8], "little") != 2
+                or self.data[off - 8:off - 4] != b"\xff" * 4):
+            return False
+        length = int.from_bytes(self.data[off - 4:off], "little")
+        if not 1 <= length <= (len(self.data) - off - 2) // 2:
+            return False
+        end = off + length * 2
+        return (self.data[end:end + 2] == b"\0\0"
+                and all(self.data[i:i + 2] != b"\0\0" for i in range(off, end, 2)))
+
     def looks_like_thunk(self, va):
         """Does `va` look like a thunk?
 
@@ -2941,6 +2961,14 @@ def main():
     # pointer (1), bare scan guess or an edge from another guess (0).
     # Relocations establish pointers, not code: rank 1 remains speculative.
     entry_strength = {addr: 4 for addr in listed_functions}
+    candidate_starts = sorted(listed_functions)
+    candidate_entries = set(candidate_starts)
+
+    def remember_candidate(target):
+        if target not in candidate_entries:
+            candidate_entries.add(target)
+            candidate_starts.insert(bisect_right(candidate_starts, target), target)
+
     finally_owners = {}
     interior_entries = [0]
     initterm_found = [0]
@@ -2970,7 +2998,13 @@ def main():
             if image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00":
                 # ADD byte ptr [EAX],AL is data at a speculative function start.
                 return False
-            if image.starts_with_utf16_run(fn.addr):
+            if image.starts_with_utf16_run(fn.addr) or image.is_utf16_constant(fn.addr):
+                return False
+            # A speculative path may not fall out of its recovered body.
+            # In particular, meeting another candidate is not an implicit
+            # tail call: only an actual JMP/RET/noreturn CALL terminates it.
+            if any(ins.mnem not in TERMINATORS and not tr.never_returns(ins)
+                   and fn.fallthrough[i] not in fn.addrs for i, ins in enumerate(fn.insns)):
                 return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
@@ -2987,42 +3021,38 @@ def main():
             tr.stats.update(stats)
 
     def prefix_before(fn, target):
-        """Cut a guess at stronger evidence, without keeping a partial opcode."""
+        """Cut a guess at a candidate boundary, without keeping a partial opcode."""
         insns = [ins for i, ins in enumerate(fn.insns)
                  if ins.addr < target and fn.fallthrough[i] is not None
                  and fn.fallthrough[i] <= target]
         if not insns:
             return None
         last_end = image.insn_end(insns[-1].addr, insns[-1].mnem)
-        if (last_end != target and insns[-1].mnem not in TERMINATORS
-                and not tr.never_returns(insns[-1])):
+        if (insns[-1].mnem not in TERMINATORS and not tr.never_returns(insns[-1])):
             return None
         prefix = Function(fn.addr, fn.name, last_end - fn.addr, insns)
         prefix.measure(image)
         return prefix if accepts(prefix) else None
 
-    def truncate_speculative(target, strength):
-        """Remove weaker coverage before admitting a stronger entry.
+    def truncate_speculative(target):
+        """Remove speculative coverage at another candidate, regardless of rank.
 
         A sweep may have decoded through the target, including through its
         first instruction byte. Clear that old coverage as well as its entry
-        aliases, then restore any overlapping owners. A clean prefix can tail
-        into the new entry; an incomplete prefix is withdrawn.
+        aliases, then restore any overlapping owners. A terminated prefix
+        survives; one cut off mid-flow is withdrawn.
         """
         # The common path has no overlap. x86 instructions are at most 15
         # bytes, so checking preceding boundaries also finds misaligned hits.
         covered = {owner[a] for a in range(max(image.base, target - 14), target + 1)
                    if a in owner}
         if not any(fn.addr < target < max(fn.end, fn.fallthrough[-1] or fn.end)
-                   and entry_strength.get(fn.addr, 0) < strength
                    and fn.addr not in protected_entries for fn in covered):
             return False
         changed = False
         for fn in list(parsed):
             end = max(fn.end, fn.fallthrough[-1] or fn.end)
             if not (fn.addr < target < end) or fn.addr in protected_entries:
-                continue
-            if entry_strength.get(fn.addr, 0) >= strength:
                 continue
             if provenance.get(fn.addr) in STRUCTURAL_PROVENANCE:
                 continue
@@ -3060,6 +3090,9 @@ def main():
             changed = True
         return changed
 
+    def protected_source(home):
+        return home is not None and home.addr in protected_entries
+
     def resolve(t, listed, home=None, validate=True, why="branch", continuation=True):
         """Make `t` an entry point.  Returns True if that changed anything."""
         if t is None:
@@ -3072,11 +3105,17 @@ def main():
         # A relocated pointer can still name text. Reject its content before
         # it can displace another candidate or become a recovery boundary.
         established_boundary = t in owner and owner[t].addr in protected_entries
-        if strength == 1 and not established_boundary and (
-                image.starts_with_utf16_run(t)
+        if strength < 2 and not established_boundary and (
+                image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                 or image.data[t - image.base:t - image.base + 2] == b"\x00\x00"):
             rejected.add(t)
             return False
+        # Branches already inside the current body are its own control flow,
+        # not independently proposed function starts.
+        own_interior = home is not None and t in home.addrs
+        independent = why != "branch" or protected_source(home)
+        if not own_interior and independent:
+            remember_candidate(t)
         entry_strength[t] = strength
         stronger = strength > previous_strength
         protected = strength >= 2
@@ -3091,8 +3130,9 @@ def main():
         # a continuation, not stronger evidence for the speculative entry.
         seh_cleanup = (why == "seh" and t in owner
                        and owner[t] in finally_owners.values())
-        truncated = (truncate_speculative(t, strength)
-                     if stronger and t not in finally_owners and not seh_cleanup else False)
+        truncated = (truncate_speculative(t)
+                     if independent and not own_interior and t not in finally_owners
+                     and not seh_cleanup else False)
         if truncated:
             listed = set(owner)
         if (strength == 1 and t not in owner and image.is_exec(t)
@@ -3127,21 +3167,20 @@ def main():
             if why != "branch" and provenance.get(t, "branch") == "branch":
                 provenance[t] = why
             return True
-        insns = image.recover(t, listed - prior.addrs if separate else listed)
+        bounds = None
+        if not protected:
+            index = bisect_right(candidate_starts, t)
+            hi = candidate_starts[index] if index < len(candidate_starts) else image.end
+            section_end = next((end for lo, end, _ in image.exec_ranges if lo <= t < end), t)
+            span_index = bisect_right(listed_starts, t) - 1
+            span_end = span_ends[listed_starts[span_index]] if span_index >= 0 else section_end
+            bounds = (t, min(hi, section_end, span_end))
+        insns = image.recover(t, listed - prior.addrs if separate else listed, bounds=bounds)
         if not insns:
             return False
         name = ("FUN_%08x" if why == "config" else "recovered_%08x") % t
         new_fn = Function(t, name, insns[-1].addr + 1 - t, insns)
         new_fn.measure(image)
-        if not protected:
-            stronger_entries = [addr for addr, rank in entry_strength.items()
-                                if rank > strength and (rank >= 2 or addr not in rejected)
-                                and t < addr < max(new_fn.end, new_fn.fallthrough[-1] or new_fn.end)]
-            if stronger_entries:
-                new_fn = prefix_before(new_fn, min(stronger_entries))
-                if new_fn is None:
-                    rejected.add(t)
-                    return truncated
         # A block reached from an established one is established too.
         inherited = provenance.get(
             home.addr if home is not None else None, "branch")
@@ -3450,46 +3489,33 @@ def main():
                         if dst.kind != "reg" or dst.size != 32:
                             continue
                     immediates.add(src.imm)
-            # Same gate as a data pointer, in the same order: a known
-            # instruction boundary wins outright; an address inside an
-            # instruction, or inside decoded table storage, is not a place
-            # execution can begin whatever it looks like.
-            for t in sorted(immediates):
-                if t in owner:
-                    if t not in all_addrs:
-                        extra[t] = owner[t]
-                        all_addrs.add(t)
-                        changed = True
-                        immediate_entries[0] += 1
+            # Collect all scan candidates against the settled protected code
+            # before admitting any of them. Otherwise an earlier guess's
+            # interior-byte coverage can suppress a later equal-rank entry.
+            starts, interior = image.code_pointers(
+                set(owner), interior_bytes=interior_bytes, exclude=tr.table_ranges)
+            reloc_candidates = {t for t, slot in relocated.items()
+                                if image.is_exec(t)
+                                and not any(lo <= t < hi or lo <= slot < hi
+                                            for lo, hi in tr.table_ranges)
+                                and (t in owner or image.plausible_immediate_target(t))}
+            immediate_candidates = {t for t in immediates
+                                    if not any(lo <= t < hi for lo, hi in tr.table_ranges)
+                                    and (t in owner or image.plausible_immediate_target(t))}
+            for t in sorted(starts | interior | reloc_candidates | immediate_candidates):
+                if (image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
+                        or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
                     continue
-                if interior_bytes[t - image.base]:
-                    image.interior_candidates.add(t)
-                    continue
-                if any(lo <= t < hi for lo, hi in tr.table_ranges):
-                    continue
-                if not image.plausible_immediate_target(t):
-                    continue
+                remember_candidate(t)
+            for t in sorted(immediate_candidates):
                 hook_evidence[t].add("immediate")
-                if resolve(t, listed, why="immediate"):
+                if resolve(t, owner, why="immediate"):
                     changed = True
                     immediate_entries[0] += 1
-
-            # Relocation evidence must reach resolve even when an earlier
-            # bare guess swept across the target's first byte. The resolver
-            # truncates weaker coverage, but preserves listed/seeded code and
-            # applies the same content filter to the relocated candidate.
-            for t, slot in sorted(relocated.items()):
-                if not image.is_exec(t) or any(lo <= t < hi or lo <= slot < hi
-                                              for lo, hi in tr.table_ranges):
-                    continue
-                if t not in owner and not image.plausible_immediate_target(t):
-                    continue
+            for t in sorted(reloc_candidates):
                 hook_evidence[t].add("reloc")
-                changed |= resolve(t, set(owner), why="data")
+                changed |= resolve(t, owner, why="data")
 
-            starts, interior = image.code_pointers(
-                set(owner), interior_bytes=interior_bytes,
-                exclude=tr.table_ranges)
             # A scan hit is evidence of nothing on its own.  It becomes
             # evidence when the same address is the value of a dword the
             # loader relocates, which is the linker saying that dword is a
