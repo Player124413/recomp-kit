@@ -1461,7 +1461,6 @@ static void test_gdi_and_com(X86 *c) {
     check(mdc != 0 && call_import(c, "GDI32.dll", "SelectObject", {mdc, hbm}) != 0,
           "a memory DC takes the bitmap");
     check(call_import(c, "GDI32.dll", "DeleteDC", {mdc}) == 1, "DeleteDC");
-    call_import(c, "USER32.dll", "ReleaseDC", {0, hdc});
     uint32_t old_bits = rd32(bits);
     check(call_import(c, "GDI32.dll", "DeleteObject", {hbm}) == 1 && !heap_owns(old_bits),
           "DeleteObject frees the bits");
@@ -1493,6 +1492,7 @@ static void test_gdi_and_com(X86 *c) {
               call_import(c, "GDI32.dll", "RealizePalette", {hdc}) == 4,
           "SelectPalette / RealizePalette report the entries");
     call_import(c, "GDI32.dll", "DeleteObject", {hpal});
+    call_import(c, "USER32.dll", "ReleaseDC", {0, hdc});
 
     check(call_import(c, "KERNEL32.dll", "SetErrorMode", {0x8001}) == 0 &&
               call_import(c, "KERNEL32.dll", "SetErrorMode", {0}) == 0x8001,

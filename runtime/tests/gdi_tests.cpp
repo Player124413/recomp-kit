@@ -152,6 +152,12 @@ static void test_model() {
     uint32_t s = 0x00302000;
     uint32_t hwnd = make_test_window(&c, s, 32, 24);
     uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    check(call_import(&c, "GDI32.dll", "SelectObject", {0x12345, 0x4f100}) == 0,
+          "invalid DC is not implicitly created");
+    uint32_t stock = call_import(&c, "GDI32.dll", "GetStockObject", {0});
+    call_import(&c, "GDI32.dll", "DeleteObject", {stock});
+    check(call_import(&c, "GDI32.dll", "GetObjectW", {stock, 12, s + 900}) == 12,
+          "stock object survives DeleteObject");
     uint32_t brush = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0xff});
     uint32_t old = call_import(&c, "GDI32.dll", "SelectObject", {dc, brush});
     check(old && old != brush, "SelectObject returns the previous brush");
@@ -218,6 +224,8 @@ static void test_drawing() {
     check(call_import(&c, "GDI32.dll", "LineTo", {dc, 16, 16}) == 1 &&
               call_import(&c, "GDI32.dll", "GetPixel", {dc, 8, 16}) == 0xff,
           "pen draws a line");
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 16, 16}) == 0,
+          "LineTo excludes its endpoint");
     call_import(&c, "GDI32.dll", "SetROP2", {dc, 7});
     call_import(&c, "GDI32.dll", "MoveToEx", {dc, 0, 16, 0});
     call_import(&c, "GDI32.dll", "LineTo", {dc, 16, 16});
@@ -268,12 +276,140 @@ static void test_drawing() {
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
+static void test_dib_rows_and_regions() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00308000;
+    uint32_t hwnd = make_test_window(&c, s, 16, 16),
+             dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s + 0x800, 0, 0x40000000, 4, 4, 2, 2, hwnd, 0, IMAGE_BASE, 0});
+    uint32_t child_dc = call_import(&c, "USER32.dll", "GetDC", {child});
+    call_import(&c, "GDI32.dll", "SetPixel", {child_dc, 0, 0, 0xff});
+    call_import(&c, "GDI32.dll", "SetPixel", {child_dc, 2, 0, 0xff});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 4, 4}) == 0xff &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 6, 4}) == 0,
+          "child canvas maps and clips to its client bounds");
+    call_import(&c, "USER32.dll", "ReleaseDC", {child, child_dc});
+    memset(g_mem + s, 0, 40);
+    wr32(s, 40);
+    wr32(s + 4, 2);
+    wr32(s + 8, 2);
+    wr16(s + 12, 1);
+    wr16(s + 14, 32);
+    wr32(s + 64, 0x00ff0000);
+    wr32(s + 68, 0x000000ff);
+    check(call_import(&c, "GDI32.dll", "SetDIBitsToDevice",
+                      {dc, 0, 0, 2, 2, 0, 0, 0, 1, s + 64, s, 0}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 0, 1}) == 0xff &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 1, 1}) == 0xff0000 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 0, 0}) == 0,
+          "partial bottom-up DIB upload places its first scan at the bottom");
+    uint32_t bitmap = call_import(&c, "GDI32.dll", "CreateDIBSection", {dc, s, 0, s + 128, 0, 0});
+    uint32_t bits = rd32(s + 128);
+    check(call_import(&c, "GDI32.dll", "SetDIBits", {dc, bitmap, 1, 1, s + 64, s, 0}) == 1 &&
+              rd32(bits + 8) == 0xffff0000 && rd32(bits + 12) == 0xff0000ff && rd32(bits) == 0,
+          "SetDIBits writes only the requested scan");
+    uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, bitmap});
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 0, 0, 0xff});
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 1, 0, 0xff00});
+    call_import(&c, "GDI32.dll", "BitBlt", {mem, 1, 0, 1, 1, mem, 0, 0, 0xcc0020});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {mem, 1, 0}) == 0xff,
+          "overlapping self blit snapshots the source");
+    uint32_t brush = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0xff00});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, brush});
+    check(call_import(&c, "GDI32.dll", "ExtFloodFill", {dc, 15, 15, 0, 1}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 15, 0}) == 0xff00 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 4, 4}) == 0xff,
+          "flood fill is bounded by different colors");
+    uint32_t pen = call_import(&c, "GDI32.dll", "GetStockObject", {8});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, pen});
+    call_import(&c, "GDI32.dll", "SetPixel", {dc, 11, 11, 0xff});
+    call_import(&c, "GDI32.dll", "SetROP2", {dc, 7});
+    call_import(&c, "GDI32.dll", "Rectangle", {dc, 10, 10, 14, 14});
+    call_import(&c, "GDI32.dll", "Rectangle", {dc, 10, 10, 14, 14});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 11, 11}) == 0xff,
+          "XOR brush fill is reversible");
+    call_import(&c, "GDI32.dll", "DeleteDC", {mem});
+    call_import(&c, "GDI32.dll", "DeleteObject", {bitmap});
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
+static void test_text() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00306000;
+    uint32_t hwnd = make_test_window(&c, s, 64, 64),
+             dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    memset(g_mem + s, 0, 92);
+    wr32(s, uint32_t(-32));
+    wr32(s + 16, 700);
+    gm_put_wstr(s + 28, "recomp", 32);
+    uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s});
+    check(font != 0, "CreateFontIndirectW");
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+    check(call_import(&c, "GDI32.dll", "GetObjectW", {font, 92, s + 128}) == 92 &&
+              rd32(s + 128) == uint32_t(-32) && rd32(s + 144) == 700,
+          "font height and weight round trip");
+    gm_put_wstr(s + 256, "AB", 4);
+    check(call_import(&c, "GDI32.dll", "GetTextExtentPointW", {dc, s + 256, 2, s + 300}) == 1 &&
+              rd32(s + 300) == 32 && rd32(s + 304) == 32,
+          "scaled text extent");
+    check(call_import(&c, "GDI32.dll", "GetTextMetricsW", {dc, s + 320}) == 1 &&
+              rd32(s + 320) == 32 && rd32(s + 324) == 26 && rd32(s + 328) == 6 &&
+              rd32(s + 340) == 16 && rd32(s + 344) == 16 && rd8(s + 375) == 0x30 &&
+              rd8(s + 376) == 0,
+          "TEXTMETRICW layout and scaled metrics");
+    call_import(&c, "GDI32.dll", "SetTextColor", {dc, 0xff});
+    call_import(&c, "GDI32.dll", "SetBkColor", {dc, 0xff0000});
+    check(call_import(&c, "GDI32.dll", "ExtTextOutW", {dc, 0, 0, 0, 0, s + 256, 1, 0}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 15, 31}) == 0xff0000,
+          "opaque scaled text background");
+    wr32(s + 400, 20);
+    wr32(s + 404, 20);
+    wr32(s + 408, 24);
+    wr32(s + 412, 24);
+    call_import(&c, "GDI32.dll", "SetBkMode", {dc, 1});
+    check(call_import(&c, "GDI32.dll", "ExtTextOutW", {dc, 0, 0, 2, s + 400, 0, 0, 0}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 20, 20}) == 0xff0000,
+          "ETO_OPAQUE with an empty string");
+    static unsigned callbacks = 0;
+    uint32_t cb = imports_alloc_trampoline(
+        "TEST", "FontCallback",
+        [](X86 *cc) {
+            ++callbacks;
+            check(gm_wstr(arg(cc, 0) + 28) == "recomp" && rd32(arg(cc, 1)) == 16 &&
+                      arg(cc, 3) == 77,
+                  "font enumeration guest payload");
+            set_eax(cc, 42);
+        },
+        4);
+    check(call_import(&c, "GDI32.dll", "EnumFontsW", {dc, 0, cb, 77}) == 42 && callbacks == 1,
+          "EnumFontsW dispatches once through recomp_call");
+    check(call_import(&c, "GDI32.dll", "EnumFontFamiliesExW", {dc, s, cb, 77, 0}) == 42 &&
+              callbacks == 2,
+          "EnumFontFamiliesExW dispatches once");
+    check(call_import(&c, "GDI32.dll", "AddFontMemResourceEx", {s, 92, 0, s + 500}) != 0 &&
+              rd32(s + 500) == 1,
+          "memory font resource uses built-in font");
+    check(call_import(&c, "GDI32.dll", "CreateDCW", {0, 0, 0, 0}) == 0 &&
+              call_import(&c, "GDI32.dll", "StartDocW", {dc, 0}) == 0 &&
+              call_import(&c, "GDI32.dll", "GetEnhMetaFileBits", {0, 0, 0}) == 0,
+          "printing and metafiles fail with correct arities");
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+    call_import(&c, "GDI32.dll", "DeleteObject", {font});
+}
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
     test_model();
+    if (argc < 2)
+        test_text();
     if (argc < 2 || strcmp(argv[1], "model") != 0) {
         test_drawing();
+        test_dib_rows_and_regions();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
     }
     printf("%d checks, %d failures\n", g_checks, g_failures);

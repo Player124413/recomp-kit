@@ -325,7 +325,7 @@ void g_GetObjectA(X86 *c) {
             set_eax(c, 84);
             return;
         }
-        if (bytes < 24) {
+        if (bytes < 24 || !gm_valid(out, have)) {
             set_eax(c, 0);
             return;
         }
@@ -414,13 +414,13 @@ void g_DeleteObject(X86 *c) {
         set_eax(c, 1);
         return;
     }
-    objects().erase(handle);
+    if (handle < 0x4f100 || handle > 0x4f113)
+        objects().erase(handle);
     set_eax(c, handle ? 1 : 0);
 }
 
 void g_CreateCompatibleDC(X86 *c) {
-    uint32_t hdc = g_next_dc++;
-    dcs()[hdc] = DeviceContext();
+    uint32_t hdc = gdi_new_dc();
     set_eax(c, hdc);
 }
 
@@ -432,11 +432,11 @@ void g_DeleteDC(X86 *c) {
 // comes back; a pen, brush or font is accepted as selected.
 void g_SelectObject(X86 *c) {
     uint32_t hdc = arg(c, 0), obj = arg(c, 1);
-    if (!hdc) {
+    if (!dc_of(hdc)) {
         set_eax(c, 0);
         return;
     }
-    DeviceContext &dc = dcs()[hdc];
+    DeviceContext &dc = *dc_of(hdc);
     if (dib_of(obj) || obj == DEFAULT_BITMAP) {
         uint32_t prev = dc.bitmap ? dc.bitmap : DEFAULT_BITMAP;
         dc.bitmap = obj == DEFAULT_BITMAP ? 0 : obj;
@@ -499,7 +499,7 @@ void g_CreatePalette(X86 *c) {
 
 void g_SelectPalette(X86 *c) {
     uint32_t hdc = arg(c, 0), hpal = arg(c, 1);
-    if (!hdc || (hpal && !palettes().count(hpal))) {
+    if (!dc_of(hdc) || (hpal && hpal != DEFAULT_PALETTE && !palettes().count(hpal))) {
         set_eax(c, 0);
         return;
     }
@@ -573,8 +573,8 @@ void g_GetDIBits(X86 *c) {
     set_eax(c, n);
 }
 
-// Report the accepted DirectDraw mode, or the palettized desktop fallback
-// before a mode is set (also used by builds without the DirectDraw module).
+// Report the display dimensions and 32-bit canvas capabilities. The indexed
+// DirectDraw palette size remains available to existing palette clients.
 void g_GetDeviceCaps(X86 *c) {
     uint32_t w = 1024, h = 768, bpp = 32;
     ddraw_display_mode(&w, &h, &bpp);
@@ -599,7 +599,7 @@ void g_GetDeviceCaps(X86 *c) {
     case 14: // PLANES
         value = 1;
         break;
-    case 38: // RASTERCAPS: RC_PALETTE
+    case 38: // RC_BITBLT | RC_DIBTODEV | RC_STRETCHBLT | RC_STRETCHDIB
         value = 0x2a01u;
         break;
     case 104: // SIZEPALETTE
@@ -650,19 +650,34 @@ void g_GetTextExtentPointA(X86 *c) {
     set_eax(c, 1);
 }
 void g_SetTextColor(X86 *c) {
-    DeviceContext &dc = dcs()[arg(c, 0)];
+    auto *found = dc_of(arg(c, 0));
+    if (!found) {
+        set_eax(c, 0xffffffff);
+        return;
+    }
+    DeviceContext &dc = *found;
     uint32_t prev = dc.text_color;
     dc.text_color = arg(c, 1);
     set_eax(c, prev);
 }
 void g_SetBkColor(X86 *c) {
-    DeviceContext &dc = dcs()[arg(c, 0)];
+    auto *found = dc_of(arg(c, 0));
+    if (!found) {
+        set_eax(c, 0xffffffff);
+        return;
+    }
+    DeviceContext &dc = *found;
     uint32_t prev = dc.bk_color;
     dc.bk_color = arg(c, 1);
     set_eax(c, prev);
 }
 void g_SetBkMode(X86 *c) {
-    DeviceContext &dc = dcs()[arg(c, 0)];
+    auto *found = dc_of(arg(c, 0));
+    if (!found) {
+        set_eax(c, 0);
+        return;
+    }
+    DeviceContext &dc = *found;
     uint32_t prev = dc.bk_mode;
     dc.bk_mode = arg(c, 1);
     set_eax(c, prev);
@@ -777,6 +792,33 @@ void offset(DeviceContext &dc, int64_t *x, int64_t *y) {
 bool contains(Rect r, int64_t x, int64_t y) {
     return x >= r.l && y >= r.t && x < r.r && y < r.b;
 }
+// Child DCs draw into the owning top-level surface, clipped by every
+// ancestor client rectangle even when no explicit GDI region is selected.
+Rect client_bounds(DeviceContext &dc, int w, int h) {
+    Rect r{0, 0, w, h};
+    if (!dc.window || !dc.surface)
+        return r;
+    int32_t root_x = 0, root_y = 0;
+    user32::client_origin(dc.surface, &root_x, &root_y);
+    uint32_t current = dc.window;
+    for (size_t hop = 0; current && current != dc.surface && hop < user32::windows().size();
+         ++hop) {
+        auto *window = user32::find_window(current);
+        if (!window)
+            return {};
+        int32_t x = 0, y = 0;
+        user32::client_origin(current, &x, &y);
+        int64_t left = int64_t(x) - root_x, top = int64_t(y) - root_y;
+        r.l = int32_t(std::clamp<int64_t>(std::max<int64_t>(r.l, left), INT_MIN, INT_MAX));
+        r.t = int32_t(std::clamp<int64_t>(std::max<int64_t>(r.t, top), INT_MIN, INT_MAX));
+        r.r = int32_t(
+            std::clamp<int64_t>(std::min<int64_t>(r.r, left + window->w), INT_MIN, INT_MAX));
+        r.b =
+            int32_t(std::clamp<int64_t>(std::min<int64_t>(r.b, top + window->h), INT_MIN, INT_MAX));
+        current = window->parent;
+    }
+    return r;
+}
 uint32_t unpack(uint32_t p, uint32_t mask) {
     if (!mask)
         return 0;
@@ -817,7 +859,8 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     Surface *s = d ? nullptr : surface_of(*dc);
     int64_t w = d ? d->width : s ? s->w : 0;
     int64_t h = d ? std::abs(int64_t(d->height)) : s ? s->h : 0;
-    if (x < 0 || y < 0 || x >= w || y >= h)
+    if (x < 0 || y < 0 || x >= w || y >= h ||
+        (!d && !contains(client_bounds(*dc, int(w), int(h)), x, y)))
         return false;
     uint32_t at = 0, value = 0;
     if (d) {
@@ -927,7 +970,7 @@ Rect clip_box(uint32_t hdc) {
     if (!dc_size(hdc, &w, &h))
         return {};
     auto &dc = *dc_of(hdc);
-    Rect r{0, 0, w, h};
+    Rect r = dc.bitmap ? Rect{0, 0, w, h} : client_bounds(dc, w, h);
     if (dc.clipped) {
         Rect bound{INT_MAX, INT_MAX, INT_MIN, INT_MIN};
         for (Rect p : dc.clip) {
@@ -954,8 +997,14 @@ void fill(uint32_t dc, Rect r, uint32_t p) {
 }
 } // namespace gdi
 
+uint32_t gdi_new_dc() {
+    uint32_t dc = g_next_dc++;
+    dcs()[dc] = DeviceContext();
+    return dc;
+}
 uint32_t gdi_window_dc(uint32_t hwnd) {
     DeviceContext dc;
+    dc.memory = false;
     // GetDC(NULL) has state/capabilities even when there is no desktop bitmap.
     if (hwnd) {
         auto *w = user32::find_window(hwnd);
@@ -1082,17 +1131,28 @@ void origins(X86 *c, int which, bool set) {
     }
     set_eax(c, 1);
 }
-#define ORIGIN(name, which, set)                                                                   \
-    void name(X86 *c) {                                                                            \
-        origins(c, which, set);                                                                    \
-    }
-ORIGIN(window_org, 0, true)
-ORIGIN(get_window_org, 0, false)
-ORIGIN(viewport_org, 1, true)
-ORIGIN(brush_org, 2, true) ORIGIN(get_brush_org, 2, false) ORIGIN(move_to, 3, true)
-    ORIGIN(get_position, 3, false)
-#undef ORIGIN
-        void stretch_mode(X86 *c) {
+void window_org(X86 *c) {
+    origins(c, 0, true);
+}
+void get_window_org(X86 *c) {
+    origins(c, 0, false);
+}
+void viewport_org(X86 *c) {
+    origins(c, 1, true);
+}
+void brush_org(X86 *c) {
+    origins(c, 2, true);
+}
+void get_brush_org(X86 *c) {
+    origins(c, 2, false);
+}
+void move_to(X86 *c) {
+    origins(c, 3, true);
+}
+void get_position(X86 *c) {
+    origins(c, 3, false);
+}
+void stretch_mode(X86 *c) {
     auto *dc = dc_of(arg(c, 0));
     int v = int(arg(c, 1));
     if (!dc || v < 1 || v > 4) {
@@ -1245,7 +1305,7 @@ bool describe_dib(uint32_t bmi, uint32_t usage, uint32_t hdc, Dib *d) {
         auto *dc = dc_of(hdc);
         auto palette = palettes().find(dc ? dc->palette : 0);
         for (uint32_t i = 0; i < count; ++i) {
-            uint32_t p = rd32(after + i * 4);
+            uint32_t p = usage ? 0 : rd32(after + i * 4);
             if (usage) {
                 uint32_t index = rd16(after + i * 2);
                 p = palette != palettes().end() && index < palette->second.entries.size()

@@ -3127,6 +3127,10 @@ static void test_gdi_primary_blit() {
     for (int i = 0; i < 4; ++i)
         wr32(bits + 4 * i, 0xffff0000);
     call_shim(tramp("GDI32.dll", "SelectObject"), {mem, dib});
+    uint32_t empty = call_shim(tramp("GDI32.dll", "CreateCompatibleDC"), {dc});
+    CHECK_EQ(call_shim(tramp("GDI32.dll", "BitBlt"), {empty, 0, 0, 2, 2, mem, 0, 0, 0xcc0020}), 0u);
+    CHECK_EQ(rd16(o->pixels), 0u);
+    call_shim(tramp("GDI32.dll", "DeleteDC"), {empty});
     size_t before = g_presents.size();
     CHECK_EQ(call_shim(tramp("GDI32.dll", "BitBlt"), {dc, 3, 4, 2, 2, mem, 0, 0, 0xcc0020}), 1u);
     CHECK_EQ(rd16(o->pixels + 4 * o->pitch + 3 * 2), 0xf800u);
@@ -3135,6 +3139,9 @@ static void test_gdi_primary_blit() {
         call_shim(tramp("GDI32.dll", "StretchBlt"), {dc, 8, 8, 4, 4, mem, 0, 0, 2, 2, 0xcc0020}),
         1u);
     CHECK_EQ(rd16(o->pixels + 11 * o->pitch + 11 * 2), 0xf800u);
+    call_shim(tramp("GDI32.dll", "SetWindowOrgEx"), {dc, 2, 3, 0});
+    CHECK_EQ(call_shim(tramp("GDI32.dll", "BitBlt"), {dc, 32, 32, 2, 2, mem, 0, 0, 0xcc0020}), 1u);
+    CHECK_EQ(rd16(o->pixels + 29 * o->pitch + 30 * 2), 0xf800u);
     call_shim(tramp("GDI32.dll", "DeleteDC"), {mem});
     call_shim(tramp("GDI32.dll", "DeleteObject"), {dib});
     call_shim(tramp("USER32.dll", "ReleaseDC"), {0, dc});

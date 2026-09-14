@@ -466,4 +466,5 @@ void imports_init() {
     extern void gdi_bitmaps_register();
     gdi_bitmaps_register();
     gdi::register_draw();
+    gdi::register_text();
 }

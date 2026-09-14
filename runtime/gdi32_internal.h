@@ -26,6 +26,7 @@ struct DcState {
     std::vector<Rect> clip;
 };
 struct DeviceContext : DcState {
+    bool memory = true;
     uint32_t window = 0; // The acquiring window, possibly a child of surface.
     std::vector<DcState> saved;
 };
@@ -64,3 +65,5 @@ void gdi_unbind_surface_dc(uint32_t dc);
 namespace gdi {
 Rect to_device(uint32_t dc, Rect rect);
 }
+
+uint32_t gdi_new_dc();

@@ -101,10 +101,16 @@ void blit_shim(X86 *c, int mode) {
     }
     uint32_t dest = arg(c, 0), primary = 0;
     auto *dc = dc_of(dest);
-    if (dc && !dc->bitmap && (dc->surface || !dc->window))
+    if (dc && !dc->memory && !dc->bitmap)
         primary = ddraw_gdi_begin_primary();
-    if (primary)
+    if (primary) {
+        // Preserve mapping and clipping when the primary supplies storage.
+        DcState state = *dc;
+        state.bitmap = dc_of(primary)->bitmap;
+        state.surface = 0;
+        static_cast<DcState &>(*dc_of(primary)) = state;
         dest = primary;
+    }
     bool ok = blit(dest, si(c, 1), si(c, 2), si(c, 3), si(c, 4), arg(c, 5), si(c, 6), si(c, 7),
                    mode == 1 ? si(c, 8) : si(c, 3), mode == 1 ? si(c, 9) : si(c, 4),
                    arg(c, mode == 1   ? 10
@@ -169,8 +175,17 @@ void box(X86 *c, bool ellipse = false) {
         return;
     }
     if (!ellipse) {
-        if (filled)
-            fill(hdc, r, p);
+        if (filled) {
+            auto pen = objects().find(dc->pen);
+            Rect interior = r;
+            if (pen != objects().end() && pen->second.style != 5 && int64_t(r.r) - r.l > 1 &&
+                int64_t(r.b) - r.t > 1)
+                interior = {r.l + 1, r.t + 1, r.r - 1, r.b - 1};
+            Rect bounds = intersection(interior, clip);
+            for (int64_t y = bounds.t; y < bounds.b; ++y)
+                for (int64_t x = bounds.l; x < bounds.r; ++x)
+                    pen_pixel(hdc, x, y, p);
+        }
         line(hdc, r.l, r.t, r.r - 1, r.t);
         line(hdc, r.r - 1, r.t, r.r - 1, r.b - 1);
         line(hdc, r.r - 1, r.b - 1, r.l, r.b - 1);
@@ -496,6 +511,8 @@ void line(uint32_t dc, int32_t x, int32_t y, int32_t x1, int32_t y1) {
     int width = int(std::clamp<int64_t>(std::abs(int64_t(pen->second.width)), 1, 4096));
     uint32_t color = argb(pen->second.color);
     for (;;) {
+        if (ax == x1 && ay == y1)
+            break; // Win32 excludes the terminal pixel.
         for (int oy = -(width / 2); oy < width - width / 2; ++oy)
             for (int ox = -(width / 2); ox < width - width / 2; ++ox)
                 pen_pixel(dc, ax + ox, ay + oy, color);

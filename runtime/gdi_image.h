@@ -20,5 +20,5 @@ uint32_t gdi_create_icon(const GdiImage &image);
 bool gdi_read_icon(uint32_t icon, GdiImage *image);
 bool gdi_delete_icon(uint32_t icon);
 
-// Dotted XOR focus border in the selected DIB; applying it twice restores pixels.
+// Dotted XOR focus border in the selected DIB or window surface; applying it twice restores pixels.
 bool gdi_focus_rect(uint32_t dc, int32_t left, int32_t top, int32_t right, int32_t bottom);

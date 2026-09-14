@@ -307,7 +307,7 @@ uint32_t scratch(uint32_t n) {
 uint32_t g_primary_dd = 0;
 // Pseudo HDCs handed out by GetDC. Outside every mapped guest region, as the
 // runtime's other handle spaces are.
-uint32_t g_next_dc = 0x00050004u;
+// DC identifiers come from GDI so native and DirectDraw clients share one allocator.
 
 uint32_t bytes_per_pixel(uint32_t bpp) {
     return bpp <= 8 ? 1u : (bpp <= 16 ? 2u : 4u);
@@ -2697,7 +2697,7 @@ void Surface_GetDC(X86 *c) {
     int32_t r[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
     ddraw_before_write(s);
     if (!s->dc_handle) {
-        s->dc_handle = g_next_dc++;
+        s->dc_handle = gdi_new_dc();
         lock_shadow_take(s, r, 0, s->dc_handle);
     }
     gdi_bind_surface_dc(s->dc_handle, int(s->width), int(s->height), int(s->bpp), s->pitch,
@@ -4304,7 +4304,6 @@ void ddraw_reset() {
     g_scratch_size = 0;
     g_primary_dd = 0;
     g_mode_w = g_mode_h = g_mode_bpp = 0;
-    g_next_dc = 0x00050004u;
 }
 
 // Register DirectDraw and related DirectX imports with the guest trampoline dispatcher.
@@ -4371,7 +4370,7 @@ extern "C" uint32_t ddraw_gdi_begin_primary() {
     auto *s = com_get(g_display_surface);
     d3d_read_surface(s, nullptr, HOST_READ_GETDC);
     ddraw_before_write(s);
-    gdi_primary_dc = g_next_dc++;
+    gdi_primary_dc = gdi_new_dc();
     gdi_primary_surface = s->id;
     int32_t r[4] = {0, 0, int32_t(s->width), int32_t(s->height)};
     lock_shadow_take(s, r, 0, gdi_primary_dc);
