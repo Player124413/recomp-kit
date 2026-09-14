@@ -34,3 +34,11 @@ bool ddraw_gdi_primary_active(void);
 #ifdef __cplusplus
 }
 #endif
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t ddraw_gdi_begin_primary(void);
+void ddraw_gdi_end_primary(uint32_t dc);
+#ifdef __cplusplus
+}
+#endif

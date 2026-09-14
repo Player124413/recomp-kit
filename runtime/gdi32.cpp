@@ -302,45 +302,6 @@ bool gdi_delete_icon(uint32_t icon) {
     return icons().erase(icon) != 0;
 }
 
-// CreateDIBSection(hdc, pbmi, usage, ppvBits, hSection, offset)
-void g_CreateDIBSection(X86 *c) {
-    uint32_t bmi = arg(c, 1), bits_out = arg(c, 3);
-    if (!bmi || !gm_valid(bmi, 40)) {
-        set_eax(c, 0);
-        return;
-    }
-    uint32_t hdr_size = rd32(bmi);
-    int32_t width = (int32_t)rd32(bmi + 4), height = (int32_t)rd32(bmi + 8);
-    uint16_t bpp = rd16(bmi + 14);
-    uint32_t compression = rd32(bmi + 16), clr_used = rd32(bmi + 32);
-    if (width <= 0 || height == 0 || !(bpp == 8 || bpp == 16 || bpp == 24 || bpp == 32)) {
-        LOGW("CreateDIBSection: unsupported %dx%d at %u bpp", width, height, bpp);
-        set_eax(c, 0);
-        return;
-    }
-    uint32_t handle = make_dib(width, height, bpp, compression, bits_out);
-    if (!handle) {
-        set_eax(c, 0);
-        return;
-    }
-    Dib &d = dibs()[handle];
-    uint32_t after = bmi + hdr_size;
-    if (compression == 3) { // BI_BITFIELDS: three masks follow the header
-        for (int i = 0; i < 3; ++i)
-            d.masks[i] = rd32(after + 4u * (uint32_t)i);
-    } else if (bpp <= 8) {
-        uint32_t n = clr_used ? clr_used : (1u << bpp);
-        if (n > 256)
-            n = 256;
-        d.colors.assign(n, 0);
-        for (uint32_t i = 0; i < n; ++i)
-            d.colors[i] = rd32(after + 4u * i);
-    }
-    LOGV("gdi: CreateDIBSection %dx%d %u bpp -> %08x, bits %08x", width, height, bpp, handle,
-         d.bits);
-    set_eax(c, handle);
-}
-
 // CreateCompatibleBitmap(hdc, width, height): a bitmap at the DC's depth,
 // else 32 bpp; its pixels are addressable like a section's.
 void g_CreateCompatibleBitmap(X86 *c) {
@@ -585,69 +546,6 @@ void g_SetSystemPaletteUse(X86 *c) {
     set_eax(c, 1); // the previous use
 }
 
-// BitBlt(dst, x, y, w, h, src, x1, y1, rop): between two DIBs of one depth
-// it copies; anything else has no pixels here and is reported once.
-void g_BitBlt(X86 *c) {
-    Dib *dst = dib_in_dc(arg(c, 0));
-    Dib *src = dib_in_dc(arg(c, 5));
-    int32_t x = (int32_t)arg(c, 1), y = (int32_t)arg(c, 2);
-    int32_t w = (int32_t)arg(c, 3), h = (int32_t)arg(c, 4);
-    int32_t sx = (int32_t)arg(c, 6), sy = (int32_t)arg(c, 7);
-    if (!dst || !src || dst->bpp != src->bpp) {
-        log_once("gdi.bitblt", "gdi: BitBlt between %s and %s: nothing is drawn in this runtime",
-                 dst ? "a DIB" : "a non-DIB DC", src ? "a DIB" : "a non-DIB DC");
-        set_eax(c, 1);
-        return;
-    }
-    int32_t dh = dst->height < 0 ? -dst->height : dst->height;
-    int32_t sh = src->height < 0 ? -src->height : src->height;
-    uint32_t bytes_px = dst->bpp / 8u;
-    for (int32_t row = 0; row < h; ++row) {
-        int32_t dy = y + row, syy = sy + row;
-        if (dy < 0 || dy >= dh || syy < 0 || syy >= sh)
-            continue;
-        int32_t x0 = x < 0 ? 0 : x, sx0 = sx + (x0 - x);
-        int32_t n = w - (x0 - x);
-        if (x0 + n > dst->width)
-            n = dst->width - x0;
-        if (sx0 + n > src->width)
-            n = src->width - sx0;
-        if (n <= 0 || sx0 < 0)
-            continue;
-        memmove(g_mem + dst->bits + (uint32_t)dy * dst->stride + (uint32_t)x0 * bytes_px,
-                g_mem + src->bits + (uint32_t)syy * src->stride + (uint32_t)sx0 * bytes_px,
-                (size_t)n * bytes_px);
-    }
-    set_eax(c, 1);
-}
-
-// PatBlt(hdc, x, y, w, h, rop): BLACKNESS and WHITENESS fill; other raster
-// operations need a brush this runtime does not model and leave the pixels.
-void g_PatBlt(X86 *c) {
-    Dib *d = dib_in_dc(arg(c, 0));
-    int32_t x = (int32_t)arg(c, 1), y = (int32_t)arg(c, 2);
-    int32_t w = (int32_t)arg(c, 3), h = (int32_t)arg(c, 4);
-    uint32_t rop = arg(c, 5);
-    if (!d || !(rop == 0x00000042u || rop == 0x00FF0062u)) {
-        set_eax(c, 1);
-        return;
-    }
-    uint8_t fill = rop == 0x00FF0062u ? 0xff : 0x00;
-    int32_t rows = d->height < 0 ? -d->height : d->height;
-    uint32_t bytes_px = d->bpp / 8u;
-    for (int32_t row = 0; row < h; ++row) {
-        int32_t dy = y + row;
-        if (dy < 0 || dy >= rows)
-            continue;
-        int32_t x0 = x < 0 ? 0 : x, x1 = x + w > d->width ? d->width : x + w;
-        if (x1 <= x0)
-            continue;
-        memset(g_mem + d->bits + (uint32_t)dy * d->stride + (uint32_t)x0 * bytes_px, fill,
-               (size_t)(x1 - x0) * bytes_px);
-    }
-    set_eax(c, 1);
-}
-
 // GetDIBits(hdc, hbm, start, lines, bits, bmi, usage): the rows as stored.
 void g_GetDIBits(X86 *c) {
     Dib *d = dib_of(arg(c, 1));
@@ -771,7 +669,6 @@ void g_SetBkMode(X86 *c) {
 }
 
 const ImportShim g_gdi32_shims[] = {
-    {"GDI32.dll", "CreateDIBSection", 6, g_CreateDIBSection},
     {"GDI32.dll", "CreateCompatibleBitmap", 3, g_CreateCompatibleBitmap},
     {"GDI32.dll", "GetObjectA", 3, g_GetObjectA},
     {"GDI32.dll", "GetObjectW", 3, g_GetObjectA},
@@ -786,8 +683,6 @@ const ImportShim g_gdi32_shims[] = {
     {"GDI32.dll", "GetPaletteEntries", 4, g_GetPaletteEntries},
     {"GDI32.dll", "GetSystemPaletteUse", 1, g_GetSystemPaletteUse},
     {"GDI32.dll", "SetSystemPaletteUse", 2, g_SetSystemPaletteUse},
-    {"GDI32.dll", "BitBlt", 9, g_BitBlt},
-    {"GDI32.dll", "PatBlt", 6, g_PatBlt},
     {"GDI32.dll", "GetDIBits", 7, g_GetDIBits},
     {"GDI32.dll", "GetDeviceCaps", 2, g_GetDeviceCaps},
     {"GDI32.dll", "TextOutA", 5, g_TextOutA},
@@ -1193,8 +1088,9 @@ void origins(X86 *c, int which, bool set) {
     }
 ORIGIN(window_org, 0, true)
 ORIGIN(get_window_org, 0, false)
-ORIGIN(viewport_org, 1, true) ORIGIN(brush_org, 2, true) ORIGIN(get_brush_org, 2, false)
-    ORIGIN(move_to, 3, true) ORIGIN(get_position, 3, false)
+ORIGIN(viewport_org, 1, true)
+ORIGIN(brush_org, 2, true) ORIGIN(get_brush_org, 2, false) ORIGIN(move_to, 3, true)
+    ORIGIN(get_position, 3, false)
 #undef ORIGIN
         void stretch_mode(X86 *c) {
     auto *dc = dc_of(arg(c, 0));
@@ -1295,4 +1191,312 @@ void gdi_model_register() {
                                        G("GetNearestPaletteIndex", 2, nearest_palette)};
 #undef G
     imports_register(shims, sizeof(shims) / sizeof(shims[0]));
+}
+
+namespace gdi {
+Rect to_device(uint32_t hdc, Rect r) {
+    auto *dc = dc_of(hdc);
+    if (!dc)
+        return {};
+    int64_t x = 0, y = 0;
+    offset(*dc, &x, &y);
+    auto bound = [](int64_t v) { return int32_t(std::clamp<int64_t>(v, INT_MIN, INT_MAX)); };
+    return {bound(r.l + x), bound(r.t + y), bound(r.r + x), bound(r.b + y)};
+}
+} // namespace gdi
+namespace {
+// Decode BITMAPINFO independently of its pixel buffer. Shared by DIB sections,
+// uploads and temporary borrowed views; every size is checked before narrowing.
+bool describe_dib(uint32_t bmi, uint32_t usage, uint32_t hdc, Dib *d) {
+    if (!bmi || !gm_valid(bmi, 40) || rd32(bmi) < 40 || !gm_valid(bmi, rd32(bmi)) ||
+        rd16(bmi + 12) != 1)
+        return false;
+    d->width = int32_t(rd32(bmi + 4));
+    d->height = int32_t(rd32(bmi + 8));
+    d->bpp = rd16(bmi + 14);
+    d->compression = rd32(bmi + 16);
+    if (d->width <= 0 || !d->height ||
+        !(d->bpp == 1 || d->bpp == 4 || d->bpp == 8 || d->bpp == 16 || d->bpp == 24 ||
+          d->bpp == 32) ||
+        !(d->compression == 0 || (d->compression == 3 && (d->bpp == 16 || d->bpp == 32))))
+        return false;
+    uint64_t stride = ((uint64_t(d->width) * d->bpp + 31) / 32) * 4,
+             rows = std::abs(int64_t(d->height));
+    if (stride * rows > GUEST_SIZE / 4)
+        return false;
+    d->stride = uint32_t(stride);
+    d->size = uint32_t(stride * rows);
+    uint32_t after = bmi + rd32(bmi);
+    if (d->compression == 3) {
+        uint32_t at = rd32(bmi) >= 52 ? bmi + 40 : after;
+        if (!gm_valid(at, 12))
+            return false;
+        for (int i = 0; i < 3; ++i)
+            d->masks[i] = rd32(at + 4 * i);
+        if (rd32(bmi) < 52)
+            after += 12;
+    }
+    if (d->bpp <= 8) {
+        uint32_t count = rd32(bmi + 32);
+        if (!count)
+            count = 1u << d->bpp;
+        if (count > (1u << d->bpp) || usage > 1 || !gm_valid(after, count * (usage ? 2 : 4)))
+            return false;
+        auto *dc = dc_of(hdc);
+        auto palette = palettes().find(dc ? dc->palette : 0);
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t p = rd32(after + i * 4);
+            if (usage) {
+                uint32_t index = rd16(after + i * 2);
+                p = palette != palettes().end() && index < palette->second.entries.size()
+                        ? colorref(palette->second.entries[index])
+                        : index * 0x010101;
+            }
+            d->colors.push_back(p);
+        }
+    }
+    return true;
+}
+uint32_t own_dib(Dib d, uint32_t bits_out = 0) {
+    uint32_t h = make_dib(d.width, d.height, d.bpp, d.compression, bits_out);
+    if (!h)
+        return 0;
+    d.bits = dibs()[h].bits;
+    d.owned = true;
+    dibs()[h] = std::move(d);
+    return h;
+}
+void create_section(X86 *c) {
+    Dib d;
+    uint32_t out = arg(c, 3);
+    if (arg(c, 4) || arg(c, 5) || !out || !gm_valid(out, 4) ||
+        !describe_dib(arg(c, 1), arg(c, 2), arg(c, 0), &d)) {
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, own_dib(d, out));
+}
+void create_bitmap(X86 *c) {
+    int32_t w = int32_t(arg(c, 0)), h = int32_t(arg(c, 1));
+    uint32_t bpp = arg(c, 3), bits = arg(c, 4);
+    if (arg(c, 2) != 1 || w <= 0 || h <= 0 ||
+        !(bpp == 1 || bpp == 4 || bpp == 8 || bpp == 16 || bpp == 24 || bpp == 32)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint64_t stride = ((uint64_t(w) * bpp + 15) / 16) * 2;
+    if (stride * h > GUEST_SIZE / 4 || (bits && !gm_valid(bits, uint32_t(stride * h)))) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t bitmap = make_dib(w, -h, uint16_t(bpp), 0, 0);
+    auto *d = dib_of(bitmap);
+    if (d && bits)
+        for (int y = 0; y < h; ++y)
+            memcpy(g_mem + d->bits + y * d->stride, g_mem + bits + size_t(y) * stride,
+                   size_t(stride));
+    set_eax(c, bitmap);
+}
+void create_dibitmap(X86 *c) {
+    Dib d;
+    uint32_t info = arg(c, 4) ? arg(c, 4) : arg(c, 1), bits = arg(c, 3);
+    if (!describe_dib(info, arg(c, 5), arg(c, 0), &d) ||
+        ((arg(c, 2) & 4) && (!bits || !gm_valid(bits, d.size)))) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t bitmap = own_dib(d);
+    if (bitmap && (arg(c, 2) & 4))
+        memcpy(g_mem + dib_of(bitmap)->bits, g_mem + bits, d.size);
+    set_eax(c, bitmap);
+}
+void bitmap_bits(X86 *c) {
+    auto *d = dib_of(arg(c, 0));
+    uint32_t out = arg(c, 2), n = d ? std::min(d->size, arg(c, 1)) : 0;
+    if (!d || (out && !gm_valid(out, n))) {
+        set_eax(c, 0);
+        return;
+    }
+    if (out)
+        memcpy(g_mem + out, g_mem + d->bits, n);
+    set_eax(c, out ? n : d->size);
+}
+void color_table(X86 *c) {
+    auto *d = dib_in_dc(arg(c, 0));
+    uint32_t start = arg(c, 1), count = arg(c, 2), out = arg(c, 3);
+    if (!d || d->bpp > 8 || !out || start >= d->colors.size()) {
+        set_eax(c, 0);
+        return;
+    }
+    count = std::min<uint32_t>(count, uint32_t(d->colors.size()) - start);
+    if (!gm_valid(out, count * 4)) {
+        set_eax(c, 0);
+        return;
+    }
+    for (uint32_t i = 0; i < count; ++i)
+        wr32(out + 4 * i, d->colors[start + i]);
+    set_eax(c, count);
+}
+// A borrowed descriptor lends the existing pixel conversion path to uploads.
+struct DibDc {
+    uint32_t bitmap, dc;
+    explicit DibDc(Dib d) {
+        d.owned = false;
+        bitmap = g_next_bitmap++;
+        dibs()[bitmap] = std::move(d);
+        dc = g_next_dc++;
+        dcs()[dc].bitmap = bitmap;
+    }
+    ~DibDc() {
+        dcs().erase(dc);
+        dibs().erase(bitmap);
+    }
+};
+void set_dibits(X86 *c) {
+    auto *dest = dib_of(arg(c, 1));
+    Dib src;
+    uint32_t start = arg(c, 2), count = arg(c, 3), bits = arg(c, 4);
+    if (!dest || !describe_dib(arg(c, 5), arg(c, 6), arg(c, 0), &src) || !bits) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t rows = uint32_t(std::abs(int64_t(dest->height)));
+    if (start >= rows) {
+        set_eax(c, 0);
+        return;
+    }
+    count = std::min({count, rows - start, uint32_t(std::abs(int64_t(src.height)))});
+    if (!count || !gm_valid(bits, count * src.stride)) {
+        set_eax(c, 0);
+        return;
+    }
+    bool top = src.height < 0;
+    src.height = top ? -int32_t(count) : int32_t(count);
+    src.bits = bits;
+    src.size = count * src.stride;
+    DibDc input(src), output(*dest);
+    for (uint32_t scan = 0; scan < count; ++scan)
+        for (int x = 0; x < std::min(src.width, dest->width); ++x) {
+            uint32_t p;
+            if (read_pixel(input.dc, x, top ? scan : count - 1 - scan, &p))
+                write_pixel(output.dc, x, dest->height < 0 ? start + scan : rows - 1 - start - scan,
+                            p);
+        }
+    set_eax(c, count);
+}
+void dib_to_device(X86 *c, bool stretch) {
+    Dib src;
+    uint32_t bits = arg(c, 9);
+    if (!describe_dib(arg(c, 10), arg(c, 11), arg(c, 0), &src) || !bits) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t count = uint32_t(std::abs(int64_t(src.height))), start = stretch ? 0 : arg(c, 7);
+    if (start >= count) {
+        set_eax(c, 0);
+        return;
+    }
+    if (!stretch)
+        count = std::min(arg(c, 8), count - start);
+    if (!count || !gm_valid(bits, count * src.stride)) {
+        set_eax(c, 0);
+        return;
+    }
+    bool top = src.height < 0;
+    if (!stretch)
+        src.height = top ? -int32_t(count) : int32_t(count);
+    src.bits = bits;
+    src.size = count * src.stride;
+    DibDc input(src);
+    if (stretch) {
+        // Reuse StretchBlt's clipping, ROP and primary routing via a nested
+        // shim call on a fresh stack frame, preserving this import's args.
+        uint32_t before = c->r[R_ESP];
+        uint32_t values[] = {arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4), input.dc,
+                             arg(c, 5), arg(c, 6), arg(c, 7), arg(c, 8), arg(c, 12)};
+        for (int i = 10; i >= 0; --i) {
+            c->r[R_ESP] -= 4;
+            wr32(c->r[R_ESP], values[i]);
+        }
+        c->r[R_ESP] -= 4;
+        wr32(c->r[R_ESP], 0);
+        imports_dispatch(c, imports_resolve("GDI32.dll", "StretchBlt"));
+        bool ok = c->r[R_EAX] != 0;
+        c->r[R_ESP] = before;
+        set_eax(c, ok ? uint32_t(std::abs(int64_t(int32_t(values[9])))) : 0);
+    } else {
+        int32_t dx = int32_t(arg(c, 1)), dy = int32_t(arg(c, 2)), sx = int32_t(arg(c, 5)),
+                sy = int32_t(arg(c, 6));
+        uint32_t width = arg(c, 3), height = arg(c, 4), lines = 0;
+        Rect clip = clip_box(arg(c, 0));
+        for (int64_t y = std::max<int64_t>(0, int64_t(clip.t) - dy);
+             y < std::min<int64_t>(height, int64_t(clip.b) - dy); ++y) {
+            int64_t scan = top ? int64_t(sy) + y : int64_t(sy) + height - 1 - y;
+            if (scan < start || scan >= int64_t(start) + count)
+                continue;
+            bool written = false;
+            for (int64_t x = std::max<int64_t>(0, int64_t(clip.l) - dx);
+                 x < std::min<int64_t>(width, int64_t(clip.r) - dx); ++x) {
+                uint32_t p;
+                int64_t row = top ? scan - start : count - 1 - (scan - start);
+                if (read_pixel(input.dc, int64_t(sx) + x, row, &p))
+                    written |= write_pixel(arg(c, 0), int64_t(dx) + x, int64_t(dy) + y, p);
+            }
+            if (written)
+                ++lines;
+        }
+        set_eax(c, lines);
+    }
+}
+void stretch_dibits(X86 *c) {
+    dib_to_device(c, true);
+}
+void set_dibits_device(X86 *c) {
+    dib_to_device(c, false);
+}
+} // namespace
+void gdi_bitmaps_register() {
+#define G(n, a, f)                                                                                 \
+    {                                                                                              \
+        "GDI32.dll", n, a, f                                                                       \
+    }
+    static const ImportShim shims[] = {
+        G("CreateDIBSection", 6, create_section),      G("CreateBitmap", 5, create_bitmap),
+        G("CreateDIBitmap", 6, create_dibitmap),       G("SetDIBits", 7, set_dibits),
+        G("SetDIBitsToDevice", 12, set_dibits_device), G("StretchDIBits", 13, stretch_dibits),
+        G("GetDIBColorTable", 4, color_table),         G("GetBitmapBits", 3, bitmap_bits)};
+#undef G
+    imports_register(shims, sizeof(shims) / sizeof(shims[0]));
+}
+void gdi_bind_surface_dc(uint32_t dc, int w, int h, int bpp, uint32_t pitch, uint32_t bits,
+                         const uint32_t *palette) {
+    gdi_unbind_surface_dc(dc);
+    Dib d;
+    d.width = w;
+    d.height = -h;
+    d.bpp = uint16_t(bpp);
+    d.bits = bits;
+    d.stride = pitch;
+    d.size = pitch * h;
+    d.owned = false;
+    if (bpp == 16) {
+        d.masks[0] = 0xf800;
+        d.masks[1] = 0x07e0;
+        d.masks[2] = 0x001f;
+    }
+    if (bpp == 8)
+        for (uint32_t i = 0; i < 256; ++i)
+            d.colors.push_back(palette ? palette[i] : i * 0x010101);
+    uint32_t bitmap = g_next_bitmap++;
+    dibs()[bitmap] = std::move(d);
+    dcs()[dc].bitmap = bitmap;
+}
+void gdi_unbind_surface_dc(uint32_t dc) {
+    auto *d = dc_of(dc);
+    if (!d)
+        return;
+    auto *bitmap = dib_in_dc(dc);
+    if (bitmap && !bitmap->owned)
+        dibs().erase(d->bitmap);
+    dcs().erase(dc);
 }

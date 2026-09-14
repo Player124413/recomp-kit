@@ -2,7 +2,7 @@
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
   memory.cpp loader.cpp imports.cpp cpu.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp oleaut32.cpp
-  mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp layout.cpp)
+  mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp layout.cpp)
 
 add_library(recomp_runtime OBJECT ${POP_RUNTIME_SOURCES})
 target_include_directories(recomp_runtime PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
@@ -45,6 +45,8 @@ add_test(NAME gdi_tests COMMAND gdi_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(gdi_tests PROPERTIES LABELS nogame)
 add_test(NAME gdi_model_tests COMMAND gdi_tests model WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(gdi_model_tests PROPERTIES LABELS nogame)
+add_test(NAME gdi_draw_tests COMMAND gdi_tests draw WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(gdi_draw_tests PROPERTIES LABELS nogame)
 
 endif()
 

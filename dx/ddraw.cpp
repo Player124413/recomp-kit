@@ -1,3 +1,5 @@
+#include "../runtime/gdi32_internal.h"
+#include "../runtime/display_seam.h"
 #include "passes.h"
 #include "game_config.h"
 // ddraw.cpp - DirectDraw: the object, display modes, surfaces, palettes and
@@ -417,6 +419,8 @@ void fill_desc(uint32_t addr, const ComObj *s, bool v2, uint32_t lpsurface) {
 // Surfaces
 // ---------------------------------------------------------------------------
 void surface_destroy(ComObj *s) {
+    if (s->dc_handle)
+        gdi_unbind_surface_dc(s->dc_handle);
     // A surface that is going away takes its pixels with it, and the host may
     // still be holding a scene for it. Ask for that scene back while the
     // memory is still there to receive it, and stop the host pointing at it.
@@ -2696,13 +2700,8 @@ void Surface_GetDC(X86 *c) {
         s->dc_handle = g_next_dc++;
         lock_shadow_take(s, r, 0, s->dc_handle);
     }
-    // The handle is real and unique, so ReleaseDC pairs correctly, but no GDI
-    // call can draw into surface memory here. Anything the guest renders
-    // through this DC is lost, which is worth one loud line.
-    log_once("ddraw.getdc",
-             "ddraw: GetDC hands out HDC %08x but GDI cannot draw into surface "
-             "memory in this runtime; anything drawn through it will not appear",
-             s->dc_handle);
+    gdi_bind_surface_dc(s->dc_handle, int(s->width), int(s->height), int(s->bpp), s->pitch,
+                        s->pixels, (effective_palette(s) ? effective_palette(s)->pal : nullptr));
     com_out_ptr(out, s->dc_handle);
     com_ret(c, DD_OK);
 }
@@ -2848,6 +2847,7 @@ void Surface_ReleaseDC(X86 *c) {
         return;
     }
     bool wrote = lock_shadow_record(s, nullptr, s->dc_handle);
+    gdi_unbind_surface_dc(s->dc_handle);
     s->dc_handle = 0;
     if (wrote) {
         ddraw_note_cpu_write_impl(s);
@@ -4355,4 +4355,40 @@ void ddraw_register() {
     com_set_destructor(K_SURFACE, surface_destroy);
 
     imports_register(g_ddraw_exports, std::size(g_ddraw_exports));
+}
+
+// GDI window blits share the primary's mutation recorder and CPU pixel storage.
+extern "C" bool ddraw_gdi_primary_active() {
+    auto *s = g_display_surface ? com_get(g_display_surface) : nullptr;
+    return s && s->kind == K_SURFACE && s->is_primary;
+}
+namespace {
+uint32_t gdi_primary_dc = 0, gdi_primary_surface = 0;
+}
+extern "C" uint32_t ddraw_gdi_begin_primary() {
+    if (!ddraw_gdi_primary_active() || gdi_primary_dc)
+        return 0;
+    auto *s = com_get(g_display_surface);
+    d3d_read_surface(s, nullptr, HOST_READ_GETDC);
+    ddraw_before_write(s);
+    gdi_primary_dc = g_next_dc++;
+    gdi_primary_surface = s->id;
+    int32_t r[4] = {0, 0, int32_t(s->width), int32_t(s->height)};
+    lock_shadow_take(s, r, 0, gdi_primary_dc);
+    gdi_bind_surface_dc(gdi_primary_dc, int(s->width), int(s->height), int(s->bpp), s->pitch,
+                        s->pixels, (effective_palette(s) ? effective_palette(s)->pal : nullptr));
+    return gdi_primary_dc;
+}
+extern "C" void ddraw_gdi_end_primary(uint32_t dc) {
+    if (!dc || dc != gdi_primary_dc)
+        return;
+    auto *s = com_get(gdi_primary_surface);
+    bool wrote = s && lock_shadow_record(s, nullptr, dc);
+    gdi_unbind_surface_dc(dc);
+    gdi_primary_dc = 0;
+    gdi_primary_surface = 0;
+    if (wrote) {
+        ddraw_note_cpu_write_impl(s);
+        surface_pixels_changed(s);
+    }
 }

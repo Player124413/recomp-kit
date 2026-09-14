@@ -70,7 +70,7 @@ static uint32_t make_test_window(X86 *c, uint32_t s, uint32_t w, uint32_t h) {
     return call_import(c, "USER32.dll", "CreateWindowExW",
                        {0, s + 0x800, 0, 0, 0, 0, w, h, 0, 0, IMAGE_BASE, 0});
 }
-static void test_window_surface_and_blits() {
+static void test_window_surface_and_blits(bool text = true) {
     X86 c;
     loader_init_context(&c);
     uint32_t s = 0x00300000;
@@ -111,6 +111,10 @@ static void test_window_surface_and_blits() {
           "StretchBlt");
     check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 47, 15}) == 0x0000ff00u,
           "the stretched blit reached the corner");
+    if (!text) {
+        call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+        return;
+    }
     // Text: a glyph is drawn in the text colour and measured at 8x16.
     call_import(&c, "GDI32.dll", "SetTextColor", {dc, 0x000000ffu});
     gm_put_wstr(s + 0x400, "A", 4);
@@ -184,12 +188,94 @@ static void test_model() {
     check(call_import(&c, "USER32.dll", "GetDC", {hwnd}) == 0, "destroyed window has no DC");
     call_import(&c, "GDI32.dll", "DeleteObject", {brush});
 }
+static void test_drawing() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00304000, hwnd = make_test_window(&c, s, 32, 32);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    uint32_t brush = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0xff00});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, brush});
+    check(call_import(&c, "GDI32.dll", "Rectangle", {dc, 1, 1, 10, 10}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 4, 4}) == 0xff00,
+          "rectangle brush fill");
+    call_import(&c, "GDI32.dll", "SaveDC", {dc});
+    check(call_import(&c, "GDI32.dll", "IntersectClipRect", {dc, 4, 4, 12, 12}) == 2,
+          "rectangular clip");
+    check(call_import(&c, "GDI32.dll", "ExcludeClipRect", {dc, 6, 6, 8, 8}) == 3, "clip hole");
+    call_import(&c, "GDI32.dll", "PatBlt", {dc, 0, 0, 32, 32, 0x00ff0062});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 5, 5}) == 0xffffff,
+          "clip accepts inner pixels");
+    call_import(&c, "GDI32.dll", "RestoreDC", {dc, uint32_t(-1)});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 6, 6}) == 0xff00 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 0, 0}) == 0,
+          "clip hole and outside preserved");
+    memset(g_mem + s, 0, 16);
+    wr32(s + 4, 1);
+    wr32(s + 12, 0xff);
+    uint32_t pen = call_import(&c, "GDI32.dll", "CreatePenIndirect", {s});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, pen});
+    call_import(&c, "GDI32.dll", "MoveToEx", {dc, 0, 16, 0});
+    check(call_import(&c, "GDI32.dll", "LineTo", {dc, 16, 16}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 8, 16}) == 0xff,
+          "pen draws a line");
+    call_import(&c, "GDI32.dll", "SetROP2", {dc, 7});
+    call_import(&c, "GDI32.dll", "MoveToEx", {dc, 0, 16, 0});
+    call_import(&c, "GDI32.dll", "LineTo", {dc, 16, 16});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 8, 16}) == 0,
+          "R2_XORPEN restores line pixels");
+    uint32_t rgn = call_import(&c, "GDI32.dll", "CreateRectRgn", {2, 3, 7, 9});
+    check(rgn && call_import(&c, "GDI32.dll", "GetRgnBox", {rgn, s}) == 2 && rd32(s) == 2 &&
+              rd32(s + 12) == 9,
+          "region bounds");
+    uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {dc});
+    memset(g_mem + s, 0, 40);
+    wr32(s, 40);
+    wr32(s + 4, 2);
+    wr32(s + 8, 2);
+    wr16(s + 12, 1);
+    wr16(s + 14, 32);
+    uint32_t dib = call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, s, 0, s + 64, 0, 0}),
+             bits = rd32(s + 64);
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, dib});
+    wr32(bits, 0xff0000);
+    wr32(bits + 4, 0xff0000);
+    wr32(bits + 8, 0xff);
+    wr32(bits + 12, 0xff);
+    check(call_import(&c, "GDI32.dll", "BitBlt", {dc, 20, 20, 2, 2, mem, 0, 0, 0xcc0020}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 20, 20}) == 0xff0000 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 20, 21}) == 0xff,
+          "bottom-up DIB orientation and COLORREF conversion");
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 0, 0, 0xff00});
+    check(rd32(bits + 8) == 0xff00ff00, "DIB writes stay in guest memory");
+    check(call_import(&c, "GDI32.dll", "GetBitmapBits", {dib, 16, s + 128}) == 16 &&
+              rd32(s + 136) == 0xff00ff00,
+          "GetBitmapBits raw bytes");
+    check(call_import(&c, "GDI32.dll", "MaskBlt",
+                      {dc, 24, 24, 2, 2, mem, 0, 0, 0, 0, 0, 0xcc0020}) == 1 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 24, 24}) == 0xff00,
+          "zero-mask MaskBlt");
+    uint32_t copy = call_import(&c, "GDI32.dll", "CreateDIBitmap", {dc, s, 4, bits, s, 0});
+    check(copy && call_import(&c, "GDI32.dll", "GetObjectW", {copy, 24, s + 160}) == 24 &&
+              rd32(s + 164) == 2,
+          "CreateDIBitmap initializes an owned copy");
+    check(call_import(&c, "GDI32.dll", "StretchDIBits",
+                      {dc, 0, 24, 4, 4, 0, 0, 2, 2, bits, s, 0, 0xcc0020}) == 2 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 0, 24}) == 0xff00,
+          "StretchDIBits writes canvas pixels");
+    call_import(&c, "GDI32.dll", "DeleteObject", {copy});
+    call_import(&c, "GDI32.dll", "DeleteDC", {mem});
+    call_import(&c, "GDI32.dll", "DeleteObject", {dib});
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
     test_model();
-    if (argc < 2 || strcmp(argv[1], "model") != 0)
-        test_window_surface_and_blits();
+    if (argc < 2 || strcmp(argv[1], "model") != 0) {
+        test_drawing();
+        test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
+    }
     printf("%d checks, %d failures\n", g_checks, g_failures);
     mem_shutdown();
     return g_failures ? 1 : 0;

@@ -3095,6 +3095,53 @@ static void test_dshow_graph_playback() {
     os_rmdir(dir);
 }
 
+static void test_gdi_primary_blit() {
+    cpu_reset();
+    reset_ddraw_for_test();
+    call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, sc(0), 0});
+    uint32_t dd = rd32(sc(0));
+    call_method(dd, DD_SetDisplayMode, {640, 480, 16});
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_PRIMARYSURFACE);
+    call_method(dd, DD_CreateSurface, {desc, sc(4), 0});
+    uint32_t primary = rd32(sc(4));
+    ComObj *o = com_this(primary);
+    CHECK(o != nullptr);
+    if (!o)
+        return;
+    uint32_t dc = call_shim(tramp("USER32.dll", "GetDC"), {0});
+    uint32_t mem = call_shim(tramp("GDI32.dll", "CreateCompatibleDC"), {dc});
+    uint32_t bmi = sc(0x300);
+    gm_zero(bmi, 40);
+    wr32(bmi, 40);
+    wr32(bmi + 4, 2);
+    wr32(bmi + 8, uint32_t(-2));
+    wr16(bmi + 12, 1);
+    wr16(bmi + 14, 32);
+    uint32_t dib =
+        call_shim(tramp("GDI32.dll", "CreateDIBSection"), {mem, bmi, 0, sc(0x400), 0, 0});
+    uint32_t bits = rd32(sc(0x400));
+    for (int i = 0; i < 4; ++i)
+        wr32(bits + 4 * i, 0xffff0000);
+    call_shim(tramp("GDI32.dll", "SelectObject"), {mem, dib});
+    size_t before = g_presents.size();
+    CHECK_EQ(call_shim(tramp("GDI32.dll", "BitBlt"), {dc, 3, 4, 2, 2, mem, 0, 0, 0xcc0020}), 1u);
+    CHECK_EQ(rd16(o->pixels + 4 * o->pitch + 3 * 2), 0xf800u);
+    CHECK(g_presents.size() > before);
+    CHECK_EQ(
+        call_shim(tramp("GDI32.dll", "StretchBlt"), {dc, 8, 8, 4, 4, mem, 0, 0, 2, 2, 0xcc0020}),
+        1u);
+    CHECK_EQ(rd16(o->pixels + 11 * o->pitch + 11 * 2), 0xf800u);
+    call_shim(tramp("GDI32.dll", "DeleteDC"), {mem});
+    call_shim(tramp("GDI32.dll", "DeleteObject"), {dib});
+    call_shim(tramp("USER32.dll", "ReleaseDC"), {0, dc});
+    call_method(primary, 2);
+    call_method(dd, 2);
+}
+
 static void test_getdc_releasedc() {
     rec_reset();
     uint32_t rt = make_render_target_for_test(64, 64, 8);
@@ -3106,7 +3153,9 @@ static void test_getdc_releasedc() {
     ddraw_reset_access_counts();
     host_d3d_mark_dirty(o->id, ddraw_surface_generation(o->id), {10, 11, 11, 12});
     CHECK_EQ(call_method(rt, 17, {sc(0x1c00)}), DD_OK); // GetDC
-    wr8(o->pixels + 11 * o->pitch + 10, 77);
+    uint32_t hdc = rd32(sc(0x1c00));
+    CHECK_EQ(call_shim(tramp("GDI32.dll", "SetPixel"), {hdc, 10, 11, 0x4d4d4d}), 0x4d4d4du);
+    CHECK_EQ(rd8(o->pixels + 11 * o->pitch + 10), 77u);
     CHECK_EQ(call_method(rt, 26, {rd32(sc(0x1c00))}), DD_OK); // ReleaseDC
     HostAccessCounts a{};
     host_access_counts(&a);
@@ -4823,14 +4872,14 @@ static void test_enum_display_modes() {
     auto check_caps = [&](uint32_t w, uint32_t h, uint32_t bpp) {
         CHECK_EQ(call_shim(caps, {hdc, 8}), w);
         CHECK_EQ(call_shim(caps, {hdc, 10}), h);
-        CHECK_EQ(call_shim(caps, {hdc, 12}), bpp);
+        CHECK_EQ(call_shim(caps, {hdc, 12}), 32u);
         CHECK_EQ(call_shim(caps, {hdc, 14}), 1);
-        CHECK_EQ(call_shim(caps, {hdc, 38}), bpp == 8 ? 0x100u : 0u);
+        CHECK_EQ(call_shim(caps, {hdc, 38}), 0x2a01u);
         CHECK_EQ(call_shim(caps, {hdc, 104}), bpp == 8 ? 256u : 0u);
-        CHECK_EQ(call_shim(caps, {hdc, 24}), bpp == 8 ? 256u : 0xffffffffu);
+        CHECK_EQ(call_shim(caps, {hdc, 24}), 0xffffffffu);
         CHECK_EQ(call_shim(caps, {hdc, 0x2000}), 0);
     };
-    check_caps(640, 480, 8);
+    check_caps(1024, 768, 32);
     uint32_t create = tramp("DDRAW.dll", "DirectDrawCreate");
     call_shim(create, {0, sc(0), 0});
     uint32_t dd = rd32(sc(0));
@@ -9768,6 +9817,7 @@ int main() {
         {"lock write records", test_lock_write_records},
         {"lock clusters", test_lock_diff_partial_records_and_payload},
         {"DC write diff", test_getdc_releasedc},
+        {"GDI primary blit", test_gdi_primary_blit},
         {"CoCreateInstance DirectSound", test_cocreate_directsound},
         {"DirectShow audio stream", test_dshow_audio_stream},
         {"DirectShow graph playback", test_dshow_graph_playback},

@@ -5480,6 +5480,23 @@ static void test_presenter_migration_cancels_old_drawable() {
 }
 
 static void test_presenter_real_offscreen(D3DRenderer *renderer) {
+    // Drive the GDI seam through a real offscreen target; source mutation
+    // after publication must not change the completed frame.
+    host_present_start_offscreen(2, 2);
+    uint32_t gdi_pixels[4] = {0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff};
+    host_display_present_window(gdi_pixels, 2, 2);
+    gdi_pixels[0] = 0;
+    auto gdi_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (host_present_unique_completed() == 0 && std::chrono::steady_clock::now() < gdi_deadline)
+        std::this_thread::yield();
+    CHECK_EQ(host_present_unique_completed(), 1u);
+    uint8_t gdi_rgba[16] = {};
+    CHECK(host_present_test_read_rgba(gdi_rgba, sizeof gdi_rgba));
+    CHECK_EQ(gdi_rgba[0], 255u);
+    CHECK_EQ(gdi_rgba[1], 0u);
+    CHECK_EQ(gdi_rgba[5], 255u);
+    CHECK_EQ(gdi_rgba[10], 255u);
+    host_present_stop();
     host_present_start_offscreen(4, 4);
     uint8_t rgba[64];
     for (int i = 0; i < 16; ++i) {
@@ -6056,7 +6073,19 @@ static void test_presenter_incremental_world_and_overlay(D3DRenderer *renderer) 
     renderer->discard();
 }
 
+static void test_gdi_window_presentation() {
+    host_present_test_begin();
+    uint32_t pixels[4] = {0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff};
+    host_display_present_window(pixels, 2, 2);
+    pixels[0] = 0; // The sealed frame owns its copy.
+    host_present_tick_for_test(0);
+    CHECK_EQ(host_present_unique_completed(), 1u);
+    CHECK_EQ(host_present_test_last_pixel(), 255u);
+    host_present_stop();
+}
+
 static void test_presentation_service() {
+    test_gdi_window_presentation();
     test_windowed_first_blit_presents_without_prior_completion();
     test_windowed_drawable_handler_and_completion_fallback();
     test_windowed_duration_pacing_selector();

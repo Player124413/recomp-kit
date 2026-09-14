@@ -61,3 +61,6 @@ void gdi_destroy_window(uint32_t window);
 void gdi_bind_surface_dc(uint32_t dc, int w, int h, int bpp, uint32_t pitch, uint32_t bits,
                          const uint32_t *palette);
 void gdi_unbind_surface_dc(uint32_t dc);
+namespace gdi {
+Rect to_device(uint32_t dc, Rect rect);
+}

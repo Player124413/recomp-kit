@@ -1,4 +1,5 @@
 #include "imports.h"
+#include "gdi32_internal.h"
 #include "user32_internal.h"
 #include "kernel32_internal.h"
 
@@ -462,4 +463,7 @@ void imports_init() {
     imports_register(g_gdi32_shims, g_gdi32_shim_count);
     extern void gdi_model_register();
     gdi_model_register();
+    extern void gdi_bitmaps_register();
+    gdi_bitmaps_register();
+    gdi::register_draw();
 }
