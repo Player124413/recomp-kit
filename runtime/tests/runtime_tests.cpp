@@ -3625,6 +3625,36 @@ static void test_kernel32_wide() {
                     {s, s + 128, s + 512, s + 0x800, 64, s + 384});
     check(n == 1 && gm_wstr(s + 0x800) == "1",
           "GetPrivateProfileStringW reads back value from write tier");
+
+    check(std::find(g_wide_file_ops.begin(), g_wide_file_ops.end(), WIN32_FILE_WRITE) !=
+              g_wide_file_ops.end(),
+          "profile update uses the write seam");
+    gm_put_wstr(s, "settings", 64);
+    gm_put_wstr(s + 128, "windowed", 64);
+    gm_put_wstr(s + 256, "caf\xc3\xa9 \xf0\x9f\x98\x80", 64);
+    check(call_import(&c, "KERNEL32.dll", "WritePrivateProfileStringW",
+                      {s, s + 128, s + 256, s + 384}) == 1,
+          "profile replaces a case-insensitive key");
+    n = call_import(&c, "KERNEL32.dll", "GetPrivateProfileStringW",
+                    {s, s + 128, s + 512, s + 0x800, 64, s + 384});
+    check(n == 7 && gm_wstr(s + 0x800) == gm_wstr(s + 256),
+          "profile value preserves Unicode and returns UTF-16 units");
+    wr32(s + 0x804, 0xa5a5a5a5);
+    check(call_import(&c, "KERNEL32.dll", "GetPrivateProfileStringW",
+                      {s, s + 128, s + 512, s + 0x800, 2, s + 384}) == 1 &&
+              gm_wstr(s + 0x800) == "c" && rd32(s + 0x804) == 0xa5a5a5a5,
+          "profile truncation stays in capacity");
+    n = call_import(&c, "KERNEL32.dll", "GetPrivateProfileStringW",
+                    {s, 0, 0, s + 0x800, 64, s + 384});
+    check(n == 9 && os_strcasecmp(gm_wstr(s + 0x800).c_str(), "Windowed") == 0 &&
+              rd16(s + 0x812) == 0,
+          "profile enumerates keys with double NUL");
+    check(call_import(&c, "KERNEL32.dll", "WritePrivateProfileStringW", {s, s + 128, 0, s + 384}) ==
+              1,
+          "profile deletes a key");
+    n = call_import(&c, "KERNEL32.dll", "GetPrivateProfileStringW",
+                    {s, s + 128, s + 512, s + 0x800, 64, s + 384});
+    check(n == 1 && gm_wstr(s + 0x800) == "0", "missing profile key uses the default");
     win32_set_file_ops(nullptr, nullptr);
     remove_tree(g_wide_root);
     section("kernel32 wide locale");
