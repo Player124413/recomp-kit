@@ -774,6 +774,17 @@ class Image(object):
         return (self.looks_like_function(va) or self.looks_like_code_start(va)
                 or self.looks_like_thunk(va))
 
+    def starts_with_utf16_run(self, va):
+        """Four printable ASCII UTF-16 pairs in the first 16 bytes suggest data.
+
+        This is only a scan-candidate filter. Explicit control-flow evidence
+        must win even when instruction bytes happen to resemble text.
+        """
+        head = self.data[va - self.base:va - self.base + 16]
+        return any(all(0x20 <= head[i] <= 0x7e and head[i + 1] == 0
+                       for i in range(off, off + 8, 2))
+                   for off in range(len(head) - 7))
+
     def looks_like_thunk(self, va):
         """Does `va` look like a thunk?
 
@@ -2923,6 +2934,10 @@ def main():
     # particular, finding an SEH frame in a pointer guess does not establish
     # that guess's entry (which may precede the real function in data).
     protected_entries = set(listed_functions)
+    # Entry evidence, strongest first: original listing (3), explicit seed
+    # or structural table (2), direct edge from a protected body (1), scan
+    # guess or a direct edge from another guess (0). Content earns no rank.
+    entry_strength = {addr: 3 for addr in listed_functions}
     finally_owners = {}
     interior_entries = [0]
     initterm_found = [0]
@@ -2948,10 +2963,12 @@ def main():
         compiler never emits - `POP ES`, `DAS`, `LJMP` - and the emitter says
         so.  Using it as the filter means the vocabulary check can never drift
         from what the translator actually supports."""
-        if (fn.addr not in protected_entries
-                and image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00"):
-            # ADD byte ptr [EAX],AL is data at a speculative function start.
-            return False
+        if fn.addr not in protected_entries:
+            if image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00":
+                # ADD byte ptr [EAX],AL is data at a speculative function start.
+                return False
+            if image.starts_with_utf16_run(fn.addr):
+                return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
             tr.prepare(fn)
@@ -2966,18 +2983,102 @@ def main():
             tr.stats.clear()
             tr.stats.update(stats)
 
+    def prefix_before(fn, target):
+        """Cut a guess at stronger evidence, without keeping a partial opcode."""
+        insns = [ins for i, ins in enumerate(fn.insns)
+                 if ins.addr < target and fn.fallthrough[i] is not None
+                 and fn.fallthrough[i] <= target]
+        if not insns:
+            return None
+        last_end = image.insn_end(insns[-1].addr, insns[-1].mnem)
+        if (last_end != target and insns[-1].mnem not in TERMINATORS
+                and not tr.never_returns(insns[-1])):
+            return None
+        prefix = Function(fn.addr, fn.name, last_end - fn.addr, insns)
+        prefix.measure(image)
+        return prefix if accepts(prefix) else None
+
+    def truncate_speculative(target):
+        """Remove weaker coverage before admitting a protected entry.
+
+        A sweep may have decoded through the target, including through its
+        first instruction byte. Clear that old coverage as well as its entry
+        aliases, then restore any overlapping owners. A clean prefix can tail
+        into the new entry; an incomplete prefix is withdrawn.
+        """
+        # The common path has no overlap. x86 instructions are at most 15
+        # bytes, so checking preceding boundaries also finds misaligned hits.
+        covered = {owner[a] for a in range(max(image.base, target - 14), target + 1)
+                   if a in owner}
+        if not any(fn.addr < target < max(fn.end, fn.fallthrough[-1] or fn.end)
+                   and fn.addr not in protected_entries for fn in covered):
+            return False
+        changed = False
+        for fn in list(parsed):
+            end = max(fn.end, fn.fallthrough[-1] or fn.end)
+            if not (fn.addr < target < end) or fn.addr in protected_entries:
+                continue
+            if provenance.get(fn.addr) in STRUCTURAL_PROVENANCE:
+                continue
+            prefix = prefix_before(fn, target)
+            for i, ins in enumerate(fn.insns):
+                if owner.get(ins.addr) is fn:
+                    del owner[ins.addr]
+                hi = fn.fallthrough[i] or ins.addr + 1
+                lo = max(image.base, ins.addr + 1)
+                hi = min(image.end, hi)
+                if lo < hi:
+                    interior_bytes[lo - image.base:hi - image.base] = b"\0" * (hi - lo)
+            for addr, prior in list(extra.items()):
+                if prior is fn and (prefix is None or addr not in prefix.addrs):
+                    del extra[addr]
+                    if addr not in bodies:
+                        all_addrs.discard(addr)
+            for addr, prior in list(finally_owners.items()):
+                if prior is fn and (prefix is None or addr not in prefix.addrs):
+                    del finally_owners[addr]
+            if prefix is None:
+                parsed.remove(fn)
+                recovered.remove(fn)
+                bodies.pop(fn.addr, None)
+                all_addrs.discard(fn.addr)
+                retired_finally_bodies.add(fn)
+                rejected.add(fn.addr)
+            else:
+                fn.__dict__.update(prefix.__dict__)
+            # register() preserves explicit ownership choices made by SEH
+            # adoption; only missing boundaries and cleared bytes are rebuilt.
+            for other in parsed:
+                if other.addr < end and other.end > fn.addr:
+                    register(other)
+            changed = True
+        return changed
+
     def resolve(t, listed, home=None, validate=True, why="branch", continuation=True):
         """Make `t` an entry point.  Returns True if that changed anything."""
         if t is None:
             return False
-        protected = (why in ("config", "seh")
-                     or (why == "branch" and home is not None and home.addr in protected_entries))
+        strength = (2 if why in STRUCTURAL_PROVENANCE else
+                    1 if why == "branch" and home is not None
+                    and home.addr in protected_entries else 0)
+        entry_strength[t] = max(entry_strength.get(t, 0), strength)
+        protected = entry_strength[t] > 0
         newly_protected = protected and t not in protected_entries
         if protected:
             protected_entries.add(t)
         if (why == "branch" and continuation and home is not None
                 and home.addr not in listed_functions and provenance.get(home.addr) == "seh"):
             why = "seh"
+        # SEH landings into an already adopted normal cleanup retain the
+        # existing split-then-adopt path below. Cutting the establishing frame
+        # from that cleanup would change RET semantics. This is ownership of
+        # a continuation, not stronger evidence for the speculative entry.
+        seh_cleanup = (why == "seh" and t in owner
+                       and owner[t] in finally_owners.values())
+        truncated = (truncate_speculative(t)
+                     if newly_protected and t not in finally_owners and not seh_cleanup else False)
+        if truncated:
+            listed = set(owner)
         # An SEH continuation can already belong to a speculative recovered
         # body. Its bad prefix may later withdraw that body. Recover the
         # structurally named suffix independently instead of promoting the
@@ -2993,7 +3094,7 @@ def main():
                                           or prior.addr in protected_entries)
         note_structural(provenance, owner if promote_owner else {}, t, why)
         if t in all_addrs and not separate:
-            return newly_protected
+            return newly_protected or truncated
         if home is not None and t in home.addrs:
             return False
         if t in owner and not separate:
@@ -3013,6 +3114,14 @@ def main():
         name = ("FUN_%08x" if why == "config" else "recovered_%08x") % t
         new_fn = Function(t, name, insns[-1].addr + 1 - t, insns)
         new_fn.measure(image)
+        if not protected:
+            stronger = [addr for addr in protected_entries
+                        if t < addr < max(new_fn.end, new_fn.fallthrough[-1] or new_fn.end)]
+            if stronger:
+                new_fn = prefix_before(new_fn, min(stronger))
+                if new_fn is None:
+                    rejected.add(t)
+                    return truncated
         # A block reached from an established one is established too.
         inherited = provenance.get(
             home.addr if home is not None else None, "branch")
@@ -3229,6 +3338,8 @@ def main():
         # explicit configuration entries, including alternate entries into a
         # listed body. Table bytes must stay out of heuristic pointer scans.
         for fn in list(parsed):
+            if fn in retired_finally_bodies:
+                continue
             for stub in seh_frame_sites(fn).values():
                 if stub in seh_stubs:
                     continue
@@ -3240,6 +3351,8 @@ def main():
                 for landing in landings:
                     changed |= resolve(landing, set(owner), why="seh")
         for fn in list(parsed):
+            if fn in retired_finally_bodies:
+                continue
             for i, ins in enumerate(fn.insns):
                 # PUSH imm32 / RET names a continuation just as a direct JMP
                 # does; do not depend on heuristic pointer discovery for it.
@@ -3251,6 +3364,8 @@ def main():
                 if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
                     changed |= resolve(Translator.branch_target(ins), listed, fn,
                                        continuation=ins.mnem != "CALL")
+                if fn in retired_finally_bodies or i >= len(fn.insns) or fn.insns[i] is not ins:
+                    break  # a stronger target replaced this speculative suffix
                 if ins.mnem in TERMINATORS or tr.never_returns(ins):
                     continue
                 if not fn.contiguous[i]:

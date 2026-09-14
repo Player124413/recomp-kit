@@ -711,3 +711,106 @@ def test_bounded_continuation_recovery_rejects_incomplete_code(code, bound):
     entry = 0x00601000
     img = synthetic_image({entry: code}, base=0x00600000)
     assert img.recover(entry, set(), bounds=(entry, entry + bound)) == []
+
+
+def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
+    """Run discovery over a synthetic PE while preserving real scan order."""
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    rows = ["address\tname\tsize"]
+    img.md.detail = True
+    for addr, raw in listings_at.items():
+        insns = [img.to_insn(ci) for ci in img.md.disasm(raw, addr)]
+        (listings / ("%08x.asm" % addr)).write_text("\n".join(i.raw for i in insns) + "\n")
+        rows.append("%08x\tfixture_%08x\t%d" % (addr, addr, len(raw)))
+    img.md.detail = False
+    table, binary, curated, out = (tmp_path / name for name in
+                                  ("functions.tsv", "image", "globals.toml", "gen"))
+    table.write_text("\n".join(rows) + "\n")
+    binary.write_bytes(img.data)
+    curated.write_text("")
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                        ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "FUNCTION_ALIGNMENT", 4)
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
+                                      "--out", str(out), "--quiet"])
+    assert T.main() == 0
+    return "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+
+
+def test_wide_string_prefix_does_not_hide_relocated_method(tmp_path, monkeypatch):
+    """A MOV-immediate string guess must not hide a relocated vtable method."""
+    import struct
+    entry, string, method, next_fn, holder = (0x00601000, 0x0060101c, 0x00601030,
+                                             0x00601100, 0x00601800)
+    blocks = {entry: b"\xba" + struct.pack("<I", string) + b"\xc3",
+              string: "MDICLIENT\0".encode("utf-16le"),
+              method: b"\x55\x8b\xec\xb8\x2a\x00\x00\x00\x5d\xc3",
+              next_fn: b"\xc3", holder: struct.pack("<I", method)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: holder}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
+    assert "void fn_%08x(" % string not in text
+
+
+@pytest.mark.parametrize("crossing", [False, True])
+@pytest.mark.parametrize("protected_caller", [False, True])
+def test_protected_call_target_truncates_earlier_scan_guess(
+        tmp_path, monkeypatch, crossing, protected_caller):
+    """The stronger CALL edge arrives after a weak body already swept its target.
+
+    The prefix is NOPs, not UTF-16: only evidence ordering can fix this case.
+    A partial instruction at the cut makes the prefix invalid and withdraws it.
+    """
+    import struct
+    entry, guess, method, caller, next_fn = (0x00601000, 0x00601020, 0x00601030,
+                                            0x00601100, 0x00601200)
+    blocks = {entry: b"\xba" + struct.pack("<I", guess) + b"\xc3",
+              guess: b"\x90" * 15 + (b"\x00" if crossing else b"\x90"),
+              method: b"\x55\x8b\xec\xb8\x2a\x00\x00\x00\x5d\xc3",
+              caller: b"\xe8" + struct.pack("<i", method - caller - 5) + b"\xc3",
+              next_fn: b"\xc3"}
+    img = synthetic_image(blocks, base=0x00600000)
+    # Static initializer entries have structural evidence. They are seeded in
+    # the scan round, and their CALLs are followed on the next round.
+    img.initterm_tables = lambda parsed: ([], {caller} if protected_caller else set())
+    img.code_pointers = lambda *args, **kwargs: (set() if protected_caller else {caller}, set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    if not protected_caller:
+        assert "void fn_%08x(" % guess in text
+        assert ("IN AL,DX" in text) == crossing
+        return  # a direct edge from another guess earns no stronger rank
+    assert "void fn_%08x(X86 *c) {\n" % method in text
+    if crossing:
+        assert "void fn_%08x(" % guess not in text
+    else:
+        prefix = text.split("void fn_%08x(X86 *c) {" % guess)[1].split("\n}", 1)[0]
+        assert "CALL_FN(%08x)" % method in prefix
+        assert "PUSH EBP" not in prefix
+    assert "IN AL,DX" not in text
+
+
+@pytest.mark.parametrize("protected", [False, True])
+def test_utf16_run_filter_applies_only_to_speculative_entries(tmp_path, monkeypatch, protected):
+    """Four printable UTF-16 pairs inside the first 16 bytes reject only guesses."""
+    import struct
+    entry, target, next_fn = 0x00601000, 0x00601020, 0x00601100
+    # At instruction boundaries these are legal instructions; a direct CALL
+    # is explicit evidence and must outrank the cheap text heuristic.
+    raw = b"\x90\x90" + "ABCD".encode("utf-16le") + b"\x90\xc3"
+    edge = (b"\xe8" + struct.pack("<i", target - entry - 5) if protected else
+            b"\xba" + struct.pack("<I", target))
+    blocks = {entry: edge + b"\xc3", target: raw, next_fn: b"\xc3"}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.code_pointers = lambda *args, **kwargs: (set(), set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert ("void fn_%08x(" % target in text) == protected
