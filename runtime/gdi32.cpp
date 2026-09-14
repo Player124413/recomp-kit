@@ -1082,12 +1082,14 @@ void gdi_composite_windows(uint32_t *argb, int w, int h) {
             }
     }
 }
-// Flush only actual window writes. A retained DC can be drawn into across pump
-// iterations, so ReleaseDC alone is insufficient. Never change primary pixels:
-// borrow its readback as the base, then composite into a private ARGB snapshot.
-void gdi_present_windows() {
+// Flush window writes, or refresh an unchanged surface on the host's display
+// clock. A retained DC can be drawn into across pump iterations, so ReleaseDC
+// alone is insufficient. Never change primary pixels: borrow its readback as
+// the base, then composite into a private ARGB snapshot.
+void gdi_present_windows(bool refresh) {
     auto surfaces = visible_surfaces();
-    if (std::none_of(surfaces.begin(), surfaces.end(), [](auto *w) { return w->surface.dirty; }))
+    if (surfaces.empty() || (!refresh && std::none_of(surfaces.begin(), surfaces.end(),
+                                                      [](auto *w) { return w->surface.dirty; })))
         return;
     uint32_t primary = ddraw_gdi_begin_primary();
     int w = 1024, h = 768;

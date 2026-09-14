@@ -119,6 +119,12 @@ void boot_clock_advance();
 // unpinned run. See the stall breaker in boot.cpp.
 void boot_clock_poll();
 
+// Refresh a static GDI phase on the virtual display's 60 Hz clock. Call under
+// the guest baton from a host tick. Primary presents take over that cadence;
+// an idle primary remains the base when window refreshes resume.
+void boot_present_windows();
+void boot_note_primary_present();
+
 // Whether this run's guest clock is pinned, for a host that wants to say so.
 bool boot_clock_pinned();
 // How many times a run of clock reads with no frame between them had to move a

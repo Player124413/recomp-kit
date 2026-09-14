@@ -10,6 +10,8 @@
 #include "../runtime/imports.h"
 #include "../runtime/win32.h"
 #include "../runtime/mods_seam.h"
+#include "../runtime/gdi32_internal.h"
+#include "../runtime/display_seam.h"
 #include "../dx/dx.h"
 #include "../dx/host_api.h"
 #include "../platform/os.h"
@@ -142,6 +144,13 @@ void arm_clock_pin() {
 }
 
 uint64_t g_clock_epoch_us = 0;
+// The offscreen display has the same 60 Hz mode reported by user32. Pace
+// refreshes on its monotonic clock, independently of the guest clock pin:
+// each actual present still advances that pin exactly once. Two refresh
+// intervals without a primary present let an idle primary become the base
+// for GDI again; recent Flips/primary writes own presentation in the meantime.
+constexpr uint64_t kWindowPeriodNs = 1000000000ull / 60;
+uint64_t g_window_next_ns = 0, g_primary_present_ns = 0;
 uint32_t raw_millis() {
     uint64_t us = os_monotonic_ns() / 1000ull;
     if (!g_clock_epoch_us)
@@ -421,6 +430,7 @@ void fault_handler(const char *name) {
 
 bool boot_load(const BootOptions &opts) {
     g_opt = opts;
+    g_window_next_ns = g_primary_present_ns = 0;
 
     mem_init();
     const char *exe = g_opt.exe;
@@ -567,6 +577,23 @@ uint32_t boot_millis() {
 
 uint32_t boot_guest_millis() {
     return host_time_source_is_pinned() ? host_pinned_clock_value() : raw_millis();
+}
+
+void boot_note_primary_present() {
+    g_primary_present_ns = os_monotonic_ns();
+}
+
+void boot_present_windows() {
+    const uint64_t now = os_monotonic_ns();
+    if (now < g_window_next_ns)
+        return;
+    // Coalesce missed refreshes rather than bursting stale frames after a
+    // long guest call. No mutable guest surface is read off the baton.
+    g_window_next_ns = now + kWindowPeriodNs;
+    if (ddraw_gdi_primary_active() && g_primary_present_ns &&
+        now - g_primary_present_ns < 2 * kWindowPeriodNs)
+        return;
+    gdi_present_windows(true);
 }
 
 void boot_clock_advance() {

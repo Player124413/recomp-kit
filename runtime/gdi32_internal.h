@@ -72,5 +72,5 @@ Rect to_device(uint32_t dc, Rect rect);
 uint32_t gdi_new_dc();
 
 // Called only with the guest baton. A present owns the composed pixel copy.
-void gdi_present_windows();
+void gdi_present_windows(bool refresh = false);
 void gdi_composite_windows(uint32_t *argb, int w, int h);

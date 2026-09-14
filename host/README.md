@@ -356,6 +356,16 @@ because the whole point is that presented frames reach a file. No window is
 opened, no device is created, no audio stream is started, no input device is
 touched; the Direct3D and audio callbacks count and discard.
 
+Headless and smoke also refresh visible GDI window surfaces at the virtual
+display's 60 Hz rate, even when an unchanged window needs no new WM_PAINT.
+Each refresh counts as a present and advances `RECOMP_PIN_CLOCK` once by its
+configured step. This is a refresh count, not a count of different images.
+Recent DirectDraw primary presents take over the cadence; after two refresh
+intervals without one, window refreshes resume over the idle primary's pixels.
+`RECOMP_FRAMES` selects frame captures in either host, and `RECOMP_FRAME_EVERY`
+samples every Nth present (0 disables writes). The smoke host's existing
+scripted dumps remain available independently.
+
 Activation is synthesised there rather than delivered: a window that has just
 been shown and holds the focus gets `WM_ACTIVATEAPP`, `WM_ACTIVATE` and
 `WM_SETFOCUS`. The game's WNDPROC at `004b0870` reads `WM_ACTIVATEAPP`'s wParam

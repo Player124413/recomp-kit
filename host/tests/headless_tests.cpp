@@ -103,6 +103,21 @@ int main(int argc, char **argv) {
     call(c, "USER32.dll", "ReleaseDC", {hwnd, dc});
     check(g_present_count == 2, "clean pump and DC release do not invent frames");
 
+    // A static form gets no more WM_PAINT, but the display still refreshes.
+    // Pinning changes guest time once per present, never once per paint/poll.
+    host_set_time_source_pinned(100, 50);
+    uint32_t refresh_start = g_present_count;
+    for (unsigned n = 0; n < 4; ++n) {
+        os_sleep_us(20000);
+        headless_tick();
+        check(g_present_count == refresh_start + n + 1,
+              "painted-once window presents once on each display tick");
+        check(host_pinned_clock_value() == 100 + (n + 1) * 50,
+              "each window refresh advances the pinned clock once");
+    }
+    check(frame_pixel(4, 4) == 0xff0000, "refresh captures the unchanged painted pixels");
+    host_set_time_source(nullptr);
+
     uint32_t top = window(8, 0x10000000, 0, 0);
     dc = call(c, "USER32.dll", "GetDC", {top});
     call(c, "USER32.dll", "FillRect", {dc, rect, blue});
@@ -136,6 +151,18 @@ int main(int argc, char **argv) {
         host_present(g_mem + surface->pixels, 640, 480, 16, nullptr, surface->pitch);
         check(frame_pixel(20, 20) == 0x00ff00 && frame_pixel(4, 4) == 0x0000ff,
               "DirectDraw present retains its green base under the blue window");
+        for (unsigned n = 0; n < 3; ++n) {
+            os_sleep_us(20000);
+            host_present(g_mem + surface->pixels, 640, 480, 16, nullptr, surface->pitch);
+            uint32_t presented = g_present_count;
+            headless_tick();
+            check(g_present_count == presented, "recent primary presents own the refresh cadence");
+        }
+        uint32_t presented = g_present_count;
+        os_sleep_us(40000);
+        headless_tick();
+        check(g_present_count == presented + 1 && frame_pixel(20, 20) == 0x00ff00,
+              "an idle primary remains the base when window refresh resumes");
         dc = call(c, "USER32.dll", "GetDC", {top});
         call(c, "USER32.dll", "FillRect", {dc, rect, red});
         call(c, "USER32.dll", "ReleaseDC", {top, dc});
@@ -148,6 +175,10 @@ int main(int argc, char **argv) {
     method(c, dd, 2, {});
     for (uint32_t w : {hidden, later, top, hwnd})
         call(c, "USER32.dll", "DestroyWindow", {w});
+    uint32_t no_windows = g_present_count;
+    os_sleep_us(20000);
+    headless_tick();
+    check(g_present_count == no_windows, "clock does not present without visible window surfaces");
     call(c, "GDI32.dll", "DeleteObject", {blue});
     call(c, "GDI32.dll", "DeleteObject", {red});
     printf("%d checks, %d failures\n", checks, failures);

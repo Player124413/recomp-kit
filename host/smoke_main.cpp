@@ -39,6 +39,7 @@
 #include "../runtime/guest.h"
 #include "../runtime/loader.h"
 #include "../runtime/win32.h"
+#include "../runtime/gdi32_internal.h"
 #include "../dx/ddraw.h"
 #include "../dx/dx.h"
 #include "../dx/host_api.h"
@@ -1461,6 +1462,8 @@ void tick() {
     TickGuard guard;
     if (!guard.held)
         return;
+    if (!boot_close_requested())
+        boot_present_windows();
     // Mirror main.mm's pump: a stationary physical pointer still wakes the
     // guest's event-driven DirectInput reader until it reaches the target.
     if (g_window_gestures)
@@ -1891,13 +1894,15 @@ extern "C" void host_set_display_mode(int w, int h, int bpp) {
 // Capture and UI instrumentation operate on copies, preserving the game surface.
 extern "C" void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *palette,
                              int pitch) {
+    if (bpp == 8 || bpp == 16)
+        boot_note_primary_present();
     ++g_presents;
     // The frame boundary, and so the one thing that moves a pinned clock.
     // Counted even for a frame this host will not look at: what the guest is
     // told the time is must not depend on whether the host could read the
     // picture.
     boot_clock_advance();
-    if (!pixels || w <= 0 || h <= 0 || (bpp != 8 && bpp != 16))
+    if (!pixels || w <= 0 || h <= 0 || (bpp != 8 && bpp != 16 && bpp != 32))
         return;
     // The page goes on a copy this host owns, never on the guest's surface.
     host_page_overlay(nullptr, w, h, bpp, pitch, palette);
@@ -1905,8 +1910,30 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
     std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4);
     if (bpp == 8)
         host_present_expand_indexed(frame, w, h, pitch, palette, rgba.data());
-    else
+    else if (bpp == 16)
         host_present_expand_rgb565(frame, w, h, pitch, rgba.data());
+    else
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const auto *row = reinterpret_cast<const uint32_t *>(frame + size_t(y) * pitch);
+                size_t i = size_t(y) * w + x;
+                rgba[4 * i] = uint8_t(row[x] >> 16);
+                rgba[4 * i + 1] = uint8_t(row[x] >> 8);
+                rgba[4 * i + 2] = uint8_t(row[x]);
+                rgba[4 * i + 3] = 255;
+            }
+    if (bpp != 32) {
+        std::vector<uint32_t> composed(size_t(w) * h);
+        for (size_t i = 0; i < composed.size(); ++i)
+            composed[i] = 0xff000000u | uint32_t(rgba[4 * i]) << 16 |
+                          uint32_t(rgba[4 * i + 1]) << 8 | rgba[4 * i + 2];
+        gdi_composite_windows(composed.data(), w, h);
+        for (size_t i = 0; i < composed.size(); ++i) {
+            rgba[4 * i] = uint8_t(composed[i] >> 16);
+            rgba[4 * i + 1] = uint8_t(composed[i] >> 8);
+            rgba[4 * i + 2] = uint8_t(composed[i]);
+        }
+    }
     host_present_stage_rgba(rgba.data(), w, h);
     g_last_rgb.resize((size_t)w * (size_t)h * 3);
     for (size_t i = 0, n = (size_t)w * (size_t)h; i < n; ++i) {
@@ -1916,6 +1943,19 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
     }
     g_last_w = w;
     g_last_h = h;
+    // Optional frame-clock capture uses the same sampling switch as headless.
+    const char *frames = recomp_env("FRAMES");
+    const char *every_spec = recomp_env("FRAME_EVERY");
+    unsigned every = every_spec ? unsigned(strtoul(every_spec, nullptr, 10)) : 1;
+    if (frames && *frames && every && (g_presents - 1) % every == 0) {
+        std::string dir(frames);
+        for (size_t i = 1; i <= dir.size(); ++i)
+            if (i == dir.size() || dir[i] == '/' || dir[i] == '\\')
+                os_mkdir(dir.substr(0, i).c_str());
+        char path[1024];
+        snprintf(path, sizeof path, "%s/frame_%04u.ppm", frames, g_presents - 1);
+        host_write_ppm(path, g_last_rgb.data(), w, h);
+    }
 
     // How much of this frame is not black, and how much of it is new, from one
     // sample of it. A script waits on these instead of on a stopwatch.
@@ -1984,6 +2024,14 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
         ++g_present_changes;
         g_last_frame_hash = hash;
     }
+}
+
+// A GDI-only frame has no DirectDraw recorder to seal it. Keep the smoke
+// measurements, captures and pin on the same path as a primary present.
+extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
+    host_present_first_write();
+    host_present(argb, w, h, 32, nullptr, w * 4);
+    host_present_seal_window();
 }
 
 namespace {

@@ -28,6 +28,8 @@
 //   RECOMP_MAX_SECONDS=S    stop after S wall-clock seconds (default 180)
 //   RECOMP_FRAMES=DIR       frame directory (default build/recomp/frames)
 //   RECOMP_FRAME_EVERY=N    write every Nth frame (default 1; 0 writes none)
+// Static GDI windows refresh at the offscreen display's 60 Hz rate. Each
+// refresh is a present and advances RECOMP_PIN_CLOCK just like DirectDraw.
 //   RECOMP_EXE=PATH         image to load (default the loader's)
 //   RECOMP_NO_ACTIVATE=1    do not synthesise activation (diagnostics)
 //   RECOMP_LOG, RECOMP_IMPORT_STATS  as documented in runtime/README.md
@@ -166,6 +168,8 @@ extern "C" void host_set_display_mode(int w, int h, int bpp) {
 // Draw diagnostics on owned copies so recording never changes guest surface contents.
 extern "C" void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *palette,
                              int pitch) {
+    if (bpp == 8 || bpp == 16)
+        boot_note_primary_present();
     // The frame boundary, and so the one thing that moves a pinned clock. See
     // boot.cpp; on an unpinned run this does nothing.
     boot_clock_advance();
@@ -500,6 +504,8 @@ void headless_tick() {
     audio_pump();
     if (boot_close_requested())
         return;
+    if (g_present_count < g_max_frames)
+        boot_present_windows();
     bool over_frames = g_present_count >= g_max_frames;
     bool over_time = boot_elapsed() >= g_max_seconds;
     if (!over_frames && !over_time)
