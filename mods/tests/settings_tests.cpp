@@ -3,10 +3,15 @@
 #include "mods_tests.h"
 #include "../mods_internal.h"
 #include "../keypad_settings.h"
+#include "../display_settings.h"
+#include "../../runtime/layout.h"
+#include "../../runtime/win32.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
 #include "../../platform/os.h"
+
+extern "C" bool mods_test_reset_loader(void);
 
 namespace {
 const char *PROFILE = nullptr; // this suite's own, from mod_test_dir
@@ -157,4 +162,72 @@ MOD_TEST_SUITE(keypad_settings_round_trip) {
     mods_keypad_init(1);
     MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
     MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 0);
+}
+
+// Settings suites run before any suite loads a symbol map. Exercise the
+// fallback page itself, including its row metadata used for navigation.
+MOD_TEST_SUITE(settings_page_without_symbols_shows_host_controls) {
+    fresh();
+    MOD_CHECK_EQ(mods_symbols_count(), 0u);
+    mods_host_set_main_thread();
+    mods_display_reset();
+    mods_page_init();
+    MOD_CHECK_EQ(mods_page_open(nullptr), POP_OK);
+    const DisplayRow hidden[] = {DISPLAY_RENDERING,    DISPLAY_UI_SCALE, DISPLAY_WIDE,
+                                 DISPLAY_CLASSIC_MODE, DISPLAY_TEXTURES, DISPLAY_FILTERING};
+    const DisplayRow visible[] = {DISPLAY_WINDOW, DISPLAY_FPS, DISPLAY_OVERLAY};
+    auto page_has_row = [](DisplayRow row) {
+        const std::string label = mods_display_line(row);
+        for (uint32_t i = 0; i < mods_page_line_count(); ++i)
+            if (label == mods_page_line(i))
+                return true;
+        return false;
+    };
+    for (DisplayRow row : hidden) {
+        MOD_CHECK(!mods_display_row_applies(row));
+        MOD_CHECK(!page_has_row(row));
+    }
+    for (DisplayRow row : visible) {
+        MOD_CHECK(mods_display_row_applies(row));
+        MOD_CHECK(page_has_row(row));
+    }
+    MOD_CHECK_EQ(mods_page_line_count(), 3u + KEYPAD_ROW_COUNT);
+    // The first visible row still targets window mode after filtering.
+    mods_input_key(0xcd, 0, true);
+    mods_input_key(0xcd, 0, false);
+    MOD_CHECK_EQ(mods_display_value(DISPLAY_WINDOW), 1);
+    mods_page_close();
+    mods_input_remove_all(MODS_OWNER_RUNTIME);
+    mods_display_reset();
+    mods_keypad_reset();
+    mods_settings_reset();
+}
+
+// Like the stub, this port can have no usable symbol table. The existing
+// layout test seam makes that failure deterministic without touching a map.
+MOD_TEST_SUITE(settings_load_before_missing_symbols) {
+    mods_host_set_main_thread();
+    MOD_CHECK(mods_test_reset_loader());
+    fresh();
+    mods_display_reset();
+    MOD_CHECK_EQ(mods_symbols_count(), 0u);
+    FILE *f = fopen(mods_settings_path(), "wb");
+    MOD_CHECK(f != nullptr);
+    if (f) {
+        MOD_CHECK(fputs("{\"host.display/window\": 2}\n", f) >= 0);
+        MOD_CHECK_EQ(fclose(f), 0);
+    }
+    host_layout_set_exe_path_for_test("/nowhere/at/all/exe");
+    MOD_CHECK(!mods_load_all());
+    MOD_CHECK_EQ(mods_symbols_count(), 0u);
+    mods_display_init();
+    int64_t v = -1;
+    MOD_CHECK_EQ(mods_settings_get(MODS_OWNER_RUNTIME, "window", &v), POP_OK);
+    MOD_CHECK_EQ(v, 2);
+    MOD_CHECK_EQ(mods_display_value(DISPLAY_WINDOW), 2);
+    MOD_CHECK(mods_test_reset_loader());
+    host_layout_set_exe_path_for_test(nullptr);
+    win32_set_file_ops(nullptr, nullptr);
+    mods_display_reset();
+    mods_settings_reset();
 }

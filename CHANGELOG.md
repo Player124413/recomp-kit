@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Load saved host settings before symbol-table validation, so window mode and
+  other profile settings survive relaunch even without a usable symbol table.
+  Hide renderer and native Options rows from the fallback settings page until
+  symbols are available; retain window mode, frame limit and performance overlay.
+
 - SDL: confine a captured pointer in a plain window as well as borderless
   and fullscreen modes. Click inside to capture, hold Escape to release,
   and drag into the window's resize margin to release capture for resizing.
