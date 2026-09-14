@@ -426,7 +426,7 @@ void monitor_from(X86 *c, int kind) {
         }
     }
     uint32_t w = 1024, h = 768, bpp = 32;
-    ddraw_display_mode(&w, &h, &bpp);
+    win32_display_mode(&w, &h, &bpp);
     set_eax(c,
             (flags & 3) || (valid && l < int32_t(w) && t < int32_t(h) && r > 0 && b > 0) ? 1 : 0);
 }

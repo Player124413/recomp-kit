@@ -69,7 +69,7 @@ Window *find_window(uint32_t hwnd) {
     if (hwnd == desktop_handle) {
         static Window desktop;
         uint32_t w = 1024, h = 768, bpp = 32;
-        ddraw_display_mode(&w, &h, &bpp);
+        win32_display_mode(&w, &h, &bpp);
         desktop.hwnd = desktop_handle;
         desktop.w = w;
         desktop.h = h;
@@ -942,10 +942,7 @@ void u_EndPaint(X86 *c) {
 // mode so a window procedure can size its fullscreen blit rectangle correctly.
 void u_GetSystemMetrics(X86 *c) {
     uint32_t width = 0, height = 0, bpp = 0;
-    if (!ddraw_display_mode(&width, &height, &bpp)) {
-        width = 1024;
-        height = 768;
-    }
+    win32_display_mode(&width, &height, &bpp);
     uint32_t v = 0;
     switch (arg(c, 0)) {
     case 0:  // SM_CXSCREEN

@@ -4957,6 +4957,12 @@ static void test_enum_display_modes() {
     CHECK_EQ(mh, 2160);
     CHECK_EQ(mbpp, 16);
     check_caps(3840, 2160, 16);
+    os_setenv("RECOMP_SMOKE_DRAWABLE", "800x600");
+    win32_display_mode(&mw, &mh, &mbpp);
+    CHECK_EQ(mw, 3840);
+    CHECK_EQ(mh, 2160);
+    CHECK_EQ(mbpp, 16);
+    os_unsetenv("RECOMP_SMOKE_DRAWABLE");
 
     // A restricted enumeration returns only the matching modes.
     uint32_t match = sc(0x100);

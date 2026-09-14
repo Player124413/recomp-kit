@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Smoke: screen metrics, retained GDI captures and pointer bounds share the
+  virtual desktop selected by RECOMP_SMOKE_DRAWABLE until DirectDraw sets
+  a mode. Script dumps and pointer coordinates assert matching dimensions.
+
 - GDI: DrawTextW and DrawTextExW now paint bitmap-font glyphs with the DC's
   colours, rectangle clipping and basic text layout. Measurement uses the
   selected font, including screen DCs without a backing surface.

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "memory.h"
 #include "win32.h"
+#include "../platform/os.h"
 
 #include <map>
 #include <string.h>
@@ -18,13 +19,31 @@
 extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *, uint32_t *) {
     return false;
 }
+// One virtual screen is shared by USER32 metrics, GDI captures and host input.
+// A selected DirectDraw mode takes precedence over the smoke desktop size.
+void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
+    if (ddraw_display_mode(w, h, bpp))
+        return;
+    *w = 1024;
+    *h = 768;
+    *bpp = 32;
+    if (const char *size = recomp_env("SMOKE_DRAWABLE")) {
+        int width = 0, height = 0;
+        char trailing = 0;
+        if (sscanf(size, "%dx%d%c", &width, &height, &trailing) == 2 && width > 0 && height > 0 &&
+            width <= 16384 && height <= 16384) {
+            *w = uint32_t(width);
+            *h = uint32_t(height);
+        }
+    }
+}
 // Runtime-only hosts offer their fallback desktop as a single mode. Linking
 // DirectDraw replaces this with its full, configurable supported-mode table.
 extern "C" __attribute__((weak)) bool ddraw_enum_display_mode(uint32_t index, uint32_t *w,
                                                               uint32_t *h, uint32_t *bpp) {
     if (index != 0)
         return false;
-    ddraw_display_mode(w, h, bpp);
+    win32_display_mode(w, h, bpp);
     return true;
 }
 
@@ -586,7 +605,7 @@ void g_GetDIBits(X86 *c) {
 // DirectDraw palette size remains available to existing palette clients.
 void g_GetDeviceCaps(X86 *c) {
     uint32_t w = 1024, h = 768, bpp = 32;
-    ddraw_display_mode(&w, &h, &bpp);
+    win32_display_mode(&w, &h, &bpp);
     uint32_t value = 0;
     switch (arg(c, 1)) {
     case 2:
@@ -1102,7 +1121,7 @@ void gdi_present_windows(bool refresh) {
         return; // A primary DC is already in use; retry on the next pump.
     } else {
         uint32_t width = w, height = h, bpp = 32;
-        ddraw_display_mode(&width, &height, &bpp);
+        win32_display_mode(&width, &height, &bpp);
         w = int(width);
         h = int(height);
     }

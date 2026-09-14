@@ -21,6 +21,7 @@
 // device uploaded textures, that the scene is not black, that a sound had
 // amplitude in it, and it can leave you the frames to look at.
 #include "boot.h"
+#include <cassert>
 #include "game_config.h"
 #include "script.h"
 #include "smoke_dumpat.h"
@@ -161,7 +162,16 @@ double nonblack_ratio(const uint8_t *rgb, int w, int h) {
     return n ? (double)lit / (double)n : 0.0;
 }
 
+void pointer_space(uint32_t *w, uint32_t *h) {
+    uint32_t bpp = 0;
+    win32_display_mode(w, h, &bpp);
+    if (g_last_w && g_last_h)
+        assert(*w == uint32_t(g_last_w) && *h == uint32_t(g_last_h));
+}
+
 void write_dump(const char *name) {
+    uint32_t space_w, space_h;
+    pointer_space(&space_w, &space_h);
     char path[1024];
     if (g_last_w && g_last_h) {
         snprintf(path, sizeof path, "%s/smoke_%s_present.ppm", host_dump_dir(), name);
@@ -650,16 +660,10 @@ void move_by(int32_t dx, int32_t dy) {
     // pointer to a corner by sending a delta far larger than the screen, which
     // is the only position it can be sure of: the game integrates the deltas
     // itself and started its pointer wherever it chose.
-    int32_t x = g_pointer_x + dx;
-    int32_t y = g_pointer_y + dy;
-    if (x < 0)
-        x = 0;
-    if (y < 0)
-        y = 0;
-    if (x > 639)
-        x = 639;
-    if (y > 479)
-        y = 479;
+    uint32_t width, height;
+    pointer_space(&width, &height);
+    int32_t x = int32_t(std::clamp<int64_t>(int64_t(g_pointer_x) + dx, 0, width - 1));
+    int32_t y = int32_t(std::clamp<int64_t>(int64_t(g_pointer_y) + dy, 0, height - 1));
     if (host_gate_motion(x, y, dx, dy))
         return; // consumed
     host_input_motion(x, y, dx, dy);

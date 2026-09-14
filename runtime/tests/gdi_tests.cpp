@@ -3,6 +3,8 @@
 #include "../loader.h"
 #include "../memory.h"
 #include "../win32.h"
+#include "../gdi32_internal.h"
+#include "../../platform/os.h"
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
@@ -139,11 +141,14 @@ static void test_window_surface_and_blits(bool text = true) {
 static int presents = 0;
 static bool primary_active = false;
 static std::vector<uint32_t> presented;
+static int presented_w = 0, presented_h = 0;
 extern "C" bool ddraw_gdi_primary_active() {
     return primary_active;
 }
 extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
     ++presents;
+    presented_w = w;
+    presented_h = h;
     presented.assign(argb, argb + size_t(w) * h);
 }
 static void test_model() {
@@ -185,6 +190,17 @@ static void test_model() {
     call_import(&c, "USER32.dll", "EndPaint", {hwnd, s});
     check(presents == 1 && presented.size() == 1024 * 768 && presented[2 * 1024 + 2] == 0xffff0000,
           "EndPaint presents owned ARGB pixels in the desktop composite");
+    os_setenv("RECOMP_SMOKE_DRAWABLE", "800x600");
+    uint32_t screen_w = call_import(&c, "USER32.dll", "GetSystemMetrics", {0});
+    uint32_t screen_h = call_import(&c, "USER32.dll", "GetSystemMetrics", {1});
+    check(screen_w == 800 && screen_h == 600,
+          "the smoke drawable selects the virtual screen before a DirectDraw mode");
+    gdi_present_windows(true);
+    check(presented_w == 800 && presented_h == 600 && presented_w == int(screen_w) &&
+              presented_h == int(screen_h),
+          "GDI dump dimensions equal the virtual screen used for pointer coordinates");
+    os_unsetenv("RECOMP_SMOKE_DRAWABLE");
+    --presents; // The explicit refresh above is separate from the retained-paint check.
     dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
     primary_active = true;
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});

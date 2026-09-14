@@ -65,7 +65,7 @@ void send_message(X86 *c, bool wide) {
 }
 void display_rect(uint32_t out) {
     uint32_t w = 1024, h = 768, bpp = 32;
-    ddraw_display_mode(&w, &h, &bpp);
+    win32_display_mode(&w, &h, &bpp);
     wr32(out, 0);
     wr32(out + 4, 0);
     wr32(out + 8, w);
@@ -431,7 +431,7 @@ void enum_settings(X86 *c, bool wide) {
     }
     uint32_t w = 1024, h = 768, bpp = 32;
     if (mode >= 0xfffffffeu) {
-        ddraw_display_mode(&w, &h, &bpp);
+        win32_display_mode(&w, &h, &bpp);
     } else if (!ddraw_enum_display_mode(mode, &w, &h, &bpp)) {
         set_eax(c, 0);
         return;
