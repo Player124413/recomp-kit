@@ -766,6 +766,50 @@ def test_short_string_does_not_hide_relocated_stub(tmp_path, monkeypatch):
     assert "void fn_%08x(" % method in text
 
 
+def test_bare_scan_hit_inside_relocated_instruction_is_not_a_boundary(tmp_path, monkeypatch):
+    """An unrelocated dword coincidence cannot split a stronger decoded opcode."""
+    import struct
+    entry, method, guess, next_fn, slot = (0x00601000, 0x00601020, 0x00601024,
+                                          0x00601100, 0x00601800)
+    blocks = {entry: b"\xc3", method: b"\xb8\x90\x90\x90\x90\xc3",
+              next_fn: b"\xc3", slot: struct.pack("<II", method, guess)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
+    assert "void fn_%08x(" % guess not in text
+
+
+def test_speculative_body_keeps_branches_over_cleanup_stub_and_pushed_alias(tmp_path, monkeypatch):
+    """A branch skips a stub; its path falls into the PUSH-named epilogue."""
+    import struct
+    entry, method, stub, alternate, epilogue, next_fn, slot = (
+        0x00601000, 0x00601020, 0x00601030, 0x00601038,
+        0x0060103d, 0x00601100, 0x00601800)
+    blocks = {
+        entry: b"\xc3",
+        method: b"\x85\xc0\x74" + bytes([alternate - method - 4])
+                + b"\x68" + struct.pack("<I", epilogue) + b"\x90\xc3",
+        stub: b"\xe9" + struct.pack("<i", next_fn - stub - 5),
+        alternate: b"\xb8\x2a\0\0\0", epilogue: b"\xc3",
+        next_fn: b"\xc3", slot: struct.pack("<III", method, stub, epilogue),
+    }
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot, stub: slot + 4, epilogue: slot + 8}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
+    marker = ("static void body_%08x(" if "static void body_%08x(" % method in text else
+              "void fn_%08x(") % method
+    body = text.split(marker, 1)[1].split("\n}", 1)[0]
+    assert "L_%08x:" % alternate in body
+    assert "L_%08x:" % epilogue in body
+    assert "case %s: goto L_%08x;" % (T.hexlit(epilogue), epilogue) in body
+    assert "L_%08x:" % stub not in body
+    assert "void fn_%08x(" % stub in text
+
+
 @pytest.mark.parametrize("terminated", [False, True])
 def test_equal_rank_candidates_bound_speculative_sweeps(tmp_path, monkeypatch, terminated):
     """Boundary handling must not depend on stronger evidence or a text guard."""

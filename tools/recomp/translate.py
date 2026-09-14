@@ -1071,7 +1071,7 @@ class Image(object):
     #: 00430ad2 was reaching back 60 KB to 0041fc70.
     RECOVER_WINDOW = 0x8000
 
-    def recover(self, start, listed, limit=None, bounds=None):
+    def recover(self, start, listed, limit=None, bounds=None, boundaries=()):
         """Decode the block at `start`, following its branches.
 
         Recursive descent rather than a linear sweep.  A sweep stops at the
@@ -1087,12 +1087,16 @@ class Image(object):
         separate entries, exactly as before. Optional bounds constrain an
         omitted continuation to its original function span and require a clean
         decode, rejecting padding or an instruction that crosses the bound.
+        Candidate boundaries stop each linear path, including partial opcodes;
+        a branch can still skip a separate stub to another block of this body.
         """
         if limit is None:
             limit = self.RECOVER_LIMIT
         if self.md is None or not (self.base <= start < self.end):
             return []
         lo, hi = bounds if bounds is not None else (self.base, self.end)
+        boundaries = sorted(a for a in boundaries if lo <= a < hi and a != start)
+        boundary_set = set(boundaries)
         self.md.detail = True
         seen = {}
         pending = [start]
@@ -1100,7 +1104,7 @@ class Image(object):
         while pending and len(seen) < limit:
             va = pending.pop()
             while len(seen) < limit:
-                if va in seen or va in listed or not (lo <= va < hi):
+                if va in seen or va in listed or va in boundary_set or not (lo <= va < hi):
                     break
                 got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
                                           va, count=1))
@@ -1110,6 +1114,9 @@ class Image(object):
                         return []
                     break
                 ci = got[0]
+                index = bisect_right(boundaries, va)
+                if index < len(boundaries) and ci.address + ci.size > boundaries[index]:
+                    break  # Do not consume another candidate's first opcode byte.
                 if ci.mnemonic in ("int3", "hlt", "(bad)"):
                     if bounds is not None:
                         self.md.detail = False
@@ -3045,17 +3052,19 @@ def main():
         # The common path has no overlap. x86 instructions are at most 15
         # bytes, so checking preceding boundaries also finds misaligned hits.
         covered = {owner[a] for a in range(max(image.base, target - 14), target + 1)
-                   if a in owner}
+                   if a in owner and a <= target < (image.insn_end(a, "") or a + 1)}
         if not any(fn.addr < target < max(fn.end, fn.fallthrough[-1] or fn.end)
                    and fn.addr not in protected_entries for fn in covered):
             return False
         changed = False
-        for fn in list(parsed):
+        for fn in covered:
             end = max(fn.end, fn.fallthrough[-1] or fn.end)
             if not (fn.addr < target < end) or fn.addr in protected_entries:
                 continue
             if provenance.get(fn.addr) in STRUCTURAL_PROVENANCE:
                 continue
+            if target in getattr(fn, "pushed_continuations", ()):
+                continue  # This is the body's own RET continuation, not another entry.
             prefix = prefix_before(fn, target)
             for i, ins in enumerate(fn.insns):
                 if owner.get(ins.addr) is fn:
@@ -3168,14 +3177,32 @@ def main():
                 provenance[t] = why
             return True
         bounds = None
+        boundaries = set()
+        recovery_stops = listed - prior.addrs if separate else listed
         if not protected:
-            index = bisect_right(candidate_starts, t)
-            hi = candidate_starts[index] if index < len(candidate_starts) else image.end
             section_end = next((end for lo, end, _ in image.exec_ranges if lo <= t < end), t)
             span_index = bisect_right(listed_starts, t) - 1
             span_end = span_ends[listed_starts[span_index]] if span_index >= 0 else section_end
-            bounds = (t, min(hi, section_end, span_end))
-        insns = image.recover(t, listed - prior.addrs if separate else listed, bounds=bounds)
+            bounds = (t, min(section_end, span_end))
+            # PUSH-named continuations and SEH landings retain body ownership;
+            # their callable aliases are not new function-start boundaries.
+            # This probe earns no protection: the candidate still passes the
+            # ordinary content/terminator checks and the final pruning gate.
+            probe = image.recover(t, recovery_stops, bounds=bounds)
+            continuations = set()
+            for ins in probe:
+                if ins.mnem == "PUSH" and ins.ops:
+                    op = parse_operand(ins.ops[0])
+                    if op.kind == "imm" and t < op.imm < bounds[1]:
+                        continuations.add(op.imm)
+            probe_fn = Function(t, "candidate", 0, probe)
+            for stub in seh_frame_sites(probe_fn).values():
+                landings, _ = image.seh_landings(stub)
+                continuations.update(landings)
+            lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
+            boundaries = {a for a in candidate_starts[lo_index:hi_index]
+                          if a not in continuations and a not in finally_owners}
+        insns = image.recover(t, recovery_stops, bounds=bounds, boundaries=boundaries)
         if not insns:
             return False
         name = ("FUN_%08x" if why == "config" else "recovered_%08x") % t
@@ -3502,6 +3529,29 @@ def main():
             immediate_candidates = {t for t in immediates
                                     if not any(lo <= t < hi for lo, hi in tr.table_ranges)
                                     and (t in owner or image.plausible_immediate_target(t))}
+            # A raw unrelocated dword hit inside a relocated candidate's
+            # instruction is not an entry candidate. Establish that evidence
+            # before letting guesses become equal-status sweep boundaries.
+            weaker_interiors = set()
+            guesses = (starts | interior | immediate_candidates) - set(relocated)
+            for t in sorted(reloc_candidates):
+                if (t in owner or image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
+                        or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
+                    continue
+                probe = image.recover(t, owner)
+                if not probe:
+                    continue
+                fn = Function(t, "relocated_candidate", 0, probe)
+                fn.measure(image)
+                if not accepts(fn):
+                    continue
+                for i, ins in enumerate(probe):
+                    end = fn.fallthrough[i] or ins.addr + 1
+                    weaker_interiors.update(a for a in range(ins.addr + 1, end) if a in guesses)
+            starts -= weaker_interiors
+            interior -= weaker_interiors
+            immediate_candidates -= weaker_interiors
+            image.interior_candidates.update(weaker_interiors)
             for t in sorted(starts | interior | reloc_candidates | immediate_candidates):
                 if (image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                         or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
