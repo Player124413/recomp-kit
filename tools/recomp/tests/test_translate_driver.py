@@ -338,6 +338,8 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
         handler_target = epilogue + 2 if epilogue_handler == "interior" else epilogue
         if epilogue_handler == "prefix":
             handler_target = entry + 17  # restore the chain, then push and run cleanup
+        if epilogue_handler == "cleanup":
+            handler_target = cleanup
         data[other_stub - img.base:other_stub - img.base + 10] = (
             b"\xe9" + struct.pack("<i", dispatcher - other_stub - 5)
             + b"\xe9" + struct.pack("<i", handler_target - other_stub - 10))
@@ -369,14 +371,6 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
     assert T.main() == 0
     text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
-    if (recovered_owner and recovered_owner not in ("config", "direct")
-            and listed_cleanup and not jump_to_cleanup):
-        # A speculative prefix falling into a separately listed cleanup has
-        # no terminator at its boundary. The new admission rule withdraws it;
-        # the listed cleanup remains independently owned and callable.
-        assert "void fn_%08x(" % entry not in text
-        assert "void fn_%08x(" % cleanup in text
-        return
     assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (cleanup, entry, T.hexlit(cleanup)) in text
     assert text.count("void fn_%08x(" % cleanup) == 1
     body = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
@@ -419,7 +413,14 @@ def test_adopted_epilogue_is_not_split_again_by_seh_resolution(tmp_path, monkeyp
 def test_adopted_body_keeps_interior_handler_entries(tmp_path, monkeypatch):
     test_finally_cleanup_and_epilogue_belong_to_establishing_body(
         tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
-        recovered_owner="config", epilogue_handler="interior")
+        recovered_owner=True, epilogue_handler="interior")
+
+
+def test_speculative_establishing_body_adopts_preexisting_cleanup_before_admission(tmp_path, monkeypatch):
+    """An already seeded cleanup alias must not look like unterminated flow."""
+    test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
+        recovered_owner=True, epilogue_handler="cleanup")
 
 
 def test_retired_cleanup_prefix_remains_an_alternate_entry(tmp_path, monkeypatch):

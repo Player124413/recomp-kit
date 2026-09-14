@@ -3189,19 +3189,41 @@ def main():
             # This probe earns no protection: the candidate still passes the
             # ordinary content/terminator checks and the final pruning gate.
             probe = image.recover(t, recovery_stops, bounds=bounds)
-            continuations = set()
-            for ins in probe:
-                if ins.mnem == "PUSH" and ins.ops:
-                    op = parse_operand(ins.ops[0])
-                    if op.kind == "imm" and t < op.imm < bounds[1]:
-                        continuations.add(op.imm)
-            probe_fn = Function(t, "candidate", 0, probe)
-            for stub in seh_frame_sites(probe_fn).values():
-                landings, _ = image.seh_landings(stub)
-                continuations.update(landings)
+            continuations, attempted, owned = set(), set(), set()
+            fragments = {ins.addr: ins for ins in probe}
+            while fragments:
+                probe_fn = Function(t, "candidate", 0, [fragments[a] for a in sorted(fragments)])
+                probe_fn.measure(image)
+                stubs = set(seh_frame_sites(probe_fn).values())
+                for ins in probe_fn.insns:
+                    if ins.mnem == "PUSH" and ins.ops:
+                        op = parse_operand(ins.ops[0])
+                        if op.kind == "imm" and t < op.imm < bounds[1]:
+                            continuations.add(op.imm)
+                for stub in stubs:
+                    landings, _ = image.seh_landings(stub)
+                    continuations.update(a for a in landings if t < a < bounds[1])
+                pending = continuations - stubs - attempted
+                if not pending:
+                    break
+                for target in sorted(pending):
+                    attempted.add(target)
+                    # An earlier SEH/data pass may already own the cleanup.
+                    # Recover its clean span-bounded bytes before judging the
+                    # establishing prefix's termination, then let normal
+                    # adoption transfer ownership without promoting the prefix.
+                    block = image.recover(target, stubs, bounds=bounds)
+                    fragment = Function(target, "continuation", 0, block)
+                    fragment.measure(image)
+                    if not block or not accepts(fragment):
+                        continue
+                    owned.update(ins.addr for ins in block)
+                    fragments.update((ins.addr, ins) for ins in block)
+            if owned:
+                recovery_stops = set(recovery_stops) - owned
             lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
             boundaries = {a for a in candidate_starts[lo_index:hi_index]
-                          if a not in continuations and a not in finally_owners}
+                          if a not in owned and a not in finally_owners}
         insns = image.recover(t, recovery_stops, bounds=bounds, boundaries=boundaries)
         if not insns:
             return False
