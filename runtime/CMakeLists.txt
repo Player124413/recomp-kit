@@ -1,7 +1,7 @@
 # The guest runtime. Object libraries, so every source is linked into every
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
-  memory.cpp loader.cpp imports.cpp cpu.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp oleaut32.cpp
+  memory.cpp loader.cpp imports.cpp cpu.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp oleaut32.cpp
   mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp layout.cpp)
 
 add_library(recomp_runtime OBJECT ${POP_RUNTIME_SOURCES})
@@ -29,6 +29,14 @@ pop_optimize(recomp_snapshot 2)
 
 # The suite spawns itself for the abort check; portable since sub-project 3.
 if(NOT IOS AND NOT ANDROID)
+add_executable(seh_tests tests/seh_tests.cpp)
+target_link_libraries(seh_tests PRIVATE recomp_platform recomp_runtime_testing)
+target_compile_options(seh_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(seh_tests 1)
+pop_test_binary(seh_tests)
+add_test(NAME seh_tests COMMAND seh_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(seh_tests PROPERTIES LABELS nogame ENVIRONMENT RECOMP_PROFILE=1)
+
 add_executable(runtime_tests tests/runtime_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(runtime_tests PRIVATE recomp_platform recomp_runtime recomp_dx)
 target_compile_options(runtime_tests PRIVATE ${POP_WARN_HOST})

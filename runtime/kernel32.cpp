@@ -1,3 +1,4 @@
+#include "seh.h"
 #include "profile.h"
 #include "game_config.h"
 // kernel32.cpp - KERNEL32 shims: heap, files, modules, TLS, sync objects,
@@ -2745,6 +2746,7 @@ void thread_run_exit_cleanup(GuestThread *t) {
     if (t->exit_cleanup_done)
         return;
     t->exit_cleanup_done = true;
+    recomp_seh_reset(nullptr);
     // The thread is gone, and anything it left on the mod layer's invocation
     // stack goes with it: unwinding to the top of the address space abandons
     // every frame. The weak seam makes this free in a build without mods.
@@ -2916,6 +2918,7 @@ void run_thread_body(X86 *c, uint32_t h) {
     }
     recomp_profile_truncate(profile_depth);
     *c = caller_ctx;
+    recomp_seh_frame_leave(c); // retire checkpoints from a synchronous guest worker
     g_in_sync_thread = saved_in;
     g_sync_thread_handle = saved_handle;
     memcpy(&g_sync_thread_jmp, &saved, sizeof saved);
@@ -3286,8 +3289,10 @@ std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max) {
 namespace {
 
 void k_RaiseException(X86 *c) {
+    if (recomp_seh_raise(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)))
+        return; // only the testing runtime can return from an unhandled raise
     LOGW("RaiseException(code=%08x flags=%08x nargs=%u args=%08x) at ESP=%08x: "
-         "no SEH support, aborting",
+         "unhandled, aborting",
          arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), c->r[R_ESP]);
     std::string what = win32_describe_cxx_throw(arg(c, 0), arg(c, 2), arg(c, 3));
     if (!what.empty())
@@ -3317,10 +3322,7 @@ void k_RaiseException(X86 *c) {
     abort();
 }
 void k_RtlUnwind(X86 *c) {
-    LOGW("RtlUnwind(target=%08x, ret=%08x, record=%08x) at ESP=%08x: "
-         "no SEH support, aborting",
-         arg(c, 0), arg(c, 1), arg(c, 2), c->r[R_ESP]);
-    abort();
+    recomp_seh_unwind(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3));
 }
 
 // -------------------------------------------------------------------------
@@ -3679,6 +3681,7 @@ void k_GetLocaleInfoW(X86 *c) {
 // because its teardown thread never registered with the scheduler and so can
 // never be recognised by sched_run_thread_finished.
 void sched_run_thread_unwind_frames() {
+    recomp_seh_reset(nullptr);
     mods_hooks_unwind_to_esp(0xffffffffu);
     recomp_profile_truncate(0);
 }

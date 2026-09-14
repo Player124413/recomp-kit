@@ -369,11 +369,14 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     // reference to the element across the call.
     void (*fn)(X86 *) = tramps()[idx].fn;
     uint8_t argc = tramps()[idx].argc;
-    std::string desc = tramps()[idx].desc;
+    // A guest exception can longjmp across fn(c). Keep no C++ owner live
+    // across that call, and do not retain a pointer into the movable vector.
+    char desc[512];
+    snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
     ++tramps()[idx].calls;
 
     uint32_t ret_addr = rd32(c->r[R_ESP]);
-    LOGV("-> %s (esp=%08x ret=%08x)", desc.c_str(), c->r[R_ESP], ret_addr);
+    LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);
 
     // The arguments as they are NOW, before the shim runs: a stdcall shim pops
     // them, so after the call they are gone and this is the only point they
@@ -388,7 +391,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
         for (uint32_t i = 0; i < n; ++i)
             args[i] = rd32(c->r[R_ESP] + 4 + 4 * i);
         uint32_t result = 0;
-        if (!g_call_observer(desc.c_str(), args, n, &result)) {
+        if (!g_call_observer(desc, args, n, &result)) {
             set_eax(c, result);
             skip = true;
         }
@@ -399,21 +402,23 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     } else if (fn) {
         fn(c);
     } else {
-        log_once(desc.c_str(), "unimplemented import %s: returning 0", desc.c_str());
+        log_once(desc, "unimplemented import %s: returning 0", desc);
         set_eax(c, 0);
     }
     if (g_return_observer)
-        g_return_observer(desc.c_str(), c->r[R_EAX]);
+        g_return_observer(desc, c->r[R_EAX]);
 
     uint32_t pop = 4;
     if (argc == ARGC_CDECL) {
         pop = 4;
     } else if (argc == ARGC_UNKNOWN) {
         pop = 4;
-        log_once((desc + "#argc").c_str(),
+        char key[sizeof desc + 6];
+        snprintf(key, sizeof key, "%s#argc", desc);
+        log_once(key,
                  "%s has an unknown stdcall argument count: not adjusting ESP, "
                  "the guest stack will drift if it is really stdcall",
-                 desc.c_str());
+                 desc);
     } else {
         pop = 4 + 4u * argc;
     }

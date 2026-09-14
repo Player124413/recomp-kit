@@ -1,3 +1,4 @@
+#include "seh.h"
 #include "loader.h"
 #include "memory.h"
 #include "imports.h"
@@ -476,6 +477,7 @@ bool loader_load(const char *exe_path) {
 }
 
 void loader_init_context(X86 *c) {
+    recomp_seh_reset(c);
     memset(c, 0, sizeof(*c));
     // Process-start CPU state. The x87 values are the post-FINIT ones the CRT
     // assumes: control word 0x037f (round to nearest, 64-bit precision, all

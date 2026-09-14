@@ -1,3 +1,4 @@
+#include "seh.h"
 #include "memory.h"
 
 #include "../platform/os.h"
@@ -222,6 +223,7 @@ void heap_reset() {
 } // namespace
 
 void mem_init() {
+    recomp_seh_reset(nullptr);
     if (g_mem) {
         os_vm_release(g_mem, GUEST_SIZE);
         g_mem = nullptr;
@@ -236,6 +238,7 @@ void mem_init() {
 }
 
 void mem_shutdown() {
+    recomp_seh_reset(nullptr);
     if (g_mem) {
         os_vm_release(g_mem, GUEST_SIZE);
         g_mem = nullptr;
