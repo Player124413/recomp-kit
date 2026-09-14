@@ -50,6 +50,17 @@ if(POP_REAL_GEN AND NOT IOS)
   endif()
 
   add_executable(profile_tests tests/profile_tests.cpp)
+  # CALL_FN takes an address token (without 0x), not a numeric expression.
+  # Select the first generated entry so this fixture exists for every game.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${POP_GEN_DIR}/funcs.h)
+  file(STRINGS ${POP_GEN_DIR}/funcs.h PROFILE_FIRST_INDEX
+    REGEX "^#define FIDX_[0-9a-f]+ 0u$" LIMIT_COUNT 1)
+  if(NOT PROFILE_FIRST_INDEX)
+    message(FATAL_ERROR "profile_tests needs the first FIDX entry in generated funcs.h")
+  endif()
+  string(REGEX REPLACE "^#define FIDX_([0-9a-f]+) 0u$" "\\1"
+    PROFILE_TARGET_TOKEN "${PROFILE_FIRST_INDEX}")
+  target_compile_definitions(profile_tests PRIVATE RECOMP_PROFILE_TARGET=${PROFILE_TARGET_TOKEN})
   target_link_libraries(profile_tests PRIVATE recomp_platform recomp_runtime recomp_dx_null)
   target_compile_options(profile_tests PRIVATE ${POP_WARN_HOST})
   pop_optimize(profile_tests 1)

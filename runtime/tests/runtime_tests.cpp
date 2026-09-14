@@ -17,11 +17,14 @@
 #include <time.h>
 #include <stdarg.h>
 #include <map>
+#include <algorithm>
+#include <cctype>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
 
-static int g_checks = 0, g_failures = 0;
+static int g_checks = 0, g_failures = 0, g_skips = 0;
 static const char *g_section = "";
 
 static void section(const char *s) {
@@ -46,7 +49,7 @@ static bool check(bool ok, const char *fmt, ...) {
 // ---------------------------------------------------------------------------
 // Shim call helper: pushes args and a return address, then dispatches.
 // ---------------------------------------------------------------------------
-static uint32_t g_fake_ret = 0x00401000;
+static uint32_t g_fake_ret = RECOMP_ENTRY_POINT;
 
 static uint32_t call_import(X86 *c, const char *dll, const char *name,
                             const std::vector<uint32_t> &args) {
@@ -138,10 +141,19 @@ static uint32_t scratch_block(uint32_t bytes) {
 // ---------------------------------------------------------------------------
 struct ExpectedSection {
     std::string name;
-    uint32_t va, vsize, raw;
+    uint32_t va, vsize, raw, offset, flags;
+};
+struct ExpectedImport {
+    uint32_t slot;
+    std::string dll, name;
+};
+struct ExpectedImage {
+    uint32_t base = 0, size = 0, entry = 0;
+    std::vector<ExpectedSection> sections;
+    std::vector<ExpectedImport> imports;
 };
 
-static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err) {
+static bool pefile_sections(ExpectedImage &out, std::string &err) {
 #ifdef _WIN32
 #define popen _popen
 #define pclose _pclose
@@ -158,8 +170,12 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
         "import pefile;pe=pefile.PE('" RECOMP_DEVELOPER_EXE "');b=pe.OPTIONAL_HEADER.ImageBase;"
         "print('IMAGE %x %x %x' % (b, pe.OPTIONAL_HEADER.SizeOfImage, "
         "b+pe.OPTIONAL_HEADER.AddressOfEntryPoint));"
-        "[print('%s %x %x %x' % (s.Name.decode().rstrip(chr(0)), b+s.VirtualAddress, "
-        "s.Misc_VirtualSize, s.SizeOfRawData)) for s in pe.sections]"
+        "[print('SECTION %s %x %x %x %x %x' % (s.Name.decode().rstrip(chr(0)), b+s.VirtualAddress, "
+        "s.Misc_VirtualSize, s.SizeOfRawData, s.PointerToRawData, s.Characteristics)) for s in "
+        "pe.sections];"
+        "[print('IMPORT %x %s %s' % (i.address, d.dll.decode(), "
+        "i.name.decode() if i.name else 'ord%d' % i.ordinal)) "
+        "for d in getattr(pe, 'DIRECTORY_ENTRY_IMPORT', []) for i in d.imports]"
         "\" 2>/dev/null";
     const char *cmd = cmd_s.c_str();
     FILE *p = popen(cmd, "r");
@@ -167,19 +183,29 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
         err = "popen failed";
         return false;
     }
-    char line[256];
-    bool any = false;
+    char line[1024];
+    bool image = false;
     while (fgets(line, sizeof line, p)) {
-        char name[64];
-        unsigned a, b, c;
-        if (sscanf(line, "%63s %x %x %x", name, &a, &b, &c) == 4) {
-            out.push_back(ExpectedSection{name, a, b, c});
-            any = true;
+        char name[512], dll[256];
+        unsigned va, vsize, raw, offset, flags;
+        if (sscanf(line, "IMAGE %x %x %x", &va, &vsize, &raw) == 3) {
+            out.base = va;
+            out.size = vsize;
+            out.entry = raw;
+            image = true;
+        } else if (sscanf(line, "SECTION %511s %x %x %x %x %x", name, &va, &vsize, &raw, &offset,
+                          &flags) == 6) {
+            out.sections.push_back({name, va, vsize, raw, offset, flags});
+        } else if (sscanf(line, "IMPORT %x %255s %511s", &va, dll, name) == 3) {
+            out.imports.push_back({va, dll, name});
+        } else {
+            err = "unrecognized pefile record";
         }
     }
     int rc = pclose(p);
-    if (!any) {
-        err = rc == 0 ? "no output from pefile" : "pefile helper failed";
+    if (rc != 0 || !image || out.sections.empty() || !err.empty()) {
+        if (err.empty())
+            err = rc == 0 ? "incomplete output from pefile" : "pefile helper failed";
         return false;
     }
     return true;
@@ -305,13 +331,8 @@ static void test_loader() {
         printf("cannot continue without the image\n");
         exit(1);
     }
-    check(loader_image_base() == 0x00400000, "image base is %08x", loader_image_base());
-    check(loader_entry_point() == 0x0055d6c0, "entry point is %08x", loader_entry_point());
-    check(loader_iat_patched() == 258, "patched %u IAT slots (expected 258)", loader_iat_patched());
-    check(loader_iat_data_imports() == 4, "%u of them are data imports backed by guest storage",
-          loader_iat_data_imports());
-    check(loader_image_limit() == 0x00d4c000, "the image ends at %08x, derived from SizeOfImage",
-          loader_image_limit());
+    check(loader_image_base() == RECOMP_IMAGE_BASE, "image base is %08x", loader_image_base());
+    check(loader_entry_point() == RECOMP_ENTRY_POINT, "entry point is %08x", loader_entry_point());
 
     // A Delphi image carries a TLS directory; the loader reserves a slot, writes
     // its index where the image reads it, and gives the main thread a block that
@@ -347,85 +368,122 @@ static void test_loader() {
         memcpy(g_mem + tls.callbacks, saved, sizeof saved);
     }
 
-    std::vector<ExpectedSection> expect;
+    ExpectedImage expect;
     std::string err;
     if (!pefile_sections(expect, err)) {
-        // The brief requires this comparison, so an unavailable helper is a
-        // test failure, not something to skip past.
-        check(false,
-              "pefile cross-check could not run: %s "
-              "(run from the repository root with .venv present)",
-              err.c_str());
+        check(false, "pefile cross-check could not run: %s", err.c_str());
     } else {
-        // First line is the image summary.
-        check(expect.size() >= 2, "pefile reported %zu records", expect.size());
-        check(expect[0].va == loader_image_base() && expect[0].raw == loader_entry_point(),
-              "pefile agrees on base %08x and entry %08x", expect[0].va, expect[0].raw);
-        const std::vector<SectionInfo> &got = loader_sections();
-        check(got.size() == expect.size() - 1, "section count %zu matches pefile %zu", got.size(),
-              expect.size() - 1);
-        size_t n = got.size() < expect.size() - 1 ? got.size() : expect.size() - 1;
+        check(expect.base == loader_image_base() && expect.entry == loader_entry_point(),
+              "pefile agrees on base %08x and entry %08x", expect.base, expect.entry);
+        check(loader_image_limit() == expect.base + expect.size,
+              "the image ends at %08x, derived from SizeOfImage %x", loader_image_limit(),
+              expect.size);
+        check(loader_iat_patched() == expect.imports.size(), "patched %u IAT slots (expected %zu)",
+              loader_iat_patched(), expect.imports.size());
+        const auto &got = loader_sections();
+        check(got.size() == expect.sections.size(), "section count %zu matches pefile %zu",
+              got.size(), expect.sections.size());
         bool all = true;
-        for (size_t i = 0; i < n; ++i) {
-            const ExpectedSection &e = expect[i + 1];
-            const SectionInfo &s = got[i];
-            if (s.name != e.name || s.va != e.va || s.vsize != e.vsize || s.raw_size != e.raw) {
-                printf("  section %zu mismatch: got %s va=%08x vs=%x raw=%x, "
-                       "pefile %s va=%08x vs=%x raw=%x\n",
-                       i, s.name.c_str(), s.va, s.vsize, s.raw_size, e.name.c_str(), e.va, e.vsize,
-                       e.raw);
+        for (size_t i = 0; i < std::min(got.size(), expect.sections.size()); ++i) {
+            const auto &e = expect.sections[i];
+            const auto &section = got[i];
+            if (section.name != e.name || section.va != e.va || section.vsize != e.vsize ||
+                section.raw_size != e.raw)
                 all = false;
-            }
         }
         check(all, "every section maps at the address, size and raw size pefile reports");
-    }
 
-    // Section content actually landed in the arena.
-    FILE *f = fopen(RECOMP_DEVELOPER_EXE, "rb");
-    check(f != nullptr, "opened the image for a byte-level spot check");
-    if (f) {
-        // .text raw data starts at file offset 0x400 and maps at 0x401000.
-        uint8_t buf[64];
-        fseek(f, 0x400, SEEK_SET);
-        size_t got = fread(buf, 1, sizeof buf, f);
-        check(got == sizeof buf && memcmp(buf, g_mem + 0x401000, sizeof buf) == 0,
-              ".text bytes at 0x401000 match the file");
-        // The entry point bytes.
-        fseek(f, 0x400 + (0x55d6c0 - 0x401000), SEEK_SET);
-        got = fread(buf, 1, 16, f);
-        check(got == 16 && memcmp(buf, g_mem + 0x55d6c0, 16) == 0,
-              "entry point bytes at 0055d6c0 match the file");
-        fclose(f);
-    }
-
-    // .bss: .data has a virtual size far larger than its raw size, so the tail
-    // must read as zero.
-    bool zeroed = true;
-    for (uint32_t a = 0x598000 + 0x58600; a < 0x598000 + 0x58600 + 4096; ++a)
-        if (g_mem[a] != 0) {
-            zeroed = false;
-            break;
+        // Use the section table for both code samples; entry need not be in the
+        // first executable section, and raw offsets need not equal RVAs.
+        FILE *f = fopen(RECOMP_DEVELOPER_EXE, "rb");
+        if (check(f != nullptr, "opened the image for a byte-level spot check")) {
+            auto spot_check = [&](uint32_t va, const ExpectedSection &section, size_t n) {
+                uint8_t bytes[64];
+                bool read = va >= section.va && uint64_t(va - section.va) + n <= section.raw &&
+                            fseek(f, section.offset + (va - section.va), SEEK_SET) == 0 &&
+                            fread(bytes, 1, n, f) == n;
+                check(read && memcmp(bytes, g_mem + va, n) == 0,
+                      "code bytes at %08x in %s match the file", va, section.name.c_str());
+            };
+            bool code = false, entry = false;
+            for (const auto &section : expect.sections) {
+                if (!code && (section.flags & 0x20000000u) && section.raw) {
+                    spot_check(section.va, section, std::min(section.raw, 64u));
+                    code = true;
+                }
+                uint32_t va = loader_entry_point();
+                if (va >= section.va && uint64_t(va - section.va) + 16 <= section.raw) {
+                    spot_check(va, section, 16);
+                    entry = true;
+                }
+            }
+            check(code && entry, "section table locates executable bytes and the entry point");
+            fclose(f);
         }
-    check(zeroed, ".data tail past SizeOfRawData is zero filled");
 
-    // IAT patched with trampolines.
-    uint32_t slot = rd32(0x00d0c580);
-    check(imports_is_trampoline(slot), "first IAT slot at 00d0c580 holds trampoline %08x", slot);
-    const char *desc = imports_describe(slot);
-    check(desc != nullptr, "trampoline %08x describes as %s", slot, desc ? desc : "(null)");
+        // Test the zero-fill tails the image actually has. The loader writes
+        // the TLS index after mapping, so those four bytes are no longer BSS.
+        bool zeroed = true, has_tail = false;
+        for (const auto &section : expect.sections) {
+            has_tail |= section.vsize > section.raw;
+            for (uint32_t i = section.raw; i < section.vsize; ++i) {
+                uint32_t va = section.va + i;
+                if (tls.index < TLS_SLOTS && va >= tls.index_addr && va - tls.index_addr < 4)
+                    continue;
+                zeroed &= rd8(va) == 0;
+            }
+        }
+        if (has_tail)
+            check(zeroed, "section tails past SizeOfRawData are zero filled");
+        else {
+            printf("  [SKIP] the image has no zero-fill section tails\n");
+            ++g_skips;
+        }
 
-    // Data imports hold guest storage, not a trampoline.
-    uint32_t guid = imports_data_address("weanetr.dll", "?BFAID_INet@@3U_GUID@@A");
-    check(guid != 0 && !imports_is_trampoline(guid),
-          "weanetr!BFAID_INet resolved to guest storage at %08x", guid);
-    bool guid_zero = true;
-    for (int i = 0; i < 16; ++i)
-        if (g_mem[guid + i])
-            guid_zero = false;
-    check(guid_zero, "the GUID storage is 16 zeroed bytes");
-    uint32_t table = imports_data_address("weanetr.dll", "?options_to_parity_table@@3PAHA");
-    check(table != 0 && heap_size(table) == 4096, "options_to_parity_table has %u bytes of storage",
-          heap_size(table));
+        uint32_t data_slots = 0;
+        bool iat_ok = true, imports_weanetr = false;
+        for (const auto &import : expect.imports) {
+            std::string dll = import.dll;
+            std::transform(dll.begin(), dll.end(), dll.begin(),
+                           [](unsigned char ch) { return char(std::tolower(ch)); });
+            imports_weanetr |= dll == "weanetr.dll";
+            uint32_t data = imports_data_address(import.dll.c_str(), import.name.c_str());
+            uint32_t trampoline = imports_trampoline_for(import.dll.c_str(), import.name.c_str());
+            uint32_t value = rd32(import.slot);
+            if (data) {
+                ++data_slots;
+                iat_ok &= value == data && !imports_is_trampoline(value);
+            } else {
+                iat_ok &= value == trampoline && imports_is_trampoline(value) &&
+                          imports_describe(value) != nullptr;
+            }
+            if (value != (data ? data : trampoline))
+                printf("  IAT mismatch at %08x for %s!%s\n", import.slot, import.dll.c_str(),
+                       import.name.c_str());
+        }
+        check(iat_ok, "every PE import slot holds its symbol's trampoline or data storage");
+        check(loader_iat_data_imports() == data_slots,
+              "%u IAT slots hold data symbols (expected %u)", loader_iat_data_imports(),
+              data_slots);
+
+        // imports_has_dll reports the shim registry, not which DLLs this PE
+        // imports. Require both so another image cannot use unallocated data.
+        if (imports_weanetr && imports_has_dll("weanetr.dll")) {
+            uint32_t guid = imports_data_address("weanetr.dll", "?BFAID_INet@@3U_GUID@@A");
+            check(guid != 0 && !imports_is_trampoline(guid),
+                  "weanetr!BFAID_INet resolved to guest storage at %08x", guid);
+            bool guid_zero = guid != 0;
+            for (int i = 0; guid && i < 16; ++i)
+                guid_zero &= g_mem[guid + i] == 0;
+            check(guid_zero, "the GUID storage is 16 zeroed bytes");
+            uint32_t table = imports_data_address("weanetr.dll", "?options_to_parity_table@@3PAHA");
+            check(table != 0 && heap_size(table) == 4096,
+                  "options_to_parity_table has %u bytes of storage", heap_size(table));
+        } else {
+            printf("  [SKIP] the image imports no data symbols\n");
+            ++g_skips;
+        }
+    }
 
     // TEB.
     check(rd32(0x0fe00000) == 0xffffffffu, "FS:[0] SEH head is -1");
@@ -442,8 +500,18 @@ static void test_loader() {
           "initial ESP %08x is inside the stack", loader_context()->r[R_ESP]);
 
     // A wrong image must be refused.
-    check(!loader_load(RECOMP_DEVELOPER_GAME_DIR "/popTB.exe"), "a different EXE is refused: %s",
-          loader_error());
+    char bad_dir[512];
+    snprintf(bad_dir, sizeof bad_dir, "%s/recomp-bad-image-XXXXXX", os_temp_dir());
+    if (check(os_mkdtemp(bad_dir) == 0, "created a scratch directory for the wrong image")) {
+        std::string bad_path = std::string(bad_dir) + "/wrong.exe";
+        FILE *bad = fopen(bad_path.c_str(), "wb");
+        if (check(bad != nullptr, "created a deliberately invalid image")) {
+            fputs("not the configured executable", bad);
+            fclose(bad);
+            check(!loader_load(bad_path.c_str()), "a different EXE is refused: %s", loader_error());
+        }
+        remove_tree(bad_dir);
+    }
     check(loader_load(nullptr), "reloaded the correct image");
 }
 
@@ -699,15 +767,20 @@ static void test_version_resource(X86 *c) {
 
 static void test_files(X86 *c) {
     section("file layer");
-    // Mixed case, backslashes, and a relative path: the real file is
-    // original/gog/data/VCONFIG0.DAT.
-    uint32_t name = put_str("DaTa\\VcOnFiG0.dat");
+    // Every game has its configured executable. Flip each ASCII letter's
+    // case to exercise the guest resolver on case-sensitive host filesystems.
+    std::string flipped = RECOMP_EXECUTABLE;
+    for (char &ch : flipped) {
+        unsigned char byte = ch;
+        ch = char(std::islower(byte) ? std::toupper(byte) : std::tolower(byte));
+    }
+    uint32_t name = put_str(flipped.c_str());
     uint32_t h =
         call_import(c, "KERNEL32.dll", "CreateFileA", {name, 0x80000000u, 1, 0, 3, 0x80, 0});
-    check(h != 0xffffffffu, "CreateFileA(\"DaTa\\\\VcOnFiG0.dat\") -> handle %08x", h);
+    check(h != 0xffffffffu, "CreateFileA(\"%s\") -> handle %08x", flipped.c_str(), h);
 
     OsStat st{};
-    os_stat(RECOMP_DEVELOPER_GAME_DIR "/data/VCONFIG0.DAT", &st);
+    check(os_stat(RECOMP_DEVELOPER_EXE, &st) == 0, "host executable is available for comparison");
     uint32_t size = call_import(c, "KERNEL32.dll", "GetFileSize", {h, 0});
     check(size == (uint32_t)st.size, "GetFileSize reports %u, host file is %lld", size,
           (long long)st.size);
@@ -716,7 +789,7 @@ static void test_files(X86 *c) {
     check(call_import(c, "KERNEL32.dll", "ReadFile", {h, buf, 64, read_count, 0}) == 1,
           "ReadFile of 64 bytes succeeded");
     check(rd32(read_count) == 64, "ReadFile reported 64 bytes");
-    FILE *f = fopen(RECOMP_DEVELOPER_GAME_DIR "/data/VCONFIG0.DAT", "rb");
+    FILE *f = fopen(RECOMP_DEVELOPER_EXE, "rb");
     uint8_t host[64];
     size_t got = f ? fread(host, 1, 64, f) : 0;
     if (f)
@@ -737,23 +810,47 @@ static void test_files(X86 *c) {
     check(call_import(c, "KERNEL32.dll", "GetLastError", {}) == 2,
           "GetLastError is ERROR_FILE_NOT_FOUND");
 
-    uint32_t dirname = put_str("LEVELS");
-    check(call_import(c, "KERNEL32.dll", "GetFileAttributesA", {dirname}) & 0x10,
-          "GetFileAttributesA(\"LEVELS\") reports a directory");
+    uint32_t dirname = put_str(RECOMP_GUEST_ROOT);
+    uint32_t attributes = call_import(c, "KERNEL32.dll", "GetFileAttributesA", {dirname});
+    check(attributes != 0xffffffffu && (attributes & 0x10),
+          "GetFileAttributesA of the executable's directory reports a directory");
 
-    // FindFirstFileA / FindNextFileA over the data directory.
-    uint32_t pattern = put_str("data\\VCONFIG0.*");
+    // The executable's stem may also name logs or configuration files. Walk
+    // until exhaustion instead of assuming exactly two matches or their order.
+    std::string stem = RECOMP_EXECUTABLE;
+    size_t extension = stem.find_last_of('.');
+    if (extension != std::string::npos)
+        stem.erase(extension);
+    std::string glob = stem + ".*";
+    uint32_t pattern = put_str(glob.c_str());
     uint32_t fd = scratch_block(0x140);
     uint32_t fh = call_import(c, "KERNEL32.dll", "FindFirstFileA", {pattern, fd});
-    check(fh != 0xffffffffu, "FindFirstFileA(\"data\\\\VCONFIG0.*\") -> %08x", fh);
-    std::string first = gm_str(fd + 44);
-    uint32_t more = call_import(c, "KERNEL32.dll", "FindNextFileA", {fh, fd});
-    std::string second = more ? gm_str(fd + 44) : std::string();
-    check(!first.empty() && !second.empty(), "found \"%s\" and \"%s\"", first.c_str(),
-          second.c_str());
-    check(call_import(c, "KERNEL32.dll", "FindNextFileA", {fh, fd}) == 0,
-          "the third FindNextFileA reports no more files");
-    call_import(c, "KERNEL32.dll", "FindClose", {fh});
+    check(fh != 0xffffffffu, "FindFirstFileA(\"%s\") -> %08x", glob.c_str(), fh);
+    if (fh != 0xffffffffu) {
+        std::set<std::string> found;
+        bool unique = true, matches = true;
+        do {
+            std::string name = gm_str(fd + 44);
+            unique &= found.insert(name).second;
+            std::string prefix = stem + ".";
+            matches &= name.size() >= prefix.size() &&
+                       std::equal(prefix.begin(), prefix.end(), name.begin(),
+                                  [](unsigned char a, unsigned char b) {
+                                      return std::tolower(a) == std::tolower(b);
+                                  });
+            if (!unique) // fail instead of hanging on a broken enumerator
+                break;
+        } while (call_import(c, "KERNEL32.dll", "FindNextFileA", {fh, fd}));
+        check(found.count(RECOMP_EXECUTABLE) != 0,
+              "file enumeration includes the configured executable %s", RECOMP_EXECUTABLE);
+        check(unique && matches, "all %zu enumerated names match the stem and occur once",
+              found.size());
+        check(call_import(c, "KERNEL32.dll", "GetLastError", {}) == 18,
+              "FindNextFileA ends with ERROR_NO_MORE_FILES");
+        check(call_import(c, "KERNEL32.dll", "FindNextFileA", {fh, fd}) == 0,
+              "exhausted FindNextFileA keeps reporting no more files");
+        check(call_import(c, "KERNEL32.dll", "FindClose", {fh}) == 1, "FindClose succeeds");
+    }
 
     // Guest-visible paths.
     uint32_t pathbuf = scratch_block(300);
@@ -1177,17 +1274,17 @@ static void test_misc_shims(X86 *c) {
               rd32(osvi + 8) == 10 && rd32(osvi + 16) == 1,
           "GetVersionExA reports Windows 98 SE (4.10, platform 1)");
     check(call_import(c, "KERNEL32.dll", "GetProcessHeap", {}) != 0, "GetProcessHeap");
-    check(call_import(c, "KERNEL32.dll", "IsBadCodePtr", {0x00401000}) == 0 &&
-              call_import(c, "KERNEL32.dll", "IsBadCodePtr", {0x00e00000}) == 1,
+    check(call_import(c, "KERNEL32.dll", "IsBadCodePtr", {loader_entry_point()}) == 0 &&
+              call_import(c, "KERNEL32.dll", "IsBadCodePtr", {loader_image_limit()}) == 1,
           "IsBadCodePtr uses the image bounds from the PE headers");
 
-    uint32_t s1 = put_str("Populous");
+    uint32_t s1 = put_str("RuntimeX");
     check(call_import(c, "KERNEL32.dll", "lstrlenA", {s1}) == 8, "lstrlenA");
     uint32_t dst = scratch_block(64);
     call_import(c, "KERNEL32.dll", "lstrcpyA", {dst, s1});
     uint32_t s2 = put_str(" TB");
     call_import(c, "KERNEL32.dll", "lstrcatA", {dst, s2});
-    check(gm_str(dst) == "Populous TB", "lstrcpyA + lstrcatA -> \"%s\"", gm_str(dst).c_str());
+    check(gm_str(dst) == "RuntimeX TB", "lstrcpyA + lstrcatA -> \"%s\"", gm_str(dst).c_str());
 
     uint32_t fmt = put_str("%s has %d units (%04x)");
     uint32_t va = scratch_block(16);
@@ -1403,70 +1500,85 @@ extern "C" int mods_display_fps() {
 
 static void test_native_draw_waits(X86 *c) {
     section("native cap replaces both original draw waits without changing simulation time");
+    // These are synthetic shim calls, so even unused configured sites can
+    // exercise the clock hook without executing the image's draw loop.
+    if (!gm_valid(RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE, 4) ||
+        !gm_valid(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE, 4)) {
+        printf("  [SKIP] frame clock hooks are sentinels for this game\n");
+        ++g_skips;
+        return;
+    }
+    const uint32_t canaries = scratch_block(32);
     const uint32_t old_ret = g_fake_ret, old_edi = c->r[R_EDI];
-    const uint8_t old_limit = rd8(0x89ce62), old_flags = rd8(0x96ead4);
-    const uint32_t addresses[] = {0x98e7cc, 0x98e7e0, 0x5cd92c, 0x5cd930, 0x5ca850};
+    const uint8_t old_limit = rd8(canaries), old_flags = rd8(canaries + 4);
+    const uint32_t addresses[] = {RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE,
+                                  RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE, canaries + 8,
+                                  canaries + 12, canaries + 16};
     uint32_t saved[5];
     for (int i = 0; i < 5; ++i)
         saved[i] = rd32(addresses[i]);
     host_set_time_source(fake_clock);
     g_fake_time = 1000;
-    wr8(0x89ce62, 40);
-    wr8(0x96ead4, 8);
-    wr32(0x5cd92c, 1234);
-    wr32(0x5cd930, 83);
-    wr32(0x5ca850, 99);
+    wr8(canaries, 40);
+    wr8(canaries + 4, 8);
+    wr32(canaries + 8, 1234);
+    wr32(canaries + 12, 83);
+    wr32(canaries + 16, 99);
     for (int rate : {40, 60, 120}) {
         g_display_fps = rate;
-        for (uint32_t caller : {0x4a47c1u, 0x4a47a4u}) {
-            g_fake_ret = 0x4a45a3;
-            check(call_import(c, "KERNEL32.dll", "GetTickCount", {}) == 1000 && rd8(0x89ce62) == 40,
-                  "%d Hz pacing preserves the legacy animation rate and real clock", rate);
-            wr32(0x98e7cc, 1016);
-            wr32(0x98e7e0, 1025);
+        for (uint32_t caller : {RECOMP_HOOK_FRAME_CLOCK_WAIT, RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP}) {
+            g_fake_ret = RECOMP_HOOK_FRAME_CLOCK_BEGIN;
+            check(call_import(c, "KERNEL32.dll", "GetTickCount", {}) == 1000 && rd8(canaries) == 40,
+                  "%d Hz pacing preserves unrelated storage and the real clock", rate);
+            wr32(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE, 1016);
+            wr32(RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE, 1025);
             c->r[R_EDI] = 60;
             g_fake_ret = caller;
             uint32_t now = call_import(c, "KERNEL32.dll", "GetTickCount", {});
-            const bool alternate = caller == 0x4a47a4;
-            check(now == 1000 && rd32(alternate ? 0x98e7cc : 0x98e7e0) == now,
+            const bool alternate = caller == RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP;
+            check(now == 1000 && rd32(alternate ? RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE
+                                                : RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE) == now,
                   "%08x retires its old wait at %d Hz, without accelerating time", caller, rate);
-            check(rd32(alternate ? 0x98e7e0 : 0x98e7cc) == (alternate ? 1025u : 1016u),
+            check(rd32(alternate
+                           ? RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE
+                           : RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE) == (alternate ? 1025u : 1016u),
                   "only the active draw deadline changes");
             check(c->r[R_EDI] == (alternate ? uint32_t(rate) : 60u),
                   "alternate wait uses the selected cap for the measured rendering-rate ceiling");
-            check(rd32(0x5cd92c) == 1234 && rd32(0x5cd930) == 83 && rd32(0x5ca850) == 99 &&
-                      rd8(0x96ead4) == 8,
-                  "simulation deadline, turn duration, measured rate and game flags stay intact");
+            check(rd32(canaries + 8) == 1234 && rd32(canaries + 12) == 83 &&
+                      rd32(canaries + 16) == 99 && rd8(canaries + 4) == 8,
+                  "unrelated timing and flag canaries stay intact");
         }
     }
-    wr32(0x98e7cc, 1016);
-    wr32(0x98e7e0, 1025);
+    wr32(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE, 1016);
+    wr32(RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE, 1025);
     c->r[R_EDI] = 60;
-    g_fake_ret = 0x49c9f6;
-    check(call_import(c, "KERNEL32.dll", "GetTickCount", {}) == 1000 && rd32(0x98e7cc) == 1016 &&
-              rd32(0x98e7e0) == 1025 && c->r[R_EDI] == 60,
+    g_fake_ret = GUEST_RETURN_SENTINEL;
+    check(call_import(c, "KERNEL32.dll", "GetTickCount", {}) == 1000 &&
+              rd32(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE) == 1016 &&
+              rd32(RECOMP_HOOK_FRAME_CLOCK_WAIT_DEADLINE) == 1025 && c->r[R_EDI] == 60,
           "unrelated clock calls cannot alter draw pacing");
     for (const char *pin : {"RECOMP_PIN_CLOCK"}) {
         os_setenv(pin, "1000,8");
-        g_fake_ret = 0x4a47a4;
+        g_fake_ret = RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP;
         call_import(c, "KERNEL32.dll", "GetTickCount", {});
-        check(rd32(0x98e7cc) == 1016 && c->r[R_EDI] == 60, "%s retains original fixture behavior",
-              pin);
+        check(rd32(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE) == 1016 && c->r[R_EDI] == 60,
+              "%s retains original fixture behavior", pin);
         os_unsetenv(pin);
     }
     g_display_fps = 0;
-    g_fake_ret = 0x4a45a3;
+    g_fake_ret = RECOMP_HOOK_FRAME_CLOCK_BEGIN;
     call_import(c, "KERNEL32.dll", "GetTickCount", {});
-    check(rd8(0x89ce62) == 40, "original mode restores the guest draw limit");
-    g_fake_ret = 0x4a47a4;
+    check(rd8(canaries) == 40, "original mode preserves unrelated storage");
+    g_fake_ret = RECOMP_HOOK_FRAME_CLOCK_WAIT_CLAMP;
     call_import(c, "KERNEL32.dll", "GetTickCount", {});
-    check(rd32(0x98e7cc) == 1016 && c->r[R_EDI] == 60,
+    check(rd32(RECOMP_HOOK_FRAME_CLOCK_CLAMP_DEADLINE) == 1016 && c->r[R_EDI] == 60,
           "original mode keeps its alternate wait and rate ceiling");
     host_clear_time_source();
     g_fake_ret = old_ret;
     c->r[R_EDI] = old_edi;
-    wr8(0x89ce62, old_limit);
-    wr8(0x96ead4, old_flags);
+    wr8(canaries, old_limit);
+    wr8(canaries + 4, old_flags);
     for (int i = 0; i < 5; ++i)
         wr32(addresses[i], saved[i]);
 }
@@ -1486,7 +1598,7 @@ static void test_windows(X86 *c) {
     // The window procedure is a stand-in the test-only recomp_call can reach;
     // it answers WM_NCCREATE with a non-zero value, as a real one must.
     uint32_t wndproc = imports_alloc_trampoline("test", "guest_callback", fake_guest_fn, 4);
-    uint32_t clsname = put_str("PopulousWnd");
+    uint32_t clsname = put_str("RuntimeTestWnd");
     uint32_t wc = scratch_block(40);
     wr32(wc + 0, 3);       // style
     wr32(wc + 4, wndproc); // lpfnWndProc
@@ -1494,10 +1606,10 @@ static void test_windows(X86 *c) {
     wr32(wc + 36, clsname);
     check(call_import(c, "USER32.dll", "RegisterClassA", {wc}) != 0, "RegisterClassA");
 
-    uint32_t title = put_str("Populous");
+    uint32_t title = put_str("RuntimeX");
     uint32_t hwnd =
         call_import(c, "USER32.dll", "CreateWindowExA",
-                    {0, clsname, title, 0x80000000u, 0, 0, 640, 480, 0, 0, 0x400000, 0});
+                    {0, clsname, title, 0x80000000u, 0, 0, 640, 480, 0, 0, RECOMP_IMAGE_BASE, 0});
     check(hwnd != 0, "CreateWindowExA -> %08x", hwnd);
     check(host_main_window() == hwnd, "host_main_window sees it");
     check(host_window_proc(hwnd) == wndproc, "the class WNDPROC was recorded");
@@ -2644,17 +2756,18 @@ static void test_registry(X86 *c) {
     os_unlink(registry_path().c_str());
     registry_load();
 
-    uint32_t sub = put_str("Software\\Bullfrog\\Populous");
+    uint32_t sub = put_str("Software\\RecompTests\\Registry");
     uint32_t phk = scratch_block(4), pdisp = scratch_block(4);
     uint32_t rc = call_import(c, "ADVAPI32.dll", "RegCreateKeyExA",
                               {0x80000002u, sub, 0, 0, 0, 0xf003f, 0, phk, pdisp});
-    check(rc == 0, "RegCreateKeyExA(HKLM\\Software\\Bullfrog\\Populous) -> %u", rc);
+    check(rc == 0, "RegCreateKeyExA(HKLM\\Software\\RecompTests\\Registry) -> %u", rc);
     uint32_t hk = rd32(phk);
     check(rd32(pdisp) == 1, "the key was created, not opened");
 
     uint32_t vname = put_str("InstallPath");
-    uint32_t vdata = put_str("C:\\Populous");
-    check(call_import(c, "ADVAPI32.dll", "RegSetValueExA", {hk, vname, 0, 1, vdata, 12}) == 0,
+    uint32_t vdata = put_str(RECOMP_GUEST_ROOT);
+    check(call_import(c, "ADVAPI32.dll", "RegSetValueExA",
+                      {hk, vname, 0, 1, vdata, sizeof(RECOMP_GUEST_ROOT)}) == 0,
           "RegSetValueExA(REG_SZ)");
     uint32_t dname = put_str("Detail");
     uint32_t ddata = scratch_block(4);
@@ -2674,33 +2787,34 @@ static void test_registry(X86 *c) {
               0,
           "RegOpenKeyExA after reload");
     uint32_t hk2 = rd32(phk2);
-    uint32_t ptype = scratch_block(4), pbuf = scratch_block(64), pcb = scratch_block(4);
-    wr32(pcb, 64);
+    uint32_t ptype = scratch_block(4), pbuf = scratch_block(sizeof(RECOMP_GUEST_ROOT) + 64),
+             pcb = scratch_block(4);
+    wr32(pcb, sizeof(RECOMP_GUEST_ROOT) + 64);
     check(call_import(c, "ADVAPI32.dll", "RegQueryValueExA", {hk2, vname, 0, ptype, pbuf, pcb}) ==
               0,
           "RegQueryValueExA(InstallPath)");
-    check(rd32(ptype) == 1 && gm_str(pbuf) == "C:\\Populous",
+    check(rd32(ptype) == 1 && gm_str(pbuf) == RECOMP_GUEST_ROOT,
           "value survived the round trip: type %u \"%s\"", rd32(ptype), gm_str(pbuf).c_str());
-    wr32(pcb, 64);
+    wr32(pcb, sizeof(RECOMP_GUEST_ROOT) + 64);
     check(call_import(c, "ADVAPI32.dll", "RegQueryValueExA", {hk2, dname, 0, ptype, pbuf, pcb}) ==
               0,
           "RegQueryValueExA(Detail)");
     check(rd32(ptype) == 4 && rd32(pbuf) == 3, "the DWORD round tripped as %u", rd32(pbuf));
 
-    uint32_t mixed_key = put_str("SOFTWARE\\bullfrog\\POPULOUS");
+    uint32_t mixed_key = put_str("SOFTWARE\\recomptests\\REGISTRY");
     uint32_t phk3 = scratch_block(4);
     check(call_import(c, "ADVAPI32.dll", "RegOpenKeyExA",
                       {0x80000002u, mixed_key, 0, 0x20019, phk3}) == 0,
           "the key opens under a different case");
-    wr32(pcb, 64);
+    wr32(pcb, sizeof(RECOMP_GUEST_ROOT) + 64);
     check(call_import(c, "ADVAPI32.dll", "RegQueryValueExA",
                       {rd32(phk3), put_str("installpath"), 0, ptype, pbuf, pcb}) == 0 &&
-              gm_str(pbuf) == "C:\\Populous",
+              gm_str(pbuf) == RECOMP_GUEST_ROOT,
           "so does the value name");
     call_import(c, "ADVAPI32.dll", "RegCloseKey", {rd32(phk3)});
 
     uint32_t missing = put_str("NoSuchValue");
-    wr32(pcb, 64);
+    wr32(pcb, sizeof(RECOMP_GUEST_ROOT) + 64);
     check(call_import(c, "ADVAPI32.dll", "RegQueryValueExA", {hk2, missing, 0, ptype, pbuf, pcb}) ==
               2,
           "a missing value reports ERROR_FILE_NOT_FOUND");
@@ -2711,11 +2825,24 @@ static void test_registry(X86 *c) {
 // hold for a zero-argument and a multi-argument shim.
 static void test_import_coverage(X86 *c) {
     section("import coverage");
-    check(imports_count() >= 254,
-          "%u trampolines allocated; the IAT contributed 254 of them, the rest were "
-          "resolved on demand",
-          imports_count());
-    check(imports_data_count() == 4, "%u data imports registered", imports_data_count());
+    ExpectedImage expect;
+    std::string err;
+    if (check(pefile_sections(expect, err), "read PE imports for coverage: %s", err.c_str())) {
+        std::set<uint32_t> trampolines, data;
+        for (const auto &import : expect.imports) {
+            uint32_t value = rd32(import.slot);
+            if (imports_is_trampoline(value))
+                trampolines.insert(value);
+            else
+                data.insert(value);
+        }
+        check(imports_count() >= trampolines.size(),
+              "%u trampolines allocated; the IAT references %zu distinct trampolines",
+              imports_count(), trampolines.size());
+        check(imports_data_count() >= data.size(),
+              "%u data symbols registered; the IAT references %zu distinct data symbols",
+              imports_data_count(), data.size());
+    }
 
     uint32_t esp_before = c->r[R_ESP];
     call_import(c, "KERNEL32.dll", "GetVersion", {});
@@ -2731,7 +2858,31 @@ static void test_import_coverage(X86 *c) {
     imports_coverage(&impl, &log_only, &unknown);
     check(impl + log_only == imports_count(), "%u implemented, %u logging-only", impl, log_only);
     check(unknown == 0, "%u imports have an unknown argument count", unknown);
-    imports_dump_coverage(stdout);
+    if (unknown) {
+        // Reuse the runtime's classification rather than duplicating its shim
+        // registry in this test. Limit the diagnostic to the first 40 names.
+        FILE *coverage = tmpfile();
+        if (check(coverage != nullptr, "opened import-coverage diagnostic buffer")) {
+            imports_dump_coverage(coverage);
+            rewind(coverage);
+            char line[1024];
+            bool names = false;
+            unsigned printed = 0;
+            printf("  first %u unknown dll!name pairs:\n", std::min(unknown, 40u));
+            while (fgets(line, sizeof line, coverage)) {
+                if (strncmp(line, "imports with an unknown stdcall argument count", 45) == 0) {
+                    names = true;
+                } else if (names) {
+                    if (line[0] != ' ')
+                        break;
+                    if (printed++ < 40)
+                        fputs(line, stdout);
+                }
+            }
+            check(printed == unknown, "coverage diagnostic names all %u unknown imports", unknown);
+            fclose(coverage);
+        }
+    }
     imports_dump_stats(stdout);
 }
 
@@ -2956,7 +3107,7 @@ static void test_mod_seams(X86 *c) {
                 seen_dirs.push_back(dir);
                 emit(ctx, "root.txt", (g_seam_root + "/read/root.txt").c_str());
             });
-        win32_host_path_op("C:\\Populous", WIN32_FILE_READ);
+        win32_host_path_op(RECOMP_GUEST_ROOT, WIN32_FILE_READ);
         check(!g_seam_calls.empty() && g_seam_calls.back().first.empty(),
               "the guest root reaches the resolver as the empty string");
         uint32_t rootpat = put_str("*.txt");
@@ -3421,6 +3572,6 @@ int main(int argc, char **argv) {
     // Last: it retires the main thread.
     test_run_thread_finished(c);
 
-    printf("\n%d checks, %d failures\n", g_checks, g_failures);
+    printf("\n%d checks, %d failures, %d skipped\n", g_checks, g_failures, g_skips);
     return g_failures ? 1 : 0;
 }

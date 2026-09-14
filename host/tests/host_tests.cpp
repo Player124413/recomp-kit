@@ -8352,6 +8352,10 @@ extern "C" int mods_display_scene_width(int w, int) {
     return test_classic ? w : std::max(w, test_scene_width);
 }
 static std::string display_offered_modes;
+static bool offered_mode(const char *mode) {
+    return ("," + display_offered_modes + ",").find(std::string(",") + mode + ",") !=
+           std::string::npos;
+}
 extern "C" int ddraw_add_mode(int w, int h, int bpp) {
     if (!display_offered_modes.empty())
         display_offered_modes += ",";
@@ -8362,7 +8366,9 @@ extern "C" int ddraw_add_mode(int w, int h, int bpp) {
 static void test_display_settings_bridge() {
     display_offered_modes.clear();
     CHECK_EQ(host_display_offer_mode(1920, 1080, 16), 1);
-    CHECK(display_offered_modes == "640x480x8,640x480x16,1920x1080x16");
+    // Bootstrap modes belong to the host. This bridge must offer the requested
+    // mode without assuming a particular game's startup resolution or depth.
+    CHECK(offered_mode("1920x1080x16"));
     CHECK_NEAR(host_display_aspect(), 4.0 / 3.0, 0.00001);
     host_present_test_begin(false);
     host_present_resize(3840, 2160);
@@ -8483,8 +8489,10 @@ static void test_display_settings_bridge() {
     test_classic = 0;
     display_offered_modes.clear();
     CHECK_EQ(host_display_offer_mode(2560, 1920, 8), 1);
-    CHECK(display_offered_modes == "640x480x8,640x480x16,2560x1920x8");
+    CHECK(offered_mode("2560x1920x8"));
+    const std::string supported = display_offered_modes;
     CHECK_EQ(host_display_offer_mode(1920, 1080, 32), 0);
+    CHECK(display_offered_modes == supported);
 }
 
 static void test_native_frame_metrics() {
@@ -8552,13 +8560,15 @@ static void test_native_frame_metrics() {
 }
 static void test_wide_cursor_bound() {
     constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
+    constexpr uint32_t right = RECOMP_HOOK_MOUSE_DEVICE_RIGHT;
+    uint32_t saved_right = rd32(right);
     uint8_t saved[0x48];
     memcpy(saved, gm_ptr(base), sizeof saved);
     host_gate_reset();
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
     wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
-    wr32(base + 0x40, 640);
+    wr32(right, 640);
     wr32(base + 0x44, 480);
     auto in = t9_layout(nullptr);
     in.cls = HOST_SCREEN_GAMEPLAY;
@@ -8569,22 +8579,22 @@ static void test_wide_cursor_bound() {
     host_gate_window_motion(400, 300, 0, 0, &hit);
     int32_t dx = 0, dy = 0;
     host_input_pointer_correction(&dx, &dy);
-    CHECK_EQ(rd32(base + 0x40), 852u);
+    CHECK_EQ(rd32(right), 852u);
     test_scene_width = 1120;
     host_input_pointer_correction(&dx, &dy);
-    CHECK_EQ(rd32(base + 0x40), 1120u);
+    CHECK_EQ(rd32(right), 1120u);
     host_gate_reset();
-    CHECK_EQ(rd32(base + 0x40), 640u);
+    CHECK_EQ(rd32(right), 640u);
     host_gate_set_layout(&in);
     host_gate_window_motion(400, 300, 0, 0, &hit);
     host_input_pointer_correction(&dx, &dy);
-    CHECK_EQ(rd32(base + 0x40), 1120u);
+    CHECK_EQ(rd32(right), 1120u);
     // A modal owns its narrower clamp. Never overwrite it or restore over it.
-    wr32(base + 0x40, 300);
+    wr32(right, 300);
     host_input_pointer_correction(&dx, &dy);
-    CHECK_EQ(rd32(base + 0x40), 300u);
+    CHECK_EQ(rd32(right), 300u);
     host_gate_reset();
-    CHECK_EQ(rd32(base + 0x40), 300u);
+    CHECK_EQ(rd32(right), 300u);
 
     // A HUD hit in the widened composition names guest x=620, even though
     // scaling the physical pointer across the entire canvas would give x=835.
@@ -8592,7 +8602,8 @@ static void test_wide_cursor_bound() {
     host_input_reset();
     memset(gm_ptr(base), 0, 0x48);
     wr32(base, RECOMP_HOOK_MOUSE_VTABLE);
-    wr32(base + 0x40, 639);
+    wr32(base + 0x40, 639); // device geometry used by pointer integration
+    wr32(right, 639);
     wr32(base + 0x44, 479);
     wr32(base + 0x20, 100);
     wr32(base + 0x24, 100);
@@ -8616,6 +8627,7 @@ static void test_wide_cursor_bound() {
     host_input_reset();
     test_scene_width = 0;
     memcpy(gm_ptr(base), saved, sizeof saved);
+    wr32(right, saved_right);
 }
 static void test_pointer_reaches_scrolling_edges() {
     constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;

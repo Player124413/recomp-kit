@@ -1,4 +1,6 @@
-// Real generated dispatch and a pinned-image string-copy fixture; no fake samples.
+// Real generated dispatch and sampler, with a safe test hook at a generated
+// entry. Executing an arbitrary game's entry point or first function can boot
+// the game; the copy workload exercises profiling without those side effects.
 #include "game_config.h"
 #include "../profile.h"
 extern "C" {
@@ -23,16 +25,30 @@ static int failures;
             ++failures;                                                                            \
         }                                                                                          \
     } while (0)
-static constexpr uint32_t target = 0x00500040; // listing name memcpy_1 (NUL string copy)
+static uint32_t target;
 static uint32_t index_;
+static uint32_t fixture_calls;
+// Volatile stores keep the sampler's workload observable even under LTO.
+// The hook follows the guest cdecl return convention, just like a translation.
+static void copy_fixture(X86 *c, uint32_t) {
+    uint32_t dst = rd32(c->r[R_ESP] + 4), src = rd32(c->r[R_ESP] + 8);
+    volatile uint8_t *out = g_mem + dst;
+    const uint8_t *in = g_mem + src;
+    for (uint32_t n = 0; n < 65536; ++n)
+        out[n] = in[n];
+    ++fixture_calls;
+    c->r[R_EAX] = dst;
+    c->eip = rd32(c->r[R_ESP]);
+    c->r[R_ESP] += 4;
+}
 static void direct_call(X86 *c) {
-    CALL_FN(00500040);
+    CALL_FN(RECOMP_PROFILE_TARGET);
 }
 static bool nested_ok;
 static void nested(X86 *c, uint32_t i) {
     CHECK(recomp_profile_depth() == 2);
     CHECK(sched_current_holder_slot()->top.load() == i);
-    recomp_hooked[i] = 0;
+    recomp_hook_ptrs[i] = copy_fixture;
     recomp_call(c, target);
     CHECK(recomp_profile_depth() == 2);
     CHECK(sched_current_holder_slot()->top.load() == i);
@@ -95,11 +111,20 @@ int main(int argc, char **argv) {
     X86 &c = *loader_context();
     loader_init_context(&c);
     sched_set_guest_thread(true);
+    CHECK(recomp_func_count > 0);
+    if (!recomp_func_count)
+        return 1;
+    target = recomp_func_addrs[0];
+    CHECK(FIDX(RECOMP_PROFILE_TARGET) == 0);
     int32_t found = recomp_index_of(target);
     CHECK(found >= 0);
     if (found < 0)
         return 1;
     index_ = uint32_t(found);
+    RecompHookFn saved_hook = recomp_hook_ptrs[index_];
+    uint8_t saved_hooked = recomp_hooked[index_];
+    recomp_hook_ptrs[index_] = copy_fixture;
+    recomp_hooked[index_] = 1;
     constexpr uint32_t n = 65536;
     uint32_t src = heap_alloc(n), dst = heap_alloc(n);
     CHECK(src && dst);
@@ -114,7 +139,7 @@ int main(int argc, char **argv) {
         wr32(sp + 4, dst);
         wr32(sp + 8, src);
     };
-    // Caller stays published across all 10,000 translated calls; gaps therefore
+    // Caller stays published across all 10,000 generated dispatches; gaps therefore
     // count against the >90% requirement instead of disappearing as idle time.
     recomp_profile_push(0xfffffffe);
     for (int i = 0; i < 10000; ++i) {
@@ -125,6 +150,7 @@ int main(int argc, char **argv) {
             recomp_call(&c, target);
     }
     CHECK(memcmp(g_mem + src, g_mem + dst, n) == 0);
+    CHECK(fixture_calls == 10000);
     CHECK(recomp_profile_depth() == (enabled ? 1u : 0u));
     if (enabled) {
         auto rows = profile_snapshot();
@@ -134,8 +160,10 @@ int main(int argc, char **argv) {
             if (r.index == index_)
                 hot = r.samples;
         }
-        printf("fixture: 10000 translated memcpy_1 calls, hot=%llu total=%llu share=%.2f%%\n",
-               (unsigned long long)hot, (unsigned long long)total, total ? 100.0 * hot / total : 0);
+        printf("fixture: 10000 generated dispatches at %08x with a copy hook, "
+               "hot=%llu total=%llu share=%.2f%%\n",
+               target, (unsigned long long)hot, (unsigned long long)total,
+               total ? 100.0 * hot / total : 0);
         CHECK(total >= 100);
         CHECK(hot * 100 > total * 90);
         setup();
@@ -199,6 +227,8 @@ int main(int argc, char **argv) {
         CHECK(profile_snapshot().empty());
         CHECK(sched_current_holder_slot() == nullptr);
     }
+    recomp_hook_ptrs[index_] = saved_hook;
+    recomp_hooked[index_] = saved_hooked;
     profile_stop();
     printf("profile tests: %s (%d failures; %s)\n", failures ? "FAIL" : "PASS", failures,
            enabled ? "enabled" : "disabled");
