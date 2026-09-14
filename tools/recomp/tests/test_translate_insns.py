@@ -29,7 +29,8 @@ from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_INTR, UcError
 from unicorn.x86_const import (
     UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBX,
     UC_X86_REG_ESP, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI,
-    UC_X86_REG_EFLAGS, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG)
+    UC_X86_REG_EFLAGS, UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG,
+    UC_X86_REG_MXCSR)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
@@ -39,7 +40,7 @@ import translate as T  # noqa: E402
 # Guest layout shared by both engines.  The code lives in its own page range,
 # the stack and scratch are zeroed before every run, and the cave holds the
 # return address a RET lands on, which is where emulation stops.
-CODE_BASE, CODE_SIZE = 0x0D010000, 0x00010000
+CODE_BASE, CODE_SIZE = 0x0D010000, 0x00020000
 STACK_BASE, STACK_SIZE = 0x0EF00000, 0x00100000
 ESP_INIT = 0x0EFFFF00
 SCRATCH, SCRATCH_SIZE = 0x0E100000, 0x00010000
@@ -102,6 +103,14 @@ def rand_regs(rng, **fixed):
     regs = {name: rng.getrandbits(32) for name in REG_NAMES if name != "ESP"}
     regs.update(fixed)
     return regs
+
+
+def cmpxchg_setup(rng):
+    """Exercise both the matching and nonmatching accumulator paths."""
+    mem = rng.getrandbits(32)
+    eax = mem if rng.random() < 0.5 else rng.getrandbits(32)
+    return {"regs": rand_regs(rng, ECX=SCRATCH + 0x40, EAX=eax),
+            "mem": [(SCRATCH + 0x40, struct.pack("<I", mem))]}
 
 
 def loop_setup(rng):
@@ -253,6 +262,24 @@ CASES = [
           (0x8, "FLD1"), (0xa, "FSTP double ptr [ESP + 0xc]"), (0xe, "RET")],
          "D9 E8  DB E3  D9 7C 24 04  D9 E8  DD 5C 24 0C  C3",
          lambda rng: {"args": [0, 0, 0, 0, 0, 0]}),
+    Case("CMPXCHG stores when EAX equals the destination and loads EAX otherwise", 0x0D01F000,
+         [(0x0, "CMPXCHG.LOCK dword ptr [ECX],EDX"), (0x4, "SETZ BL"), (0x7, "RET")],
+         "F0 0F B1 11  0F 94 C3  C3", cmpxchg_setup),
+    Case("XADD exchanges and adds", 0x0D020000,
+         [(0x0, "XADD.LOCK dword ptr [ECX],EDX"), (0x4, "RET")],
+         "F0 0F C1 11  C3",
+         lambda rng: {"regs": rand_regs(rng, ECX=SCRATCH + 0x40),
+                      "mem": [(SCRATCH + 0x40, struct.pack("<I", rng.getrandbits(32)))]}),
+    Case("PAUSE is a hint and changes nothing", 0x0D021000,
+         [(0x0, "PAUSE"), (0x2, "RET")],
+         "F3 90  C3", lambda rng: {"regs": rand_regs(rng)}),
+    Case("CMC complements the carry", 0x0D022000,
+         [(0x0, "STC"), (0x1, "CMC"), (0x2, "SETC BL"), (0x5, "CMC"),
+          (0x6, "SETC CL"), (0x9, "RET")],
+         "F9  F5  0F 92 C3  F5  0F 92 C1  C3", lambda rng: {"regs": rand_regs(rng)}),
+    Case("STMXCSR stores the default MXCSR", 0x0D023000,
+         [(0x0, "STMXCSR dword ptr [ECX]"), (0x3, "RET")],
+         "0F AE 19  C3", lambda rng: {"regs": rand_regs(rng, ECX=SCRATCH + 0x80)}),
 ]
 
 
@@ -374,6 +401,7 @@ class Emu(object):
         self.u.mem_write(SCRATCH, b"\0" * SCRATCH_SIZE)
         self.u.mem_write(case.addr, case.code)
         self.u.reg_write(UC_X86_REG_FPCW, FPU_CW_INIT)
+        self.u.reg_write(UC_X86_REG_MXCSR, 0x1f80)
         self.u.reg_write(UC_X86_REG_FPSW, 0)
         self.u.reg_write(UC_X86_REG_FPTAG, FPU_TAG_INIT)
         self.u.reg_write(UC_X86_REG_EFLAGS, EFLAGS_MISC_INIT)

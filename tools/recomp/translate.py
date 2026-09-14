@@ -1869,6 +1869,33 @@ class Translator(object):
             L.append(write_op(b, size, "t_"))
             return L
 
+        if m == "CMPXCHG":
+            # The guest is single-threaded, so LOCK needs no host atomic.
+            # Flags come from accumulator - destination on either path.
+            size = operand_size(ops)
+            dst, src = ops
+            dst = self.rmw(dst, size, L)
+            L.append("uint32_t a_ = c->r[0] & %s, b_ = %s;"
+                     % (hexlit(mask_of(size)), read_op(dst, size)))
+            L.append("uint64_t rf_ = (uint64_t)a_ - b_;")
+            L.append("uint32_t r_ = (uint32_t)rf_ & %s;" % hexlit(mask_of(size)))
+            L.append("if (a_ == b_) { %s }" % write_op(dst, size, read_op(src, size)))
+            L.append("else { %s }" % write_op(Op("reg", reg=0, size=size, part=None), size, "b_"))
+            L.extend(self.flags_arith("sub", size, live))
+            return L
+
+        if m == "XADD":
+            size = operand_size(ops)
+            dst, src = ops
+            dst = self.rmw(dst, size, L)
+            L.append("uint32_t a_ = %s, b_ = %s;" % (read_op(dst, size), read_op(src, size)))
+            L.append("uint64_t rf_ = (uint64_t)a_ + b_;")
+            L.append("uint32_t r_ = (uint32_t)rf_ & %s;" % hexlit(mask_of(size)))
+            L.append(write_op(src, size, "a_"))
+            L.append(write_op(dst, size, "r_"))
+            L.extend(self.flags_arith("add", size, live))
+            return L
+
         if m == "PUSH":
             size = operand_size(ops, hint=32)
             if size == 16:
@@ -2082,6 +2109,8 @@ class Translator(object):
             return ["c->eflags_cf = 0;"]
         if m == "STC":
             return ["c->eflags_cf = 1;"]
+        if m == "CMC":
+            return ["c->eflags_cf = !c->eflags_cf;"]
 
         # ---------------------------------------------------- control flow --
         if m in JCC:
@@ -2159,8 +2188,11 @@ class Translator(object):
             port = read_op(ops[0], 32) if ops[0].kind == "reg" else read_op(ops[0], 32)
             L.append("recomp_out(c, %s, %s, %d);" % (port, read_op(ops[1], size), size // 8))
             return L
-        if m in ("NOP", "WAIT"):
+        if m in ("NOP", "WAIT", "PAUSE"):
             return [";"]
+        if m == "STMXCSR":
+            # No translated SSE arithmetic changes MXCSR, so expose its reset value.
+            return ["wr32(%s, 0x1f80u);" % addr_expr(ops[0])]
         if m == "FNCLEX":
             return ["c->fpu_sw &= (uint16_t)~0x80ffu;"]
 
