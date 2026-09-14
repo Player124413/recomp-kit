@@ -578,10 +578,65 @@ def test_except_calls_push_decoded_returns_after_short_jump(tmp_path, monkeypatc
     for ret in (cleanup + 5, cleanup + 10, epilogue):
         assert "wr32(c->r[4], %s);" % T.hexlit(ret) in block
     assert "wr32(c->r[4], %s);" % T.hexlit(cleanup + 11) not in block
-    assert "recomp_jump(c, t_);" in text
+    assert "c->eip = c->r[2]; return;" in text
     table_text = (out / "table.c").read_text()
     returns = table_text.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]
     assert "0x%08xu" % epilogue in returns
+
+
+@pytest.mark.parametrize("code,is_return", [
+    ("5a 83 c4 08 ff e2", True),                   # pop own return, clean arguments
+    ("50 58 5a ff e2", True),                     # balanced push/pop before return
+    ("66 50 66 58 5a ff e2", True),               # 16-bit stack slots
+    ("55 89 e5 83 ec 08 c9 5a ff e2", True),      # LEAVE restores entry ESP
+    ("5a 8b 64 24 2c 31 c0 ff e2", True),         # unknown ESP preserves EDX
+    ("5a 75 01 90 ff e2", True),                  # agreeing control-flow paths
+    ("ba 00 11 60 00 ff e2", False),              # ordinary computed jump
+    ("50 5a ff e2", False),                       # popped a local, not the return
+    ("5a b2 01 ff e2", False),                    # partial register overwrite
+    ("5a 87 c2 ff e2", False),                    # XCHG writes both registers
+    ("5a f7 e1 ff e2", False),                    # MUL implicitly overwrites EDX
+    ("8b 64 24 2c 5a ff e2", False),              # unknown ESP before POP
+    ("5a 75 02 31 d2 ff e2", False),              # one path loses the return
+    ("75 01 50 5a ff e2", False),                 # inconsistent stack deltas
+])
+def test_popped_return_register_is_classified_statically(code, is_return):
+    from test_translate_insns import Opts
+    entry = 0x00601000
+    raw = bytes.fromhex(code)
+    img = synthetic_image({entry: raw}, base=0x00600000)
+    img.md.detail = True
+    fn = T.Function(entry, "popped_return", len(raw),
+                    [img.to_insn(ci) for ci in img.md.disasm(raw, entry)])
+    fn.measure(img)
+    tr = T.Translator(img, {entry}, Opts())
+    tr.prepare(fn)
+    text = "\n".join(tr.translate(fn))
+    assert ("c->eip = c->r[2]; return;" in text) == is_return
+    assert ("recomp_jump(c, t_);" in text) != is_return
+
+
+def test_popped_return_avoids_dispatch_when_continuation_is_also_an_entry(tmp_path, monkeypatch):
+    import struct
+    entry, done, helper = 0x00601000, 0x00601020, 0x00601060
+    continuation = entry + 5
+    caller = b"\xe8" + struct.pack("<i", done - entry - 5) + b"\x40\xc3"
+    # Like an exception epilogue: POP EDX, restore ESP, CALL cleanup, JMP EDX.
+    body = (b"\x5a\x8b\x64\x24\x2c\xe8"
+            + struct.pack("<i", helper - done - 10) + b"\xff\xe2")
+    blocks = {entry: caller, done: body, helper: b"\xc3"}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   blocks | {continuation: caller[5:]})
+    done_text = text.split("void fn_%08x(X86 *c) {" % done, 1)[1].split("\n}", 1)[0]
+    assert "c->eip = c->r[2]; return;" in done_text
+    assert "recomp_jump" not in done_text
+    table = (tmp_path / "gen/table.c").read_text()
+    returns = table.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]
+    assert "0x%08xu" % continuation in returns
+    jump = table.split("void recomp_jump(", 1)[1].split("void recomp_unknown_jump(", 1)[0]
+    assert jump.index("if (i >= 0)") < jump.index("recomp_is_call_return(target)")
 
 
 def test_ret_classifies_after_pop_without_an_interior_switch_for_plain_returns():

@@ -1345,6 +1345,126 @@ class Translator(object):
                 return op.imm & 0xffffffff
         return None
 
+    def popped_return_jumps(self, fn, entries):
+        """Prove JMPs through the caller's return slot without runtime lookup.
+
+        Facts are (ESP delta, EBP delta, registers popped at delta zero).
+        Joins retain only agreeing facts; alternate entries start independent
+        call frames. CALL is stack-neutral here, including cleanup calls after
+        a saved return has been popped. Explicit/implicit register writes kill
+        that register's fact. Unknown instructions or indirect destinations
+        discard facts rather than guessing that a computed target is a return.
+        """
+        if not any(ins.mnem == "POP" for ins in fn.insns):
+            return set()
+        candidates = {i for i, ins in enumerate(fn.insns)
+                      if ins.mnem == "JMP" and ins.ops and ins.ops[0] in REG32}
+        if not candidates:
+            return set()
+        unknown = (None, None, frozenset())
+        states, pending = {}, []
+
+        def merge(i, state):
+            old = states.get(i)
+            if old is not None:
+                state = (old[0] if old[0] == state[0] else None,
+                         old[1] if old[1] == state[1] else None, old[2] & state[2])
+            if state != old:
+                states[i] = state
+                pending.append(i)
+
+        def transfer(ins, state):
+            delta, frame, saved = state
+            m = ins.mnem
+            ops = [parse_operand(o) for o in ins.ops] if m not in self.STRING_MNEM else []
+            writes = set()
+            # Read-only instructions and calls do not explicitly redefine a
+            # saved return register. All unmodelled forms invalidate the proof.
+            readonly = {"CMP", "TEST", "PUSH", "CALL", "JMP", "RET", "NOP", "WAIT",
+                        "PAUSE", "CLC", "STC", "CMC", "CLD", "STD", "SAHF", "CLI", "STI"}
+            dest_write = {"MOV", "MOVZX", "MOVSX", "LEA", "POP", "ADD", "ADC", "SUB",
+                          "SBB", "AND", "OR", "XOR", "INC", "DEC", "NEG", "NOT", "SHL",
+                          "SHR", "SAR", "ROL", "ROR", "RCL", "RCR", "SHLD", "SHRD",
+                          "BSWAP", "BSF", "BSR", "BTS", "BTR", "BTC", "IMUL"}
+            if m in readonly or m in JCC or m.startswith("F"):
+                if m in ("FNSTSW", "FSTSW"):
+                    writes.add(R_EAX)
+            elif m in dest_write or m.startswith("SET") or m.startswith("CMOV"):
+                if ops and ops[0].kind == "reg":
+                    writes.add(ops[0].reg)
+            elif m in ("XCHG", "XADD", "CMPXCHG"):
+                writes.update(o.reg for o in ops if o.kind == "reg")
+                if m == "CMPXCHG":
+                    writes.add(R_EAX)
+            elif m in ("PUSHAD", "PUSHFD", "PUSHF", "POPFD", "POPF"):
+                writes.add(R_ESP)
+            elif m == "LEAVE":
+                writes.update((R_ESP, R_EBP))
+            elif m in ("MUL", "DIV", "IDIV", "RDTSC"):
+                writes.update((R_EAX, R_EDX))
+            elif m in ("CDQ", "CWD"):
+                writes.add(R_EDX)
+            elif m in ("CBW", "CWDE", "LAHF", "XLAT"):
+                writes.add(R_EAX)
+            else:
+                return unknown
+            if m == "IMUL" and len(ops) == 1:
+                writes.update((R_EAX, R_EDX))
+            if m.startswith("LOOP"):
+                writes.add(R_ECX)
+            result = set(saved) - writes
+            if (m == "POP" and delta == 0 and ops[0].kind == "reg"
+                    and ops[0].size == 32 and ops[0].reg != R_ESP):
+                result.add(ops[0].reg)
+            adjustment = None
+            if m in ("PUSH", "POP"):
+                adjustment = operand_size(ops, hint=32) // 8 * (-1 if m == "PUSH" else 1)
+            elif m in ("PUSHAD", "PUSHFD", "PUSHF", "POPFD", "POPF"):
+                adjustment = {"PUSHAD": -32, "PUSHFD": -4, "PUSHF": -2,
+                              "POPFD": 4, "POPF": 2}[m]
+            elif m == "RET":
+                adjustment = 4 + (parse_imm(ins.ops[0]) if ins.ops else 0)
+            elif (m in ("ADD", "SUB") and ops[0].kind == "reg"
+                  and ops[0].reg == R_ESP and ops[0].size == 32 and ops[1].kind == "imm"):
+                immediate = ops[1].imm & 0xffffffff
+                if immediate >= 0x80000000:
+                    immediate -= 0x100000000
+                adjustment = immediate * (-1 if m == "SUB" else 1)
+            if m == "LEAVE":
+                new_delta = frame + 4 if frame is not None else None
+            elif m == "POP" and ops[0].kind == "reg" and ops[0].reg == R_ESP:
+                new_delta = None
+            elif adjustment is not None:
+                new_delta = delta + adjustment if delta is not None else None
+            else:
+                new_delta = None if R_ESP in writes else delta
+            new_frame = None if R_EBP in writes else frame
+            if (m == "MOV" and ins.ops == ["EBP", "ESP"]):
+                new_frame = delta
+            return new_delta, new_frame, frozenset(result)
+
+        for addr in (fn.addr, *entries):
+            merge(fn.index[addr], (0, None, frozenset()))
+        unknown_indirect_seen = False
+        while pending:
+            i = pending.pop()
+            ins, state = fn.insns[i], states[i]
+            if i in candidates and parse_operand(ins.ops[0]).reg in state[2]:
+                continue
+            out = transfer(ins, state)
+            if ins.mnem == "JMP" and self.branch_target(ins) is None:
+                # A non-return computed jump can enter anywhere. Seed unknown
+                # facts once, avoiding a quadratic all-to-all propagation.
+                if not unknown_indirect_seen:
+                    for j in range(len(fn.insns)):
+                        merge(j, unknown)
+                    unknown_indirect_seen = True
+                continue
+            for j in self.successors(fn, i):
+                merge(j, out)
+        return {i for i in candidates if i in states
+                and parse_operand(fn.insns[i].ops[0]).reg in states[i][2]}
+
     def successors(self, fn, i):
         """Indices reachable from insn i, and whether flags escape the function."""
         ins = fn.insns[i]
@@ -1861,6 +1981,7 @@ class Translator(object):
         if dropped:
             self.stale_entries.update(dropped)
             entries = [e for e in entries if e in fn.index]
+        fn.return_jumps = self.popped_return_jumps(fn, entries)
         if self.opts.eager_flags:
             live_out = [ALL_FLAGS] * len(fn.insns)
         else:
@@ -2469,6 +2590,9 @@ class Translator(object):
         return ["c->eip = %s; recomp_jump(c, %s); return;" % (hexlit(ins.addr), hexlit(t))]
 
     def emit_indirect_jump(self, fn, i, ins, op):
+        if i in fn.return_jumps:
+            self.stats["_jmp_popped_return"] += 1
+            return ["c->eip = %s; return;" % read_op(op, 32)]
         targets = self.jumptables.get((fn.addr, ins.addr))
         L = ["uint32_t t_ = %s;" % read_op(op, 32)]
         if not targets:
