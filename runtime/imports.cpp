@@ -407,6 +407,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     }
     if (g_return_observer)
         g_return_observer(desc, c->r[R_EAX]);
+    LOGV("<- %s (eax=%08x)", desc, c->r[R_EAX]);
 
     uint32_t pop = 4;
     if (argc == ARGC_CDECL) {

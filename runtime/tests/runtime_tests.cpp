@@ -5202,6 +5202,32 @@ static void test_delphi_dlls() {
     call_import(&c, "ADVAPI32.dll", "RegCloseKey", {hk});
 }
 
+static void test_import_return_trace() {
+    section("verbose import return values");
+    char dir[] = "build/recomp/import-trace-XXXXXX", exe[4096];
+    if (!check(os_mkdtemp(dir) == 0, "created an import trace directory"))
+        return;
+    std::string path = std::string(dir) + "/returns.log";
+    check(os_exe_path(exe, sizeof exe) == 0, "import trace knows its executable");
+    const char *args[] = {exe, "--child-import-trace", path.c_str(), nullptr};
+    int64_t pid = 0;
+    int code = -1;
+    check(os_spawn(args, &pid) == 0 && os_wait(pid, &code) == 0 && code == 0,
+          "import trace child exits cleanly (exit %d)", code);
+    std::string text;
+    if (FILE *log = fopen(path.c_str(), "r")) {
+        char line[1024];
+        while (fgets(line, sizeof line, log))
+            text += line;
+        fclose(log);
+    }
+    check(text.find("<- KERNEL32.dll!GetCurrentProcess (eax=ffffffff)") != std::string::npos,
+          "verbose trace records the actual nonzero return value");
+    check(text.find("<- USER32.dll!IsWindow (eax=00000000)") != std::string::npos,
+          "verbose trace records a FALSE return value");
+    remove_tree(dir);
+}
+
 int main(int argc, char **argv) {
     const bool child = argc > 1 && strcmp(argv[1], "--child-setjmp-abort") == 0;
     if (child) {
@@ -5221,6 +5247,19 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    if (argc == 3 && strcmp(argv[1], "--child-import-trace") == 0) {
+        if (!freopen(argv[2], "w", stderr))
+            return 2;
+        os_setenv("RECOMP_LOG", "2");
+        mem_init();
+        imports_init();
+        X86 c;
+        loader_init_context(&c);
+        call_import(&c, "KERNEL32.dll", "GetCurrentProcess", {});
+        call_import(&c, "USER32.dll", "IsWindow", {0});
+        mem_shutdown();
+        return g_failures ? 1 : 0;
+    }
     if (argc == 3 && strcmp(argv[1], "--child-heap-refusal") == 0) {
         if (!freopen(argv[2], "w", stderr))
             return 2;
@@ -5241,6 +5280,7 @@ int main(int argc, char **argv) {
     }
 
     test_loader();
+    test_import_return_trace();
     test_modules_and_wide();
     test_kernel32_wide();
     test_delphi_dlls();
