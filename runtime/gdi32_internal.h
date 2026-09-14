@@ -8,6 +8,7 @@
 namespace gdi {
 struct Surface {
     int w = 0, h = 0;
+    bool dirty = false;
     std::vector<uint32_t> argb;
 };
 struct Rect {
@@ -69,3 +70,7 @@ Rect to_device(uint32_t dc, Rect rect);
 }
 
 uint32_t gdi_new_dc();
+
+// Called only with the guest baton. A present owns the composed pixel copy.
+void gdi_present_windows();
+void gdi_composite_windows(uint32_t *argb, int w, int h);

@@ -777,13 +777,14 @@ Surface *surface_of(DeviceContext &dc) {
         return nullptr;
     auto &s = window->surface;
     if (s.w != w || s.h != h) {
-        std::vector<uint32_t> pixels(size_t(w) * h, 0xff000000);
+        std::vector<uint32_t> pixels(size_t(w) * h, 0);
         for (int y = 0; y < std::min(h, s.h); ++y)
             std::copy_n(s.argb.begin() + size_t(y) * s.w, std::min(w, s.w),
                         pixels.begin() + size_t(y) * w);
         s.argb = std::move(pixels);
         s.w = w;
         s.h = h;
+        s.dirty = true;
     }
     return &s;
 }
@@ -907,6 +908,7 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     }
     if (!d) {
         s->argb[size_t(y) * s->w + x] = result | 0xff000000;
+        s->dirty = true;
         return true;
     }
     if (d->bpp <= 8) {
@@ -1042,13 +1044,83 @@ bool gdi_release_window_dc(uint32_t hwnd, uint32_t hdc) {
     auto *dc = dc_of(hdc);
     if (!dc || dc->window != hwnd)
         return false;
-    auto *w = user32::find_window(dc->surface);
-    int width = 0, height = 0;
-    if (w && w->visible && !ddraw_gdi_primary_active() && dc_size(hdc, &width, &height))
-        host_display_present_window(w->surface.argb.data(), width, height);
     dcs().erase(hdc);
+    gdi_present_windows();
     return true;
 }
+namespace {
+// Child DCs already write into their top-level owner's surface. Opaque GDI
+// pixels cover the base, while untouched storage leaves DirectDraw visible.
+std::vector<user32::Window *> visible_surfaces() {
+    std::vector<user32::Window *> result;
+    for (auto &kv : user32::windows()) {
+        auto &w = kv.second;
+        if (w.visible && !(w.style & 0x40000000u) && !w.surface.argb.empty())
+            result.push_back(&w);
+    }
+    // Handles increase in creation order. Topmost windows remain above the
+    // ordinary group even when another ordinary window is created later.
+    std::stable_sort(result.begin(), result.end(),
+                     [](auto *a, auto *b) { return (a->exstyle & 8) < (b->exstyle & 8); });
+    return result;
+}
+} // namespace
+void gdi_composite_windows(uint32_t *argb, int w, int h) {
+    if (!argb || w <= 0 || h <= 0)
+        return;
+    int32_t origin_x = 0, origin_y = 0;
+    if (ddraw_gdi_primary_active())
+        user32::client_origin(host_main_window(), &origin_x, &origin_y);
+    for (auto *window : visible_surfaces()) {
+        auto &s = window->surface;
+        int64_t dx = int64_t(window->x) - origin_x, dy = int64_t(window->y) - origin_y;
+        for (int64_t y = std::max<int64_t>(0, dy); y < std::min<int64_t>(h, dy + s.h); ++y)
+            for (int64_t x = std::max<int64_t>(0, dx); x < std::min<int64_t>(w, dx + s.w); ++x) {
+                uint32_t p = s.argb[size_t(y - dy) * s.w + size_t(x - dx)];
+                if (p >> 24)
+                    argb[size_t(y) * w + size_t(x)] = p;
+            }
+    }
+}
+// Flush only actual window writes. A retained DC can be drawn into across pump
+// iterations, so ReleaseDC alone is insufficient. Never change primary pixels:
+// borrow its readback as the base, then composite into a private ARGB snapshot.
+void gdi_present_windows() {
+    auto surfaces = visible_surfaces();
+    if (std::none_of(surfaces.begin(), surfaces.end(), [](auto *w) { return w->surface.dirty; }))
+        return;
+    uint32_t primary = ddraw_gdi_begin_primary();
+    int w = 1024, h = 768;
+    if (primary) {
+        if (!gdi::dc_size(primary, &w, &h)) {
+            ddraw_gdi_end_primary(primary);
+            return;
+        }
+    } else if (ddraw_gdi_primary_active()) {
+        return; // A primary DC is already in use; retry on the next pump.
+    } else {
+        uint32_t width = w, height = h, bpp = 32;
+        ddraw_display_mode(&width, &height, &bpp);
+        w = int(width);
+        h = int(height);
+    }
+    if (w <= 0 || h <= 0 || uint64_t(w) * h > GUEST_SIZE / 4) {
+        ddraw_gdi_end_primary(primary);
+        return;
+    }
+    std::vector<uint32_t> pixels(size_t(w) * h, 0xff000000);
+    if (primary) {
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                gdi::read_pixel(primary, x, y, &pixels[size_t(y) * w + x]);
+        ddraw_gdi_end_primary(primary);
+    }
+    gdi_composite_windows(pixels.data(), w, h);
+    for (auto *window : surfaces)
+        window->surface.dirty = false;
+    host_display_present_window(pixels.data(), w, h);
+}
+
 void gdi_destroy_window(uint32_t window) {
     for (auto it = dcs().begin(); it != dcs().end();)
         if (it->second.window == window || it->second.surface == window)

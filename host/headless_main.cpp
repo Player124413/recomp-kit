@@ -39,6 +39,7 @@
 #include "../runtime/guest.h"
 #include "../runtime/loader.h"
 #include "../runtime/win32.h"
+#include "../runtime/gdi32_internal.h"
 #include "../dx/host_api.h"
 
 #include <stdint.h>
@@ -85,7 +86,7 @@ uint32_t g_seen_max_distinct = 0, g_seen_max_nonbg = 0;
 int g_mode_w = 0, g_mode_h = 0, g_mode_bpp = 0;
 uint32_t g_mode_sets = 0;
 uint32_t g_d3d_scenes = 0, g_d3d_draws = 0, g_d3d_clears = 0, g_d3d_textures = 0;
-uint32_t g_present8 = 0, g_present16 = 0;
+uint32_t g_present8 = 0, g_present16 = 0, g_present32 = 0;
 
 void mkdir_p(const std::string &path) {
     std::string acc;
@@ -176,14 +177,42 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
             ++g_present8;
         else if (bpp == 16)
             ++g_present16;
+        else if (bpp == 32)
+            ++g_present32;
     }
 
     if (!pixels || w <= 0 || h <= 0)
         return;
 
+    // A DirectDraw present keeps its base pixels and overlays current window
+    // surfaces. GDI-only snapshots arrive already composed through the seam.
+    std::vector<uint32_t> composed;
+    if (bpp == 8 || bpp == 16) {
+        composed.resize(size_t(w) * h);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const uint8_t *row = static_cast<const uint8_t *>(pixels) + size_t(y) * pitch;
+                uint32_t p;
+                if (bpp == 8)
+                    p = palette ? palette[row[x]] : row[x] * 0x010101u;
+                else {
+                    uint16_t v = uint16_t(row[x * 2] | row[x * 2 + 1] << 8);
+                    p = (((v >> 11) & 31) * 255 / 31) << 16 | (((v >> 5) & 63) * 255 / 63) << 8 |
+                        (v & 31) * 255 / 31;
+                }
+                composed[size_t(y) * w + x] = p | 0xff000000;
+            }
+        gdi_composite_windows(composed.data(), w, h);
+    }
     // The page goes on a copy this host owns, never on the surface the guest
     // is still reading; everything below reads the copy.
-    const uint8_t *src = (const uint8_t *)host_page_overlay(pixels, w, h, bpp, pitch, palette);
+    const uint8_t *src = composed.empty()
+                             ? (const uint8_t *)host_page_overlay(pixels, w, h, bpp, pitch, palette)
+                             : static_cast<const uint8_t *>(pixels);
+    const uint32_t *composed_src =
+        composed.empty() ? nullptr
+                         : static_cast<const uint32_t *>(
+                               host_page_overlay(composed.data(), w, h, 32, w * 4, nullptr));
     std::vector<uint8_t> rgb((size_t)w * (size_t)h * 3);
     // A coarse content summary, computed on every frame even when the frame
     // itself is not written, so the run can say which frame first had content.
@@ -223,11 +252,23 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
                 r = (c >> 16) & 0xff;
                 g = (c >> 8) & 0xff;
                 b = c & 0xff;
+            } else if (bpp == 32) {
+                uint32_t p;
+                memcpy(&p, row + 4 * x, 4);
+                r = (p >> 16) & 255;
+                g = (p >> 8) & 255;
+                b = p & 255;
             } else {
                 uint16_t p = (uint16_t)(row[2 * x] | (row[2 * x + 1] << 8));
                 r = ((p >> 11) & 0x1f) * 255 / 31;
                 g = ((p >> 5) & 0x3f) * 255 / 63;
                 b = (p & 0x1f) * 255 / 31;
+            }
+            if (!composed.empty()) {
+                uint32_t p = composed_src[size_t(y) * w + x];
+                r = (p >> 16) & 255;
+                g = (p >> 8) & 255;
+                b = p & 255;
             }
             out[3 * x + 0] = (uint8_t)r;
             out[3 * x + 1] = (uint8_t)g;
@@ -308,6 +349,11 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
                fs.path.empty() ? "" : " (written)");
         fflush(stdout);
     }
+}
+
+// Same display seam as the windowed presenter, using the headless file sink.
+extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
+    host_present(argb, w, h, 32, nullptr, w * 4);
 }
 
 extern "C" void host_d3d_begin_scene() {
@@ -477,7 +523,8 @@ void print_report(FILE *out, bool abnormal) {
     printf("elapsed:            %.1fs\n", boot_elapsed());
     printf("presented frames:   %u (%u written to %s)\n", g_present_count, g_frames_written,
            g_frames_dir.c_str());
-    printf("present depth:      %u at 8bpp, %u at 16bpp\n", g_present8, g_present16);
+    printf("present depth:      %u at 8bpp, %u at 16bpp, %u at 32bpp\n", g_present8, g_present16,
+           g_present32);
     if (g_mode_sets)
         printf("display mode:       %dx%d %dbpp (set %u time%s)\n", g_mode_w, g_mode_h, g_mode_bpp,
                g_mode_sets, g_mode_sets == 1 ? "" : "s");

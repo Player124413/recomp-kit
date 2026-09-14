@@ -703,6 +703,7 @@ void peek_message(X86 *c) {
     // back, and only a thread holding the scheduler baton may do that.
     host_pump_timers(c);
     pump_window_timers();
+    gdi_present_windows();
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3), flags = arg(c, 4);
     for (auto it = queue().begin(); it != queue().end(); ++it) {
@@ -740,6 +741,7 @@ void u_GetMessageA(X86 *c) {
 
     for (;;) {
         pump_window_timers();
+        gdi_present_windows();
         for (auto it = queue().begin(); it != queue().end(); ++it) {
             if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
                 continue;

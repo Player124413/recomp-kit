@@ -183,12 +183,12 @@ static void test_model() {
     check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 2, 2}) == 0xff,
           "window pixels survive DC release");
     call_import(&c, "USER32.dll", "EndPaint", {hwnd, s});
-    check(presents == 1 && presented.size() == 32 * 24 && presented[2 * 32 + 2] == 0xffff0000,
-          "EndPaint presents owned ARGB window pixels");
+    check(presents == 1 && presented.size() == 1024 * 768 && presented[2 * 1024 + 2] == 0xffff0000,
+          "EndPaint presents owned ARGB pixels in the desktop composite");
     dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
     primary_active = true;
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
-    check(presents == 1, "DirectDraw primary suppresses window presentation");
+    check(presents == 1, "unchanged window does not present again with a primary");
     primary_active = false;
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
     check(call_import(&c, "USER32.dll", "GetDC", {hwnd}) == 0, "destroyed window has no DC");

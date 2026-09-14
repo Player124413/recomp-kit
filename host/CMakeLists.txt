@@ -201,3 +201,17 @@ pop_test_binary(host_tests)
 add_test(NAME host_tests COMMAND host_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(host_tests PROPERTIES LABELS gpu)
 endif()
+
+# The production headless capture path with synthetic guest windows and no GPU.
+if(NOT IOS AND NOT ANDROID)
+pop_host(headless_tests
+  SOURCES ${HOST}/tests/headless_tests.cpp ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp
+          ${HOST}/page_overlay.cpp ${POP_AUDIO_SOURCES}
+  LIBS recomp_platform recomp_runtime recomp_dx host_common
+  FRAMEWORKS ${FW_FOUNDATION})
+pop_link_sdl(headless_tests)
+pop_test_binary(headless_tests)
+add_test(NAME headless_tests COMMAND headless_tests ${CMAKE_CURRENT_BINARY_DIR}/capture-frames
+  WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(headless_tests PROPERTIES LABELS nogame)
+endif()
