@@ -24,6 +24,8 @@ static inline const char *win32_guest_root_name() {
 // loaded EXE).
 void win32_init(const std::string &game_dir);
 const std::string &win32_game_dir();
+// Guest spelling shared by shell folder APIs; creation uses the write overlay.
+std::string shell_folder_guest_path(uint32_t csidl, bool create);
 
 // Reserves a process-wide TLS slot for the loader or TlsAlloc; 0xffffffff
 // when every slot is in use. win32_init resets the reservation map.

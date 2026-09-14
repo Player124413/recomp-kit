@@ -72,13 +72,16 @@ static uint32_t call_import(X86 *c, const char *dll, const char *name,
     wr32(esp, g_fake_ret);
     c->r[R_ESP] = esp;
     imports_dispatch(c, tramp);
-    if (c->r[R_ESP] != before) {
+    uint32_t expected =
+        imports_argc(tramp) == ARGC_CDECL ? before - uint32_t(args.size()) * 4 : before;
+    if (c->r[R_ESP] != expected) {
         printf("  [FAIL] %s!%s left ESP at %08x, expected %08x (bad argc?)\n", dll, name,
-               c->r[R_ESP], before);
+               c->r[R_ESP], expected);
         ++g_failures;
         ++g_checks;
         c->r[R_ESP] = before;
     }
+    c->r[R_ESP] = before; // cdecl callers remove their arguments.
     return c->r[R_EAX];
 }
 
@@ -4312,6 +4315,54 @@ static void test_delphi_registry_version() {
     check(!p || !heap_owns(p), "CoTaskMemFree releases storage");
 }
 
+static void test_delphi_misc() {
+    section("Delphi absent services and C ABI");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00330000;
+    wr32(s, 0xdeadbeef);
+    wr32(s + 4, 0xdeadbeef);
+    check(call_import(&c, "WINSPOOL.DRV", "EnumPrintersW", {2, 0, 2, 0, 0, s, s + 4}) == 1 &&
+              rd32(s) == 0 && rd32(s + 4) == 0,
+          "EnumPrintersW clears needed and returned counts");
+    check(call_import(&c, "WINSPOOL.DRV", "GetDefaultPrinterW", {0, s}) == 0 &&
+              get_last_error() == 2,
+          "GetDefaultPrinterW reports FILE_NOT_FOUND");
+    wr32(s, 0xdeadbeef);
+    check(call_import(&c, "WINSPOOL.DRV", "OpenPrinterW", {0, s, 0}) == 0 && rd32(s) == 0,
+          "OpenPrinterW produces no printer handle");
+    check(call_import(&c, "WINSPOOL.DRV", "ClosePrinter", {0}) == 1 &&
+              call_import(&c, "WINSPOOL.DRV", "DocumentPropertiesW", {0, 0, 0, 0, 0, 0}) ==
+                  0xffffffffu,
+          "absent printer close and document properties");
+    wr32(s, 0xdeadbeef);
+    check(call_import(&c, "NETAPI32.dll", "NetWkstaGetInfo", {0, 100, s}) == 50 && rd32(s) == 0 &&
+              imports_argc(imports_resolve("NETAPI32.dll", "NetWkstaGetInfo")) == 3,
+          "NetWkstaGetInfo uses the documented three-argument ABI and clears output");
+    check(call_import(&c, "NETAPI32.dll", "NetApiBufferFree", {0}) == 0, "NetApiBufferFree");
+    memset(g_mem + s, 0x33, 32);
+    check(call_import(&c, "msvcrt.dll", "memset", {s + 1, 0xab, 3}) == s + 1 && rd8(s) == 0x33 &&
+              rd8(s + 1) == 0xab && rd8(s + 4) == 0x33,
+          "cdecl memset writes the requested span");
+    check(call_import(&c, "msvcrt.dll", "memcpy", {s + 16, s, 5}) == s + 16 &&
+              !memcmp(g_mem + s, g_mem + s + 16, 5),
+          "cdecl memcpy copies bytes and returns destination");
+    check(imports_argc(imports_resolve("msvcrt.dll", "memcpy")) == ARGC_CDECL &&
+              imports_argc(imports_resolve("msvcrt.dll", "memset")) == ARGC_CDECL,
+          "C runtime imports leave argument cleanup to caller");
+    call_import(&c, "SHELL32.dll", "SHGetSpecialFolderPathA", {0, s, 5, 0});
+    std::string documents = gm_str(s);
+    for (uint32_t csidl : {5u, 26u, 28u, 35u})
+        check(call_import(&c, "SHFOLDER.dll", "SHGetFolderPathW", {0, csidl, 0, 0, s + 512}) == 0 &&
+                  gm_wstr(s + 512) == documents,
+              "SHGetFolderPathW(%u) shares the guest documents path", csidl);
+    check(call_import(&c, "SHFOLDER.dll", "SHGetFolderPathW", {0, 0x26, 0, 0, s + 512}) ==
+              0x80070057u,
+          "SHGetFolderPathW rejects unsupported folders");
+    check(call_import(&c, "SHELL32.dll", "Shell_NotifyIconW", {0, 0}) == 1,
+          "Shell_NotifyIconW accepts notifications");
+}
+
 static void test_delphi_dlls() {
     section("Delphi DLLs");
     X86 c;
@@ -4390,6 +4441,7 @@ int main(int argc, char **argv) {
     test_delphi_dlls();
     test_delphi_automation();
     test_delphi_registry_version();
+    test_delphi_misc();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

@@ -530,6 +530,35 @@ void registry_flush() {
     g_registry_dirty = false;
 }
 
+std::string shell_folder_guest_path(uint32_t csidl, bool create) {
+    const char *name;
+    switch (csidl & 0xff) {
+    case 0x05: // CSIDL_PERSONAL
+        name = "Documents";
+        break;
+    case 0x1a: // CSIDL_APPDATA
+    case 0x1c: // CSIDL_LOCAL_APPDATA
+        name = "AppData";
+        break;
+    case 0x23: // CSIDL_COMMON_APPDATA
+        name = "CommonAppData";
+        break;
+    case 0x26: // CSIDL_PROGRAM_FILES
+        name = "Program Files";
+        break;
+    default:
+        name = "Documents";
+        break;
+    }
+    std::string guest = std::string(RECOMP_GUEST_ROOT) + "\\" + name;
+    if (create) {
+        std::string host = win32_host_path(guest, true);
+        if (!host.empty())
+            os_mkdir(host.c_str());
+    }
+    return guest;
+}
+
 namespace {
 
 // -------------------------------------------------------------------------
@@ -868,32 +897,8 @@ void g_GetSystemPaletteEntries(X86 *c) {
 // they resolve like every other game path (and the mod layer's file seam can
 // redirect them); the folder is created when asked.
 void s_SHGetSpecialFolderPathA(X86 *c) {
-    uint32_t buf = arg(c, 1), csidl = arg(c, 2), create = arg(c, 3);
-    const char *name;
-    switch (csidl & 0xff) {
-    case 0x05: // CSIDL_PERSONAL
-        name = "Documents";
-        break;
-    case 0x1a: // CSIDL_APPDATA
-    case 0x1c: // CSIDL_LOCAL_APPDATA
-        name = "AppData";
-        break;
-    case 0x23: // CSIDL_COMMON_APPDATA
-        name = "CommonAppData";
-        break;
-    case 0x26: // CSIDL_PROGRAM_FILES
-        name = "Program Files";
-        break;
-    default:
-        name = "Documents";
-        break;
-    }
-    std::string guest = std::string(RECOMP_GUEST_ROOT) + "\\" + name;
-    if (create) {
-        std::string host = win32_host_path(guest, true);
-        if (!host.empty())
-            os_mkdir(host.c_str());
-    }
+    uint32_t buf = arg(c, 1);
+    std::string guest = shell_folder_guest_path(arg(c, 2), arg(c, 3) != 0);
     if (!buf) {
         set_eax(c, 0);
         return;
