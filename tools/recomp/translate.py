@@ -3372,7 +3372,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
     # and the symbol index has to move with them or it will describe a build
     # that was never published.
     with open(os.path.join(args.out, "symbols.json"), "w") as fh:
-        json.dump({"exe_sha256": sha, "image_base": "00400000",
+        json.dump({"exe_sha256": sha, "image_base": "%08x" % image.base,
                    "functions": functions, "globals": globals_out,
                    "events": events}, fh, indent=1)
     if not args.quiet:
@@ -3422,6 +3422,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
     if args.report:
         with open(args.report, "w") as fh:
             json.dump({
+                "image_base": "%08x" % image.base,
                 "functions_total": len(parsed),
                 "functions_ok": len(ok),
                 "entry_points": len(entry_names),

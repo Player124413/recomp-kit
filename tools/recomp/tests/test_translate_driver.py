@@ -5,6 +5,8 @@
 import os
 import sys
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, os.path.join(ROOT, "tools/recomp"))
@@ -69,6 +71,37 @@ def synthetic_image(code_at, base=0x00400000, size=0x2000):
     img.recover_errors = []
     img.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     return img
+
+
+@pytest.mark.parametrize("artifact", ["symbols.json", "translate-report.json"])
+def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact):
+    """Run the driver on a synthetic RET image at a nondefault load address."""
+    import json
+    base, entry = 0x00600000, 0x00601000
+    img = synthetic_image({entry: b"\xc3"}, base=base)
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    (listings / ("%08x.asm" % entry)).write_text("%08x  RET\n" % entry)
+    table = tmp_path / "functions.tsv"
+    table.write_text("address\tname\tsize\n%08x\treturn_only\t1\n" % entry)
+    binary = tmp_path / "synthetic-image"
+    binary.write_bytes(img.data)
+    curated = tmp_path / "globals.toml"
+    curated.write_text("")
+    out = tmp_path / "gen"
+    report = out / "translate-report.json"
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    monkeypatch.setattr(T, "LISTINGS", str(listings))
+    monkeypatch.setattr(T, "FUNCS_TSV", str(table))
+    monkeypatch.setattr(T, "BINARY", str(binary))
+    monkeypatch.setattr(T, "CURATED", str(curated))
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
+                                     "--out", str(out), "--report", str(report), "--quiet"])
+    assert T.main() == 0
+    result = json.loads((out / artifact).read_text())
+    assert result["image_base"] == "%08x" % base
 
 
 def test_a_pushed_destructor_thunk_is_an_entry_candidate():
