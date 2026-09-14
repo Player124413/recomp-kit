@@ -4,7 +4,7 @@
 // Windows are bookkeeping only: no pixels are produced here. The host layer
 // (Task 7) pushes real events in with host_post_message() and the guest pulls
 // them out through PeekMessageA/GetMessageA exactly as it would on Win32.
-#include "imports.h"
+#include "user32_internal.h"
 #include "gdi_image.h"
 #include "win32.h"
 #include "memory.h"
@@ -19,40 +19,7 @@
 // Defined in kernel32.cpp with the scheduler.
 void sched_checkpoint();
 
-namespace {
-
-struct WndClass {
-    uint32_t style = 0;
-    uint32_t wndproc = 0;
-    uint32_t cls_extra = 0;
-    uint32_t wnd_extra = 0;
-    uint32_t hinstance = 0;
-    uint32_t hicon = 0;
-    uint32_t hcursor = 0;
-    uint32_t hbrush = 0;
-    std::string menu;
-};
-
-struct Window {
-    uint32_t hwnd = 0;
-    uint32_t wndproc = 0;
-    uint32_t style = 0, exstyle = 0;
-    int32_t x = 0, y = 0, w = 0, h = 0;
-    std::string cls, title;
-    uint32_t userdata = 0;
-    uint32_t hinstance = 0;
-    std::vector<uint32_t> extra;
-    bool visible = false;
-    bool shown = false;
-    // Windows tracks an update region per window; the runtime only needs to
-    // know whether it is empty, which is what UpdateWindow and BeginPaint act
-    // on. Showing a window invalidates it, painting it validates it.
-    bool update_pending = false;
-};
-
-struct Msg {
-    uint32_t hwnd, message, wparam, lparam, time, ptx, pty;
-};
+namespace user32 {
 
 std::map<std::string, WndClass> &classes() {
     static std::map<std::string, WndClass> m;
@@ -89,13 +56,13 @@ std::string lower(std::string s) {
 }
 
 // Class names arrive either as a pointer to a string or as an atom (< 0x10000).
-std::string class_key(uint32_t p) {
+std::string class_key(uint32_t p, bool wide) {
     if (p && p < 0x10000) {
         char buf[32];
         snprintf(buf, sizeof buf, "#atom%u", p);
         return buf;
     }
-    return lower(gm_str(p, 256));
+    return lower(wide ? gm_wstr(p, 256) : gm_str(p, 256));
 }
 
 Window *find_window(uint32_t hwnd) {
@@ -127,18 +94,15 @@ void store_msg(uint32_t p, const Msg &m) {
     wr32(p + 24, m.pty);
 }
 
-} // namespace
+} // namespace user32
+
+using namespace user32;
 
 // ---------------------------------------------------------------------------
 // Host bridge
 // ---------------------------------------------------------------------------
 void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lparam) {
-    // The cadence trace's WM_TIMER kind. This game installs no window timer -
-    // there is no SetTimer shim and nothing posts 0x0113 today - so a real
-    // run's trace has no WM_TIMER lines at all. The seam is here so that a
-    // timer added later is traced without anyone remembering to, and so that
-    // an empty WM_TIMER column reads as "the game never used one" rather than
-    // "nobody instrumented it".
+    // Record timer delivery on the same cadence seam as other host messages.
     if (msg == 0x0113)
         host_note_cadence("WM_TIMER");
     Msg m{hwnd, msg, wparam, lparam, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
@@ -214,12 +178,12 @@ uint32_t host_dispatch_to_wndproc(X86 *c, uint32_t hwnd, uint32_t msg, uint32_t 
     return guest_call(c, proc, hwnd, msg, wparam, lparam);
 }
 
-namespace {
+namespace user32 {
 
 // ---------------------------------------------------------------------------
 // Classes and windows
 // ---------------------------------------------------------------------------
-void u_RegisterClassA(X86 *c) {
+void register_class_named(X86 *c, bool wide) {
     uint32_t p = arg(c, 0);
     if (!p) {
         set_eax(c, 0);
@@ -234,17 +198,27 @@ void u_RegisterClassA(X86 *c) {
     wc.hicon = rd32(p + 20);
     wc.hcursor = rd32(p + 24);
     wc.hbrush = rd32(p + 28);
-    wc.menu = gm_str(rd32(p + 32), 256);
-    std::string name = class_key(rd32(p + 36));
-    classes()[name] = wc;
+    wc.menu_id = rd32(p + 32) < 0x10000 ? rd32(p + 32) : 0;
+    wc.menu = wc.menu_id ? "" : (wide ? gm_wstr(rd32(p + 32)) : gm_str(rd32(p + 32)));
+    wc.unicode = wide;
+    wc.extra.resize((wc.cls_extra + 3) / 4);
+    std::string name = class_key(rd32(p + 36), wide);
+    wc.name = wide ? gm_wstr(rd32(p + 36)) : gm_str(rd32(p + 36));
+
     // The class is also reachable through the returned ATOM, which is what a
     // caller passes to CreateWindowExA when it keeps the RegisterClass result.
     uint32_t atom = 0xc000 + (uint32_t)classes().size();
+    wc.atom = atom;
+    classes()[name] = wc;
     char atom_key[32];
     snprintf(atom_key, sizeof atom_key, "#atom%u", atom);
     classes()[atom_key] = wc;
     LOGV("RegisterClassA(\"%s\", wndproc=%08x) -> atom %u", name.c_str(), wc.wndproc, atom);
     set_eax(c, atom);
+}
+
+void u_RegisterClassA(X86 *c) {
+    register_class_named(c, false);
 }
 
 void u_UnregisterClassA(X86 *c) {
@@ -254,10 +228,10 @@ void u_UnregisterClassA(X86 *c) {
 
 // Create a guest window and deliver WM_NCCREATE/WM_CREATE through its window procedure.
 // Honor callback rejection and the initial visibility transition before returning the window handle.
-void u_CreateWindowExA(X86 *c) {
+void create_window_named(X86 *c, bool wide) {
     uint32_t exstyle = arg(c, 0);
-    std::string cls = class_key(arg(c, 1));
-    std::string title = gm_str(arg(c, 2), 256);
+    std::string cls = class_key(arg(c, 1), wide);
+    std::string title = wide ? gm_wstr(arg(c, 2)) : gm_str(arg(c, 2));
     uint32_t style = arg(c, 3);
     int32_t x = (int32_t)arg(c, 4), y = (int32_t)arg(c, 5);
     int32_t w = (int32_t)arg(c, 6), h = (int32_t)arg(c, 7);
@@ -291,8 +265,15 @@ void u_CreateWindowExA(X86 *c) {
     win.y = y;
     win.w = w;
     win.h = h;
-    win.cls = cls;
-    win.title = title;
+    win.cls = class_key(ci->second.atom);
+    win.title_utf8 = title;
+    win.unicode = wide;
+    win.parent = style & 0x40000000u ? arg(c, 8) : 0;
+    win.owner = win.parent ? 0 : arg(c, 8);
+    win.menu = win.parent ? 0 : arg(c, 9);
+    win.id = win.parent ? arg(c, 9) : 0;
+    win.enabled = !(style & 0x08000000u);
+    win.thread = guest_current_thread_id();
     win.hinstance = hinst;
     win.extra.assign((ci->second.wnd_extra + 3) / 4, 0);
     windows()[hwnd] = win;
@@ -352,6 +333,10 @@ void u_CreateWindowExA(X86 *c) {
         }
     }
     set_eax(c, hwnd);
+}
+
+void u_CreateWindowExA(X86 *c) {
+    create_window_named(c, false);
 }
 
 void u_DestroyWindow(X86 *c) {
@@ -637,7 +622,7 @@ void u_GetWindowLongA(X86 *c) {
 void u_SetWindowTextA(X86 *c) {
     Window *w = find_window(arg(c, 0));
     if (w)
-        w->title = gm_str(arg(c, 1), 256);
+        w->title_utf8 = gm_str(arg(c, 1));
     set_eax(c, 1);
 }
 
@@ -668,7 +653,9 @@ bool msg_matches(const Msg &m, uint32_t filter_hwnd, uint32_t min_msg, uint32_t 
     return m.message >= min_msg && m.message <= max_msg;
 }
 
-void u_PeekMessageA(X86 *c) {
+Msg last_message{};
+
+void peek_message(X86 *c) {
     // The game's message loop is PeekMessageA and nothing else: it never calls
     // GetMessageA, so anything hung off that one never runs. Windows services
     // timers while a message is being retrieved, which is what makes this the
@@ -681,6 +668,7 @@ void u_PeekMessageA(X86 *c) {
     for (auto it = queue().begin(); it != queue().end(); ++it) {
         if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
             continue;
+        last_message = *it;
         store_msg(p, *it);
         if (flags & 1)
             queue().erase(it); // PM_REMOVE
@@ -716,6 +704,7 @@ void u_GetMessageA(X86 *c) {
                 continue;
             Msg m = *it;
             queue().erase(it);
+            last_message = m;
             store_msg(p, m);
             set_eax(c, m.message == 0x0012 ? 0 : 1); // WM_QUIT ends the loop
             return;
@@ -777,7 +766,7 @@ void u_TranslateMessage(X86 *c) {
     set_eax(c, 0);
 }
 
-void u_DispatchMessageA(X86 *c) {
+void dispatch_message(X86 *c) {
     uint32_t p = arg(c, 0);
     if (!p) {
         set_eax(c, 0);
@@ -793,13 +782,31 @@ void u_PostMessageA(X86 *c) {
     set_eax(c, 1);
 }
 
+void u_PeekMessageA(X86 *c) {
+    peek_message(c);
+}
+void u_DispatchMessageA(X86 *c) {
+    dispatch_message(c);
+}
 void u_SendMessageA(X86 *c) {
-    set_eax(c, host_dispatch_to_wndproc(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)));
+    send_message(c, false);
 }
 
-void u_DefWindowProcA(X86 *c) {
+void def_window_proc(X86 *c, bool wide) {
     uint32_t hwnd = arg(c, 0), msg = arg(c, 1);
+    Window *w = find_window(hwnd);
     switch (msg) {
+    case 0x000c: // WM_SETTEXT
+        if (w)
+            w->title_utf8 = wide ? gm_wstr(arg(c, 3)) : gm_str(arg(c, 3));
+        set_eax(c, w ? 1 : 0);
+        return;
+    case 0x000d: // WM_GETTEXT
+        set_eax(c, put_text(arg(c, 3), arg(c, 2), w ? w->title_utf8 : "", wide));
+        return;
+    case 0x000e: // WM_GETTEXTLENGTH
+        set_eax(c, w ? (wide ? wide_units(w->title_utf8) : uint32_t(w->title_utf8.size())) : 0);
+        return;
     case 0x0081: // WM_NCCREATE: TRUE, or creation is cancelled
     case 0x0014: // WM_ERASEBKGND: the background counts as erased
         set_eax(c, 1);
@@ -815,6 +822,10 @@ void u_DefWindowProcA(X86 *c) {
         break;
     }
     set_eax(c, 0);
+}
+
+void u_DefWindowProcA(X86 *c) {
+    def_window_proc(c, false);
 }
 
 void u_PostQuitMessage(X86 *c) {
@@ -910,10 +921,10 @@ void u_GetSystemMetrics(X86 *c) {
 void u_LoadCursorA(X86 *c) {
     set_eax(c, 0x0002a000u + (arg(c, 1) & 0xfffu));
 }
-// Every window the runtime creates is an ANSI window: the game then takes
-// its RegisterClassA / CreateWindowExA path.
+// The creation API determines the encoding delivered to the window procedure.
 void u_IsWindowUnicode(X86 *c) {
-    set_eax(c, 0);
+    Window *w = find_window(arg(c, 0));
+    set_eax(c, w && w->unicode);
 }
 // An icon or cursor assembled from bitmaps: a distinct handle, never drawn by
 // the host, which paints its own pointer.
@@ -963,7 +974,7 @@ void u_GetMessagePos(X86 *c) {
     set_eax(c, ((uint32_t)(uint16_t)g_cursor_y << 16) | (uint16_t)g_cursor_x);
 }
 void u_GetMessageTime(X86 *c) {
-    set_eax(c, host_millis());
+    set_eax(c, last_message.time);
 }
 void u_GetAsyncKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
@@ -1173,7 +1184,7 @@ void u_wvsprintfA(X86 *c) {
     set_eax(c, (uint32_t)res.size());
 }
 
-} // namespace
+} // namespace user32
 
 const ImportShim g_user32_shims[] = {
     {"USER32.dll", "RegisterClassA", 1, u_RegisterClassA},

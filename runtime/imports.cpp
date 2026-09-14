@@ -1,4 +1,5 @@
 #include "imports.h"
+#include "user32_internal.h"
 #include "kernel32_internal.h"
 
 // Defined in kernel32.cpp with the scheduler.
@@ -455,6 +456,7 @@ void imports_init() {
     misc_dlls_register();
     comctl32_register();
     imports_register(g_user32_shims, g_user32_shim_count);
+    user32_wide_register();
     imports_register(g_misc_shims, g_misc_shim_count);
     imports_register(g_gdi32_shims, g_gdi32_shim_count);
 }

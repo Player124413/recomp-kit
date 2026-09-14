@@ -4559,6 +4559,58 @@ static void test_delphi_controls() {
           "flat properties and tracking");
 }
 
+// The pinned frame clock makes message timers deterministic without host sleeps.
+static void test_user32_vcl() {
+    section("wide windows and VCL model");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00300000;
+    uint32_t defproc = imports_resolve("USER32.dll", "DefWindowProcW");
+    memset(g_mem + s, 0, 40);
+    wr32(s + 4, defproc);
+    gm_put_wstr(s + 0x100, "TVclTestWindow", 32);
+    wr32(s + 36, s + 0x100);
+    uint32_t atom = call_import(&c, "USER32.dll", "RegisterClassW", {s});
+    check(atom != 0, "RegisterClassW");
+    gm_put_wstr(s + 0x200, "Wide \xce\xa9\xf0\x9f\x98\x80", 32);
+    uint32_t hwnd =
+        call_import(&c, "USER32.dll", "CreateWindowExW",
+                    {0, s + 0x100, s + 0x200, 0x00cf0000u, 0, 0, 800, 600, 0, 0, IMAGE_BASE, 0});
+    check(hwnd != 0, "CreateWindowExW -> %08x", hwnd);
+    check(call_import(&c, "USER32.dll", "IsWindowUnicode", {hwnd}) == 1, "a W window is Unicode");
+    check(call_import(&c, "USER32.dll", "GetWindowTextW", {hwnd, s + 0x300, 32}) == 8 &&
+              gm_wstr(s + 0x300) == "Wide \xce\xa9\xf0\x9f\x98\x80",
+          "GetWindowTextW counts UTF-16 units");
+    check(call_import(&c, "USER32.dll", "SendMessageW", {hwnd, 0xd, 32, s + 0x300}) == 8,
+          "WM_GETTEXT reaches DefWindowProcW");
+    gm_put_str(s + 0x600, "changed", 16);
+    check(call_import(&c, "USER32.dll", "SendMessageA", {hwnd, 0xc, 0, s + 0x600}) == 1 &&
+              call_import(&c, "USER32.dll", "GetWindowTextW", {hwnd, s + 0x300, 32}) == 7 &&
+              gm_wstr(s + 0x300) == "changed",
+          "A text is converted for a W procedure");
+    check(call_import(&c, "USER32.dll", "GetClassInfoW", {IMAGE_BASE, atom, s + 0x700}) == 1 &&
+              rd32(s + 0x704) == defproc,
+          "GetClassInfoW accepts the class atom");
+    gm_put_wstr(s + 0x400, "prop", 8);
+    check(call_import(&c, "USER32.dll", "SetPropW", {hwnd, s + 0x400, 0x1234}) == 1 &&
+              call_import(&c, "USER32.dll", "GetPropW", {hwnd, s + 0x400}) == 0x1234,
+          "window properties");
+    host_set_time_source_pinned(100, 20);
+    check(call_import(&c, "USER32.dll", "SetTimer", {hwnd, 7, 10, 0}) == 7, "SetTimer");
+    host_pinned_clock_advance();
+    uint32_t msg = s + 0x500;
+    // Creation queues WM_MOVE/WM_SIZE, so ask specifically for the timer.
+    check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x113, 0x113, 1}) == 1 &&
+              rd32(msg + 4) == 0x113 && rd32(msg + 8) == 7 && rd32(msg + 16) == 120,
+          "WM_TIMER 7 is queued after the deadline with its timestamp");
+    check(call_import(&c, "USER32.dll", "KillTimer", {hwnd, 7}) == 1, "KillTimer");
+    host_clear_time_source();
+    check(call_import(&c, "USER32.dll", "GetSysColor", {15}) == 0x00f0f0f0u, "COLOR_BTNFACE");
+    check(call_import(&c, "USER32.dll", "DestroyWindow", {hwnd}) == 1, "DestroyWindow");
+    while (call_import(&c, "USER32.dll", "PeekMessageA", {msg, 0, 0, 0, 1})) {
+    }
+}
+
 static void test_delphi_dlls() {
     section("Delphi DLLs");
     X86 c;
@@ -4641,6 +4693,7 @@ int main(int argc, char **argv) {
     test_delphi_registry_version();
     test_delphi_misc();
     test_delphi_controls();
+    test_user32_vcl();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);
