@@ -1356,6 +1356,8 @@ def build_dispatch_probe(verbose=True):
         fh.write("void (*const recomp_base_ptrs[%d])(X86 *);\n" % nfn)
         fh.write("""
 void recomp_call(X86 *c, uint32_t target) { (void)c; probe(target); }
+int recomp_is_call_return(uint32_t target) { (void)target; return 1; }
+int32_t recomp_index_of(uint32_t target) { (void)target; return -1; }
 void recomp_jump(X86 *c, uint32_t target) { (void)c; probe(target); }
 void recomp_unknown_jump(X86 *c, uint32_t target) { (void)c; probe(target); }
 

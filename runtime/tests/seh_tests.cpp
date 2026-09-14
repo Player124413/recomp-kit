@@ -95,11 +95,20 @@ static void block(X86 *c) {
     recomp_seh_frame_leave(c);
     c->eip = rd32(c->r[R_ESP]);
     c->r[R_ESP] += 4;
+    recomp_return(c);
     final_esp = c->r[R_ESP];
 }
 
 // These are the test's tiny dispatch tables. Calls never intercept an unwind;
 // jumps intercept before lookup, including an already-known landing entry.
+extern "C" int recomp_is_call_return(uint32_t target) {
+    return target == GUEST_RETURN_SENTINEL;
+}
+extern "C" int32_t recomp_index_of(uint32_t target) {
+    // A call-return can also be an entry. The landing's RET must prefer
+    // its pending caller, rather than dispatch that entry a second time.
+    return target == LANDING || target == GUEST_RETURN_SENTINEL ? 0 : -1;
+}
 extern "C" void recomp_call(X86 *c, uint32_t target) {
     if (target == LANDING) {
         block(c);

@@ -2364,9 +2364,9 @@ class Translator(object):
                      "switch (r_) {"]
                 L.extend("case %s: goto L_%08x;" % (hexlit(t), t)
                          for t in sorted(fn.pushed_continuations))
-                L.extend(["default: c->eip = r_; return;", "}"])
+                L.extend(["default: c->eip = r_; recomp_return(c); return;", "}"])
                 return L
-            return ["c->eip = rd32(c->r[4]); c->r[4] += %du; return;" % (4 + n)]
+            return ["c->eip = rd32(c->r[4]); c->r[4] += %du; recomp_return(c); return;" % (4 + n)]
 
         # --------------------------------------------------------- system --
         if m == "RDTSC":

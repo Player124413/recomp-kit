@@ -216,7 +216,7 @@ def test_return_switch_requires_pushed_instruction_boundary(target, dispatch):
         assert text.count("switch (r_)") == 2
         assert text.count("case 0x60100bu: goto L_0060100b;") == 2
         assert "c->r[4] += 12u;" in text
-        assert text.count("default: c->eip = r_; return;") == 2
+        assert text.count("default: c->eip = r_; recomp_return(c); return;") == 2
     assert "void fn_00601005(X86 *c) { body_00601000(c, 0x601005u); }" in text
 
 
@@ -573,3 +573,23 @@ def test_except_calls_push_decoded_returns_after_short_jump(tmp_path, monkeypatc
     table_text = (out / "table.c").read_text()
     returns = table_text.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]
     assert "0x%08xu" % epilogue in returns
+
+
+def test_ret_classifies_after_pop_without_an_interior_switch_for_plain_returns():
+    from pathlib import Path
+    from test_translate_insns import Opts
+    entry = 0x00601000
+    img = synthetic_image({entry: b"\xc3"}, base=0x00600000)
+    fn = T.Function(entry, "plain_return", 1, T.parse_listing_text("00601000  RET\n"))
+    fn.measure(img)
+    tr = T.Translator(img, {entry}, Opts())
+    tr.prepare(fn)
+    text = "\n".join(tr.translate(fn))
+    assert "c->eip = rd32(c->r[4]); c->r[4] += 4u; recomp_return(c); return;" in text
+    assert "switch" not in text
+    # Shared classification also serves the default of pushed-continuation
+    # switches. A continuation that is also an entry must return, not run twice.
+    header = (Path(ROOT) / "runtime/x86.h").read_text()
+    helper = header.split("static inline void recomp_return(X86 *c)", 1)[1].split("}\n", 1)[0]
+    assert helper.index("recomp_is_call_return") < helper.index("recomp_index_of")
+    assert "recomp_call(c, c->eip);" in helper

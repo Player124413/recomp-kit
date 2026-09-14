@@ -86,7 +86,7 @@ class Case(object):
     exact bytes are the wrong measure (x87 results)."""
 
     def __init__(self, name, addr, lines, code, setup=None, ignore=(), check=None,
-                 expect_intr=None):
+                 expect_intr=None, entries=()):
         self.name = name
         self.addr = addr
         self.lines = lines
@@ -95,6 +95,7 @@ class Case(object):
         self.ignore = ignore
         self.check = check
         self.expect_intr = expect_intr
+        self.entries = entries
 
     def listing(self):
         return "\n".join("%08x  %s" % (self.addr + off, text) for off, text in self.lines) + "\n"
@@ -235,6 +236,15 @@ def fbstp_setup(rng):
 
 
 CASES = [
+    Case("Vtable adapter RET enters the method with Self and the caller return", 0x0D029000,
+         [(0, "ADD EAX,-0x8"), (3, "PUSH EAX"), (4, "MOV EAX,dword ptr [EAX]"),
+          (6, "MOV EAX,dword ptr [EAX + 0x8]"), (9, "XCHG dword ptr [ESP],EAX"),
+          (12, "RET"), (13, "MOV EAX,0x12345678"), (18, "RET")],
+         "83 c0 f8 50 8b 00 8b 40 08 87 04 24 c3 b8 78 56 34 12 c3",
+         lambda rng: {"regs": rand_regs(rng, EAX=SCRATCH + 0x108),
+                      "mem": [(SCRATCH + 0x100, struct.pack("<I", SCRATCH + 0x200)),
+                              (SCRATCH + 0x208, struct.pack("<I", 0x0D02900D))]},
+         entries=(0x0D02900D,)),
     Case("Cleanup RET follows a nonadjacent pushed continuation", 0x0D01EC00,
          [(0, "PUSH EBP"), (1, "MOV EBP,ESP"), (3, "PUSH 0x0d01ec11"),
           (8, "LEA EAX,[EBP]"), (11, "MOV EDX,0x3"),
@@ -483,12 +493,12 @@ class Opts(object):
 
 def translate_case(case):
     """The emitted C for one case, or the TranslateError it raised."""
-    tr = T.Translator(NoImage(), {c.addr for c in CASES}, Opts())
+    tr = T.Translator(NoImage(), {a for c in CASES for a in (c.addr,) + c.entries}, Opts())
     insns = T.parse_listing_text(case.listing())
     fn = T.Function(case.addr, case.name, len(case.code), insns)
     fn.measure(NoImage())
     tr.prepare(fn)
-    text = "\n".join(tr.translate(fn))
+    text = "\n".join(tr.translate(fn, case.entries))
     assert "FN(" not in text, "synthetic cases must not call anything"
     return text
 
@@ -535,11 +545,17 @@ def built():
         fh.write("\n".join(parts))
     with open(os.path.join(work, "table.c"), "w") as fh:
         fh.write('#include "x86.h"\n')
-        for case in ok:
-            fh.write("void fn_%08x(X86 *c);\n" % case.addr)
+        entries = [a for case in ok for a in (case.addr,) + case.entries]
+        for addr in entries:
+            fh.write("void fn_%08x(X86 *c);\n" % addr)
+        fh.write("int recomp_is_call_return(uint32_t target) { return target == 0x%08xu; }\n" % MAGIC_RET)
+        fh.write("int32_t recomp_index_of(uint32_t target) { switch (target) {\n")
+        for index, addr in enumerate(entries):
+            fh.write("case 0x%08xu: return %d;\n" % (addr, index))
+        fh.write("default: return -1; } }\n")
         fh.write("void recomp_call(X86 *c, uint32_t target) {\n    switch (target) {\n")
-        for case in ok:
-            fh.write("    case 0x%08xu: fn_%08x(c); return;\n" % (case.addr, case.addr))
+        for addr in entries:
+            fh.write("    case 0x%08xu: fn_%08x(c); return;\n" % (addr, addr))
         fh.write("    default: recomp_unknown_call(c, target); c->eip = rd32(c->r[R_ESP]); c->r[R_ESP] += 4;\n"
                  "    }\n}\n")
         # The harness calls each case from MAGIC_RET outside the code arena.

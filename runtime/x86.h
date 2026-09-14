@@ -268,6 +268,19 @@ uint64_t recomp_override_hash(void);
 /* Index into the three tables, or -1 when addr is not an entry. Being an entry
  * is NOT the same as being hookable: eligibility comes from symbols.json. */
 int32_t recomp_index_of(uint32_t addr);
+int recomp_is_call_return(uint32_t target);
+
+/* RET has already popped EIP and applied any immediate stack adjustment.
+ * A CALL continuation belongs to the pending host caller, even when it is
+ * also an alternate entry. Other entries are tail calls, as in interface
+ * adapters that exchange a vtable method onto the guest stack before RET.
+ * Unknown returns retain the existing EIP/host-return behaviour. */
+static inline void recomp_return(X86 *c) {
+    if (recomp_is_call_return(c->eip))
+        return;
+    if (recomp_index_of(c->eip) >= 0)
+        recomp_call(c, c->eip);
+}
 
 /* --------------------------------------------------------------- flags */
 
