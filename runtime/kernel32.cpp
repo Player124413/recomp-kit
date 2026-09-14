@@ -1205,7 +1205,7 @@ bool runtime_serves_module(const std::string &lower_name) {
     for (int i = 0; known[i]; ++i)
         if (lower_name == known[i])
             return true;
-    return false;
+    return imports_serves_module(lower_name.c_str());
 }
 
 void k_LoadLibraryA(X86 *c) {

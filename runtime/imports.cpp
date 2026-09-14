@@ -180,6 +180,16 @@ uint32_t imports_resolve(const char *dll, const char *name) {
                                     ri->second.argc_stdcall);
 }
 
+bool imports_serves_module(const char *dll) {
+    if (!dll || !*dll)
+        return false;
+    // key_of applies the same DLL normalization as registration/resolution.
+    // Including '!' makes the prefix match the complete module name only.
+    std::string prefix = key_of(dll, nullptr);
+    auto it = registry().lower_bound(prefix);
+    return it != registry().end() && it->first.compare(0, prefix.size(), prefix) == 0;
+}
+
 const char *imports_describe(uint32_t target) {
     if (!imports_is_trampoline(target))
         return nullptr;

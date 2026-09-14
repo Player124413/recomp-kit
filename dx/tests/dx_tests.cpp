@@ -5986,6 +5986,9 @@ static void test_bink_smack_stubs() {
     CHECK_EQ(rd32(bink + 0x10), 0u); // frame count: a finished video
     CHECK_EQ(rd32(bink + 0x14), 0u); // current frame
     CHECK_EQ(rd32(bink + 0x08), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkGetRects@8"), {bink, 0}), 0u);
+    CHECK_EQ(rd32(bink + 0xb4), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkPause@8"), {bink, 1}), 0u);
     CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkWait@4"), {bink}), 0u);
     CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {bink}), 0u);
     call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {bink});
@@ -6003,6 +6006,39 @@ static void test_bink_smack_stubs() {
     CHECK_EQ(call_shim(tramp("smackw32.dll", "_SmackOpen@12"), {0, 0, 0}), 0u);
     CHECK_EQ(imports_argc(tramp("binkw32.dll", "_BinkCopyToBuffer@28")), 7u);
     CHECK_EQ(imports_argc(tramp("smackw32.dll", "_SmackToBuffer@28")), 7u);
+}
+
+static void test_bink_entry_points_resolve() {
+    cpu_reset();
+    gm_put_str(sc(0), "BINKW32.DLL", 0x100);
+    uint32_t load = tramp("KERNEL32.dll", "LoadLibraryA");
+    uint32_t get_proc = tramp("KERNEL32.dll", "GetProcAddress");
+    uint32_t module = call_shim(load, {sc(0)});
+    CHECK(module != 0);
+    const char *const names[] = {
+        "_BinkPause@8",          "_BinkDDSurfaceType@4",   "_BinkDoFrame@4", "_BinkCopyToBuffer@28",
+        "_BinkGetRects@8",       "_BinkNextFrame@4",       "_BinkWait@4",    "_BinkClose@4",
+        "_BinkSetSoundSystem@8", "_BinkOpenDirectSound@4", "_BinkOpen@8",
+    };
+    for (const char *name : names) {
+        gm_put_str(sc(0x100), name, 0x100);
+        uint32_t entry = call_shim(get_proc, {module, sc(0x100)});
+        if (!entry)
+            fprintf(stderr, "Bink entry point unresolved: %s\n", name);
+        CHECK(entry != 0);
+        CHECK_EQ(entry, imports_resolve("binkw32.dll", name));
+    }
+    gm_put_str(sc(0), "bInKw32.dLl", 0x100);
+    CHECK_EQ(call_shim(load, {sc(0)}), module);
+    // An upper-case registry spelling must be loadable too; an unregistered
+    // DLL must still fail instead of receiving a meaningless pseudo handle.
+    gm_put_str(sc(0), "ddraw.dll", 0x100);
+    uint32_t ddraw = call_shim(load, {sc(0)});
+    CHECK(ddraw != 0);
+    gm_put_str(sc(0x100), "DirectDrawCreate", 0x100);
+    CHECK_EQ(call_shim(get_proc, {ddraw, sc(0x100)}), tramp("DDRAW.dll", "DirectDrawCreate"));
+    gm_put_str(sc(0), "unregistered_video.dll", 0x100);
+    CHECK_EQ(call_shim(load, {sc(0)}), 0u);
 }
 
 static void test_video_frame_convert() {
@@ -6031,7 +6067,7 @@ static void test_video_frame_convert() {
 
 // An optional private container exercises the real guest file API and decoder.
 // The player must use its own descriptor so decoding never seeks the guest's.
-static void test_bink_open_from_handle() {
+static void with_bink_container(void (*check_record)(uint32_t rec, uint32_t handle)) {
     const char *container = recomp_env("TEST_BINK_CONTAINER");
     if (!container || !*container) {
         printf("bink container test: RECOMP_TEST_BINK_CONTAINER unset, skipped\n");
@@ -6076,41 +6112,7 @@ static void test_bink_open_from_handle() {
         uint32_t rec = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {handle, 0x00800000});
         CHECK(rec != 0);
         if (rec) {
-            uint32_t width = rd32(rec), height = rd32(rec + 4);
-            CHECK(width >= 16 && width <= 4096);
-            CHECK(height >= 16 && height <= 4096);
-            CHECK(rd32(rec + 0x10) > 0);
-            CHECK_EQ(rd32(rec + 0x14), 1u);
-            printf("bink container test: %ux%u, %u frames\n", width, height, rd32(rec + 0x10));
-            if (width >= 16 && width <= 4096 && height >= 16 && height <= 4096) {
-                uint32_t pitch = width * 2, bytes = pitch * height;
-                uint32_t dest = heap_alloc(bytes, true, 16);
-                CHECK(dest != 0);
-                if (dest) {
-                    // A video may fade in from black. Decode until RGB565
-                    // contains different pixels, with a bounded frame budget.
-                    bool nonuniform = false;
-                    uint32_t decoded_frames = 0;
-                    while (decoded_frames < 45 && !nonuniform) {
-                        call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
-                        ++decoded_frames;
-                        call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
-                        CHECK_EQ(rd32(rec + 0x14), decoded_frames + 1);
-                        memset(g_mem + dest, 0xa5, bytes);
-                        call_shim(tramp("binkw32.dll", "_BinkCopyToBuffer@28"),
-                                  {rec, dest, pitch, height, 0, 0, 10});
-                        for (uint32_t i = 2; i < bytes; i += 2)
-                            nonuniform |= rd16(dest + i) != rd16(dest);
-                    }
-                    printf("bink container test: %s after decoding %u frames (limit 45)\n",
-                           nonuniform ? "non-uniform RGB565" : "still uniform RGB565",
-                           decoded_frames);
-                    CHECK(nonuniform);
-                    uint32_t error = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
-                    CHECK(error && gm_str(error).empty());
-                    heap_free(dest);
-                }
-            }
+            check_record(rec, handle);
             call_shim(tramp("binkw32.dll", "_BinkClose@4"), {rec});
             CHECK(!heap_owns(rec));
         }
@@ -6119,6 +6121,106 @@ static void test_bink_open_from_handle() {
     }
     heap_free(name);
     win32_init(previous_dir);
+}
+
+static void test_bink_open_from_handle() {
+    with_bink_container([](uint32_t rec, uint32_t) {
+        uint32_t width = rd32(rec), height = rd32(rec + 4);
+        CHECK(width >= 16 && width <= 4096);
+        CHECK(height >= 16 && height <= 4096);
+        CHECK(rd32(rec + 0x10) > 0);
+        CHECK_EQ(rd32(rec + 0x14), 1u);
+        printf("bink container test: %ux%u, %u frames\n", width, height, rd32(rec + 0x10));
+        if (width >= 16 && width <= 4096 && height >= 16 && height <= 4096) {
+            uint32_t pitch = width * 2, bytes = pitch * height;
+            uint32_t dest = heap_alloc(bytes, true, 16);
+            CHECK(dest != 0);
+            if (dest) {
+                // A video may fade in from black. Decode until RGB565
+                // contains different pixels, with a bounded frame budget.
+                bool nonuniform = false;
+                uint32_t decoded_frames = 0;
+                while (decoded_frames < 45 && !nonuniform) {
+                    call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+                    ++decoded_frames;
+                    call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+                    CHECK_EQ(rd32(rec + 0x14), decoded_frames + 1);
+                    memset(g_mem + dest, 0xa5, bytes);
+                    call_shim(tramp("binkw32.dll", "_BinkCopyToBuffer@28"),
+                              {rec, dest, pitch, height, 0, 0, 10});
+                    for (uint32_t i = 2; i < bytes; i += 2)
+                        nonuniform |= rd16(dest + i) != rd16(dest);
+                }
+                printf("bink container test: %s after decoding %u frames (limit 45)\n",
+                       nonuniform ? "non-uniform RGB565" : "still uniform RGB565", decoded_frames);
+                CHECK(nonuniform);
+                uint32_t error = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+                CHECK(error && gm_str(error).empty());
+                heap_free(dest);
+            }
+        }
+    });
+}
+
+static void test_bink_rects_and_pause() {
+    cpu_reset();
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkOpenDirectSound@4"), {0}), 1u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkGetRects@8"), {0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkPause@8"), {0, 1}), 0u);
+    const char *container = recomp_env("TEST_BINK_CONTAINER");
+    if (!container || !*container)
+        return;
+    with_bink_container([](uint32_t rec, uint32_t handle) {
+        uint32_t rects = tramp("binkw32.dll", "_BinkGetRects@8");
+        uint32_t pause = tramp("binkw32.dll", "_BinkPause@8");
+        uint32_t wait = tramp("binkw32.dll", "_BinkWait@4");
+        wr32(rec + 0xb4, 8); // GetRects must clear a stale count before decode.
+        CHECK_EQ(call_shim(rects, {rec, 0}), 0u);
+        CHECK_EQ(rd32(rec + 0xb4), 0u);
+        CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec}), 0u);
+        CHECK_EQ(call_shim(rects, {rec, 0}), 1u);
+        CHECK_EQ(rd32(rec + 0xb4), 1u);
+        CHECK_EQ(rd32(rec + 0x34), 0u);
+        CHECK_EQ(rd32(rec + 0x38), 0u);
+        CHECK_EQ(rd32(rec + 0x3c), rd32(rec));
+        CHECK_EQ(rd32(rec + 0x40), rd32(rec + 4));
+        call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+        CHECK_EQ(rd32(rec + 0x14), 2u);
+        CHECK_EQ(call_shim(wait, {rec}), 1u);
+        CHECK_EQ(call_shim(pause, {rec, 1}), 0u);
+        uint32_t paused_at = host_millis();
+        CHECK_EQ(call_shim(wait, {rec}), 1u);
+        size_t plays = g_plays.size(), queues = g_queues.size();
+        CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkService@4"), {rec}), 0u);
+        CHECK_EQ(g_plays.size(), plays);
+        CHECK_EQ(g_queues.size(), queues);
+
+        // A second, unpaused record proves frame 2 really became due. Open
+        // it later so its deadline cannot precede the paused record's, and
+        // avoid assuming that every private video runs at the same rate.
+        uint32_t control = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {handle, 0x00800000});
+        CHECK(control != 0);
+        if (control) {
+            call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {control});
+            os_sleep_us(30 * 1000);
+            uint32_t control_wait = call_shim(wait, {control});
+            while (control_wait && (uint32_t)(host_millis() - paused_at) < 2000) {
+                os_sleep_us(1000);
+                control_wait = call_shim(wait, {control});
+            }
+            CHECK_EQ(control_wait, 0u);
+            uint32_t paused_ms = host_millis() - paused_at;
+            CHECK(paused_ms >= 30);
+            CHECK_EQ(call_shim(wait, {rec}), 1u);
+            CHECK_EQ(call_shim(pause, {rec, 0}), 0u);
+            CHECK_EQ(call_shim(wait, {rec}), 1u);
+            printf("bink pause test: paused %u ms; frame 2 due in control, waiting after resume\n",
+                   paused_ms);
+            call_shim(tramp("binkw32.dll", "_BinkClose@4"), {control});
+        } else {
+            call_shim(pause, {rec, 0});
+        }
+    });
 }
 
 static void test_bink_handle_flag_errors() {
@@ -9965,10 +10067,12 @@ int main() {
         {"Miles samples", test_mss32_sample},
         {"Miles streams", test_mss32_stream},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
+        {"Bink entry points resolve", test_bink_entry_points_resolve},
         {"video frame conversion", test_video_frame_convert},
         {"Bink play", test_bink_play},
         {"Bink open from handle", test_bink_open_from_handle},
         {"Bink handle flag errors", test_bink_handle_flag_errors},
+        {"Bink rects and pause", test_bink_rects_and_pause},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},

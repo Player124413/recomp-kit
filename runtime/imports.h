@@ -92,6 +92,9 @@ uint32_t imports_trampoline_for(const char *dll, const char *name);
 // Like imports_trampoline_for but allocates on demand when the name is one of
 // the registered shims. Backs GetProcAddress.
 uint32_t imports_resolve(const char *dll, const char *name);
+// Whether at least one shim is registered for this DLL (case-insensitive).
+// Backs LoadLibrary; unimplemented IAT trampolines alone do not serve a DLL.
+bool imports_serves_module(const char *dll);
 
 static inline bool imports_is_trampoline(uint32_t a) {
     return a >= TRAMP_BASE && a < TRAMP_LIMIT && ((a - TRAMP_BASE) % TRAMP_STRIDE) == 0;

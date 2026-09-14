@@ -81,7 +81,8 @@ struct BinkPlayer {
     int video_index = -1, audio_index = -1;
     int32_t channel = -1;
     AVRational fps{};
-    uint32_t t0 = 0, count = 0, current = 1;
+    uint32_t t0 = 0, paused_at = 0, count = 0, current = 1;
+    bool paused = false;
     bool eof = false, flushed = false, failed = false;
     bool have_frame = false, audio_started = false, audio_unavailable = false;
 
@@ -449,6 +450,44 @@ void BinkNextFrame(X86 *c) {
     set_eax(c, 0);
 }
 
+// The SDK stores eight {x, y, width, height} rectangles at +0x34 and their
+// count at +0xb4. A decoded frame dirties the whole image; before decode,
+// clear the count so the guest never blits an uninitialised frame.
+void BinkGetRects(X86 *c) {
+    set_eax(c, 0);
+    uint32_t rec = arg(c, 0);
+    BinkPlayer *p = player_for(rec);
+    if (!p)
+        return;
+    uint32_t count = p->have_frame ? 1 : 0;
+    if (count) {
+        wr32(rec + 0x34, 0);
+        wr32(rec + 0x38, 0);
+        wr32(rec + 0x3c, (uint32_t)p->frame->width);
+        wr32(rec + 0x40, (uint32_t)p->frame->height);
+    }
+    wr32(rec + 0xb4, count);
+    set_eax(c, count);
+}
+
+// Shift the playback origin by the time spent paused, preserving the time
+// remaining until the next frame. Repeated pause/resume calls are harmless;
+// unsigned subtraction also handles the host's millisecond counter wrapping.
+void BinkPause(X86 *c) {
+    if (BinkPlayer *p = player_for(arg(c, 0))) {
+        if (arg(c, 1)) {
+            if (!p->paused) {
+                p->paused_at = host_millis();
+                p->paused = true;
+            }
+        } else if (p->paused) {
+            p->t0 += host_millis() - p->paused_at;
+            p->paused = false;
+        }
+    }
+    set_eax(c, 0);
+}
+
 // The guest copies frame N after NextFrame changes the counter to N+1.
 // The wait ends at that counter's boundary using host time, never a guest
 // rendering clock; unsigned subtraction also handles host_millis wrapping.
@@ -459,7 +498,7 @@ void BinkWait(X86 *c) {
         // The ABI's millisecond expression truncates, rather than rounding.
         int64_t due =
             av_rescale_rnd((int64_t)(p->current - 1) * 1000, p->fps.den, p->fps.num, AV_ROUND_DOWN);
-        wait = (uint32_t)(host_millis() - p->t0) < (uint64_t)due;
+        wait = p->paused || (uint32_t)(host_millis() - p->t0) < (uint64_t)due;
     }
     set_eax(c, wait);
 }
@@ -469,7 +508,7 @@ void BinkWait(X86 *c) {
 void BinkService(X86 *c) {
     set_eax(c, 0);
     BinkPlayer *p = player_for(arg(c, 0));
-    if (!p || !p->audio || p->failed || p->audio_unavailable)
+    if (!p || p->paused || !p->audio || p->failed || p->audio_unavailable)
         return;
     uint32_t block = (uint32_t)p->audio->ch_layout.nb_channels * 2;
     uint32_t ahead = (uint32_t)p->audio->sample_rate * block;
@@ -602,6 +641,12 @@ void BinkDoFrame(X86 *c) {
 void BinkNextFrame(X86 *c) {
     ret0(c);
 }
+void BinkGetRects(X86 *c) {
+    ret0(c);
+}
+void BinkPause(X86 *c) {
+    ret0(c);
+}
 void BinkWait(X86 *c) {
     ret0(c);
 }
@@ -639,15 +684,27 @@ void BinkGetError(X86 *c) {
 #define SMACK(name, bytes, fn) {"smackw32.dll", "_Smack" #name "@" #bytes, (bytes) / 4, fn}
 
 const ImportShim g_video_shims[] = {
-    BINK(Open, 8, BinkOpen),       BINK(OpenMiles, 4, ret0),
-    BINK(SetSoundSystem, 8, ret1), BINK(DDSurfaceType, 4, BinkDDSurfaceType),
-    BINK(DoFrame, 4, BinkDoFrame), BINK(NextFrame, 4, BinkNextFrame),
-    BINK(Wait, 4, BinkWait),       BINK(CopyToBuffer, 28, BinkCopyToBuffer),
-    BINK(Service, 4, BinkService), BINK(GetError, 0, BinkGetError),
-    BINK(Close, 4, BinkClose),     BINK(BufferClose, 4, ret0),
-    SMACK(Open, 12, ret0),         SMACK(SoundUseMSS, 4, ret0),
-    SMACK(DoFrame, 4, ret0),       SMACK(NextFrame, 4, ret0),
-    SMACK(Wait, 4, ret0),          SMACK(ToBuffer, 28, ret0),
+    BINK(OpenDirectSound, 4, ret1),
+    BINK(GetRects, 8, BinkGetRects),
+    BINK(Pause, 8, BinkPause),
+    BINK(Open, 8, BinkOpen),
+    BINK(OpenMiles, 4, ret0),
+    BINK(SetSoundSystem, 8, ret1),
+    BINK(DDSurfaceType, 4, BinkDDSurfaceType),
+    BINK(DoFrame, 4, BinkDoFrame),
+    BINK(NextFrame, 4, BinkNextFrame),
+    BINK(Wait, 4, BinkWait),
+    BINK(CopyToBuffer, 28, BinkCopyToBuffer),
+    BINK(Service, 4, BinkService),
+    BINK(GetError, 0, BinkGetError),
+    BINK(Close, 4, BinkClose),
+    BINK(BufferClose, 4, ret0),
+    SMACK(Open, 12, ret0),
+    SMACK(SoundUseMSS, 4, ret0),
+    SMACK(DoFrame, 4, ret0),
+    SMACK(NextFrame, 4, ret0),
+    SMACK(Wait, 4, ret0),
+    SMACK(ToBuffer, 28, ret0),
     SMACK(Close, 4, ret0),
 };
 

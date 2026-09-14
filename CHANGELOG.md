@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bink: serve the DirectSound token, decoded-frame rectangles and pause
+  entry points. Pausing holds the frame clock and stops audio refills;
+  resuming shifts frame deadlines by the paused interval. Builds without
+  FFmpeg expose the same entry points with finished-video behavior.
+  LoadLibrary now accepts any DLL with registered shims, case-insensitively,
+  so dynamically loaded video imports resolve through GetProcAddress.
 - Bink: open a video from a guest file handle at its current offset using
   FFmpeg custom I/O over the remainder of the host file. The player reopens
   the file read-only and owns its I/O context, leaving the guest's position
