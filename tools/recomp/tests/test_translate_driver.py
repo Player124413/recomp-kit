@@ -814,3 +814,56 @@ def test_utf16_run_filter_applies_only_to_speculative_entries(tmp_path, monkeypa
     text = translate_entry_fixture(tmp_path, monkeypatch, img,
                                    {a: blocks[a] for a in (entry, next_fn)})
     assert ("void fn_%08x(" % target in text) == protected
+
+
+@pytest.mark.parametrize("location", ["inside", "outside", "bad_decode", "chain"])
+def test_pruned_cleanup_alias_falls_back_to_listed_span(tmp_path, monkeypatch, location):
+    """Prune both weak owners, then retain the cleanup through its listed span.
+
+    A bad prefix covers a callee. Losing that callee prunes the speculative
+    caller too, including its cleanup alias; the protected SEH landing survives.
+    """
+    import struct
+    anchor, guess, stub, epilogue = 0x00601000, 0x00601020, 0x00601080, 0x00601090
+    prefix, method, dispatcher = 0x006011f0, 0x00601200, 0x00601400
+    if location == "outside":
+        anchor = 0x00601070  # the cleanup lies before every listed span
+    setup = b"\x55\x8b\xec\x31\xc0\x55\x68" + struct.pack("<I", stub) + b"\x64\xff\x30\x64\x89\x20"
+    call = guess + len(setup)
+    setup += b"\xe8" + struct.pack("<i", method - call - 5)
+    setup += b"\x5a\x59\x59\x64\x89\x10\x68" + struct.pack("<I", epilogue)
+    cleanup = guess + len(setup)
+    setup += (b"\x68" + struct.pack("<I", epilogue) + b"\x90\xc3" if location == "chain" else
+              b"\x0f\x0b\xc3" if location == "bad_decode" else b"\x90\xc3")
+    blocks = {
+        anchor: b"\xc3", guess: setup,
+        stub: b"\xe9" + struct.pack("<i", dispatcher - stub - 5)
+            + b"\xe9" + struct.pack("<i", cleanup - stub - 10),
+        epilogue: b"\x8b\xe5\x5d\xc3",
+        prefix: b"\x0f\x85" + struct.pack("<i", 0x00700000 - prefix - 6) + b"\x90" * 10,
+        method: b"\xb8\x2a\0\0\0\xc3", dispatcher: b"\xc3",
+    }
+    if location == "chain":
+        blocks[epilogue] = b"\x68" + struct.pack("<I", epilogue + 0x10) + b"\x90\xc3"
+        blocks[epilogue + 0x10] = b"\x8b\xe5\x5d\xc3"
+    img = synthetic_image(blocks, base=0x00600000)
+    img.code_pointers = lambda *a, **kw: ({guess, prefix}, set())
+    img.plausible_immediate_target = lambda addr: False
+    listings = {a: blocks[a] for a in (anchor, dispatcher)}
+    if location == "bad_decode":
+        # The malformed cleanup prevents discovery of the weak caller. Keep
+        # the landing explicitly listed so its dispatch must still fail.
+        listings[stub + 5] = blocks[stub][5:]
+    if location in ("outside", "bad_decode"):
+        with pytest.raises(T.TranslateError, match="literal dispatch targets are not entry points"):
+            translate_entry_fixture(tmp_path, monkeypatch, img, listings)
+        return
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, listings)
+    assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (cleanup, anchor, T.hexlit(cleanup)) in text
+    assert "void fn_%08x(" % guess not in text
+    assert "void fn_%08x(" % prefix not in text
+    if location == "chain":
+        body = text.split("static void body_%08x(" % anchor, 1)[1].split("void fn_%08x(" % anchor, 1)[0]
+        for target in (epilogue, epilogue + 0x10):
+            assert "L_%08x:" % target in body
+            assert "case %s: goto L_%08x;" % (T.hexlit(target), target) in body

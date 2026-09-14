@@ -24,6 +24,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from bisect import bisect_right
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -3591,8 +3592,118 @@ def main():
             pruned.append(a)
         for t in [t for t, f in extra.items() if f.addr in drop]:
             del extra[t]
+
+    # A speculative owner stays prunable even when it covers a real cleanup.
+    # Its removal must not erase a dispatch still required by protected code.
+    # Reclaim only the reachable suffix through the original listed span, not
+    # the rejected owner's prefix. Newly attached code can expose another
+    # cleanup, pushed continuation, or callee, so drain a worklist to a fixpoint.
+    span_functions = {fn.addr: fn for fn in parsed
+                      if fn.addr in listed_functions and fn.addr in bodies}
+    known = set(bodies) | {t for t, fn in extra.items() if fn.addr in bodies}
+
+    def span_owner(target):
+        i = bisect_right(listed_starts, target) - 1
+        if i < 0:
+            return None
+        start = listed_starts[i]
+        return span_functions.get(start) if target < span_ends[start] else None
+
+    def required_targets(fn):
+        targets = {t for t, _ in dangling_targets(bodies[fn.addr], known)}
+        home = span_owner(fn.addr)
+        if home is not None:
+            for ins in fn.insns:
+                if ins.mnem == "PUSH" and ins.ops:
+                    op = parse_operand(ins.ops[0])
+                    if op.kind == "imm" and home.addr <= op.imm < span_ends[home.addr]:
+                        targets.add(op.imm)
+        for stub in seh_frame_sites(fn).values():
+            targets.add(stub)
+            landings, table_range = image.seh_landings(stub)
+            targets.update(landings)
+            seh_stubs.add(stub)
+            if table_range:
+                tr.table_ranges.add(table_range)
+        return targets - known
+
+    pending = set()
+    for fn in parsed:
+        if fn.addr in bodies and (fn.addr in protected_entries
+                                  or provenance.get(fn.addr) in STRUCTURAL_PROVENANCE):
+            pending.update(required_targets(fn))
+    attempted = set()
+    span_recovered = set()
+    while pending:
+        target = min(pending)
+        pending.remove(target)
+        if target in known or target in attempted:
+            continue
+        attempted.add(target)
+        home = span_owner(target)
+        if home is None:
+            continue  # keep the existing gate failure when there is no owner
+        protected_entries.add(target)
+        entry_strength[target] = max(entry_strength.get(target, 0), 1)
+        if target in home.addrs:
+            grown = home
+        else:
+            # Existing entries and handler stubs keep their dispatch identity;
+            # withdrawn bodies and aliases are no longer sweep boundaries.
+            blocked = (known | seh_stubs | home.addrs) - {target}
+            insns = image.recover(target, blocked,
+                                  bounds=(home.addr, span_ends[home.addr]))
+            if not insns:
+                continue
+            candidate = Function(target, "span continuation", 0, insns)
+            candidate.measure(image)
+            if not accepts(candidate):
+                continue
+            # A clean decode cannot replace bytes already owned by the listing.
+            ends = {ins.addr: home.fallthrough[i] or ins.addr + 1
+                    for i, ins in enumerate(home.insns)}
+            starts = sorted(ends)
+            overlap = False
+            for i, ins in enumerate(insns):
+                end = candidate.fallthrough[i] or ins.addr + 1
+                pos = bisect_right(starts, ins.addr)
+                if ((pos and ends[starts[pos - 1]] > ins.addr)
+                        or (pos < len(starts) and starts[pos] < end)):
+                    overlap = True
+                    break
+            if overlap:
+                continue
+            merged = {ins.addr: ins for ins in home.insns}
+            merged.update({ins.addr: ins for ins in insns})
+            grown = Function(home.addr, home.name, home.size,
+                             [merged[a] for a in sorted(merged)])
+            grown.measure(image)
+        aliases = {a for a, fn in extra.items() if fn is home} | {target}
+        tr.func_addrs.add(target)
+        tr.all_insn_addrs.update(grown.addrs)
+        try:
+            tr.prepare(grown, strict=True)
+            body = tr.translate(grown, aliases)
+        except TranslateError:
+            continue
+        home.__dict__.update(grown.__dict__)
+        extra[target] = home
+        owner[target] = home
+        finally_owners[target] = home
+        register(home)
+        bodies[home.addr] = body
+        known.add(target)
+        all_addrs.add(target)
+        span_recovered.add(target)
+        # Table entries introduced by the recovered suffix use the same gate
+        # and span recovery as its explicit dispatches.
+        for (addr, _), targets in tr.jumptables.items():
+            if addr == home.addr:
+                pending.update(set(targets) - known)
+        pending.update(required_targets(home))
+    tr.stats["_span_recovered_after_pruning"] = len(span_recovered)
     if pruned:
-        gone = set(pruned)
+        gone = set(pruned) - known
         for a in bodies:
             bodies[a] = retarget_withdrawn(bodies[a], gone)
         tr.stats["_withdrawn_retargeted"] = len(gone)
