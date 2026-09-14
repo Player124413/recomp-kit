@@ -493,15 +493,12 @@ void u_ScreenToClient(X86 *c) {
     if (p && w) {
         LOGV("ScreenToClient(%08x): (%d,%d) through a window at %d,%d", arg(c, 0), (int32_t)rd32(p),
              (int32_t)rd32(p + 4), w->x, w->y);
-        wr32(p + 0, rd32(p + 0) - (uint32_t)w->x);
-        wr32(p + 4, rd32(p + 4) - (uint32_t)w->y);
+        int32_t x, y;
+        client_origin(w->hwnd, &x, &y);
+        wr32(p, rd32(p) - uint32_t(x));
+        wr32(p + 4, rd32(p + 4) - uint32_t(y));
     }
     set_eax(c, w ? 1 : 0);
-}
-// One window is ever active and focused: the game's main window.
-
-void u_GetMenu(X86 *c) {
-    set_eax(c, 0);
 }
 
 void u_OpenIcon(X86 *c) {
@@ -516,8 +513,10 @@ void u_ClientToScreen(X86 *c) {
     Window *w = find_window(arg(c, 0));
     uint32_t p = arg(c, 1);
     if (p && w) {
-        wr32(p + 0, rd32(p + 0) + (uint32_t)w->x);
-        wr32(p + 4, rd32(p + 4) + (uint32_t)w->y);
+        int32_t x, y;
+        client_origin(w->hwnd, &x, &y);
+        wr32(p, rd32(p) + uint32_t(x));
+        wr32(p + 4, rd32(p + 4) + uint32_t(y));
     }
     set_eax(c, 1);
 }
@@ -796,6 +795,18 @@ void dispatch_message(X86 *c) {
 }
 
 void u_PostMessageA(X86 *c) {
+    // System messages with text pointers cannot be posted asynchronously. A
+    // caller must SendMessage so the buffer remains alive through conversion.
+    if (arg(c, 1) == 0x000c || arg(c, 1) == 0x000d) {
+        set_last_error(1159); // ERROR_MESSAGE_SYNC_ONLY
+        set_eax(c, 0);
+        return;
+    }
+    if (arg(c, 0) && !find_window(arg(c, 0))) {
+        set_last_error(1400);
+        set_eax(c, 0);
+        return;
+    }
     host_post_message(arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3));
     set_eax(c, 1);
 }
@@ -899,6 +910,87 @@ void u_GetSystemMetrics(X86 *c) {
     case 17: // SM_CYFULLSCREEN
         v = height - 19;
         break;
+    case 2:
+    case 3:
+    case 9:
+    case 10:
+    case 20:
+    case 21:
+        v = 17;
+        break;
+    case 15:
+        v = 19;
+        break;
+    case 19:
+    case 22:
+    case 23:
+    case 41:
+    case 42:
+    case 44:
+    case 63:
+    case 74:
+        v = 1;
+        break;
+    case 28:
+        v = 112;
+        break;
+    case 29:
+        v = 27;
+        break;
+    case 30:
+    case 31:
+    case 52:
+    case 53:
+        v = 18;
+        break;
+    case 34:
+        v = 112;
+        break;
+    case 35:
+        v = 27;
+        break;
+    case 36:
+    case 37:
+    case 49:
+    case 50:
+        v = 4;
+        break;
+    case 38:
+    case 39:
+        v = 75;
+        break;
+    case 45:
+    case 46:
+        v = 2;
+        break;
+    case 47:
+        v = 160;
+        break;
+    case 48:
+        v = 24;
+        break;
+    case 51:
+    case 55:
+        v = 19;
+        break;
+    case 54:
+    case 59:
+    case 61:
+    case 78:
+        v = width;
+        break;
+    case 56:
+    case 60:
+    case 62:
+    case 79:
+        v = height;
+        break;
+    case 57:
+    case 58:
+    case 68:
+    case 69:
+        v = 16;
+        break;
     case 4: // SM_CYCAPTION
         v = 19;
         break;
@@ -986,7 +1078,7 @@ void u_GetCursorPos(X86 *c) {
     set_eax(c, 1);
 }
 void u_GetMessagePos(X86 *c) {
-    set_eax(c, ((uint32_t)(uint16_t)g_cursor_y << 16) | (uint16_t)g_cursor_x);
+    set_eax(c, (last_message.pty << 16) | (last_message.ptx & 0xffff));
 }
 void u_GetMessageTime(X86 *c) {
     set_eax(c, last_message.time);
@@ -1055,18 +1147,6 @@ void u_GetKeyboardLayout(X86 *c) {
 // ---------------------------------------------------------------------------
 // Clipboard: nothing is shared with the host clipboard.
 // ---------------------------------------------------------------------------
-void u_OpenClipboard(X86 *c) {
-    set_eax(c, 1);
-}
-void u_CloseClipboard(X86 *c) {
-    set_eax(c, 1);
-}
-void u_IsClipboardFormatAvailable(X86 *c) {
-    set_eax(c, 0);
-}
-void u_GetClipboardData(X86 *c) {
-    set_eax(c, 0);
-}
 
 // ---------------------------------------------------------------------------
 // Message boxes and formatting
@@ -1237,7 +1317,6 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
     {"USER32.dll", "CreateIconIndirect", 1, u_CreateIconIndirect},
     {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
-    {"USER32.dll", "GetMenu", 1, u_GetMenu},
     {"USER32.dll", "OpenIcon", 1, u_OpenIcon},
     {"USER32.dll", "FindWindowA", 2, u_FindWindowA},
     {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
@@ -1248,10 +1327,6 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "GetDoubleClickTime", 0, u_GetDoubleClickTime},
     {"USER32.dll", "GetKeyboardType", 1, u_GetKeyboardType},
     {"USER32.dll", "GetKeyboardLayout", 1, u_GetKeyboardLayout},
-    {"USER32.dll", "OpenClipboard", 1, u_OpenClipboard},
-    {"USER32.dll", "CloseClipboard", 0, u_CloseClipboard},
-    {"USER32.dll", "IsClipboardFormatAvailable", 1, u_IsClipboardFormatAvailable},
-    {"USER32.dll", "GetClipboardData", 1, u_GetClipboardData},
     {"USER32.dll", "MessageBoxA", 4, u_MessageBoxA},
     {"USER32.dll", "MessageBoxW", 4, u_MessageBoxW},
     {"USER32.dll", "wvsprintfA", 3, u_wvsprintfA},

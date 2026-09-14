@@ -261,6 +261,33 @@ bool gdi_draw_image(uint32_t dc, const GdiImage &image, int32_t x, int32_t y, in
         }
     return true;
 }
+// Toggle a dotted focus border in the selected guest DIB. XOR is deliberately
+// performed on stored channels, so drawing the same rectangle twice is exact.
+bool gdi_focus_rect(uint32_t dc, int32_t left, int32_t top, int32_t right, int32_t bottom) {
+    Dib *dst = dib_in_dc(dc);
+    if (!dst || !(dst->bpp == 16 || dst->bpp == 24 || dst->bpp == 32))
+        return false;
+    int64_t height = dst->height < 0 ? -int64_t(dst->height) : dst->height;
+    int32_t x0 = std::max(0, left), y0 = std::max(0, top);
+    int32_t x1 = int32_t(std::min<int64_t>(dst->width, right));
+    int32_t y1 = int32_t(std::min<int64_t>(height, bottom));
+    for (int32_t y = y0; y < y1; ++y)
+        for (int32_t x = x0; x < x1; ++x) {
+            if ((x != left && x != right - 1 && y != top && y != bottom - 1) ||
+                ((uint32_t(x) + uint32_t(y)) & 1))
+                continue;
+            uint32_t row = uint32_t(dst->height > 0 ? height - 1 - y : y);
+            uint32_t at = dst->bits + row * dst->stride + uint32_t(x) * (dst->bpp / 8);
+            if (dst->bpp == 16) {
+                uint16_t mask = uint16_t(dst->masks[0] | dst->masks[1] | dst->masks[2]);
+                wr16(at, rd16(at) ^ (mask ? mask : 0x7fff));
+            } else
+                for (uint32_t channel = 0; channel < 3; ++channel)
+                    wr8(at + channel, rd8(at + channel) ^ 255);
+        }
+    return true;
+}
+
 // Validate the packed DIB before reading colors or rows. Resources and BMP
 // files share this format; compressed RLE/JPEG/PNG data is not a DIB here.
 bool gdi_decode_image(uint32_t at, uint32_t bytes, GdiImage *image, uint32_t pixel_offset) {

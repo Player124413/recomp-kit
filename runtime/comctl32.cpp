@@ -456,6 +456,8 @@ void il_SetOverlayImage(X86 *c) {
 // Shared scrollbar state for FlatSB and the plain window API. The exported
 // bodies below use the plain Win32 argument layouts so user32 can reuse them.
 struct Scroll {
+    bool visible = true;
+    uint32_t disabled = 0;
     int32_t min = 0, max = 100, pos = 0;
     uint32_t page = 0;
 };
@@ -534,6 +536,58 @@ void win32_set_scroll_info(X86 *c) {
         s.pos = int32_t(rd32(in + 20));
     clamp(s);
     set_eax(c, s.pos);
+}
+// Plain USER32 and FlatSB both own these same per-window records.
+void win32_get_scroll_range(X86 *c) {
+    uint32_t lo = arg(c, 2), hi = arg(c, 3);
+    if (!lo || !hi || !gm_valid(lo, 4) || !gm_valid(hi, 4)) {
+        set_eax(c, 0);
+        return;
+    }
+    auto &s = scroll(c);
+    wr32(lo, s.min);
+    wr32(hi, s.max);
+    set_eax(c, 1);
+}
+void win32_set_scroll_range(X86 *c) {
+    auto &s = scroll(c);
+    s.min = int32_t(arg(c, 2));
+    s.max = int32_t(arg(c, 3));
+    clamp(s);
+    set_eax(c, 1);
+}
+void win32_show_scroll_bar(X86 *c) {
+    uint32_t bar = arg(c, 1);
+    bool visible = arg(c, 2) != 0;
+    if (bar == 3) {
+        scrollbars[{arg(c, 0), 0}].visible = visible;
+        scrollbars[{arg(c, 0), 1}].visible = visible;
+    } else
+        scroll(c).visible = visible;
+    set_eax(c, 1);
+}
+void win32_enable_scroll_bar(X86 *c) {
+    uint32_t bar = arg(c, 1), flags = arg(c, 2);
+    bool changed = false;
+    for (uint32_t i = 0; i < 4; ++i)
+        if ((bar == 3 && i < 2) || (bar != 3 && i == bar)) {
+            auto &s = scrollbars[{arg(c, 0), i}];
+            changed |= s.disabled != flags;
+            s.disabled = flags;
+        }
+    set_eax(c, changed);
+}
+void win32_forget_scrollbars(uint32_t hwnd) {
+    for (auto i = scrollbars.begin(); i != scrollbars.end();)
+        if (i->first.first == hwnd)
+            i = scrollbars.erase(i);
+        else
+            ++i;
+    for (auto i = scroll_props.begin(); i != scroll_props.end();)
+        if (i->first.first == hwnd)
+            i = scroll_props.erase(i);
+        else
+            ++i;
 }
 namespace {
 const ImportShim shims[] = {

@@ -1741,6 +1741,8 @@ static void test_windows(X86 *c) {
     // The input gate is not linked here; use the same user32 cursor bridge
     // that host input delivery uses before posting WM_MOUSEMOVE.
     host_set_cursor_pos(200, 100);
+    host_post_message(hwnd, 0x0200, 0, 0);
+    call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0x0200, 0x0200, 1});
     check(call_import(c, "USER32.dll", "GetMessagePos", {}) == ((100u << 16) | 200u),
           "GetMessagePos packs y:x");
     check(call_import(c, "USER32.dll", "GetMessageTime", {}) <=
@@ -2964,11 +2966,16 @@ static void test_import_coverage(X86 *c) {
         const std::set<std::string> delphi_dlls = {
             "oleaut32.dll", "advapi32.dll", "version.dll",  "comctl32.dll", "winspool.drv",
             "netapi32.dll", "msvcrt.dll",   "shfolder.dll", "shell32.dll",  "ole32.dll"};
-        uint32_t checked = 0, missing = 0;
+        uint32_t checked = 0, missing = 0, user32_checked = 0, user32_missing = 0;
         for (const auto &import : expect.imports) {
             std::string dll = import.dll;
             std::transform(dll.begin(), dll.end(), dll.begin(),
                            [](unsigned char ch) { return char(std::tolower(ch)); });
+            if (dll == "user32.dll") {
+                ++user32_checked;
+                if (imports_argc(rd32(import.slot)) == ARGC_UNKNOWN)
+                    ++user32_missing;
+            }
             // CoCreateInstance belongs to DX, which this runtime-only binary
             // does not link. Only the six COM additions are part of this task.
             const std::set<std::string> com_additions = {"OleInitialize",  "OleUninitialize",
@@ -2982,6 +2989,8 @@ static void test_import_coverage(X86 *c) {
                     ++missing;
             }
         }
+        check(user32_missing == 0, "USER32 argument counts: %u imports checked, %u unknown",
+              user32_checked, user32_missing);
         check(missing == 0, "Delphi DLL argument counts: %u imports checked, %u unknown", checked,
               missing);
         check(imports_count() >= trampolines.size(),
@@ -4641,10 +4650,30 @@ static void test_user32_window_model() {
               call_import(&c, "USER32.dll", "IsChild", {hwnd, child}) == 1,
           "child parent relationship");
     check(call_import(&c, "USER32.dll", "GetDlgCtrlID", {child}) == 42, "child control ID");
+    uint32_t popup = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s, 0, 0x90000000u, 0, 0, 40, 30, hwnd, 0, IMAGE_BASE, 0});
+    call_import(&c, "USER32.dll", "ShowOwnedPopups", {hwnd, 0});
+    check(call_import(&c, "USER32.dll", "IsWindowVisible", {popup}) == 0,
+          "ShowOwnedPopups hides owned windows");
+    call_import(&c, "USER32.dll", "ShowOwnedPopups", {hwnd, 1});
+    check(call_import(&c, "USER32.dll", "IsWindowVisible", {popup}) == 1,
+          "ShowOwnedPopups restores only windows it hid");
+    check(call_import(&c, "USER32.dll", "SetWindowRgn", {0xdead, 0, 0}) == 0,
+          "SetWindowRgn rejects an invalid window");
+
     wr32(s + 0x100, 0);
     wr32(s + 0x104, 0);
     call_import(&c, "USER32.dll", "MapWindowPoints", {child, 0, s + 0x100, 1});
     check(rd32(s + 0x100) == 13 && rd32(s + 0x104) == 24, "nested client origin maps to screen");
+    call_import(&c, "USER32.dll", "ScreenToClient", {child, s + 0x100});
+    check(rd32(s + 0x100) == 0 && rd32(s + 0x104) == 0,
+          "ScreenToClient uses the complete parent chain");
+    wr32(s + 0x100, 0);
+    wr32(s + 0x104, 0);
+    call_import(&c, "USER32.dll", "ClientToScreen", {child, s + 0x100});
+    check(rd32(s + 0x100) == 13 && rd32(s + 0x104) == 24,
+          "ClientToScreen uses the complete parent chain");
+
     check(call_import(&c, "USER32.dll", "SetParent", {hwnd, child}) == 0 &&
               call_import(&c, "USER32.dll", "GetParent", {hwnd}) == 0,
           "parent cycles are rejected");
@@ -4697,7 +4726,26 @@ static void test_user32_window_model() {
               call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x113, 0x113, 1}) == 0,
           "callback runs once through recomp_call");
     call_import(&c, "USER32.dll", "KillTimer", {hwnd, 9});
+    host_set_time_source_pinned(0xfffffff0u, 20);
+    uint32_t generated_timer = call_import(&c, "USER32.dll", "SetTimer", {hwnd, 0, 10, 0});
+    host_pinned_clock_advance();
+    check(generated_timer &&
+              call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x113, 0x113, 1}) == 1 &&
+              rd32(msg + 8) == generated_timer,
+          "zero-ID timer returns its queued ID across clock wrap");
+    check(call_import(&c, "USER32.dll", "KillTimer", {hwnd, generated_timer}) == 1,
+          "generated timer can be killed by its returned ID");
+
     host_clear_time_source();
+    host_set_cursor_pos(21, 34);
+    host_post_message(hwnd, 0x8002, 0, 0);
+    call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x8002, 0x8002, 1});
+    host_set_cursor_pos(55, 89);
+    check(call_import(&c, "USER32.dll", "GetMessagePos", {}) == ((34u << 16) | 21u),
+          "GetMessagePos retains the retrieved message coordinates");
+    gm_put_str(s + 0x700, "unsafe queued text", 32);
+    check(call_import(&c, "USER32.dll", "PostMessageA", {hwnd, 0xc, 0, s + 0x700}) == 0,
+          "posted text pointers are rejected instead of escaping a synchronous call");
     host_set_message_waiter(vcl_wait_once);
     vcl_wait_calls = 0;
     check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {2, 0, 0, 0, 0}) == 0x102 &&
@@ -4716,11 +4764,178 @@ static void test_user32_window_model() {
           "keyboard state uses host input bridge");
     host_set_key_state(65, false);
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+    check(call_import(&c, "USER32.dll", "IsWindow", {popup}) == 0,
+          "owner destruction retires owned popups");
     check(call_import(&c, "USER32.dll", "IsWindow", {child}) == 0 &&
               call_import(&c, "USER32.dll", "GetFocus", {}) == 0,
           "parent destruction retires children and focus");
     while (call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1})) {
     }
+}
+
+static void test_user32_services() {
+    section("menus, scrollbars, clipboard, resources and drawing");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00320000;
+    uint32_t menu = call_import(&c, "USER32.dll", "CreateMenu", {}),
+             sub = call_import(&c, "USER32.dll", "CreatePopupMenu", {});
+    gm_put_wstr(s, "Item \xce\xa9", 32);
+    check(menu && sub &&
+              call_import(&c, "USER32.dll", "InsertMenuW", {menu, 0xffffffffu, 0x410, sub, s}) == 1,
+          "insert Unicode popup menu");
+    memset(g_mem + s + 0x100, 0, 48);
+    wr32(s + 0x100, 48);
+    wr32(s + 0x104, 0x43);
+    wr32(s + 0x110, 77);
+    wr32(s + 0x124, s);
+    check(call_import(&c, "USER32.dll", "InsertMenuItemW", {sub, 0, 1, s + 0x100}) == 1 &&
+              call_import(&c, "USER32.dll", "GetSubMenu", {menu, 0}) == sub &&
+              call_import(&c, "USER32.dll", "GetMenuItemID", {sub, 0}) == 77,
+          "menu item IDs and submenu handles");
+    check(call_import(&c, "USER32.dll", "GetMenuStringW", {menu, 0, s + 0x200, 32, 0x400}) == 6 &&
+              gm_wstr(s + 0x200) == "Item \xce\xa9",
+          "menu text round trip");
+    check(call_import(&c, "USER32.dll", "CheckMenuItem", {sub, 77, 8}) == 0 &&
+              (call_import(&c, "USER32.dll", "GetMenuState", {sub, 77, 0}) & 8),
+          "checked menu state");
+    wr32(s + 0x104, 0x42);
+    wr32(s + 0x124, s + 0x200);
+    wr32(s + 0x128, 32);
+    check(call_import(&c, "USER32.dll", "GetMenuItemInfoW", {sub, 77, 0, s + 0x100}) == 1 &&
+              rd32(s + 0x128) == 6 && gm_wstr(s + 0x200) == "Item \xce\xa9",
+          "MENUITEMINFOW guest layout and text units");
+    check(call_import(&c, "USER32.dll", "RemoveMenu", {menu, 0, 0x400}) == 1 &&
+              call_import(&c, "USER32.dll", "GetMenuItemCount", {sub}) == 1,
+          "RemoveMenu retains submenu ownership");
+    call_import(&c, "USER32.dll", "InsertMenuW", {menu, 0xffffffffu, 0x410, sub, s});
+    check(call_import(&c, "USER32.dll", "DeleteMenu", {menu, 0, 0x400}) == 1 &&
+              call_import(&c, "USER32.dll", "GetMenuItemCount", {sub}) == 0xffffffffu,
+          "DeleteMenu destroys attached submenu");
+    call_import(&c, "USER32.dll", "DestroyMenu", {menu});
+    check(call_import(&c, "USER32.dll", "SetScrollRange", {123, 1, 10, 80, 0}) == 1 &&
+              call_import(&c, "USER32.dll", "GetScrollRange", {123, 1, s + 0x300, s + 0x304}) ==
+                  1 &&
+              rd32(s + 0x300) == 10 && rd32(s + 0x304) == 80,
+          "plain scrollbar range");
+    call_import(&c, "USER32.dll", "SetScrollPos", {123, 1, 30, 0});
+    check(call_import(&c, "COMCTL32.dll", "FlatSB_GetScrollPos", {123, 1}) == 30,
+          "plain and flat scrollbar state is shared");
+    wr32(s + 0x400, 28);
+    wr32(s + 0x404, 6);
+    wr32(s + 0x410, 10);
+    wr32(s + 0x414, 100);
+    check(call_import(&c, "USER32.dll", "SetScrollInfo", {123, 1, s + 0x400, 0}) == 71 &&
+              call_import(&c, "COMCTL32.dll", "FlatSB_GetScrollPos", {123, 1}) == 71,
+          "shared scrollbar page clamping");
+    gm_put_wstr(s, "Runtime.Format", 32);
+    uint32_t format = call_import(&c, "USER32.dll", "RegisterClipboardFormatW", {s});
+    check(format >= 0xc000 &&
+              call_import(&c, "USER32.dll", "RegisterClipboardFormatW", {s}) == format,
+          "clipboard format registration is stable");
+    uint32_t message = call_import(&c, "USER32.dll", "RegisterWindowMessageW", {s});
+    check(message >= 0xc000 &&
+              call_import(&c, "USER32.dll", "RegisterWindowMessageW", {s}) == message,
+          "registered window message is stable");
+    call_import(&c, "USER32.dll", "OpenClipboard", {0});
+    call_import(&c, "USER32.dll", "EmptyClipboard", {});
+    uint32_t data = heap_alloc(16, true);
+    check(call_import(&c, "USER32.dll", "SetClipboardData", {format, data}) == data &&
+              call_import(&c, "USER32.dll", "GetClipboardData", {format}) == data &&
+              call_import(&c, "USER32.dll", "IsClipboardFormatAvailable", {format}) == 1,
+          "clipboard data round trip");
+    call_import(&c, "USER32.dll", "EmptyClipboard", {});
+    check(call_import(&c, "USER32.dll", "IsClipboardFormatAvailable", {format}) == 0,
+          "EmptyClipboard clears formats");
+    call_import(&c, "USER32.dll", "CloseClipboard", {});
+    uint32_t hook = call_import(&c, "USER32.dll", "SetWindowsHookExW", {3, 1, 0, 0});
+    check(hook && call_import(&c, "USER32.dll", "UnhookWindowsHookEx", {hook}) == 1 &&
+              call_import(&c, "USER32.dll", "UnhookWindowsHookEx", {hook}) == 0,
+          "hook handle lifetime");
+    wr8(s, 1);
+    wr16(s + 2, 65);
+    wr16(s + 4, 77);
+    uint32_t accel = call_import(&c, "USER32.dll", "CreateAcceleratorTableW", {s, 1});
+    check(accel && call_import(&c, "USER32.dll", "DestroyAcceleratorTable", {accel}) == 1,
+          "accelerator table copies six-byte guest entries");
+    // Resource string lookup must keep the length prefix out of the text.
+    std::vector<ResourceName> names;
+    bool checked = false;
+    if (resource_names(6, &names))
+        for (const auto &name : names) {
+            if (name.is_string)
+                continue;
+            uint32_t bytes = 0, p = resource_data(resource_find(6, name.id), &bytes),
+                     end = p + bytes;
+            for (uint32_t i = 0; p && i < 16 && p + 2 <= end; ++i) {
+                uint32_t n = rd16(p);
+                p += 2;
+                if (n > (end - p) / 2)
+                    break;
+                if (n) {
+                    uint32_t id = (name.id - 1) * 16 + i;
+                    check(call_import(&c, "USER32.dll", "LoadStringW",
+                                      {IMAGE_BASE, id, s + 0x500, 0}) == n &&
+                              rd32(s + 0x500) == p,
+                          "LoadStringW zero-capacity resource pointer");
+                    check(call_import(&c, "USER32.dll", "LoadStringW",
+                                      {IMAGE_BASE, id, s + 0x600, 4}) == std::min(n, 3u) &&
+                              rd16(s + 0x600 + std::min(n, 3u) * 2) == 0,
+                          "LoadStringW short buffer terminates");
+                    checked = true;
+                    break;
+                }
+                p += n * 2;
+            }
+            if (checked)
+                break;
+        }
+    if (!checked) {
+        printf("  [skip] image has no nonempty string resource\n");
+        ++g_skips;
+    }
+    // Draw a system brush and a constructed icon into an actual guest DIB.
+    uint32_t hdr = s + 0x800;
+    memset(g_mem + hdr, 0, 40);
+    wr32(hdr, 40);
+    wr32(hdr + 4, 4);
+    wr32(hdr + 8, 0xfffffffcu);
+    wr16(hdr + 12, 1);
+    wr16(hdr + 14, 32);
+    uint32_t bmp = call_import(&c, "GDI32.dll", "CreateDIBSection", {0, hdr, 0, s + 0x900, 0, 0}),
+             bits = rd32(s + 0x900);
+    uint32_t dc = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, bmp});
+    wr32(s + 0xa00, 0);
+    wr32(s + 0xa04, 0);
+    wr32(s + 0xa08, 4);
+    wr32(s + 0xa0c, 4);
+    uint32_t brush = call_import(&c, "USER32.dll", "GetSysColorBrush", {15});
+    check(brush && call_import(&c, "USER32.dll", "FillRect", {dc, s + 0xa00, brush}) == 1 &&
+              (rd32(bits) & 0xffffff) == 0xf0f0f0,
+          "FillRect paints a system color brush into the DIB");
+    uint32_t before_focus = rd32(bits);
+    check(call_import(&c, "USER32.dll", "DrawFocusRect", {dc, s + 0xa00}) == 1 &&
+              rd32(bits) != before_focus &&
+              call_import(&c, "USER32.dll", "DrawFocusRect", {dc, s + 0xa00}) == 1 &&
+              rd32(bits) == before_focus,
+          "focus rectangle XOR restores pixels on second draw");
+    memset(g_mem + s + 0xb00, 0, 16);
+    for (uint32_t i = 0; i < 4; ++i)
+        wr32(s + 0xb20 + i * 4, 0xff0000ff);
+    uint32_t icon =
+        call_import(&c, "USER32.dll", "CreateIcon", {0, 2, 2, 1, 32, s + 0xb00, s + 0xb20});
+    check(icon && call_import(&c, "USER32.dll", "DrawIcon", {dc, 0, 0, icon}) == 1 &&
+              (rd32(bits) & 0xffffff) == 0xff,
+          "DrawIcon paints owned pixels");
+    check(call_import(&c, "USER32.dll", "GetIconInfo", {icon, s + 0xc00}) == 1 &&
+              rd32(s + 0xc10) != 0,
+          "GetIconInfo returns caller-owned bitmaps");
+    call_import(&c, "GDI32.dll", "DeleteObject", {rd32(s + 0xc0c)});
+    call_import(&c, "GDI32.dll", "DeleteObject", {rd32(s + 0xc10)});
+    call_import(&c, "USER32.dll", "DestroyIcon", {icon});
+    call_import(&c, "GDI32.dll", "DeleteDC", {dc});
+    call_import(&c, "GDI32.dll", "DeleteObject", {bmp});
 }
 
 static void test_delphi_dlls() {
@@ -4807,6 +5022,7 @@ int main(int argc, char **argv) {
     test_delphi_controls();
     test_user32_vcl();
     test_user32_window_model();
+    test_user32_services();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

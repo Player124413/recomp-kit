@@ -22,6 +22,11 @@ void win32_get_scroll_pos(X86 *c);
 void win32_set_scroll_pos(X86 *c);
 void win32_get_scroll_info(X86 *c);
 void win32_set_scroll_info(X86 *c);
+void win32_get_scroll_range(X86 *c);
+void win32_set_scroll_range(X86 *c);
+void win32_show_scroll_bar(X86 *c);
+void win32_enable_scroll_bar(X86 *c);
+void win32_forget_scrollbars(uint32_t hwnd);
 
 // Process-wide state
 // ---------------------------------------------------------------------------

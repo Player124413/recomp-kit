@@ -34,6 +34,8 @@ struct Window {
     uint32_t menu = 0, parent = 0, owner = 0, id = 0;
     uint32_t thread = 0;
     bool enabled = true;
+    bool owned_hidden = false;
+    uint32_t region = 0;
     uint32_t show_cmd = 0;
     uint32_t userdata = 0;
     uint32_t hinstance = 0;
@@ -72,6 +74,7 @@ extern Msg last_message;
 constexpr uint32_t desktop_handle = 0x00020000;
 void pump_window_timers();
 void window_created(uint32_t hwnd);
+void forget_window_services(uint32_t hwnd);
 bool destroy_window(X86 *c, uint32_t hwnd);
 void client_origin(uint32_t hwnd, int32_t *x, int32_t *y);
 void display_rect(uint32_t out);

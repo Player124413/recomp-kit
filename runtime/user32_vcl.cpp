@@ -52,12 +52,14 @@ bool destroy_window(X86 *c, uint32_t hwnd) {
     host_dispatch_to_wndproc(c, hwnd, 2, 0, 0);
     std::vector<uint32_t> children;
     for (const auto &kv : windows())
-        if (kv.second.parent == hwnd)
+        if (kv.second.parent == hwnd || kv.second.owner == hwnd)
             children.push_back(kv.first);
     for (uint32_t child : children)
         destroy_window(c, child);
     host_dispatch_to_wndproc(c, hwnd, 0x82, 0, 0);
+    forget_window_services(hwnd);
     windows().erase(hwnd);
+    win32_forget_scrollbars(hwnd);
     for (auto i = timers.begin(); i != timers.end();)
         if (i->second.hwnd == hwnd)
             i = timers.erase(i);
@@ -116,8 +118,8 @@ void set_timer(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    if (!hwnd && (!id || !timers.count({0, id}))) {
-        while (timers.count({0, next_timer}))
+    if (!id || (!hwnd && !timers.count({0, id}))) {
+        while (timers.count({hwnd, next_timer}))
             ++next_timer;
         id = next_timer++;
     }
@@ -478,6 +480,40 @@ void scroll_window(X86 *c) {
         w->update_pending = true;
     set_eax(c, w != nullptr);
 }
+// Ownership and update state are retained even before a GDI window surface exists.
+void set_window_region(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    if (w) {
+        w->region = arg(c, 1);
+        if (arg(c, 2))
+            w->update_pending = true;
+    }
+    set_eax(c, w != nullptr);
+}
+void show_owned(X86 *c) {
+    uint32_t owner = arg(c, 0);
+    bool show = arg(c, 1) != 0;
+    if (!find_window(owner)) {
+        set_eax(c, 0);
+        return;
+    }
+    for (auto &kv : windows()) {
+        Window &w = kv.second;
+        if (w.owner != owner)
+            continue;
+        if (!show && w.visible) {
+            w.owned_hidden = true;
+            w.visible = false;
+            w.style &= ~0x10000000u;
+        } else if (show && w.owned_hidden) {
+            w.owned_hidden = false;
+            w.visible = true;
+            w.style |= 0x10000000u;
+            w.update_pending = true;
+        }
+    }
+    set_eax(c, 1);
+}
 void get_cursor(X86 *c) {
     set_eax(c, g_cursor);
 }
@@ -538,6 +574,633 @@ void sys_color(X86 *c) {
     uint32_t i = arg(c, 0);
     set_eax(c, i < 30 ? colors[i] : 0);
 }
+// Menus retain text in UTF-8 and expose the 32-bit MENUITEMINFOW layout.
+// Removing a submenu detaches it; deleting an item retires its subtree.
+struct MenuItem {
+    uint32_t type = 0, state = 0, id = 0, submenu = 0, checked = 0, unchecked = 0, data = 0,
+             bitmap = 0;
+    std::string text;
+};
+struct Menu {
+    std::vector<MenuItem> items;
+};
+std::map<uint32_t, Menu> menus;
+std::map<uint32_t, uint32_t> system_menus;
+uint32_t next_menu = 0x00070000;
+uint32_t new_menu() {
+    uint32_t h = next_menu++;
+    menus[h] = {};
+    return h;
+}
+void create_menu(X86 *c) {
+    set_eax(c, new_menu());
+}
+struct MenuLocation {
+    uint32_t handle = 0;
+    size_t index = 0;
+};
+MenuLocation locate_item(uint32_t menu, uint32_t item, bool position,
+                         std::set<uint32_t> *seen = nullptr) {
+    std::set<uint32_t> local;
+    if (!seen)
+        seen = &local;
+    auto it = menus.find(menu);
+    if (it == menus.end() || !seen->insert(menu).second)
+        return {};
+    if (position)
+        return item < it->second.items.size() ? MenuLocation{menu, item} : MenuLocation{};
+    for (size_t i = 0; i < it->second.items.size(); ++i) {
+        auto &m = it->second.items[i];
+        if (m.id == item)
+            return {menu, i};
+        if (m.submenu) {
+            auto found = locate_item(m.submenu, item, false, seen);
+            if (found.handle)
+                return found;
+        }
+    }
+    return {};
+}
+MenuItem *menu_item(uint32_t menu, uint32_t item, bool position) {
+    auto at = locate_item(menu, item, position);
+    return at.handle ? &menus[at.handle].items[at.index] : nullptr;
+}
+bool destroy_menu_tree(uint32_t menu) {
+    auto it = menus.find(menu);
+    if (it == menus.end())
+        return false;
+    auto items = it->second.items;
+    menus.erase(it);
+    for (const auto &m : items)
+        if (m.submenu)
+            destroy_menu_tree(m.submenu);
+    for (auto &kv : windows())
+        if (kv.second.menu == menu)
+            kv.second.menu = 0;
+    for (auto &kv : menus)
+        for (auto &item : kv.second.items)
+            if (item.submenu == menu)
+                item.submenu = 0;
+    return true;
+}
+void destroy_menu(X86 *c) {
+    set_eax(c, destroy_menu_tree(arg(c, 0)));
+}
+void get_menu(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    set_eax(c, w ? w->menu : 0);
+}
+void set_menu(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    uint32_t menu = arg(c, 1);
+    bool ok = w && (!menu || menus.count(menu));
+    if (ok)
+        w->menu = menu;
+    set_eax(c, ok);
+}
+void system_menu(X86 *c) {
+    uint32_t hwnd = arg(c, 0);
+    if (!find_window(hwnd)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t &menu = system_menus[hwnd];
+    if (arg(c, 1)) {
+        destroy_menu_tree(menu);
+        menu = 0;
+        set_eax(c, 0);
+        return;
+    }
+    if (!menus.count(menu)) {
+        menu = new_menu();
+        for (uint32_t id : {0xf120u, 0xf010u, 0xf000u, 0xf020u, 0xf030u, 0xf060u}) {
+            MenuItem item;
+            item.id = id;
+            menus[menu].items.push_back(item);
+        }
+    }
+    set_eax(c, menu);
+}
+void submenu(X86 *c) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), true);
+    set_eax(c, m ? m->submenu : 0);
+}
+void menu_count(X86 *c) {
+    auto i = menus.find(arg(c, 0));
+    set_eax(c, i == menus.end() ? 0xffffffffu : uint32_t(i->second.items.size()));
+}
+void menu_id(X86 *c) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), true);
+    set_eax(c, m && !m->submenu ? m->id : 0xffffffffu);
+}
+void menu_state(X86 *c) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), arg(c, 2) & 0x400);
+    uint32_t result = 0xffffffffu;
+    if (m) {
+        result = m->state | m->type;
+        if (m->submenu)
+            result |= 0x10 | (uint32_t(menus[m->submenu].items.size()) << 8);
+    }
+    set_eax(c, result);
+}
+void change_menu_state(X86 *c, uint32_t mask) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), arg(c, 2) & 0x400);
+    uint32_t old = m ? m->state & mask : 0xffffffffu;
+    if (m)
+        m->state = (m->state & ~mask) | (arg(c, 2) & mask);
+    set_eax(c, old);
+}
+void check_menu(X86 *c) {
+    change_menu_state(c, 8);
+}
+void enable_menu(X86 *c) {
+    change_menu_state(c, 3);
+}
+void remove_menu(X86 *c, bool destroy) {
+    auto at = locate_item(arg(c, 0), arg(c, 1), arg(c, 2) & 0x400);
+    if (!at.handle) {
+        set_eax(c, 0);
+        return;
+    }
+    auto &items = menus[at.handle].items;
+    uint32_t sub = items[at.index].submenu;
+    items.erase(items.begin() + at.index);
+    if (destroy && sub)
+        destroy_menu_tree(sub);
+    set_eax(c, 1);
+}
+void remove_menu_item(X86 *c) {
+    remove_menu(c, false);
+}
+void delete_menu_item(X86 *c) {
+    remove_menu(c, true);
+}
+void menu_string(X86 *c) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), arg(c, 4) & 0x400);
+    if (!m) {
+        set_eax(c, 0);
+        return;
+    }
+    set_eax(c, !arg(c, 2) || !arg(c, 3) ? wide_units(m->text)
+                                        : put_text(arg(c, 2), arg(c, 3), m->text, true));
+}
+bool read_menu_info(uint32_t p, MenuItem *item) {
+    if (!p || !gm_valid(p, 44) || (rd32(p) != 44 && rd32(p) != 48) || !gm_valid(p, rd32(p)))
+        return false;
+    uint32_t mask = rd32(p + 4);
+    if (mask & 0x110)
+        item->type = rd32(p + 8);
+    if (mask & 1)
+        item->state = rd32(p + 12);
+    if (mask & 2)
+        item->id = rd32(p + 16);
+    if (mask & 4) {
+        item->submenu = rd32(p + 20);
+        if (item->submenu && !menus.count(item->submenu))
+            return false;
+    }
+    if (mask & 8) {
+        item->checked = rd32(p + 24);
+        item->unchecked = rd32(p + 28);
+    }
+    if (mask & 32)
+        item->data = rd32(p + 32);
+    if ((mask & 0x40) || ((mask & 0x10) && !(item->type & 0x904)))
+        item->text = gm_wstr(rd32(p + 36));
+    if (mask & 0x10) {
+        if (item->type & 0x100)
+            item->data = rd32(p + 36);
+        if (item->type & 4)
+            item->bitmap = rd32(p + 36);
+    }
+    if ((mask & 0x80) && rd32(p) >= 48)
+        item->bitmap = rd32(p + 44);
+    return true;
+}
+void get_menu_info(X86 *c) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), arg(c, 2) != 0);
+    uint32_t p = arg(c, 3);
+    if (!m || !p || !gm_valid(p, 44) || (rd32(p) != 44 && rd32(p) != 48) || !gm_valid(p, rd32(p))) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t mask = rd32(p + 4);
+    if (mask & 0x110)
+        wr32(p + 8, m->type);
+    if (mask & 1)
+        wr32(p + 12, m->state);
+    if (mask & 2)
+        wr32(p + 16, m->id);
+    if (mask & 4)
+        wr32(p + 20, m->submenu);
+    if (mask & 8) {
+        wr32(p + 24, m->checked);
+        wr32(p + 28, m->unchecked);
+    }
+    if (mask & 32)
+        wr32(p + 32, m->data);
+    if ((mask & 0x40) || ((mask & 0x10) && !(m->type & 0x904))) {
+        uint32_t out = rd32(p + 36), cap = rd32(p + 40);
+        wr32(p + 40, out && cap ? put_text(out, cap, m->text, true) : wide_units(m->text));
+    }
+    if (mask & 0x10) {
+        if (m->type & 0x100)
+            wr32(p + 36, m->data);
+        if (m->type & 4)
+            wr32(p + 36, m->bitmap);
+    }
+    if ((mask & 0x80) && rd32(p) >= 48)
+        wr32(p + 44, m->bitmap);
+    set_eax(c, 1);
+}
+bool menu_contains(uint32_t root, uint32_t target, std::set<uint32_t> *seen = nullptr) {
+    std::set<uint32_t> local;
+    if (!seen)
+        seen = &local;
+    if (root == target)
+        return true;
+    auto i = menus.find(root);
+    if (i == menus.end() || !seen->insert(root).second)
+        return false;
+    for (const auto &m : i->second.items)
+        if (m.submenu && menu_contains(m.submenu, target, seen))
+            return true;
+    return false;
+}
+void set_menu_info(X86 *c) {
+    auto *m = menu_item(arg(c, 0), arg(c, 1), arg(c, 2) != 0);
+    MenuItem copy;
+    if (m)
+        copy = *m;
+    bool ok = m && read_menu_info(arg(c, 3), &copy) &&
+              (!copy.submenu || !menu_contains(copy.submenu, arg(c, 0)));
+    if (ok)
+        *m = copy;
+    set_eax(c, ok);
+}
+bool insert_item(uint32_t menu, uint32_t before, bool position, const MenuItem &item) {
+    auto i = menus.find(menu);
+    if (i == menus.end() || (item.submenu && menu_contains(item.submenu, menu)))
+        return false;
+    auto at = locate_item(menu, before, position);
+    if (at.handle) {
+        auto &items = menus[at.handle].items;
+        items.insert(items.begin() + at.index, item);
+        return true;
+    }
+    if (before == 0xffffffffu || (position && before >= i->second.items.size())) {
+        i->second.items.push_back(item);
+        return true;
+    }
+    return false;
+}
+void insert_menu_info(X86 *c) {
+    MenuItem item;
+    set_eax(c, read_menu_info(arg(c, 3), &item) &&
+                   insert_item(arg(c, 0), arg(c, 1), arg(c, 2) != 0, item));
+}
+void insert_menu(X86 *c) {
+    MenuItem item;
+    uint32_t flags = arg(c, 2), value = arg(c, 4);
+    item.type = flags & 0x6b64;
+    item.state = flags & 0xb;
+    if (flags & 0x10)
+        item.submenu = arg(c, 3);
+    else
+        item.id = arg(c, 3);
+    if (flags & 0x100)
+        item.data = value;
+    else if (flags & 4)
+        item.bitmap = value;
+    else if (!(flags & 0x800))
+        item.text = gm_wstr(value);
+    bool ok = (!item.submenu || menus.count(item.submenu)) &&
+              insert_item(arg(c, 0), arg(c, 1), flags & 0x400, item);
+    set_eax(c, ok);
+}
+// Private clipboard ownership never reaches the host clipboard. GlobalAlloc
+// handles in this runtime are guest heap addresses; EmptyClipboard releases them.
+bool clipboard_open = false;
+std::map<uint32_t, uint32_t> clipboard;
+std::map<std::string, uint32_t> clipboard_formats, window_messages;
+uint32_t register_name(std::map<std::string, uint32_t> &names, uint32_t p) {
+    std::string name = gm_wstr(p);
+    if (name.empty())
+        return 0;
+    for (char &ch : name)
+        ch = char(std::tolower((unsigned char)ch));
+    auto i = names.find(name);
+    if (i != names.end())
+        return i->second;
+    if (names.size() >= 0x4000)
+        return 0;
+    uint32_t id = 0xc000 + uint32_t(names.size());
+    names[name] = id;
+    return id;
+}
+void register_clipboard(X86 *c) {
+    set_eax(c, register_name(clipboard_formats, arg(c, 0)));
+}
+void register_message(X86 *c) {
+    set_eax(c, register_name(window_messages, arg(c, 0)));
+}
+void open_clipboard(X86 *c) {
+    bool ok = !clipboard_open;
+    if (ok)
+        clipboard_open = true;
+    set_eax(c, ok);
+}
+void close_clipboard(X86 *c) {
+    bool was = clipboard_open;
+    clipboard_open = false;
+    set_eax(c, was);
+}
+void empty_clipboard(X86 *c) {
+    if (!clipboard_open) {
+        set_eax(c, 0);
+        return;
+    }
+    std::set<uint32_t> freed;
+    for (auto &kv : clipboard)
+        if (kv.second && freed.insert(kv.second).second)
+            heap_free(kv.second);
+    clipboard.clear();
+    set_eax(c, 1);
+}
+void set_clipboard(X86 *c) {
+    uint32_t fmt = arg(c, 0), data = arg(c, 1);
+    if (!clipboard_open || !fmt) {
+        set_eax(c, 0);
+        return;
+    }
+    clipboard[fmt] = data;
+    set_eax(c, data);
+}
+void get_clipboard(X86 *c) {
+    auto i = clipboard.find(arg(c, 0));
+    set_eax(c, clipboard_open && i != clipboard.end() ? i->second : 0);
+}
+void clipboard_available(X86 *c) {
+    set_eax(c, clipboard.count(arg(c, 0)) != 0);
+}
+struct Hook {
+    uint32_t kind, proc, module, thread;
+};
+std::map<uint32_t, Hook> hooks;
+uint32_t next_hook = 0x00071000;
+void set_hook(X86 *c) {
+    if (!arg(c, 1)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t h = next_hook++;
+    hooks[h] = {arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)};
+    set_eax(c, h);
+}
+void unhook(X86 *c) {
+    set_eax(c, hooks.erase(arg(c, 0)) != 0);
+}
+std::map<uint32_t, std::vector<uint8_t>> accelerators;
+uint32_t next_accelerator = 0x00073000;
+void create_accelerator(X86 *c) {
+    uint32_t p = arg(c, 0), n = arg(c, 1);
+    if (!p || !n || n > 0x10000 || !gm_valid(p, n * 6)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t h = next_accelerator++;
+    accelerators[h] = std::vector<uint8_t>(g_mem + p, g_mem + p + n * 6);
+    set_eax(c, h);
+}
+void destroy_accelerator(X86 *c) {
+    set_eax(c, accelerators.erase(arg(c, 0)) != 0);
+}
+// System brushes are stable cached handles, also accepting COLOR_* + 1 as
+// FillRect does. Window DC presentation remains with the GDI surface layer.
+constexpr uint32_t system_brush_base = 0x00072000;
+void sys_brush(X86 *c) {
+    uint32_t i = arg(c, 0);
+    set_eax(c, i < 30 ? system_brush_base + i : 0);
+}
+bool brush_color(uint32_t brush, uint32_t *pixel) {
+    uint32_t i = brush >= system_brush_base ? brush - system_brush_base : brush - 1;
+    if (i >= 30)
+        return false;
+    uint32_t rgb = colors[i];
+    *pixel = 0xff000000 | ((rgb & 255) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 255);
+    return true;
+}
+bool paint_rect(uint32_t dc, int32_t l, int32_t t, int32_t r, int32_t b, uint32_t pixel,
+                bool frame = false) {
+    int64_t w = int64_t(r) - l, h = int64_t(b) - t;
+    if (w <= 0 || h <= 0)
+        return true;
+    if (w > 16384 || h > 16384 || w * h > 0x1000000)
+        return false;
+    GdiImage image;
+    image.width = int32_t(w);
+    image.height = int32_t(h);
+    image.pixels.resize(size_t(w * h), frame ? 0 : pixel);
+    if (frame)
+        for (int32_t y = 0; y < h; ++y)
+            for (int32_t x = 0; x < w; ++x)
+                if (!x || !y || x == w - 1 || y == h - 1)
+                    image.pixels[size_t(y) * w + x] = pixel;
+    return gdi_draw_image(dc, image, l, t, int32_t(w), int32_t(h));
+}
+void fill_or_frame(X86 *c, bool frame) {
+    uint32_t p = arg(c, 1), color = 0;
+    bool ok = p && gm_valid(p, 16) && brush_color(arg(c, 2), &color);
+    if (ok)
+        ok = paint_rect(arg(c, 0), int32_t(rd32(p)), int32_t(rd32(p + 4)), int32_t(rd32(p + 8)),
+                        int32_t(rd32(p + 12)), color, frame);
+    set_eax(c, ok);
+}
+void fill_rect(X86 *c) {
+    fill_or_frame(c, false);
+}
+void frame_rect(X86 *c) {
+    fill_or_frame(c, true);
+}
+void draw_edge(X86 *c) {
+    uint32_t p = arg(c, 1);
+    if (!p || !gm_valid(p, 16)) {
+        set_eax(c, 0);
+        return;
+    }
+    int32_t l = int32_t(rd32(p)), t = int32_t(rd32(p + 4)), r = int32_t(rd32(p + 8)),
+            b = int32_t(rd32(p + 12));
+    uint32_t flags = arg(c, 3), edge = arg(c, 2), light = (edge & 5) ? 0xffffffff : 0xffa0a0a0,
+             dark = (edge & 5) ? 0xffa0a0a0 : 0xffffffff;
+    bool ok = true;
+    if (flags & 1)
+        ok &= paint_rect(arg(c, 0), l, t, l + 1, b, light);
+    if (flags & 2)
+        ok &= paint_rect(arg(c, 0), l, t, r, t + 1, light);
+    if (flags & 4)
+        ok &= paint_rect(arg(c, 0), r - 1, t, r, b, dark);
+    if (flags & 8)
+        ok &= paint_rect(arg(c, 0), l, b - 1, r, b, dark);
+    if (flags & 0x800) {
+        if (flags & 1)
+            ++l;
+        if (flags & 2)
+            ++t;
+        if (flags & 4)
+            --r;
+        if (flags & 8)
+            --b;
+        wr32(p, l);
+        wr32(p + 4, t);
+        wr32(p + 8, r);
+        wr32(p + 12, b);
+    }
+    set_eax(c, ok);
+}
+void draw_control(X86 *c) {
+    uint32_t p = arg(c, 1);
+    if (!p || !gm_valid(p, 16)) {
+        set_eax(c, 0);
+        return;
+    }
+    int32_t l = int32_t(rd32(p)), t = int32_t(rd32(p + 4)), r = int32_t(rd32(p + 8)),
+            b = int32_t(rd32(p + 12));
+    bool ok = paint_rect(arg(c, 0), l, t, r, b, 0xfff0f0f0) &&
+              paint_rect(arg(c, 0), l, t, r, b, 0xff808080, true);
+    set_eax(c, ok);
+}
+void draw_focus(X86 *c) {
+    uint32_t p = arg(c, 1);
+    set_eax(c, p && gm_valid(p, 16) &&
+                   gdi_focus_rect(arg(c, 0), int32_t(rd32(p)), int32_t(rd32(p + 4)),
+                                  int32_t(rd32(p + 8)), int32_t(rd32(p + 12))));
+}
+void create_icon(X86 *c) {
+    uint32_t w = arg(c, 1), h = arg(c, 2), planes = arg(c, 3), bpp = arg(c, 4), mask = arg(c, 5),
+             bits = arg(c, 6);
+    if (!w || !h || w > 4096 || h > 4096 || planes != 1 || (bpp != 1 && bpp != 24 && bpp != 32)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t stride = ((w * bpp + 15) / 16) * 2, ms = ((w + 15) / 16) * 2;
+    if (!bits || !gm_valid(bits, stride * h) || (mask && !gm_valid(mask, ms * h))) {
+        set_eax(c, 0);
+        return;
+    }
+    GdiImage image;
+    image.width = w;
+    image.height = h;
+    image.pixels.resize(size_t(w) * h);
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+            uint32_t at = bits + y * stride + (x * bpp) / 8, pixel;
+            if (bpp == 1)
+                pixel = (rd8(at) & (0x80 >> (x & 7))) ? 0xffffffff : 0xff000000;
+            else
+                pixel = 0xff000000 | rd8(at) | (uint32_t(rd8(at + 1)) << 8) |
+                        (uint32_t(rd8(at + 2)) << 16);
+            if (mask && (rd8(mask + y * ms + x / 8) & (0x80 >> (x & 7))))
+                pixel = 0;
+            image.pixels[size_t(y) * w + x] = pixel;
+        }
+    set_eax(c, gdi_create_icon(image));
+}
+void draw_icon(X86 *c, bool ex) {
+    GdiImage image;
+    uint32_t icon = arg(c, 3);
+    if (!gdi_read_icon(icon, &image)) {
+        set_eax(c, 0);
+        return;
+    }
+    int32_t w = ex && arg(c, 4) ? int32_t(arg(c, 4)) : image.width,
+            h = ex && arg(c, 5) ? int32_t(arg(c, 5)) : image.height;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) {
+        set_eax(c, 0);
+        return;
+    }
+    if (w != image.width || h != image.height) {
+        GdiImage scaled;
+        scaled.width = w;
+        scaled.height = h;
+        scaled.pixels.resize(size_t(w) * h);
+        for (int32_t y = 0; y < h; ++y)
+            for (int32_t x = 0; x < w; ++x)
+                scaled.pixels[size_t(y) * w + x] =
+                    image.pixels[size_t(int64_t(y) * image.height / h) * image.width +
+                                 int64_t(x) * image.width / w];
+        image = std::move(scaled);
+    }
+    set_eax(c, gdi_draw_image(arg(c, 0), image, int32_t(arg(c, 1)), int32_t(arg(c, 2)), w, h));
+}
+void draw_icon_basic(X86 *c) {
+    draw_icon(c, false);
+}
+void draw_icon_ex(X86 *c) {
+    draw_icon(c, true);
+}
+void copy_icon(X86 *c) {
+    GdiImage image;
+    set_eax(c, gdi_read_icon(arg(c, 0), &image) ? gdi_create_icon(image) : 0);
+}
+void copy_image(X86 *c) {
+    GdiImage image;
+    uint32_t type = arg(c, 1);
+    bool ok =
+        type == 0 ? gdi_read_bitmap(arg(c, 0), &image, true) : gdi_read_icon(arg(c, 0), &image);
+    if (!ok || type > 2) {
+        set_eax(c, 0);
+        return;
+    }
+    int32_t w = arg(c, 2) ? int32_t(arg(c, 2)) : image.width,
+            h = arg(c, 3) ? int32_t(arg(c, 3)) : image.height;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) {
+        set_eax(c, 0);
+        return;
+    }
+    GdiImage scaled;
+    scaled.width = w;
+    scaled.height = h;
+    scaled.pixels.resize(size_t(w) * h);
+    for (int32_t y = 0; y < h; ++y)
+        for (int32_t x = 0; x < w; ++x)
+            scaled.pixels[size_t(y) * w + x] =
+                image.pixels[size_t(int64_t(y) * image.height / h) * image.width +
+                             int64_t(x) * image.width / w];
+    uint32_t result = type == 0 ? gdi_image_bitmap(scaled) : gdi_create_icon(scaled);
+    if (result && (arg(c, 4) & 8)) {
+        if (type == 0)
+            gdi_delete_bitmap(arg(c, 0));
+        else
+            gdi_delete_icon(arg(c, 0));
+    }
+    set_eax(c, result);
+}
+void destroy_cursor(X86 *c) {
+    gdi_delete_icon(arg(c, 0));
+    set_eax(c, arg(c, 0) != 0);
+}
+void icon_info(X86 *c) {
+    uint32_t p = arg(c, 1);
+    GdiImage image;
+    if (!p || !gm_valid(p, 20) || !gdi_read_icon(arg(c, 0), &image)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t bitmap = gdi_image_bitmap(image), mask = gdi_image_mask(image);
+    if (!bitmap || !mask) {
+        gdi_delete_bitmap(bitmap);
+        gdi_delete_bitmap(mask);
+        set_eax(c, 0);
+        return;
+    }
+    wr32(p, 1);
+    wr32(p + 4, 0);
+    wr32(p + 8, 0);
+    wr32(p + 12, mask);
+    wr32(p + 16, bitmap);
+    set_eax(c, 1);
+}
+
 const ImportShim shims[] = {
 #define U(name, n, fn) {"USER32.dll", name, n, fn}
     U("SetTimer", 4, set_timer),
@@ -580,7 +1243,7 @@ const ImportShim shims[] = {
     U("GetDCEx", 3, get_dc),
     U("GetWindowDC", 1, get_dc),
     U("RedrawWindow", 4, redraw),
-    U("SetWindowRgn", 3, yes),
+    U("SetWindowRgn", 3, set_window_region),
     U("ScrollWindow", 5, scroll_window),
     U("MapWindowPoints", 4, map_points),
     U("IntersectRect", 3, intersect_rect),
@@ -593,16 +1256,84 @@ const ImportShim shims[] = {
     U("MsgWaitForMultipleObjectsEx", 5, message_wait),
     U("WaitMessage", 0, wait_message),
     U("GetSysColor", 1, sys_color),
-    U("ShowOwnedPopups", 2, yes),
+    U("ShowOwnedPopups", 2, show_owned),
     U("GetLastActivePopup", 1, last_popup),
     U("MessageBeep", 1, yes),
     U("GetDlgCtrlID", 1, ctrl_id),
     U("TranslateMDISysAccel", 2, zero),
     U("ShowCaret", 1, yes),
     U("HideCaret", 1, yes),
+    U("CreateMenu", 0, create_menu),
+    U("CreatePopupMenu", 0, create_menu),
+    U("DestroyMenu", 1, destroy_menu),
+    U("GetMenu", 1, get_menu),
+    U("SetMenu", 2, set_menu),
+    U("GetSystemMenu", 2, system_menu),
+    U("GetSubMenu", 2, submenu),
+    U("GetMenuItemCount", 1, menu_count),
+    U("GetMenuItemID", 2, menu_id),
+    U("GetMenuState", 3, menu_state),
+    U("CheckMenuItem", 3, check_menu),
+    U("EnableMenuItem", 3, enable_menu),
+    U("RemoveMenu", 3, remove_menu_item),
+    U("DeleteMenu", 3, delete_menu_item),
+    U("DrawMenuBar", 1, yes),
+    U("TrackPopupMenu", 7, zero),
+    U("EndMenu", 0, yes),
+    U("GetMenuStringW", 5, menu_string),
+    U("GetMenuItemInfoW", 4, get_menu_info),
+    U("SetMenuItemInfoW", 4, set_menu_info),
+    U("InsertMenuW", 5, insert_menu),
+    U("InsertMenuItemW", 4, insert_menu_info),
+    U("GetScrollPos", 2, win32_get_scroll_pos),
+    U("SetScrollPos", 4, win32_set_scroll_pos),
+    U("GetScrollRange", 4, win32_get_scroll_range),
+    U("SetScrollRange", 5, win32_set_scroll_range),
+    U("GetScrollInfo", 3, win32_get_scroll_info),
+    U("SetScrollInfo", 4, win32_set_scroll_info),
+    U("ShowScrollBar", 3, win32_show_scroll_bar),
+    U("EnableScrollBar", 3, win32_enable_scroll_bar),
+    U("OpenClipboard", 1, open_clipboard),
+    U("CloseClipboard", 0, close_clipboard),
+    U("GetClipboardData", 1, get_clipboard),
+    U("IsClipboardFormatAvailable", 1, clipboard_available),
+    U("EmptyClipboard", 0, empty_clipboard),
+    U("SetClipboardData", 2, set_clipboard),
+    U("RegisterClipboardFormatW", 1, register_clipboard),
+    U("RegisterWindowMessageW", 1, register_message),
+    U("SetWindowsHookExW", 4, set_hook),
+    U("UnhookWindowsHookEx", 1, unhook),
+    U("CallNextHookEx", 4, zero),
+    U("CreateAcceleratorTableW", 2, create_accelerator),
+    U("DestroyAcceleratorTable", 1, destroy_accelerator),
+    U("GetSysColorBrush", 1, sys_brush),
+    U("FillRect", 3, fill_rect),
+    U("FrameRect", 3, frame_rect),
+    U("DrawEdge", 4, draw_edge),
+    U("DrawFrameControl", 4, draw_control),
+    U("DrawFocusRect", 2, draw_focus),
+    U("DrawIcon", 4, draw_icon_basic),
+    U("DrawIconEx", 9, draw_icon_ex),
+    U("CopyIcon", 1, copy_icon),
+    U("CopyImage", 5, copy_image),
+    U("CreateIcon", 7, create_icon),
+    U("DestroyCursor", 1, destroy_cursor),
+    U("GetIconInfo", 2, icon_info),
 #undef U
 };
 } // namespace
 void user32_vcl_register() {
     imports_register(shims, sizeof(shims) / sizeof(shims[0]));
+}
+
+// Menus attached to an owned window retire with it; detached menus stay caller-owned.
+void user32::forget_window_services(uint32_t hwnd) {
+    Window *w = find_window(hwnd);
+    if (w && w->menu)
+        destroy_menu_tree(w->menu);
+    auto i = system_menus.find(hwnd);
+    if (i != system_menus.end()) {
+        destroy_menu_tree(i->second);
+        system_menus.erase(i);
+    }
 }

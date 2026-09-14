@@ -526,6 +526,7 @@ const ImportShim shims[] = {
     W("EnumDisplayDevicesW", 4, enum_devices),
     W("GetMonitorInfoW", 2, monitor_info),
     W("IsDialogMessageW", 2, dialog_message),
+    W("IsDialogMessageA", 2, dialog_message),
 #undef W
 };
 } // namespace
