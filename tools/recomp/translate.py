@@ -1132,8 +1132,8 @@ class Translator(object):
         self.table_bases = set()
         #: alternate entries that turned out not to be in their block
         self.stale_entries = set()
-        #: (function, jmp address) -> table base, for every constant-
-        #: displacement indirect jump, decoded or not
+        #: (function, jmp address) -> table base, for every statically based
+        #: table-shaped jump inside the image, decoded or not
         self.table_sites = {}
         #: sites whose extent is inferred rather than derived from a bound
         self.table_sites_inferred = set()
@@ -1236,6 +1236,20 @@ class Translator(object):
 
     # -- jump tables -------------------------------------------------------
 
+    def is_table_site(self, ins):
+        """Does this jump index a dword table at a static image address?"""
+        if ins.mnem != "JMP" or not ins.ops:
+            return False
+        try:
+            op = parse_operand(ins.ops[0])
+        except TranslateError:
+            return False
+        # An out-of-image displacement is an offset in a computed address,
+        # not static table storage. Tables also live in executable sections,
+        # so data_ranges alone would reject valid switches in .text.
+        return (op.kind == "mem" and op.index is not None and op.scale == 4
+                and bool(op.disp) and self.image.base <= op.disp < self.image.end)
+
     def decode_jumptable(self, fn, i):
         """Decode the switch behind `JMP dword ptr [reg*4 + base]`.
 
@@ -1249,13 +1263,10 @@ class Translator(object):
         boundary is an error, not a place to stop.
         """
         ins = fn.insns[i]
-        try:
-            op = parse_operand(ins.ops[0])
-        except TranslateError:
+        if not self.is_table_site(ins):
             return None
-        if op.kind != "mem" or op.index is None or op.scale != 4 or not op.disp:
-            return None
-        # Every indirect jump through a constant displacement is a table read,
+        op = parse_operand(ins.ops[0])
+        # Every table-shaped jump with an in-image displacement is a table read,
         # recorded whether or not the decode below succeeds: a site that
         # decodes nothing at all is the worst kind of gap and would otherwise
         # be invisible to the coverage check.
@@ -3022,8 +3033,8 @@ def main():
                          | set(t for t, f in extra.items() if f.addr in bodies))
 
     # Table coverage, in two parts, both of them sound.  Every entry a table
-    # decoded has to dispatch somewhere, and every constant-displacement
-    # indirect jump has to decode a table at all - a site that decodes nothing
+    # decoded has to dispatch somewhere, and every statically based table site
+    # inside the image has to decode a table at all - a site that decodes nothing
     # is the worst kind of gap and emits a `recomp_jump` on a computed target,
     # which no literal check can see.  Guessing at a table's real extent by
     # reading past what was decoded is not included: it flags whatever data
