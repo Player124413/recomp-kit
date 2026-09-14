@@ -418,17 +418,25 @@ void u_SetWindowPos(X86 *c) {
     Window *w = find_window(arg(c, 0));
     uint32_t flags = arg(c, 6);
     if (w) {
-        if (!(flags & 0x0002)) {
+        // A WM_SIZE handler may set the same size while arranging children.
+        // Only actual changes notify it again, or paint is starved forever.
+        bool moved =
+            !(flags & 0x0002) && (w->x != int32_t(arg(c, 2)) || w->y != int32_t(arg(c, 3)));
+        bool sized =
+            !(flags & 0x0001) && (w->w != int32_t(arg(c, 4)) || w->h != int32_t(arg(c, 5)));
+        if (moved) {
             w->x = (int32_t)arg(c, 2);
             w->y = (int32_t)arg(c, 3);
         } // SWP_NOMOVE
-        if (!(flags & 0x0001)) {
+        if (sized) {
             w->w = (int32_t)arg(c, 4);
             w->h = (int32_t)arg(c, 5);
             if (!(flags & 0x0008)) // SWP_NOREDRAW
                 w->update_pending = true;
         } // SWP_NOSIZE
-        post_geometry(w->hwnd, w, !(flags & 0x0002), !(flags & 0x0001));
+        LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h,
+             w->x, w->y, flags, moved, sized);
+        post_geometry(w->hwnd, w, moved, sized);
     }
     set_eax(c, 1);
 }

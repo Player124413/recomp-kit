@@ -1710,6 +1710,9 @@ static void test_windows(X86 *c) {
               rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
               rd32(msgbuf + 12) == ((600u << 16) | 800u),
           "and WM_SIZE");
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, 800, 600, 0});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 3, 5, 1}) == 0,
+          "unchanged geometry does not enqueue another WM_MOVE or WM_SIZE");
     call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 0, 0, 0, 0, 0x0003 /* NOSIZE|NOMOVE */});
     check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
           "a SetWindowPos that neither moves nor sizes posts nothing");
