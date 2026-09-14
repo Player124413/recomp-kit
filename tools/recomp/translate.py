@@ -3531,6 +3531,10 @@ def main():
     tr.func_addrs = all_addrs
     tr.all_insn_addrs = set(owner)
     tr.jumptables.clear()
+    # Discovery can truncate a speculative owner after recording its switch.
+    # Rebuild both sides of the coverage check from the final function bodies.
+    tr.table_sites.clear()
+    tr.table_sites_inferred.clear()
     tr.unlisted_targets.clear()
     for fn in parsed:
         try:

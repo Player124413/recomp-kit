@@ -867,6 +867,39 @@ def test_relocated_alias_keeps_listed_instruction_evidence(tmp_path, monkeypatch
     assert "void fn_%08x(X86 *c) { body_%08x" % (target, entry) in text
 
 
+def test_truncated_guess_drops_its_old_jump_table_site(tmp_path, monkeypatch):
+    """A table moved to a stronger owner must not remain a gap on its old prefix."""
+    import struct
+    entry, guess, method, first, second, default, table, slot = (
+        0x00601000, 0x00601020, 0x00601030, 0x00601050, 0x00601060,
+        0x00601070, 0x00601900, 0x00601800)
+    blocks = {
+        entry: b"\xba" + struct.pack("<I", guess) + b"\xc3",
+        guess: b"\x90" * 16,
+        method: b"\x83\xf8\x01\x77" + bytes([default - method - 5])
+                + b"\xff\x24\x85" + struct.pack("<I", table),
+        first: b"\xb8\x01\0\0\0\xc3", second: b"\xb8\x02\0\0\0\xc3",
+        default: b"\xc3", table: struct.pack("<II", first, second),
+        slot: struct.pack("<I", method),
+    }
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, {entry: blocks[entry]})
+    assert "void fn_%08x(" % method in text
+    assert "case 0x%xu:" % first in text
+    assert "case 0x%xu:" % second in text
+
+
+def test_final_table_gate_still_rejects_an_undecoded_live_site(tmp_path, monkeypatch):
+    """Clearing discovery records must not hide a switch still in a live body."""
+    import struct
+    entry, table = 0x00601000, 0x00601900
+    raw = b"\xff\x24\x85" + struct.pack("<I", table)
+    img = synthetic_image({entry: raw, table: b"\0" * 4}, base=0x00600000)
+    with pytest.raises(T.TranslateError, match="1 table sites decoded nothing"):
+        translate_entry_fixture(tmp_path, monkeypatch, img, {entry: raw})
+
+
 @pytest.mark.parametrize("relocated", [False, True])
 def test_method_with_zero_local_pushes_is_an_entry(tmp_path, monkeypatch, relocated):
     """PUSH 0 reserves Delphi locals; its 6a 00 bytes are not a text run."""
