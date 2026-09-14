@@ -1970,7 +1970,10 @@ class Translator(object):
     def emit(self, fn, i, live):
         ins = fn.insns[i]
         m = ins.mnem
-        nxt = fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end
+        # A recovered block can end on a CALL, with its last-byte estimate
+        # four bytes short of the real rel32 continuation. Listing gaps can
+        # also skip past it. The return address belongs to the instruction.
+        nxt = fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
         try:
             body = self._emit(fn, i, ins, m, nxt, live)
             body = visual_animation_read(ins.addr, body)

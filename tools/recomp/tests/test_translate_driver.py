@@ -516,3 +516,60 @@ def test_a_code_pointer_spelled_in_printable_bytes_is_still_a_pointer():
     assert img.looks_like_function(target)
     starts, _interior = img.code_pointers(set())
     assert target in starts
+
+
+def test_except_calls_push_decoded_returns_after_short_jump(tmp_path, monkeypatch):
+    """A short jump skips an E9 stub and three CALLs ending at a listed epilogue."""
+    import struct
+    entry, stub, helper, done, dispatch = 0x00601000, 0x00601020, 0x00601100, 0x00601110, 0x00601120
+    cleanup, epilogue = stub + 5, stub + 20
+    prefix = (b"\x55\x89\xe5\x31\xc0\x55\x68" + struct.pack("<I", stub)
+              + b"\x64\xff\x30\x64\x89\x20\x5a\x59\x59\x64\x89\x10")
+    prefix += b"\x90" * (stub - entry - 2 - len(prefix)) + b"\xeb\x14"
+    omitted = b"\xe9" + struct.pack("<i", dispatch - stub - 5)
+    for at, target in ((cleanup, helper), (cleanup + 5, helper), (cleanup + 10, done)):
+        omitted += b"\xe8" + struct.pack("<i", target - at - 5)
+    epilogue_code = b"\x5d\xc3"
+    # DoneExcept's relevant contract: pop the CALL continuation and JMP to it.
+    img = synthetic_image({entry: prefix + omitted + epilogue_code,
+                           helper: b"\xc3", done: b"\x5a\xff\xe2", dispatch: b"\xc3"},
+                          base=0x00600000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    img.plausible_immediate_target = lambda addr: False
+    img.md.detail = True
+    insns = [img.to_insn(ci) for ci in img.md.disasm(prefix, entry)]
+    insns += [img.to_insn(ci) for ci in img.md.disasm(epilogue_code, epilogue)]
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    rows = [(entry, "establishing", epilogue + 2 - entry, insns)]
+    for addr, code in ((helper, b"\xc3"), (done, b"\x5a\xff\xe2"), (dispatch, b"\xc3")):
+        rows.append((addr, "helper", len(code), [img.to_insn(ci) for ci in img.md.disasm(code, addr)]))
+    img.md.detail = False
+    for addr, name, size, insns in rows:
+        (listings / ("%08x.asm" % addr)).write_text("\n".join(
+            "%08x  %s %s" % (i.addr, i.mnem, ",".join(i.ops)) for i in insns) + "\n")
+    table = tmp_path / "functions.tsv"
+    table.write_text("address\tname\tsize\n" + "".join(
+        "%08x\t%s\t%d\n" % (addr, name, size) for addr, name, size, _ in rows))
+    binary, curated = tmp_path / "image", tmp_path / "globals.toml"
+    binary.write_bytes(img.data)
+    curated.write_text("")
+    out = tmp_path / "gen"
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                        ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
+    assert T.main() == 0
+    text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+    block = text.split("void fn_%08x(X86 *c) {" % cleanup, 1)[1].split("\n}", 1)[0]
+    for ret in (cleanup + 5, cleanup + 10, epilogue):
+        assert "wr32(c->r[4], %s);" % T.hexlit(ret) in block
+    assert "wr32(c->r[4], %s);" % T.hexlit(cleanup + 11) not in block
+    assert "recomp_jump(c, t_);" in text
+    table_text = (out / "table.c").read_text()
+    returns = table_text.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]
+    assert "0x%08xu" % epilogue in returns
