@@ -560,6 +560,15 @@ void dx_free_audio_channel(int32_t ch) {
         used[(size_t)ch] = false;
 }
 
+// Group the file players in one callback: the runtime has four frame slots,
+// shared with display and callback-driven audio. All run under the guest baton.
+static void file_audio_frame_pump(X86 *c) {
+    mss32_frame_pump(c);
+    dshow_frame_pump(c);
+    fmod_frame_pump(c);
+    soundlib_frame_pump(c);
+}
+
 void dx_register_shims() {
     // Installed before the tables so a failure during registration itself,
     // and every failure afterwards, is named rather than silent.
@@ -577,6 +586,9 @@ void dx_register_shims() {
     dshow_register();
     qmixer_register();
     mss32_register();
+    fmod_register();
+    soundlib_register();
+    galaxy_stub_register();
     bink_register();
     weanetr_register();
     // The audio shims need a tick on the main guest thread: the game drives
@@ -589,8 +601,7 @@ void dx_register_shims() {
     // the audio pump's guest callbacks, the order the direct call used to have.
     host_set_frame_pump(ddraw_frame_pump);
     host_set_frame_pump(qmixer_frame_pump);
-    host_set_frame_pump(mss32_frame_pump);
-    host_set_frame_pump(dshow_frame_pump);
+    host_set_frame_pump(file_audio_frame_pump);
 }
 
 void dx_reset() {
@@ -598,6 +609,8 @@ void dx_reset() {
     // from the generation com_reset is about to discard, and com_reset
     // rebuilds the vtables, so nothing may still be pointing at the old ones.
     qmixer_reset();
+    fmod_reset();
+    soundlib_reset();
     ddraw_reset();
     d3d_reset();
     dsound_reset();

@@ -30,7 +30,7 @@ pop_optimize(recomp_snapshot 2)
 # The suite spawns itself for the abort check; portable since sub-project 3.
 if(NOT IOS AND NOT ANDROID)
 add_executable(runtime_tests tests/runtime_tests.cpp tests/stub_recomp_call.cpp)
-target_link_libraries(runtime_tests PRIVATE recomp_platform recomp_runtime)
+target_link_libraries(runtime_tests PRIVATE recomp_platform recomp_runtime recomp_dx)
 target_compile_options(runtime_tests PRIVATE ${POP_WARN_HOST})
 pop_optimize(runtime_tests 1)
 pop_test_binary(runtime_tests)

@@ -32,6 +32,9 @@ void dshow_register();
 void dinput_register();
 void qmixer_register();
 void mss32_register();
+void fmod_register();
+void soundlib_register();
+void galaxy_stub_register();
 void bink_register();
 void weanetr_register();
 
@@ -44,6 +47,8 @@ void dsound_reset();
 void dshow_reset();
 void dinput_reset();
 void bink_reset();
+void fmod_reset();
+void soundlib_reset();
 
 // The host calls this after feeding new input through host_input_state. It
 // signals the notification event of every DirectInput device that registered
@@ -83,6 +88,9 @@ void dsound_pump();
 void qmixer_frame_pump(X86 *c);
 // Refills Miles streams on the guest frame seam.
 void mss32_frame_pump(X86 *c);
+// Decode FMOD streams and schedule Soundlib MIDI events on the guest thread.
+void fmod_frame_pump(X86 *c);
+void soundlib_frame_pump(X86 *c);
 // Keeps a DirectShow graph's audio channel fed and posts its completion.
 void dshow_frame_pump(X86 *c);
 // The display's frame boundary in the same shape, registered beside it: the

@@ -23,6 +23,8 @@
 #include "../../platform/os.h"
 #include "fixtures/tone_mp3.h"
 
+#include <algorithm>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <array>
@@ -351,9 +353,31 @@ void host_audio_stop(int32_t ch) {
     g_queued_bytes = 0;
     g_voice_remaining = 0;
 }
-void host_audio_set_volume(int32_t, int32_t) {}
-void host_audio_set_pan(int32_t, int32_t) {}
-void host_audio_set_frequency(int32_t, uint32_t) {}
+static std::map<int32_t, int32_t> g_audio_volumes, g_audio_pans;
+static std::map<int32_t, uint32_t> g_audio_rates;
+void host_audio_set_volume(int32_t ch, int32_t v) {
+    g_audio_volumes[ch] = v;
+}
+void host_audio_set_pan(int32_t ch, int32_t v) {
+    g_audio_pans[ch] = v;
+}
+void host_audio_set_frequency(int32_t ch, uint32_t v) {
+    g_audio_rates[ch] = v;
+}
+static bool g_midi_available = false;
+static uint32_t g_midi_closes = 0;
+static std::vector<uint32_t> g_midi_messages;
+int host_midi_open(const char *) {
+    return g_midi_available ? 1 : 0;
+}
+void host_midi_short(uint32_t msg) {
+    g_midi_messages.push_back(msg);
+}
+void host_midi_sysex(const void *, uint32_t) {}
+void host_midi_reset() {}
+void host_midi_close() {
+    ++g_midi_closes;
+}
 uint32_t host_audio_position(int32_t) {
     return g_test_audio_pos;
 }
@@ -5728,6 +5752,309 @@ static uint32_t build_test_wave() {
     return wav;
 }
 
+// FMOD's exported suffixes are the stdcall stack contract, independent of
+// the host channel ids shared with the other sound libraries.
+static void test_fmod() {
+    cpu_reset();
+    const char *names[] = {"_FSOUND_Init@12",
+                           "_FSOUND_Close@0",
+                           "_FSOUND_SetOutput@4",
+                           "_FSOUND_SetDriver@4",
+                           "_FSOUND_GetDriverName@4",
+                           "_FSOUND_Sample_LoadWav@12",
+                           "_FSOUND_Sample_Free@4",
+                           "_FSOUND_Sample_GetDefaults@20",
+                           "_FSOUND_Sample_SetLoopMode@8",
+                           "_FSOUND_PlaySoundAttrib@20",
+                           "_FSOUND_StopSound@4",
+                           "_FSOUND_SetVolume@8",
+                           "_FSOUND_SetPan@8",
+                           "_FSOUND_SetFrequency@8",
+                           "_FSOUND_Stream_OpenMpeg@8",
+                           "_FSOUND_Stream_Play@8",
+                           "_FSOUND_Stream_SetPaused@8",
+                           "_FSOUND_Stream_Close@4"};
+    for (const char *name : names) {
+        uint32_t t = tramp("fmod.dll", name);
+        CHECK(t != 0);
+        CHECK_EQ(imports_argc(t), (uint32_t)atoi(strchr(name, '@') + 1) / 4);
+    }
+    auto f = [](const char *name, std::initializer_list<uint32_t> args) {
+        return call_shim(tramp("fmod.dll", name), args);
+    };
+    CHECK_EQ(f("_FSOUND_Init@12", {44100, 2, 0}), 1u);
+    CHECK_EQ(f("_FSOUND_SetOutput@4", {0}), 1u);
+    CHECK_EQ(f("_FSOUND_SetDriver@4", {0}), 1u);
+    uint32_t driver = f("_FSOUND_GetDriverName@4", {0});
+    CHECK(driver != 0);
+    if (driver)
+        CHECK(gm_str(driver) == "recomp mixer");
+    CHECK_EQ(f("_FSOUND_GetDriverName@4", {0}), driver);
+    uint32_t wav = build_test_wave();
+    // Extend the existing RIFF fixture to eight signed 16-bit mono frames.
+    wr32(wav + 4, 52);
+    wr32(wav + 28, 44100);
+    wr16(wav + 32, 2);
+    wr16(wav + 34, 16);
+    wr32(wav + 40, 16);
+    for (uint32_t i = 0; i < 8; ++i)
+        wr16(wav + 44 + i * 2, (uint16_t)(i * 1000));
+    uint32_t sample = f("_FSOUND_Sample_LoadWav@12", {0xffffffffu, wav, 0x8000});
+    CHECK(sample != 0);
+    uint32_t defaults = sc(0x200);
+    CHECK_EQ(f("_FSOUND_Sample_GetDefaults@20",
+               {sample, defaults, defaults + 4, defaults + 8, defaults + 12}),
+             1u);
+    CHECK_EQ(rd32(defaults), 22050u);
+    CHECK_EQ(rd32(defaults + 4), 255u);
+    CHECK_EQ(rd32(defaults + 8), 128u);
+    CHECK_EQ(f("_FSOUND_Sample_GetDefaults@20", {sample, 0, 0, 0, 0}), 1u);
+    CHECK_EQ(f("_FSOUND_Sample_SetLoopMode@8", {sample, 2}), 1u);
+    // The sample owns PCM after loading: guest scratch may be overwritten.
+    memset(g_mem + wav, 0, 60);
+    g_sample_tracking = true;
+    g_plays.clear();
+    uint32_t ch = f("_FSOUND_PlaySoundAttrib@20", {0xffffffffu, sample, 22050, 200, 128});
+    CHECK(ch < 2);
+    CHECK_EQ(g_plays.size(), 1u);
+    if (!g_plays.empty()) {
+        const auto &p = g_plays.back();
+        CHECK_EQ(p.rate, 22050);
+        CHECK_EQ(p.bits, 16);
+        CHECK_EQ(p.channels, 1);
+        CHECK_EQ(p.loop, 1);
+        CHECK_EQ(p.pan, 0);
+        CHECK_EQ(p.bytes, 16u);
+        CHECK_EQ(p.pcm[2] | p.pcm[3] << 8, 1000);
+        CHECK_EQ(f("_FSOUND_SetVolume@8", {ch, 64}), 1u);
+        CHECK_EQ(g_audio_volumes[p.channel], -1201);
+        CHECK_EQ(f("_FSOUND_SetPan@8", {ch, 255}), 1u);
+        CHECK_EQ(g_audio_pans[p.channel], 10000);
+        CHECK_EQ(f("_FSOUND_SetFrequency@8", {ch, 11025}), 1u);
+        CHECK_EQ(g_audio_rates[p.channel], 11025u);
+    }
+    uint32_t other = f("_FSOUND_PlaySoundAttrib@20",
+                       {0xffffffffu, sample, 0xffffffffu, 0xffffffffu, 0xffffffffu});
+    CHECK(other < 2 && other != ch);
+    CHECK_EQ(f("_FSOUND_PlaySoundAttrib@20", {0xffffffffu, sample, 22050, 255, 128}), 0xffffffffu);
+    if (!g_plays.empty())
+        g_sample_playing[g_plays.back().channel] = false;
+    CHECK_EQ(f("_FSOUND_PlaySoundAttrib@20", {0xffffffffu, sample, 22050, 255, 128}), other);
+    CHECK_EQ(f("_FSOUND_StopSound@4", {ch}), 1u);
+    CHECK_EQ(f("_FSOUND_Sample_Free@4", {sample}), 0u);
+    CHECK_EQ(f("_FSOUND_PlaySoundAttrib@20", {0xffffffffu, sample, 22050, 255, 128}), 0xffffffffu);
+    CHECK_EQ(f("_FSOUND_Sample_LoadWav@12", {0xffffffffu, 0xfffffff0u, 0x8000}), 0u);
+    CHECK_EQ(f("_FSOUND_Close@0", {}), 0u);
+    CHECK_EQ(call_shim(tramp("CGalaxy.dll", "cgGetGalaxyAPI"), {}), 0u);
+    CHECK_EQ(imports_argc(tramp("CGalaxy.dll", "cgGetGalaxyAPI")), 0u);
+    g_sample_tracking = false;
+}
+
+static void test_fmod_stream() {
+    cpu_reset();
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-fmod-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string file = std::string(dir) + "/Test.mp3";
+    FILE *out = fopen(file.c_str(), "wb");
+    CHECK(out != nullptr);
+    if (!out)
+        return;
+    CHECK_EQ(fwrite(kToneMp3, 1, sizeof kToneMp3, out), sizeof kToneMp3);
+    CHECK_EQ(fclose(out), 0);
+    win32_init(dir);
+    dx_register_shims();
+    auto f = [](const char *name, std::initializer_list<uint32_t> args) {
+        return call_shim(tramp("fmod.dll", name), args);
+    };
+    CHECK_EQ(f("_FSOUND_Init@12", {44100, 4, 0}), 1u);
+    gm_put_str(sc(0x100), "test.mp3", 0x100);
+    g_plays.clear();
+    g_queue_enabled = true;
+    g_test_audio_pos = 0;
+    // Disk WAVE input uses the resolver too, and replacing a numbered slot
+    // stops every voice borrowing the old sample while preserving other DX ids.
+    uint32_t wav = build_test_wave();
+    std::string wave_file = std::string(dir) + "/Sample.wav";
+    out = fopen(wave_file.c_str(), "wb");
+    CHECK(out != nullptr);
+    if (!out)
+        return;
+    CHECK_EQ(fwrite(g_mem + wav, 1, 52, out), 52u);
+    CHECK_EQ(fclose(out), 0);
+    gm_put_str(sc(0x300), "sample.wav", 0x100);
+    uint32_t sample = f("_FSOUND_Sample_LoadWav@12", {7, sc(0x300), 0});
+    CHECK(sample != 0);
+    int32_t expected_voice = dx_alloc_audio_channel();
+    CHECK(expected_voice >= 0);
+    dx_free_audio_channel(expected_voice);
+    CHECK(f("_FSOUND_PlaySoundAttrib@20", {0xffffffffu, sample, 22050, 255, 128}) < 4);
+    CHECK(!g_plays.empty());
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays.back().bits, 8);
+        CHECK_EQ(g_plays.back().pcm[0], 0x80u);
+        CHECK_EQ(g_plays.back().channel, expected_voice);
+    }
+    uint32_t replacement = f("_FSOUND_Sample_LoadWav@12", {7, sc(0x300), 0});
+    CHECK(replacement != 0 && replacement != sample);
+    CHECK_EQ(f("_FSOUND_Sample_GetDefaults@20", {sample, 0, 0, 0, 0}), 0u);
+    CHECK_EQ(f("_FSOUND_Sample_Free@4", {replacement}), 0u);
+    int32_t released_voice = dx_alloc_audio_channel();
+    CHECK_EQ(released_voice, expected_voice);
+    dx_free_audio_channel(released_voice);
+    CHECK_EQ(remove(wave_file.c_str()), 0);
+    uint32_t short_wave = heap_alloc(12);
+    memcpy(g_mem + short_wave, g_mem + wav, 12);
+    CHECK_EQ(f("_FSOUND_Sample_LoadWav@12", {0xffffffffu, short_wave, 0x8000}), 0u);
+    heap_free(short_wave);
+    gm_put_str(sc(0x100), "test.mp3", 0x100);
+    g_plays.clear();
+    uint32_t stream = f("_FSOUND_Stream_OpenMpeg@8", {sc(0x100), 0});
+    CHECK(stream != 0);
+    CHECK_EQ(g_plays.size(), 0u);
+    CHECK(f("_FSOUND_Stream_Play@8", {0xffffffffu, stream}) < 4);
+    CHECK_EQ(g_plays.size(), 1u);
+    size_t stopped = g_stops.size();
+    CHECK_EQ(f("_FSOUND_Sample_Free@4", {0}), 0u);
+    CHECK_EQ(g_stops.size(), stopped); // invalid sample must not stop a stream
+    g_queue_retired = true;
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_queues.size(), 0u);
+    g_queue_retired = false;
+    host_pump_timers(&g_cpu);
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays.back().rate, 44100);
+        CHECK_EQ(g_plays.back().channels, 2);
+        CHECK_EQ(g_plays.back().bytes + g_queued_bytes, 27648u);
+    }
+    // Pausing resumes from the audible frame, not the decoder's prefetched end.
+    g_stream_played = 4608;
+    CHECK_EQ(f("_FSOUND_Stream_SetPaused@8", {stream, 1}), 1u);
+    size_t plays = g_plays.size();
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_plays.size(), plays);
+    CHECK_EQ(g_queued_bytes, 0u);
+    CHECK_EQ(f("_FSOUND_Stream_SetPaused@8", {stream, 0}), 1u);
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_plays.size(), plays + 1);
+    if (!g_plays.empty())
+        CHECK_EQ(g_plays.back().bytes + g_queued_bytes, 27648u - 4608);
+    CHECK_EQ(f("_FSOUND_Stream_Close@4", {stream}), 1u);
+    CHECK_EQ(g_queued_bytes, 0u);
+    stream = f("_FSOUND_Stream_OpenMpeg@8", {sc(0x100), 2});
+    CHECK(f("_FSOUND_Stream_Play@8", {0xffffffffu, stream}) < 4);
+    host_pump_timers(&g_cpu);
+    CHECK(g_queued_bytes >= 44100u * 4);
+    CHECK_EQ(f("_FSOUND_Stream_Close@4", {stream}), 1u);
+    gm_put_str(sc(0x100), "missing.mp3", 0x100);
+    CHECK_EQ(f("_FSOUND_Stream_OpenMpeg@8", {sc(0x100), 0}), 0u);
+    CHECK_EQ(f("_FSOUND_Close@0", {}), 0u);
+    g_queue_enabled = false;
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+}
+
+static void test_soundlib_stub() {
+    cpu_reset();
+    const char *names[] = {"CreateMidi",    "OpenMidi",      "PlayMidi", "StopMidi",
+                           "SetMidiVolume", "GetMidiVolume", "FreeMidi"};
+    const uint32_t arities[] = {0, 1, 0, 0, 1, 0, 0};
+    for (size_t i = 0; i < std::size(names); ++i)
+        CHECK_EQ(imports_argc(tramp("Soundlib.dll", names[i])), arities[i]);
+    auto f = [](const char *name, std::initializer_list<uint32_t> args) {
+        return call_shim(tramp("Soundlib.dll", name), args);
+    };
+    g_midi_available = false;
+    CHECK_EQ(f("CreateMidi", {}), 0u); // headless host has no synth
+    g_midi_available = true;
+    CHECK_EQ(f("CreateMidi", {}), 1u);
+    CHECK_EQ(f("SetMidiVolume", {(uint32_t)-2000}), 0u);
+    CHECK_EQ(f("GetMidiVolume", {}), (uint32_t)-2000);
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-soundlib-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string file = std::string(dir) + "/Test.mid";
+    // Format 0, PPQN 96: a note on at zero, running-status note off at 500ms.
+    const uint8_t midi[] = {'M', 'T',  'h', 'd', 0,   0,   0,   6, 0,    0,    0,
+                            1,   0,    96,  'M', 'T', 'r', 'k', 0, 0,    0,    11,
+                            0,   0x90, 60,  100, 96,  60,  0,   0, 0xff, 0x2f, 0};
+    FILE *out = fopen(file.c_str(), "wb");
+    CHECK(out != nullptr);
+    if (!out)
+        return;
+    CHECK_EQ(fwrite(midi, 1, sizeof midi, out), sizeof midi);
+    CHECK_EQ(fclose(out), 0);
+    win32_init(dir);
+    dx_register_shims();
+    host_set_time_source_pinned(100, 500);
+    gm_put_str(sc(0x100), "test.mid", 0x100);
+    wr32(sc(0x200), sc(0x100));
+    g_midi_messages.clear();
+    CHECK_EQ(f("OpenMidi", {sc(0x200)}), 0u);
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x643c90u) !=
+          g_midi_messages.end());
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x003c90u) ==
+          g_midi_messages.end());
+    host_pinned_clock_advance();
+    host_pump_timers(&g_cpu);
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x003c90u) !=
+          g_midi_messages.end());
+    CHECK_EQ(f("StopMidi", {}), 0u);
+    size_t before = g_midi_messages.size();
+    host_pinned_clock_advance();
+    host_pump_timers(&g_cpu);
+    CHECK_EQ(g_midi_messages.size(), before);
+    CHECK_EQ(f("PlayMidi", {}), 0u);
+    CHECK(g_midi_messages.size() > before);
+    CHECK_EQ(f("StopMidi", {}), 0u);
+    // Format 1 merges the tempo track with notes: one quarter at 250ms,
+    // followed by one at 500ms. Track volume is scaled by the master gain.
+    const uint8_t multi[] = {'M',  'T',  'h',  'd',  0,    0,    0,    6,    0,  1,    0,    2,
+                             0,    96,   'M',  'T',  'r',  'k',  0,    0,    0,  18,   0,    0xff,
+                             0x51, 3,    3,    0xd0, 0x90, 96,   0xff, 0x51, 3,  7,    0xa1, 0x20,
+                             96,   0xff, 0x2f, 0,    'M',  'T',  'r',  'k',  0,  0,    0,    20,
+                             0,    0xb0, 7,    80,   0,    0x90, 60,   100,  96, 0x80, 60,   0,
+                             96,   0x90, 64,   100,  0,    0xff, 0x2f, 0};
+    out = fopen(file.c_str(), "wb");
+    CHECK(out != nullptr);
+    if (!out)
+        return;
+    CHECK_EQ(fwrite(multi, 1, sizeof multi, out), sizeof multi);
+    CHECK_EQ(fclose(out), 0);
+    host_set_time_source_pinned(0, 250);
+    g_midi_messages.clear();
+    CHECK_EQ(f("OpenMidi", {sc(0x200)}), 0u);
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x0807b0u) !=
+          g_midi_messages.end());
+    host_pinned_clock_advance();
+    host_pump_timers(&g_cpu);
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x003c80u) !=
+          g_midi_messages.end());
+    host_pinned_clock_advance();
+    host_pump_timers(&g_cpu);
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x644090u) ==
+          g_midi_messages.end());
+    host_pinned_clock_advance();
+    host_pump_timers(&g_cpu);
+    CHECK(std::find(g_midi_messages.begin(), g_midi_messages.end(), 0x644090u) !=
+          g_midi_messages.end());
+    CHECK_EQ(f("StopMidi", {}), 0u);
+    out = fopen(file.c_str(), "wb");
+    CHECK(out != nullptr);
+    if (!out)
+        return;
+    CHECK_EQ(fwrite(multi, 1, sizeof multi - 1, out), sizeof multi - 1);
+    CHECK_EQ(fclose(out), 0);
+    CHECK(f("OpenMidi", {sc(0x200)}) != 0u); // truncated track
+    CHECK_EQ(f("FreeMidi", {}), 0u);
+    CHECK(g_midi_closes > 0);
+    CHECK(f("OpenMidi", {0}) != 0u);
+    host_clear_time_source();
+    g_midi_available = false;
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+}
+
 static void test_riff_parse() {
     cpu_reset();
     uint32_t wav = build_test_wave();
@@ -6957,11 +7284,30 @@ static void test_qmixer_failure() {
 // dx_reset must leave no cached guest address behind: after it, everything
 // works against the fresh arena.
 static void test_reset() {
+    cpu_reset();
+    call_shim(tramp("fmod.dll", "_FSOUND_Init@12"), {44100, 4, 0});
+    uint32_t sample = call_shim(tramp("fmod.dll", "_FSOUND_Sample_LoadWav@12"),
+                                {0xffffffffu, build_test_wave(), 0x8000});
+    CHECK(sample != 0);
+    CHECK(call_shim(tramp("fmod.dll", "_FSOUND_PlaySoundAttrib@20"),
+                    {0xffffffffu, sample, 22050, 255, 128}) < 4);
+    g_midi_available = true;
+    CHECK_EQ(call_shim(tramp("Soundlib.dll", "CreateMidi"), {}), 1u);
+    uint32_t closed = g_midi_closes;
     mem_init();
     dx_reset();
     g_scratch = heap_alloc(0x4000, true, 16);
     CHECK(g_scratch != 0);
     CHECK_EQ(com_live_count(), 0u);
+    CHECK_EQ(g_midi_closes, closed + 1);
+    g_midi_available = false;
+    cpu_reset();
+    CHECK_EQ(call_shim(tramp("fmod.dll", "_FSOUND_Sample_GetDefaults@20"), {sample, 0, 0, 0, 0}),
+             0u);
+    uint32_t driver = call_shim(tramp("fmod.dll", "_FSOUND_GetDriverName@4"), {0});
+    CHECK(driver != 0);
+    if (driver)
+        CHECK(gm_str(driver) == "recomp mixer");
 
     cpu_reset();
     g_presents.clear();
@@ -9864,6 +10210,9 @@ int main() {
         {"DirectSound", test_dsound},
         {"DirectInput", test_dinput},
         {"QMixer", test_qmixer},
+        {"FMOD samples", test_fmod},
+        {"FMOD streams", test_fmod_stream},
+        {"Soundlib MIDI", test_soundlib_stub},
         {"Miles arities", test_mss32_arities},
         {"RIFF WAVE", test_riff_parse},
         {"Miles samples", test_mss32_sample},

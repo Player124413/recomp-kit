@@ -3,6 +3,7 @@
 // Run from the repository root:
 //   .venv/bin/python tools/test.py --compile-only && build/recomp/runtime_tests
 #include "../imports.h"
+#include "../../dx/dx.h"
 #include "../resources.h"
 #include "../mods_seam.h"
 #include "../intrinsics.h"
@@ -2951,6 +2952,9 @@ static void test_registry(X86 *c) {
 // hold for a zero-argument and a multi-argument shim.
 static void test_import_coverage(X86 *c) {
     section("import coverage");
+    // The application upgrades the loader's logging-only IAT entries by
+    // registering DX after loading. Coverage must include those modules too.
+    dx_register_shims();
     ExpectedImage expect;
     std::string err;
     if (check(pefile_sections(expect, err), "read PE imports for coverage: %s", err.c_str())) {
