@@ -3542,6 +3542,22 @@ static void wide_enum_callback(X86 *c) {
     g_wide_enum_text = gm_wstr(arg(c, 0));
     set_eax(c, 1);
 }
+
+// Both version probes consume four x86 slots; the condition mask uses EDX:EAX.
+static uint64_t call_condition_mask(X86 *c, uint64_t mask, uint32_t type, uint32_t condition) {
+    uint32_t saved = c->r[R_ESP], sp = saved - 20;
+    wr32(sp, g_fake_ret);
+    wr32(sp + 4, (uint32_t)mask);
+    wr32(sp + 8, (uint32_t)(mask >> 32));
+    wr32(sp + 12, type);
+    wr32(sp + 16, condition);
+    c->r[R_ESP] = sp;
+    uint32_t tramp = imports_resolve("KERNEL32.dll", "VerSetConditionMask");
+    check(tramp != 0 && imports_dispatch(c, tramp), "VerSetConditionMask dispatches");
+    check(c->r[R_ESP] == saved, "VerSetConditionMask cleans all four stdcall argument slots");
+    c->r[R_ESP] = saved;
+    return ((uint64_t)c->r[R_EDX] << 32) | c->r[R_EAX];
+}
 static void test_kernel32_wide() {
     X86 c;
     loader_init_context(&c);
@@ -3788,6 +3804,71 @@ static void test_kernel32_wide() {
                   1 &&
               g_wide_enum_calls == 1 && g_wide_enum_text == "1",
           "EnumCalendarInfoW calls the guest once");
+
+    section("kernel32 wide process and version");
+    uint32_t cmd_a = call_import(&c, "KERNEL32.dll", "GetCommandLineA", {});
+    uint32_t cmd_w = call_import(&c, "KERNEL32.dll", "GetCommandLineW", {});
+    check(cmd_w && gm_wstr(cmd_w) == gm_str(cmd_a) &&
+              call_import(&c, "KERNEL32.dll", "GetCommandLineW", {}) == cmd_w,
+          "GetCommandLineW widens the stable ANSI answer");
+    memset(g_mem + fd, 0xa5, 72);
+    call_import(&c, "KERNEL32.dll", "GetStartupInfoW", {fd});
+    check(rd32(fd) == 68 && rd32(fd + 64) == 0 && rd32(fd + 68) == 0xa5a5a5a5,
+          "GetStartupInfoW writes exactly 68 bytes");
+    check(call_import(&c, "KERNEL32.dll", "VerifyVersionInfoW", {fd, 0, 0, 0}) == 1,
+          "VerifyVersionInfoW");
+    check(call_condition_mask(&c, 0x8000000000001234ull, 0x80, 5) ==
+              (0x8000000000001234ull | (5ull << 21)),
+          "VerSetConditionMask preserves EDX:EAX and the three-bit condition field");
+    check(call_import(&c, "KERNEL32.dll", "GetCurrentProcessId", {}) == 1, "GetCurrentProcessId");
+    check(call_import(&c, "KERNEL32.dll", "IsDebuggerPresent", {}) == 0 &&
+              call_import(&c, "KERNEL32.dll", "SwitchToThread", {}) == 0,
+          "debugger and switch probes");
+    check(call_import(&c, "KERNEL32.dll", "MulDiv", {5, 1, 2}) == 3 &&
+              call_import(&c, "KERNEL32.dll", "MulDiv", {(uint32_t)-5, 1, 2}) == (uint32_t)-3,
+          "MulDiv rounds signed halves away from zero");
+    check(call_import(&c, "KERNEL32.dll", "MulDiv", {0x7fffffff, 2, 1}) == 0xffffffffu &&
+              call_import(&c, "KERNEL32.dll", "MulDiv", {1, 2, 0}) == 0xffffffffu,
+          "MulDiv reports overflow and divide by zero");
+    check(call_import(&c, "KERNEL32.dll", "VirtualProtect", {s, 4096, 4, fd}) == 1 &&
+              rd32(fd) == 0x40,
+          "VirtualProtect returns the previous protection");
+    for (const auto &region : std::vector<std::pair<uint32_t, uint32_t>>{
+             {loader_image_base(), 0x1000000}, {HEAP_BASE, 0x20000}, {STACK_LIMIT, 0x20000}}) {
+        memset(g_mem + fd, 0xa5, 32);
+        check(call_import(&c, "KERNEL32.dll", "VirtualQuery", {region.first + 123, fd, 28}) == 28 &&
+                  rd32(fd + 4) == region.first && rd32(fd + 12) >= 4096 &&
+                  rd32(fd + 16) == 0x1000 && rd32(fd + 24) == region.second &&
+                  rd32(fd + 28) == 0xa5a5a5a5,
+              "VirtualQuery classifies arena region %08x", region.first);
+    }
+    check(call_import(&c, "KERNEL32.dll", "VirtualQueryEx", {0xffffffffu, s, fd, 28}) == 28 &&
+              rd32(fd + 16) == 0x10000,
+          "VirtualQueryEx reports an unassigned arena range as free");
+    check(call_import(&c, "KERNEL32.dll", "VirtualQuery", {GUEST_SIZE, fd, 28}) == 0 &&
+              call_import(&c, "KERNEL32.dll", "VirtualQuery", {s, fd, 27}) == 0,
+          "VirtualQuery rejects invalid addresses and short records");
+    check(call_import(&c, "KERNEL32.dll", "SetErrorMode", {1}) == 0 &&
+              call_import(&c, "KERNEL32.dll", "SetErrorMode", {0}) == 1,
+          "SetErrorMode preserves the existing previous-mode behavior");
+    gm_put_wstr(s, "Wide-Atom", 64);
+    uint32_t atom = call_import(&c, "KERNEL32.dll", "GlobalAddAtomW", {s});
+    gm_put_wstr(s, "wide-atom", 64);
+    check(atom >= 0xc000 && call_import(&c, "KERNEL32.dll", "GlobalFindAtomW", {s}) == atom,
+          "global wide atoms are case-insensitive");
+    check(call_import(&c, "KERNEL32.dll", "GlobalAddAtomW", {s}) == atom,
+          "GlobalAddAtomW retains an existing atom");
+    call_import(&c, "KERNEL32.dll", "GlobalDeleteAtom", {atom});
+    check(call_import(&c, "KERNEL32.dll", "GlobalFindAtomW", {s}) == atom,
+          "atom remains until all references are deleted");
+    call_import(&c, "KERNEL32.dll", "GlobalDeleteAtom", {atom});
+    check(call_import(&c, "KERNEL32.dll", "GlobalFindAtomW", {s}) == 0,
+          "GlobalDeleteAtom removes the last reference");
+    event = call_import(&c, "KERNEL32.dll", "CreateEventW", {0, 1, 1, 0});
+    wr32(fd, event);
+    check(call_import(&c, "KERNEL32.dll", "WaitForMultipleObjectsEx", {1, fd, 0, 0, 1}) == 0,
+          "WaitForMultipleObjectsEx uses the existing wait body");
+    call_import(&c, "KERNEL32.dll", "CloseHandle", {event});
     section("kernel32 wide resources");
     uint32_t r = call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 1, 16});
     check(r != 0, "FindResourceW(VS_VERSION_INFO)");

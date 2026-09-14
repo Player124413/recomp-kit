@@ -1176,16 +1176,11 @@ void k_UnmapViewOfFile(X86 *c) {
 // names: a game's own -debugout or -nointro, the way its players and its
 // developers steered it.  Read once, when the CRT first asks.
 void k_GetCommandLineA(X86 *c) {
-    if (!g_cmdline_addr) {
-        std::string line = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
-        if (const char *extra = recomp_env("GUEST_ARGS"); extra && *extra)
-            line += std::string(" ") + extra;
-        g_cmdline_addr = guest_strdup(line.c_str());
-    }
-    set_eax(c, g_cmdline_addr);
+    get_command_line(c);
 }
 } // namespace
 void win32_reset_command_line_for_test() {
+    kernel32_wide_reset_command_line();
     g_cmdline_addr = 0;
 }
 namespace {
@@ -1238,12 +1233,7 @@ void k_SetEnvironmentVariableA(X86 *c) {
 }
 
 void k_GetStartupInfoA(X86 *c) {
-    uint32_t p = arg(c, 0);
-    if (p) {
-        memset(g_mem + p, 0, 68);
-        wr32(p, 68);
-    }
-    set_eax(c, 0);
+    startup_info(c);
 }
 
 void k_GetSystemInfo(X86 *c) {
@@ -1666,16 +1656,7 @@ void k_WaitForSingleObject(X86 *c) {
 }
 
 void k_WaitForMultipleObjects(X86 *c) {
-    uint32_t n = arg(c, 0), parr = arg(c, 1), wait_all = arg(c, 2), timeout = arg(c, 3);
-    if (!n || n > MAXIMUM_WAIT_OBJECTS_ || !parr || !gm_valid(parr, 4 * n)) {
-        set_last_error(87);
-        set_eax(c, 0xffffffffu); // WAIT_FAILED
-        return;
-    }
-    uint32_t handles_[MAXIMUM_WAIT_OBJECTS_];
-    for (uint32_t i = 0; i < n; ++i)
-        handles_[i] = rd32(parr + 4 * i);
-    set_eax(c, sched_wait_objects(handles_, n, wait_all != 0, timeout));
+    wait_multiple_objects(c);
 }
 
 // -------------------------------------------------------------------------
@@ -4251,6 +4232,38 @@ void open_mutex_named(X86 *c, const std::string &name) {
     }
     set_last_error(ERROR_FILE_NOT_FOUND_);
     set_eax(c, 0);
+}
+
+void get_command_line(X86 *c) {
+    if (!g_cmdline_addr) {
+        std::string line = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+        if (const char *extra = recomp_env("GUEST_ARGS"); extra && *extra)
+            line += std::string(" ") + extra;
+        g_cmdline_addr = guest_strdup(line.c_str());
+    }
+    set_eax(c, g_cmdline_addr);
+}
+
+void startup_info(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (p) {
+        memset(g_mem + p, 0, 68);
+        wr32(p, 68);
+    }
+    set_eax(c, 0);
+}
+
+void wait_multiple_objects(X86 *c) {
+    uint32_t n = arg(c, 0), parr = arg(c, 1), wait_all = arg(c, 2), timeout = arg(c, 3);
+    if (!n || n > MAXIMUM_WAIT_OBJECTS_ || !parr || !gm_valid(parr, 4 * n)) {
+        set_last_error(87);
+        set_eax(c, 0xffffffffu); // WAIT_FAILED
+        return;
+    }
+    uint32_t handles_[MAXIMUM_WAIT_OBJECTS_];
+    for (uint32_t i = 0; i < n; ++i)
+        handles_[i] = rd32(parr + 4 * i);
+    set_eax(c, sched_wait_objects(handles_, n, wait_all != 0, timeout));
 }
 
 const ImportShim g_kernel32_shims[] = {

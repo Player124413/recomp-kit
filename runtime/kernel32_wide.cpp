@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <map>
+#include <cctype>
 
 namespace {
 // gm_wstr produces valid UTF-8. Count UTF-16 units, including surrogate pairs.
@@ -546,7 +548,191 @@ void k_GetCPInfoExW(X86 *c) {
     set_eax(c, 1);
 }
 
+uint32_t g_cmdline_w = 0;
+std::map<std::string, uint16_t> g_atoms;
+std::map<uint16_t, uint32_t> g_atom_refs;
+uint32_t g_next_atom = 0xc000;
+void k_GetCommandLineW(X86 *c) {
+    if (!g_cmdline_w) {
+        get_command_line(c);
+        std::string line = gm_str(c->r[R_EAX]);
+        uint32_t cap = (uint32_t)line.size() + 1;
+        g_cmdline_w = heap_alloc(cap * 2, true);
+        if (g_cmdline_w)
+            gm_put_wstr(g_cmdline_w, line, cap);
+    }
+    set_eax(c, g_cmdline_w);
+}
+void k_GetStartupInfoW(X86 *c) {
+    startup_info(c);
+}
+void k_VerifyVersionInfoW(X86 *c) {
+    set_eax(c, 1);
+}
+void k_VerSetConditionMask(X86 *c) {
+    // ULONGLONG occupies two x86 slots. Both version APIs use stdcall (four
+    // slots), and winnt.h's VER_NUM_BITS_PER_CONDITION_MASK is 3, not 7.
+    uint64_t mask = (uint64_t)arg(c, 0) | ((uint64_t)arg(c, 1) << 32);
+    uint32_t type = arg(c, 2), condition = arg(c, 3) & 7;
+    for (int bit = 7; bit >= 0; --bit) {
+        if (type & (1u << bit)) {
+            mask |= (uint64_t)condition << (3 * bit);
+            break;
+        }
+    }
+    set_eax64(c, mask);
+}
+void k_GetCurrentProcessId(X86 *c) {
+    set_eax(c, 1);
+}
+void k_IsDebuggerPresent(X86 *c) {
+    set_eax(c, 0);
+}
+void k_SwitchToThread(X86 *c) {
+    set_eax(c, 0);
+}
+void k_MulDiv(X86 *c) {
+    int64_t product = (int64_t)(int32_t)arg(c, 0) * (int32_t)arg(c, 1);
+    int64_t divisor = (int32_t)arg(c, 2);
+    if (!divisor) {
+        set_eax(c, 0xffffffffu);
+        return;
+    }
+    bool negative = (product < 0) != (divisor < 0);
+    int64_t magnitude = product < 0 ? -product : product;
+    int64_t denominator = divisor < 0 ? -divisor : divisor;
+    int64_t result = (magnitude + denominator / 2) / denominator;
+    if (negative)
+        result = -result;
+    set_eax(c, result < INT32_MIN || result > INT32_MAX ? 0xffffffffu : (uint32_t)result);
+}
+void k_VirtualProtect(X86 *c) {
+    uint32_t old = arg(c, 3);
+    if (old && gm_valid(old, 4))
+        wr32(old, 0x40);
+    set_eax(c, 1);
+}
+// MEMORY_BASIC_INFORMATION is seven DWORDs on the 32-bit guest. Describe
+// the queried page through the end of its image/heap/stack range, or the
+// gap before the next range. These are arena categories, not host mappings.
+uint32_t virtual_query(uint32_t address, uint32_t out, uint32_t len) {
+    if (address >= GUEST_SIZE || !out || len < 28 || !gm_valid(out, 28)) {
+        set_last_error(87);
+        return 0;
+    }
+    struct Region {
+        uint32_t base, end, type, protection;
+    };
+    const Region regions[] = {{loader_image_base(), loader_image_limit(), 0x1000000, 0x40},
+                              {HEAP_BASE, HEAP_LIMIT, 0x20000, 4},
+                              {STACK_LIMIT, STACK_TOP, 0x20000, 4}};
+    uint32_t page = address & ~0xfffu, end = GUEST_SIZE, allocation = 0, type = 0, protection = 0;
+    for (const auto &r : regions) {
+        if (address >= r.base && address < r.end) {
+            allocation = r.base;
+            end = r.end;
+            type = r.type;
+            protection = r.protection;
+            break;
+        }
+        if (r.base > address)
+            end = std::min(end, r.base);
+    }
+    wr32(out, page);
+    wr32(out + 4, allocation);
+    wr32(out + 8, protection);
+    wr32(out + 12, end - page);
+    wr32(out + 16, type ? 0x1000 : 0x10000);
+    wr32(out + 20, protection);
+    wr32(out + 24, type);
+    return 28;
+}
+void k_VirtualQuery(X86 *c) {
+    set_eax(c, virtual_query(arg(c, 0), arg(c, 1), arg(c, 2)));
+}
+void k_VirtualQueryEx(X86 *c) {
+    set_eax(c, virtual_query(arg(c, 1), arg(c, 2), arg(c, 3)));
+}
+std::string atom_name(uint32_t p) {
+    std::string name = gm_wstr(p);
+    for (char &ch : name)
+        ch = (char)tolower((unsigned char)ch);
+    return name;
+}
+void k_GlobalAddAtomW(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (p < 0x10000) {
+        set_eax(c, p < 0xc000 ? p : 0);
+        return;
+    }
+    std::string name = atom_name(p);
+    if (name.empty() || wide_units(name) > 255) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    auto found = g_atoms.find(name);
+    if (found != g_atoms.end()) {
+        ++g_atom_refs[found->second];
+        set_eax(c, found->second);
+        return;
+    }
+    for (uint32_t i = 0; i < 0x4000; ++i) {
+        uint16_t atom = (uint16_t)g_next_atom;
+        g_next_atom = g_next_atom == 0xffff ? 0xc000 : g_next_atom + 1;
+        if (!g_atom_refs.count(atom)) {
+            g_atoms[name] = atom;
+            g_atom_refs[atom] = 1;
+            set_eax(c, atom);
+            return;
+        }
+    }
+    set_last_error(8);
+    set_eax(c, 0);
+}
+void k_GlobalFindAtomW(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (p < 0x10000) {
+        set_eax(c, p < 0xc000 ? p : 0);
+        return;
+    }
+    auto it = g_atoms.find(atom_name(p));
+    set_eax(c, it == g_atoms.end() ? 0 : it->second);
+}
+void k_GlobalDeleteAtom(X86 *c) {
+    uint16_t atom = (uint16_t)arg(c, 0);
+    auto ref = g_atom_refs.find(atom);
+    if (ref != g_atom_refs.end() && --ref->second == 0) {
+        g_atom_refs.erase(ref);
+        for (auto it = g_atoms.begin(); it != g_atoms.end(); ++it)
+            if (it->second == atom) {
+                g_atoms.erase(it);
+                break;
+            }
+    }
+    set_eax(c, 0);
+}
+void k_WaitForMultipleObjectsEx(X86 *c) {
+    wait_multiple_objects(c);
+}
+
 static const ImportShim g_kernel32_wide[] = {
+    {"KERNEL32.dll", "GetCommandLineW", 0, k_GetCommandLineW},
+    {"KERNEL32.dll", "GetStartupInfoW", 1, k_GetStartupInfoW},
+    {"KERNEL32.dll", "VerifyVersionInfoW", 4, k_VerifyVersionInfoW},
+    {"KERNEL32.dll", "VerSetConditionMask", 4, k_VerSetConditionMask},
+    {"KERNEL32.dll", "GetCurrentProcessId", 0, k_GetCurrentProcessId},
+    {"KERNEL32.dll", "IsDebuggerPresent", 0, k_IsDebuggerPresent},
+    {"KERNEL32.dll", "SwitchToThread", 0, k_SwitchToThread},
+    {"KERNEL32.dll", "MulDiv", 3, k_MulDiv},
+    {"KERNEL32.dll", "VirtualProtect", 4, k_VirtualProtect},
+    {"KERNEL32.dll", "VirtualQuery", 3, k_VirtualQuery},
+    {"KERNEL32.dll", "VirtualQueryEx", 4, k_VirtualQueryEx},
+    {"KERNEL32.dll", "GlobalAddAtomW", 1, k_GlobalAddAtomW},
+    {"KERNEL32.dll", "GlobalFindAtomW", 1, k_GlobalFindAtomW},
+    {"KERNEL32.dll", "GlobalDeleteAtom", 1, k_GlobalDeleteAtom},
+    {"KERNEL32.dll", "WaitForMultipleObjectsEx", 5, k_WaitForMultipleObjectsEx},
+
     {"KERNEL32.dll", "GetThreadLocale", 0, k_GetThreadLocale},
     {"KERNEL32.dll", "SetThreadLocale", 1, k_SetThreadLocale},
     {"KERNEL32.dll", "EnumSystemLocalesW", 2, k_EnumSystemLocalesW},
@@ -601,4 +787,12 @@ void kernel32_wide_register() {
 
 void kernel32_wide_reset() {
     g_thread_lcid = 0x0409;
+    g_cmdline_w = 0;
+    g_atoms.clear();
+    g_atom_refs.clear();
+    g_next_atom = 0xc000;
+}
+
+void kernel32_wide_reset_command_line() {
+    g_cmdline_w = 0;
 }

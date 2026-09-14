@@ -25,3 +25,8 @@ void create_mapping_named(X86 *c, const std::string &name);
 void open_mutex_named(X86 *c, const std::string &name);
 
 void kernel32_wide_reset();
+
+void get_command_line(X86 *c);
+void startup_info(X86 *c);
+void wait_multiple_objects(X86 *c);
+void kernel32_wide_reset_command_line();
