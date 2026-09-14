@@ -847,6 +847,10 @@ void host_gate_publish_drawable_size(int w, int h) {
 bool host_pointer_can_capture(bool key, bool inside, bool click, bool escape, bool page) {
     return key && inside && click && !escape && !page;
 }
+bool host_pointer_confinement_wanted(bool captured, int window_mode) {
+    (void)window_mode;
+    return captured;
+}
 bool host_pointer_at_resize_edge(double x, double y, double w, double h, double margin) {
     return w > 0 && h > 0 && (x < margin || y < margin || x >= w - margin || y >= h - margin);
 }

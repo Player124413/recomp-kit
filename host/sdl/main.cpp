@@ -307,12 +307,12 @@ void update_platform_pointer_capture() {
         g_pointer_hidden = false;
     }
 
-    // A regular window retains its resize/desktop escape behavior. Borderless
-    // and fullscreen need real confinement; hiding alone leaves OS hot edges
-    // reachable.
+    // A regular window confines too; hiding alone lets the OS pointer leave
+    // the frame. Dragging into the resize margin releases capture so the
+    // window's resize edges remain reachable.
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
-    HostRect rect = want && g_window_mode != 0 && g_window
+    HostRect rect = host_pointer_confinement_wanted(want, g_window_mode) && g_window
                         ? host_pointer_confinement_rect({0, 0, double(bw), double(bh)})
                         : HostRect{};
     if (g_window && (rect.x != g_pointer_confinement.x || rect.y != g_pointer_confinement.y ||

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- SDL: confine a captured pointer in a plain window as well as borderless
+  and fullscreen modes. Click inside to capture, hold Escape to release,
+  and drag into the window's resize margin to release capture for resizing.
+
 - Android reads game data from SDL's external files directory under `game/`,
   reads `switches.txt` beside it, and defaults to a writable `profile/` there.
   Missing data logs the expected executable and `adb push` command, then exits.
