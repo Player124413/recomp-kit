@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Touch: taps press and release at the finger's position, including near a
+  window edge, without a cursor nudge after release. Held fingers and drags
+  retain edge snapping so holding an edge still scrolls; lifting an edge
+  hold moves the cursor back inside to stop scrolling.
+
 - Load saved host settings before symbol-table validation, so window mode and
   other profile settings survive relaunch even without a usable symbol table.
   Hide renderer and native Options rows from the fallback settings page until

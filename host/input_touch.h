@@ -23,7 +23,7 @@ constexpr uint64_t kTouchClickHoldNs = 90ull * 1000000ull;
 constexpr uint32_t kTouchClickHoldFrames = 2;
 // A game that stops presenting still gets its release after this long.
 constexpr uint64_t kTouchClickHoldMaxNs = 400ull * 1000000ull;
-// A finger this close to a side of the window is placed exactly on it: games
+// A held or dragging finger this close to a side is placed exactly on it: games
 // scroll when the cursor sits on the outermost row or column, which a finger
 // on a bezel never quite reaches. When such a hold ends the cursor is moved
 // back inside by kTouchEdgeRelease so the scrolling stops with the finger.
@@ -140,7 +140,7 @@ class TouchMapper {
     uint32_t presents_ = 0;
     uint32_t presents_at_press_ = 0;
     bool release_ready(uint64_t now) const;
-    void place(std::vector<TouchAction> *out, double x, double y);
+    void place(std::vector<TouchAction> *out, double x, double y, bool snap = true);
     void click(std::vector<TouchAction> *out, int button, double x, double y, uint64_t now);
     void end_edge_hold(std::vector<TouchAction> *out);
     void release_held(std::vector<TouchAction> *out);
