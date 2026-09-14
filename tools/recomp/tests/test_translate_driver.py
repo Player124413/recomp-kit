@@ -1101,3 +1101,58 @@ def test_pruned_cleanup_alias_falls_back_to_listed_span(tmp_path, monkeypatch, l
         for target in (epilogue, epilogue + 0x10):
             assert "L_%08x:" % target in body
             assert "case %s: goto L_%08x;" % (T.hexlit(target), target) in body
+
+
+def test_pushed_data_fragment_cannot_hide_later_called_method(tmp_path, monkeypatch):
+    """A span PUSH argument is still a guess until its whole sweep is code.
+
+    The listed owner pushes a short, headerless string. Its speculative
+    continuation sweep crosses an omitted method, only later named by a
+    direct CALL from a relocated initializer. The literal fragment must be
+    withdrawn without disturbing the owner's original instructions.
+    """
+    import struct
+    entry, literal, method, next_fn, callback, slot = (
+        0x00601000, 0x0060102c, 0x00601030, 0x00601100, 0x00601200, 0x00601800)
+    blocks = {
+        entry: b"\x68" + struct.pack("<I", literal) + b"\x58\xc3",
+        literal: b"\x5c\x00\x00\x00",
+        method: b"\x55\x8b\xec\xb8\x2a\0\0\0\x5d\xc3",
+        next_fn: b"\xc3",
+        callback: b"\xe8" + struct.pack("<i", method - callback - 5) + b"\xc3",
+        slot: struct.pack("<I", callback),
+    }
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {callback: slot}
+    img.code_pointers = lambda *args, **kwargs: (set(), set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % callback in text
+    assert "void fn_%08x(" % method in text
+    assert "IN AL,DX" not in text
+    assert "void fn_%08x(" % literal not in text
+    assert "goto L_%08x" % literal not in text
+    assert "CALL_FN(%08x)" % method in text
+
+
+def test_span_fragment_keeps_its_pushed_interior_alias(tmp_path, monkeypatch):
+    """An independently scanned epilogue is still the fragment's own RET target."""
+    import struct
+    entry, fragment, epilogue, next_fn, slot = (
+        0x00601000, 0x00601020, 0x00601030, 0x00601100, 0x00601800)
+    blocks = {
+        entry: b"\x68" + struct.pack("<I", fragment) + b"\xc3",
+        fragment: b"\x68" + struct.pack("<I", epilogue)
+                  + b"\x85\xc0\x74" + bytes([epilogue - fragment - 9]) + b"\xc3",
+        epilogue: b"\xb8\x2a\0\0\0\xc3", next_fn: b"\xc3",
+        slot: struct.pack("<I", epilogue),
+    }
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {epilogue: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (
+        epilogue, entry, T.hexlit(epilogue)) in text
+    body = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
+    assert "case %s: goto L_%08x;" % (T.hexlit(epilogue), epilogue) in body
+    assert "L_%08x:" % epilogue in body

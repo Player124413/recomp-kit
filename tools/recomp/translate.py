@@ -2945,6 +2945,10 @@ def main():
         register(fn)
 
     listed_functions = {fn.addr for fn in parsed}
+    original_instructions = {fn: set(fn.addrs) for fn in parsed}
+    span_guesses = {}
+    withdrawn_span_guesses = set()
+    span_guess_instructions = defaultdict(set)
     # Listing size ends at its last exported instruction, which may be an
     # early finally RET. Only the next original listing bounds its full span;
     # newly discovered entries must not shrink that bound during recovery.
@@ -3041,6 +3045,69 @@ def main():
         prefix = Function(fn.addr, fn.name, last_end - fn.addr, insns)
         prefix.measure(image)
         return prefix if accepts(prefix) else None
+
+    def truncate_span_guess(target):
+        """A PUSH guess does not inherit the listed owner's entry evidence.
+
+        An omitted fragment can precede a real method not discovered until a
+        later callback pass. Apply the same boundary/terminator rule to that
+        fragment while preserving the original listing and unrelated landings.
+        """
+        keys = set()
+        for addr in range(max(image.base, target - 14), target + 1):
+            if addr in span_guess_instructions and addr <= target < (image.insn_end(addr, "") or addr + 1):
+                keys.update(span_guess_instructions[addr])
+        changed = False
+        for key in keys:
+            fn, start = key
+            fragment = span_guesses.get(key)
+            if fragment is None or target <= start or target in original_instructions.get(fn, ()):
+                continue
+            if target in Translator.pushed_continuations(fn):
+                continue  # The fragment owns this RET epilogue, even if a scan also names it.
+            prefix = prefix_before(fragment, target)
+            removed = fragment.addrs - (prefix.addrs if prefix is not None else set())
+            for addr in fragment.addrs:
+                span_guess_instructions[addr].discard(key)
+            if prefix is None:
+                del span_guesses[key]
+                withdrawn_span_guesses.add(start)
+            else:
+                span_guesses[key] = prefix
+                for addr in prefix.addrs:
+                    span_guess_instructions[addr].add(key)
+            retained = original_instructions.get(fn, set()).copy()
+            for (body, _), other in span_guesses.items():
+                if body is fn:
+                    retained.update(other.addrs)
+            removed -= retained
+            if not removed:
+                continue
+            for i, ins in enumerate(fn.insns):
+                if ins.addr not in removed:
+                    continue
+                if owner.get(ins.addr) is fn:
+                    del owner[ins.addr]
+                hi = min(image.end, fn.fallthrough[i] or ins.addr + 1)
+                lo = max(image.base, ins.addr + 1)
+                if lo < hi:
+                    interior_bytes[lo - image.base:hi - image.base] = b"\0" * (hi - lo)
+            trimmed = Function(fn.addr, fn.name, fn.size,
+                               [ins for ins in fn.insns if ins.addr not in removed])
+            trimmed.measure(image)
+            fn.__dict__.update(trimmed.__dict__)
+            for addr in removed:
+                if extra.get(addr) is fn:
+                    del extra[addr]
+                    if addr not in bodies:
+                        all_addrs.discard(addr)
+                if finally_owners.get(addr) is fn:
+                    del finally_owners[addr]
+            for other in parsed:
+                if other is not fn and other.addrs & removed:
+                    register(other)
+            changed = True
+        return changed
 
     def truncate_speculative(target):
         """Remove speculative coverage at another candidate, regardless of rank.
@@ -3143,9 +3210,13 @@ def main():
         # a continuation, not stronger evidence for the speculative entry.
         seh_cleanup = (why == "seh" and t in owner
                        and owner[t] in finally_owners.values())
+        fragment_truncated = (truncate_span_guess(t)
+                              if (independent or not continuation) and not own_interior else False)
+        if fragment_truncated:
+            remember_candidate(t)
         truncated = (truncate_speculative(t)
                      if independent and not own_interior and t not in finally_owners
-                     and not seh_cleanup else False)
+                     and not seh_cleanup else False) or fragment_truncated
         if truncated:
             listed = set(owner)
         if (strength == 1 and t not in owner and image.is_exec(t)
@@ -3279,7 +3350,9 @@ def main():
         span_end = span_ends.get(fn.addr)
         stubs = set(seh_frame_sites(fn).values())
 
-        def adopt(target, in_span=False):
+        def adopt(target, in_span=False, guessed=False):
+            if guessed and target in withdrawn_span_guesses:
+                return False
             prior = owner.get(target)
             # A pointer guess may own a real suffix behind an invalid prefix.
             # Follow only the cleanup/epilogue's reachable instructions, not
@@ -3292,11 +3365,19 @@ def main():
                     # Existing fragments in the span are not new function
                     # boundaries. Follow normal edges through them, while the
                     # handler stubs retain their separate dispatcher entries.
-                    insns = image.recover(target, stubs, bounds=(fn.addr, span_end))
+                    lo, hi = bisect_right(candidate_starts, target), bisect_right(candidate_starts, span_end)
+                    boundaries = (set(candidate_starts[lo:hi]) - fn.addrs) if guessed else ()
+                    insns = image.recover(target, stubs, bounds=(fn.addr, span_end),
+                                          boundaries=boundaries)
                     candidate = Function(target, "continuation", 0, insns)
                     candidate.measure(image)
                     if not insns or not accepts(candidate):
                         return False
+                    if guessed and fn in original_instructions:
+                        key = (fn, target)
+                        span_guesses[key] = candidate
+                        for addr in candidate.addrs:
+                            span_guess_instructions[addr].add(key)
                 else:
                     blocked = set(owner) - prior.addrs if prior is not None else owner
                     insns = image.recover(target, blocked)
@@ -3352,7 +3433,7 @@ def main():
                     if op.kind == "imm" and fn.addr <= op.imm < span_end:
                         targets.add(op.imm)
             for target in sorted(targets - stubs):
-                changed |= adopt(target, in_span=True)
+                changed |= adopt(target, in_span=True, guessed=True)
             # The normal path can join the suffix of an except landing before
             # reaching a finally cleanup. Seed those in-span landings into the
             # same owner too, retaining their callable alternate entries.
@@ -3762,7 +3843,8 @@ def main():
                 if ins.mnem == "PUSH" and ins.ops:
                     op = parse_operand(ins.ops[0])
                     if op.kind == "imm" and home.addr <= op.imm < span_ends[home.addr]:
-                        targets.add(op.imm)
+                        if op.imm not in withdrawn_span_guesses:
+                            targets.add(op.imm)
         for stub in seh_frame_sites(fn).values():
             targets.add(stub)
             landings, table_range = image.seh_landings(stub)
