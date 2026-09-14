@@ -2586,12 +2586,12 @@ static void test_callbacks(X86 *c) {
     while (call_import(c, "USER32.dll", "PeekMessageA", {msg, hwnd, 0x0003, 0x0005, 1})) {
     }
     wr32(msg + 0, hwnd);
-    wr32(msg + 4, 0x0113); // WM_TIMER
+    wr32(msg + 4, 0x8001); // WM_APP+1: WM_TIMER lParam names a callback now
     wr32(msg + 8, 7);
     wr32(msg + 12, 0x1234);
     uint32_t esp_before = c->r[R_ESP];
     uint32_t result = call_import(c, "USER32.dll", "DispatchMessageA", {msg});
-    check(g_callback_hits == 1 && g_callback_args[1] == 0x0113 && g_callback_args[2] == 7 &&
+    check(g_callback_hits == 1 && g_callback_args[1] == 0x8001 && g_callback_args[2] == 7 &&
               g_callback_args[3] == 0x1234,
           "DispatchMessageA passed hwnd, message, wParam, lParam");
     check(result == 0x600d, "DispatchMessageA returned the WNDPROC result");
@@ -4611,6 +4611,118 @@ static void test_user32_vcl() {
     }
 }
 
+static uint32_t g_vcl_timer_calls, g_vcl_enum_calls;
+static void vcl_timer_callback(X86 *c) {
+    check(arg(c, 1) == 0x113 && arg(c, 2) == 9 && arg(c, 3) == 220, "timer callback arguments");
+    ++g_vcl_timer_calls;
+    set_eax(c, 0);
+}
+static void vcl_enum_callback(X86 *c) {
+    check(arg(c, 1) == 0x5678, "window enumeration lParam");
+    ++g_vcl_enum_calls;
+    set_eax(c, 1);
+}
+static uint32_t vcl_wait_calls;
+static bool vcl_wait_once() {
+    ++vcl_wait_calls;
+    return false;
+}
+static void test_user32_window_model() {
+    section("window model lifetime, callbacks and waits");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00310000, msg = s + 0x500;
+    gm_put_wstr(s, "TVclTestWindow", 32);
+    uint32_t hwnd = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                {0, s, 0, 0x10000000, 10, 20, 200, 100, 0, 0, IMAGE_BASE, 0});
+    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s, 0, 0x50000000, 3, 4, 50, 30, hwnd, 42, IMAGE_BASE, 0});
+    check(child && call_import(&c, "USER32.dll", "GetParent", {child}) == hwnd &&
+              call_import(&c, "USER32.dll", "IsChild", {hwnd, child}) == 1,
+          "child parent relationship");
+    check(call_import(&c, "USER32.dll", "GetDlgCtrlID", {child}) == 42, "child control ID");
+    wr32(s + 0x100, 0);
+    wr32(s + 0x104, 0);
+    call_import(&c, "USER32.dll", "MapWindowPoints", {child, 0, s + 0x100, 1});
+    check(rd32(s + 0x100) == 13 && rd32(s + 0x104) == 24, "nested client origin maps to screen");
+    check(call_import(&c, "USER32.dll", "SetParent", {hwnd, child}) == 0 &&
+              call_import(&c, "USER32.dll", "GetParent", {hwnd}) == 0,
+          "parent cycles are rejected");
+    uint32_t cb = imports_alloc_trampoline("test", "vcl_enum", vcl_enum_callback, 2);
+    g_vcl_enum_calls = 0;
+    check(call_import(&c, "USER32.dll", "EnumChildWindows", {hwnd, cb, 0x5678}) == 1 &&
+              g_vcl_enum_calls == 1,
+          "enumerate children through guest dispatch");
+    check(call_import(&c, "USER32.dll", "EnableWindow", {child, 0}) == 0 &&
+              call_import(&c, "USER32.dll", "IsWindowEnabled", {child}) == 0 &&
+              call_import(&c, "USER32.dll", "EnableWindow", {child, 1}) == 1,
+          "EnableWindow returns previous disabled state");
+    call_import(&c, "USER32.dll", "SetFocus", {child});
+    check(call_import(&c, "USER32.dll", "GetFocus", {}) == child, "focus state");
+    call_import(&c, "USER32.dll", "SetCapture", {child});
+    check(call_import(&c, "USER32.dll", "GetCapture", {}) == child &&
+              call_import(&c, "USER32.dll", "ReleaseCapture", {}) == 1 &&
+              call_import(&c, "USER32.dll", "GetCapture", {}) == 0,
+          "capture state");
+    call_import(&c, "USER32.dll", "ShowWindow", {hwnd, 2});
+    check(call_import(&c, "USER32.dll", "IsIconic", {hwnd}) == 1, "minimized state");
+    call_import(&c, "USER32.dll", "ShowWindow", {hwnd, 3});
+    wr32(s + 0x200, 44);
+    check(call_import(&c, "USER32.dll", "GetWindowPlacement", {hwnd, s + 0x200}) == 1 &&
+              rd32(s + 0x208) == 3 && call_import(&c, "USER32.dll", "IsZoomed", {hwnd}) == 1,
+          "placement and maximized state");
+    uint32_t desktop = call_import(&c, "USER32.dll", "GetDesktopWindow", {});
+    check(desktop && call_import(&c, "USER32.dll", "GetWindowRect", {desktop, s + 0x300}) == 1 &&
+              rd32(s + 0x308) == call_import(&c, "USER32.dll", "GetSystemMetrics", {0}),
+          "desktop rectangle matches display");
+    check(call_import(&c, "USER32.dll", "MonitorFromWindow", {hwnd, 0}) == 1, "single monitor");
+    wr32(s + 0x400, 104);
+    check(call_import(&c, "USER32.dll", "GetMonitorInfoW", {1, s + 0x400}) == 1 &&
+              rd32(s + 0x40c) == rd32(s + 0x308),
+          "monitor geometry");
+    while (call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1})) {
+    }
+    host_set_time_source_pinned(200, 20);
+    cb = imports_alloc_trampoline("test", "vcl_timer", vcl_timer_callback, 4);
+    g_vcl_timer_calls = 0;
+    call_import(&c, "USER32.dll", "SetTimer", {hwnd, 9, 10, cb});
+    host_pinned_clock_advance();
+    check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x113, 0x113, 0}) == 1 &&
+              g_vcl_timer_calls == 0,
+          "timer callback waits for dispatch");
+    check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x113, 0x113, 1}) == 1,
+          "peek does not duplicate timer");
+    call_import(&c, "USER32.dll", "DispatchMessageW", {msg});
+    check(g_vcl_timer_calls == 1 &&
+              call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x113, 0x113, 1}) == 0,
+          "callback runs once through recomp_call");
+    call_import(&c, "USER32.dll", "KillTimer", {hwnd, 9});
+    host_clear_time_source();
+    host_set_message_waiter(vcl_wait_once);
+    vcl_wait_calls = 0;
+    check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {2, 0, 0, 0, 0}) == 0x102 &&
+              vcl_wait_calls == 1,
+          "empty wait pumps once then times out");
+    host_post_message(hwnd, 0x8001, 0, 0);
+    check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx", {2, 0, 0, 0, 0}) == 2 &&
+              vcl_wait_calls == 1,
+          "queued message returns count without pumping");
+    call_import(&c, "USER32.dll", "WaitMessage", {});
+    check(vcl_wait_calls == 2, "WaitMessage pumps once");
+    host_set_message_waiter(nullptr);
+    host_set_key_state(65, true);
+    check(call_import(&c, "USER32.dll", "GetKeyboardState", {s + 0x600}) == 1 &&
+              g_mem[s + 0x641] == 0x80,
+          "keyboard state uses host input bridge");
+    host_set_key_state(65, false);
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+    check(call_import(&c, "USER32.dll", "IsWindow", {child}) == 0 &&
+              call_import(&c, "USER32.dll", "GetFocus", {}) == 0,
+          "parent destruction retires children and focus");
+    while (call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1})) {
+    }
+}
+
 static void test_delphi_dlls() {
     section("Delphi DLLs");
     X86 c;
@@ -4694,6 +4806,7 @@ int main(int argc, char **argv) {
     test_delphi_misc();
     test_delphi_controls();
     test_user32_vcl();
+    test_user32_window_model();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

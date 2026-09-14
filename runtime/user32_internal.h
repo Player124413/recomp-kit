@@ -69,7 +69,14 @@ extern int32_t g_cursor_x, g_cursor_y;
 extern uint8_t g_key_state[256];
 extern bool (*g_message_waiter)();
 extern Msg last_message;
+constexpr uint32_t desktop_handle = 0x00020000;
+void pump_window_timers();
+void window_created(uint32_t hwnd);
+bool destroy_window(X86 *c, uint32_t hwnd);
+void client_origin(uint32_t hwnd, int32_t *x, int32_t *y);
 void display_rect(uint32_t out);
 void alias_ansi(X86 *c, const char *name);
 } // namespace user32
 void user32_wide_register();
+
+void user32_vcl_register();

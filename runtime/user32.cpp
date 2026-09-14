@@ -66,6 +66,17 @@ std::string class_key(uint32_t p, bool wide) {
 }
 
 Window *find_window(uint32_t hwnd) {
+    if (hwnd == desktop_handle) {
+        static Window desktop;
+        uint32_t w = 1024, h = 768, bpp = 32;
+        ddraw_display_mode(&w, &h, &bpp);
+        desktop.hwnd = desktop_handle;
+        desktop.w = w;
+        desktop.h = h;
+        desktop.visible = true;
+        desktop.unicode = true;
+        return &desktop;
+    }
     auto it = windows().find(hwnd);
     return it == windows().end() ? nullptr : &it->second;
 }
@@ -332,6 +343,7 @@ void create_window_named(X86 *c, bool wide) {
                 g_window_shown(hwnd);
         }
     }
+    window_created(hwnd);
     set_eax(c, hwnd);
 }
 
@@ -340,16 +352,7 @@ void u_CreateWindowExA(X86 *c) {
 }
 
 void u_DestroyWindow(X86 *c) {
-    uint32_t hwnd = arg(c, 0);
-    if (!find_window(hwnd)) {
-        set_eax(c, 0);
-        return;
-    }
-    host_dispatch_to_wndproc(c, hwnd, 0x0002 /* WM_DESTROY */, 0, 0);
-    windows().erase(hwnd);
-    if (g_main_hwnd == hwnd)
-        g_main_hwnd = windows().empty() ? 0 : windows().begin()->first;
-    set_eax(c, 1);
+    set_eax(c, destroy_window(c, arg(c, 0)));
 }
 
 // SW_HIDE is the only command that hides; every other one shows the window in
@@ -363,7 +366,21 @@ void u_ShowWindow(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    w->visible = arg(c, 1) != 0; // SW_HIDE == 0
+    uint32_t cmd = arg(c, 1);
+    w->show_cmd = cmd;
+    w->visible = cmd != 0; // SW_HIDE == 0
+    if (w->visible)
+        w->style |= WS_VISIBLE;
+    else
+        w->style &= ~WS_VISIBLE;
+    if (cmd == 2 || cmd == 6 || cmd == 7 || cmd == 11) {
+        w->style |= 0x20000000u;
+        w->style &= ~0x01000000u;
+    } else if (cmd == 3) {
+        w->style |= 0x01000000u;
+        w->style &= ~0x20000000u;
+    } else if (cmd == 1 || cmd == 9)
+        w->style &= ~0x21000000u;
     set_eax(c, was ? 1 : 0);
     if (!was && w->visible) {
         w->update_pending = true;
@@ -420,10 +437,12 @@ void u_GetWindowRect(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    wr32(r + 0, (uint32_t)w->x);
-    wr32(r + 4, (uint32_t)w->y);
-    wr32(r + 8, (uint32_t)(w->x + w->w));
-    wr32(r + 12, (uint32_t)(w->y + w->h));
+    int32_t x, y;
+    client_origin(w->hwnd, &x, &y);
+    wr32(r, x);
+    wr32(r + 4, y);
+    wr32(r + 8, x + w->w);
+    wr32(r + 12, y + w->h);
     set_eax(c, 1);
 }
 
@@ -480,37 +499,19 @@ void u_ScreenToClient(X86 *c) {
     set_eax(c, w ? 1 : 0);
 }
 // One window is ever active and focused: the game's main window.
-void u_GetActiveWindow(X86 *c) {
-    set_eax(c, g_main_hwnd);
-}
-void u_SetFocus(X86 *c) {
-    set_eax(c, find_window(arg(c, 0)) ? g_main_hwnd : 0);
-}
+
 void u_GetMenu(X86 *c) {
     set_eax(c, 0);
 }
-void u_IsIconic(X86 *c) {
-    set_eax(c, 0);
-}
+
 void u_OpenIcon(X86 *c) {
     set_eax(c, 1);
 }
-void u_SetForegroundWindow(X86 *c) {
-    set_eax(c, 1);
-}
+
 void u_FindWindowA(X86 *c) {
     set_eax(c, 0);
 }
-void u_SetActiveWindow(X86 *c) {
-    // Single-window runtime: the main window is always the active one.
-    set_eax(c, host_main_window());
-}
-void u_WaitMessage(X86 *c) {
-    // A blocking wait in the original; here a scheduling checkpoint so the
-    // service threads run, then return as if a message arrived.
-    sched_checkpoint();
-    set_eax(c, 1);
-}
+
 void u_ClientToScreen(X86 *c) {
     Window *w = find_window(arg(c, 0));
     uint32_t p = arg(c, 1);
@@ -543,9 +544,6 @@ void u_InvalidateRect(X86 *c) {
     }
     set_eax(c, 1);
 }
-void u_GetForegroundWindow(X86 *c) {
-    set_eax(c, g_main_hwnd);
-}
 
 void u_SetWindowLongA(X86 *c) {
     Window *w = find_window(arg(c, 0));
@@ -563,6 +561,14 @@ void u_SetWindowLongA(X86 *c) {
     case -6:
         old = w->hinstance;
         w->hinstance = v;
+        break;
+    case -8:
+        old = w->parent;
+        w->parent = v;
+        break;
+    case -12:
+        old = w->id;
+        w->id = v;
         break;
     case -16:
         old = w->style;
@@ -599,6 +605,12 @@ void u_GetWindowLongA(X86 *c) {
         return;
     case -6:
         set_eax(c, w->hinstance);
+        return;
+    case -8:
+        set_eax(c, w->parent);
+        return;
+    case -12:
+        set_eax(c, w->id);
         return;
     case -16:
         set_eax(c, w->style);
@@ -663,6 +675,7 @@ void peek_message(X86 *c) {
     // shims get their tick - a streamed sound is refilled by calling the guest
     // back, and only a thread holding the scheduler baton may do that.
     host_pump_timers(c);
+    pump_window_timers();
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3), flags = arg(c, 4);
     for (auto it = queue().begin(); it != queue().end(); ++it) {
@@ -699,6 +712,7 @@ void u_GetMessageA(X86 *c) {
     }
 
     for (;;) {
+        pump_window_timers();
         for (auto it = queue().begin(); it != queue().end(); ++it) {
             if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
                 continue;
@@ -710,6 +724,7 @@ void u_GetMessageA(X86 *c) {
             return;
         }
         host_pump_timers(c);
+        pump_window_timers();
         // Without a host there is nothing that could ever post a message, so
         // blocking would be a hang with no way out. That is the one case where
         // the documented error is the honest answer.
@@ -774,7 +789,10 @@ void dispatch_message(X86 *c) {
     }
     uint32_t hwnd = rd32(p + 0), msg = rd32(p + 4);
     uint32_t wp = rd32(p + 8), lp = rd32(p + 12);
-    set_eax(c, host_dispatch_to_wndproc(c, hwnd, msg, wp, lp));
+    if (msg == 0x113 && lp)
+        set_eax(c, guest_call(c, lp, hwnd, msg, wp, rd32(p + 16)));
+    else
+        set_eax(c, host_dispatch_to_wndproc(c, hwnd, msg, wp, lp));
 }
 
 void u_PostMessageA(X86 *c) {
@@ -812,10 +830,7 @@ void def_window_proc(X86 *c, bool wide) {
         set_eax(c, 1);
         return;
     case 0x0010: // WM_CLOSE -> DestroyWindow
-        host_dispatch_to_wndproc(c, hwnd, 0x0002 /* WM_DESTROY */, 0, 0);
-        windows().erase(hwnd);
-        if (g_main_hwnd == hwnd)
-            g_main_hwnd = windows().empty() ? 0 : windows().begin()->first;
+        destroy_window(c, hwnd);
         host_post_message(0, 0x0012 /* WM_QUIT */, 0, 0);
         break;
     default:
@@ -1201,7 +1216,6 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "ClientToScreen", 2, u_ClientToScreen},
     {"USER32.dll", "SetRect", 5, u_SetRect},
     {"USER32.dll", "InvalidateRect", 3, u_InvalidateRect},
-    {"USER32.dll", "GetForegroundWindow", 0, u_GetForegroundWindow},
     {"USER32.dll", "SetWindowLongA", 3, u_SetWindowLongA},
     {"USER32.dll", "GetWindowLongA", 2, u_GetWindowLongA},
     {"USER32.dll", "SetWindowTextA", 2, u_SetWindowTextA},
@@ -1209,7 +1223,6 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "CreateDialogParamA", 5, u_CreateDialogParamA},
     {"USER32.dll", "PeekMessageA", 5, u_PeekMessageA},
     {"USER32.dll", "GetMessageA", 4, u_GetMessageA},
-    {"USER32.dll", "WaitMessage", 0, u_WaitMessage},
     {"USER32.dll", "GetMessagePos", 0, u_GetMessagePos},
     {"USER32.dll", "GetMessageTime", 0, u_GetMessageTime},
     {"USER32.dll", "TranslateMessage", 1, u_TranslateMessage},
@@ -1224,14 +1237,9 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
     {"USER32.dll", "CreateIconIndirect", 1, u_CreateIconIndirect},
     {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
-    {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},
-    {"USER32.dll", "SetFocus", 1, u_SetFocus},
     {"USER32.dll", "GetMenu", 1, u_GetMenu},
-    {"USER32.dll", "IsIconic", 1, u_IsIconic},
     {"USER32.dll", "OpenIcon", 1, u_OpenIcon},
-    {"USER32.dll", "SetForegroundWindow", 1, u_SetForegroundWindow},
     {"USER32.dll", "FindWindowA", 2, u_FindWindowA},
-    {"USER32.dll", "SetActiveWindow", 1, u_SetActiveWindow},
     {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
     {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
     {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},
