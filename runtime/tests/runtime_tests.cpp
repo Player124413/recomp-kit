@@ -576,6 +576,36 @@ static void test_allocator() {
     heap_free(keep);
     check(heap_check().empty(), "heap still consistent: %s",
           heap_check().empty() ? "yes" : heap_check().c_str());
+
+    // Check the actual refusal log in a child, without redirecting this
+    // process's stderr or disturbing its current guest register file.
+    char dir[] = "build/recomp/heap-refusal-XXXXXX", exe[4096];
+    if (check(os_mkdtemp(dir) == 0, "created a heap diagnostic directory")) {
+        std::string path = std::string(dir) + "/refusal.log";
+        check(os_exe_path(exe, sizeof exe) == 0, "heap diagnostic knows its executable");
+        const char *args[] = {exe, "--child-heap-refusal", path.c_str(), nullptr};
+        int64_t pid = 0;
+        int code = -1;
+        check(os_spawn(args, &pid) == 0 && os_wait(pid, &code) == 0 && code == 0,
+              "heap refusal child exits cleanly (exit %d)", code);
+        std::string text;
+        if (FILE *log = fopen(path.c_str(), "r")) {
+            char line[1024];
+            while (fgets(line, sizeof line, log))
+                text += line;
+            fclose(log);
+        }
+        check(text.find("refusing a 4294967295 byte request") != std::string::npos,
+              "refusal log retains the requested size");
+        check(text.find("EAX=13579bdf") != std::string::npos &&
+                  text.find("EDI=2468ace0") != std::string::npos &&
+                  text.find("ESP=") != std::string::npos && text.find("EIP=") != std::string::npos,
+              "refusal log includes the active guest registers");
+        char frame[64];
+        snprintf(frame, sizeof frame, "frame 0 returns to %08x", loader_image_base() + 0x1234);
+        check(text.find(frame) != std::string::npos, "refusal log includes the guest return chain");
+        remove_tree(dir);
+    }
 }
 
 static void test_heap_shims(X86 *c) {
@@ -5107,6 +5137,25 @@ int main(int argc, char **argv) {
         printf("runtime_tests: no game image at %s; the game-backed checks were skipped\n",
                RECOMP_DEVELOPER_EXE);
         return 0;
+    }
+
+    if (argc == 3 && strcmp(argv[1], "--child-heap-refusal") == 0) {
+        if (!freopen(argv[2], "w", stderr))
+            return 2;
+        mem_init();
+        imports_init();
+        if (!loader_load(nullptr))
+            return 3;
+        X86 *c = loader_context();
+        loader_init_context(c);
+        c->r[R_EAX] = 0x13579bdf;
+        c->r[R_EDI] = 0x2468ace0;
+        c->r[R_EBP] = c->r[R_ESP] - 64;
+        wr32(c->r[R_EBP], 0);
+        wr32(c->r[R_EBP] + 4, loader_image_base() + 0x1234);
+        c->r[R_ESP] -= 96;
+        wr32(c->r[R_ESP], loader_image_base() + 0x2345);
+        return heap_alloc(0xffffffffu) == 0 ? 0 : 4;
     }
 
     test_loader();

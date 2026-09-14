@@ -1,5 +1,7 @@
 #include "seh.h"
 #include "memory.h"
+#include "win32.h"
+#include "loader.h"
 
 #include "../platform/os.h"
 #include <algorithm>
@@ -259,6 +261,29 @@ uint32_t heap_alloc(uint32_t size, bool zero, uint32_t align) {
     if (!size_is_sane(size)) {
         LOGW("heap_alloc: refusing a %u byte request, the arena is %u bytes", size,
              HEAP_ARENA_BYTES);
+        // Oversized requests often originate in a corrupted guest length.
+        // Use this thread's register file, including worker-thread callers.
+        if (const X86 *c = guest_current_context()) {
+            LOGW("heap_alloc: EIP=%08x EAX=%08x ECX=%08x EDX=%08x EBX=%08x "
+                 "ESP=%08x EBP=%08x ESI=%08x EDI=%08x",
+                 c->eip, c->r[R_EAX], c->r[R_ECX], c->r[R_EDX], c->r[R_EBX], c->r[R_ESP],
+                 c->r[R_EBP], c->r[R_ESI], c->r[R_EDI]);
+            auto chain = win32_return_chain(c->r[R_EBP], 12);
+            for (size_t i = 0; i < chain.size(); ++i)
+                LOGW("  frame %zu returns to %08x", i, chain[i]);
+            // Frameless RTL helpers do not appear in the EBP chain. Include
+            // stack words preceded by a CALL, as the exception diagnostic does.
+            auto candidates = win32_stack_return_candidates(c->r[R_ESP], 0x400, loader_image_base(),
+                                                            loader_image_limit(), 24);
+            std::string line;
+            for (uint32_t ret : candidates) {
+                char word[16];
+                snprintf(word, sizeof word, " %08x", ret);
+                line += word;
+            }
+            if (!line.empty())
+                LOGW("  return addresses on the stack, newest first:%s", line.c_str());
+        }
         return 0;
     }
     if (align < 16)
