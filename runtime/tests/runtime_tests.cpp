@@ -1670,6 +1670,58 @@ static void fake_guest_fn(X86 *c) {
     set_eax(c, 0x600d);
 }
 
+static std::vector<uint32_t> g_geometry_messages;
+static uint32_t g_geometry_width, g_geometry_height;
+static bool g_geometry_suppress;
+static void geometry_wndproc(X86 *c) {
+    uint32_t hwnd = arg(c, 0), msg = arg(c, 1), wp = arg(c, 2), lp = arg(c, 3);
+    if (msg == 0x47 || msg == 3 || msg == 5)
+        g_geometry_messages.push_back(msg);
+    if (msg == 5) {
+        g_geometry_width = lp & 0xffff;
+        g_geometry_height = lp >> 16;
+    }
+    if (msg == 0x47 && g_geometry_suppress)
+        set_eax(c, 0);
+    else
+        call_import(c, "USER32.dll", "DefWindowProcW", {hwnd, msg, wp, lp});
+}
+
+static void test_synchronous_geometry(X86 *c) {
+    section("USER32 synchronous window geometry");
+    uint32_t proc = imports_alloc_trampoline("test", "geometry_wndproc", geometry_wndproc, 4);
+    uint32_t cls = put_str("GeometryWnd"), wc = scratch_block(40);
+    wr32(wc + 4, proc);
+    wr32(wc + 36, cls);
+    call_import(c, "USER32.dll", "RegisterClassA", {wc});
+    uint32_t hwnd = call_import(c, "USER32.dll", "CreateWindowExA",
+                                {0, cls, cls, 0x80000000u, 0, 0, 320, 240, 0, 0, 0, 0});
+    uint32_t msg = scratch_block(28), rect = scratch_block(16);
+    while (call_import(c, "USER32.dll", "PeekMessageW", {msg, hwnd, 3, 5, 1})) {
+    }
+    g_geometry_messages.clear();
+    g_geometry_width = 320;
+    g_geometry_height = 240;
+    g_geometry_suppress = false;
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, 560, g_geometry_height, 4});
+    check(g_geometry_width == 560 && g_geometry_height == 240,
+          "SetWindowPos updates the window procedure's size before returning");
+    check(g_geometry_messages == std::vector<uint32_t>({0x47, 3, 5}),
+          "WM_WINDOWPOSCHANGED delegates synchronous WM_MOVE and WM_SIZE to DefWindowProc");
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, g_geometry_width, 410, 4});
+    call_import(c, "USER32.dll", "GetClientRect", {hwnd, rect});
+    check(rd32(rect + 8) == 560 && rd32(rect + 12) == 410,
+          "successive width and height changes preserve the first dimension");
+    check(call_import(c, "USER32.dll", "PeekMessageW", {msg, hwnd, 3, 5, 1}) == 0,
+          "SetWindowPos does not leave stale geometry messages queued");
+    g_geometry_messages.clear();
+    g_geometry_suppress = true;
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 30, 40, 600, 420, 4});
+    check(g_geometry_messages == std::vector<uint32_t>({0x47}) && g_geometry_width == 560,
+          "handling WM_WINDOWPOSCHANGED without DefWindowProc suppresses WM_MOVE and WM_SIZE");
+    call_import(c, "USER32.dll", "DestroyWindow", {hwnd});
+}
+
 static void test_windows(X86 *c) {
     section("USER32 windows and messages");
     // The window procedure is a stand-in the test-only recomp_call can reach;
@@ -1701,15 +1753,12 @@ static void test_windows(X86 *c) {
               rd32(msgbuf) == hwnd && rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
               rd32(msgbuf + 12) == ((480u << 16) | 640u),
           "WM_SIZE follows it with the client size (lParam %08x)", rd32(msgbuf + 12));
+    g_callback_hits = 0;
     call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, 800, 600, 0});
-    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
-              rd32(msgbuf + 4) == 0x0003 && rd32(msgbuf + 8) == 0 &&
-              rd32(msgbuf + 12) == ((20u << 16) | 10u),
-          "SetWindowPos posts WM_MOVE");
-    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
-              rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
-              rd32(msgbuf + 12) == ((600u << 16) | 800u),
-          "and WM_SIZE");
+    check(g_callback_hits == 1 && g_callback_args[1] == 0x47,
+          "SetWindowPos sends WM_WINDOWPOSCHANGED synchronously");
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 3, 5, 1}) == 0,
+          "a procedure that consumes WM_WINDOWPOSCHANGED receives no WM_MOVE/WM_SIZE");
     call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, 800, 600, 0});
     check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 3, 5, 1}) == 0,
           "unchanged geometry does not enqueue another WM_MOVE or WM_SIZE");
@@ -5397,6 +5446,7 @@ int main(int argc, char **argv) {
     test_native_draw_waits(c);
     test_midi(c);
     test_windows(c);
+    test_synchronous_geometry(c);
     test_guest_thunks(c);
     test_callbacks(c);
     test_scheduling(c);

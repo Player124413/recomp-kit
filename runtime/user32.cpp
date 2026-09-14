@@ -440,7 +440,23 @@ void u_SetWindowPos(X86 *c) {
         } // SWP_NOSIZE
         LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h,
              w->x, w->y, flags, moved, sized);
-        post_geometry(w->hwnd, w, moved, sized);
+        if (moved || sized) {
+            // SetWindowPos sends this before returning. VCL updates its cached
+            // bounds here before setting another dimension. DefWindowProc is
+            // responsible for the derived WM_MOVE/WM_SIZE notifications.
+            uint32_t pos = heap_alloc(28, true);
+            if (pos) {
+                wr32(pos, w->hwnd);
+                wr32(pos + 4, arg(c, 1));
+                wr32(pos + 8, w->x);
+                wr32(pos + 12, w->y);
+                wr32(pos + 16, w->w);
+                wr32(pos + 20, w->h);
+                wr32(pos + 24, flags | (moved ? 0 : 2) | (sized ? 0 : 1));
+                host_dispatch_to_wndproc(c, w->hwnd, 0x47 /* WM_WINDOWPOSCHANGED */, 0, pos);
+                heap_free(pos);
+            }
+        }
     }
     set_eax(c, 1);
 }
@@ -894,6 +910,20 @@ void def_window_proc(X86 *c, bool wide) {
                        ? host_dispatch_to_wndproc(c, w->parent, msg, arg(c, 2), arg(c, 3))
                        : 1);
         return;
+    case 0x0047: { // WM_WINDOWPOSCHANGED
+        uint32_t pos = arg(c, 3);
+        if (w && pos) {
+            uint32_t flags = rd32(pos + 24);
+            uint32_t move = (uint32_t(uint16_t(w->y)) << 16) | uint16_t(w->x);
+            uint32_t size = (uint32_t(uint16_t(w->h)) << 16) | uint16_t(w->w);
+            if (!(flags & 2))
+                host_dispatch_to_wndproc(c, hwnd, 3 /* WM_MOVE */, 0, move);
+            if (!(flags & 1) && find_window(hwnd))
+                host_dispatch_to_wndproc(c, hwnd, 5 /* WM_SIZE */, 0, size);
+        }
+        set_eax(c, 0);
+        return;
+    }
     case 0x0081: // WM_NCCREATE: TRUE, or creation is cancelled
     case 0x0014: // WM_ERASEBKGND: the background counts as erased
         set_eax(c, 1);

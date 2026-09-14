@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- USER32: SetWindowPos sends WM_WINDOWPOSCHANGED synchronously, with
+  WM_MOVE and WM_SIZE delivered by DefWindowProc, so successive dimension
+  changes see the window procedure's updated bounds.
+
 - Smoke mouse input follows visible, enabled windows in stacking order,
   delivers client coordinates and modifier flags, respects capture, and
   asks inactive windows to activate before a button press.
