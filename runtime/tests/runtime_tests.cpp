@@ -3520,6 +3520,126 @@ static void child_setjmp_abort(X86 *c) {
     os_exit_immediately(0); // reached only if it failed to abort
 }
 
+// Wide file writes use an isolated profile seam, never the developer's inputs.
+static std::vector<int> g_wide_file_ops;
+static const std::string g_wide_root = "build/recomp/wide-profile-test";
+static int wide_resolver(const char *relative, int op, char *out, size_t cap) {
+    g_wide_file_ops.push_back(op);
+    std::string path = g_wide_root + "/" + relative;
+    OsStat st{};
+    if (op == WIN32_FILE_READ && os_stat(path.c_str(), &st) != 0)
+        return 0;
+    if (path.size() + 1 > cap)
+        return 0;
+    memcpy(out, path.c_str(), path.size() + 1);
+    return 1;
+}
+
+static void test_kernel32_wide() {
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t s = 0x00300000, fd = s + 0x1000;
+    section("kernel32 wide files");
+    gm_put_wstr(s, RECOMP_EXECUTABLE, 128);
+    uint32_t attrs = call_import(&c, "KERNEL32.dll", "GetFileAttributesW", {s});
+    check(attrs != 0 && attrs != 0xffffffffu && !(attrs & 0x10), "GetFileAttributesW(exe) = %08x",
+          attrs);
+    uint32_t h = call_import(&c, "KERNEL32.dll", "CreateFileW", {s, 0x80000000u, 1, 0, 3, 0x80, 0});
+    check(h != 0 && h != 0xffffffffu, "CreateFileW opens the executable");
+    if (h && h != 0xffffffffu)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {h});
+    memset(g_mem + fd, 0xa5, 600);
+    gm_put_wstr(s, "*.exe", 128);
+    uint32_t fh = call_import(&c, "KERNEL32.dll", "FindFirstFileW", {s, fd});
+    check(fh != 0 && fh != 0xffffffffu, "FindFirstFileW(*.exe)");
+    if (fh && fh != 0xffffffffu) {
+        std::set<std::string> names;
+        do {
+            std::string found = gm_wstr(fd + 44, 260);
+            check(found.size() > 4 && os_strcasecmp(found.c_str() + found.size() - 4, ".exe") == 0,
+                  "wide find record: %s", found.c_str());
+            check(names.insert(found).second, "wide enumeration advances");
+            check(rd32(fd + 592) == 0xa5a5a5a5, "WIN32_FIND_DATAW ends at byte 592");
+        } while (names.size() < 100 && call_import(&c, "KERNEL32.dll", "FindNextFileW", {fh, fd}));
+        call_import(&c, "KERNEL32.dll", "FindClose", {fh});
+    }
+    gm_put_wstr(s, "folder\\caf\xc3\xa9.txt", 128);
+    uint32_t n = call_import(&c, "KERNEL32.dll", "GetFullPathNameW", {s, 256, fd, fd + 600});
+    check(n > 0 && gm_wstr(rd32(fd + 600)) == "caf\xc3\xa9.txt",
+          "GetFullPathNameW returns a UTF-16 file-part pointer");
+    uint32_t need = call_import(&c, "KERNEL32.dll", "GetFullPathNameW", {s, 0, 0, 0});
+    check(need == n + 1 &&
+              call_import(&c, "KERNEL32.dll", "GetFullPathNameW", {s, 2, fd, 0}) == need,
+          "GetFullPathNameW reports required units including NUL on a short buffer");
+    gm_put_wstr(s, RECOMP_EXECUTABLE, 128);
+    check(call_import(&c, "KERNEL32.dll", "GetFileAttributesExW", {s, 0, fd}) == 1 &&
+              rd32(fd + 32) > 0,
+          "GetFileAttributesExW includes file size");
+    check(call_import(&c, "KERNEL32.dll", "GetSystemDirectoryW", {fd, 128}) == 17 &&
+              gm_wstr(fd) == "C:\\WINDOWS\\SYSTEM",
+          "GetSystemDirectoryW");
+    check(call_import(&c, "KERNEL32.dll", "GetDriveTypeW", {0}) == 3, "GetDriveTypeW");
+    check(call_import(&c, "KERNEL32.dll", "GetLogicalDriveStringsW", {5, fd}) == 4 &&
+              gm_wstr(fd) == "C:\\" && rd16(fd + 8) == 0,
+          "GetLogicalDriveStringsW double terminates");
+    check(call_import(&c, "KERNEL32.dll", "GetVolumeInformationW",
+                      {0, fd, 64, fd + 128, fd + 132, fd + 136, fd + 140, 64}) == 1 &&
+              gm_wstr(fd + 140) == "FAT32",
+          "GetVolumeInformationW");
+    check(call_import(&c, "KERNEL32.dll", "GetDiskFreeSpaceW", {0, fd, fd + 4, fd + 8, fd + 12}) ==
+                  1 &&
+              rd32(fd) && rd32(fd + 4) && rd32(fd + 8) <= rd32(fd + 12),
+          "GetDiskFreeSpaceW geometry");
+    gm_put_wstr(s, "C:", 8);
+    check(call_import(&c, "KERNEL32.dll", "QueryDosDeviceW", {s, fd, 128}) > 0 &&
+              !gm_wstr(fd).empty(),
+          "QueryDosDeviceW(C:)");
+    remove_tree(g_wide_root);
+    mkdir_p(g_wide_root);
+    win32_set_file_ops(wide_resolver, nullptr);
+    gm_put_wstr(s, "caf\xc3\xa9.txt", 128);
+    h = call_import(&c, "KERNEL32.dll", "CreateFileW", {s, 0x40000000u, 0, 0, 2, 0x80, 0});
+    check(h && h != 0xffffffffu, "CreateFileW creates a Unicode path in the write tier");
+    if (h && h != 0xffffffffu)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {h});
+    gm_put_wstr(s + 256, "copy.txt", 128);
+    check(call_import(&c, "KERNEL32.dll", "CopyFileW", {s, s + 256, 1}) == 1, "CopyFileW");
+    check(call_import(&c, "KERNEL32.dll", "SetFileAttributesW", {s, 0x80}) == 1,
+          "SetFileAttributesW");
+    check(call_import(&c, "KERNEL32.dll", "DeleteFileW", {s}) == 1, "DeleteFileW");
+    gm_put_wstr(s, "empty", 128);
+    check(call_import(&c, "KERNEL32.dll", "CreateDirectoryW", {s, 0}) == 1, "CreateDirectoryW");
+    check(call_import(&c, "KERNEL32.dll", "RemoveDirectoryW", {s}) == 1 &&
+              g_wide_file_ops.back() == WIN32_FILE_DELETE,
+          "RemoveDirectoryW uses the delete tier");
+    section("kernel32 wide profile strings");
+    gm_put_wstr(s, "Settings", 64);
+    gm_put_wstr(s + 128, "Windowed", 64);
+    gm_put_wstr(s + 256, "1", 64);
+    gm_put_wstr(s + 384, "wide-test.ini", 64);
+    check(call_import(&c, "KERNEL32.dll", "WritePrivateProfileStringW",
+                      {s, s + 128, s + 256, s + 384}) == 1,
+          "WritePrivateProfileStringW");
+    gm_put_wstr(s + 512, "0", 64);
+    n = call_import(&c, "KERNEL32.dll", "GetPrivateProfileStringW",
+                    {s, s + 128, s + 512, s + 0x800, 64, s + 384});
+    check(n == 1 && gm_wstr(s + 0x800) == "1",
+          "GetPrivateProfileStringW reads back value from write tier");
+    win32_set_file_ops(nullptr, nullptr);
+    remove_tree(g_wide_root);
+    section("kernel32 wide locale");
+    check(call_import(&c, "KERNEL32.dll", "GetThreadLocale", {}) == 0x0409, "GetThreadLocale");
+    check(call_import(&c, "KERNEL32.dll", "GetUserDefaultUILanguage", {}) == 0x0409,
+          "GetUserDefaultUILanguage");
+    section("kernel32 wide resources");
+    uint32_t r = call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 1, 16});
+    check(r != 0, "FindResourceW(VS_VERSION_INFO)");
+    uint32_t size = call_import(&c, "KERNEL32.dll", "SizeofResource", {0, r});
+    uint32_t data = call_import(&c, "KERNEL32.dll", "LoadResource", {0, r});
+    check(size > 0x34 && data != 0 && gm_valid(data, size) && rd32(data + 40) == 0xfeef04bdu,
+          "the loaded resource is a VS_VERSIONINFO (size %u)", size);
+}
+
 int main(int argc, char **argv) {
     const bool child = argc > 1 && strcmp(argv[1], "--child-setjmp-abort") == 0;
     if (child) {
@@ -3541,6 +3661,7 @@ int main(int argc, char **argv) {
 
     test_loader();
     test_modules_and_wide();
+    test_kernel32_wide();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

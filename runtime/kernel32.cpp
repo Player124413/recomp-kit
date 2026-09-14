@@ -7,6 +7,7 @@
 // directory holding the loaded EXE (original/gog by default). Lookups are
 // case-insensitive and '\' is translated to '/'.
 #include "imports.h"
+#include "kernel32_internal.h"
 #include "mods_seam.h"
 #include "display_seam.h"
 #include "frame_deadline.h"
@@ -528,8 +529,9 @@ bool wildcard_match(const char *pat, const char *str) {
     return false;
 }
 
-void fill_find_data(uint32_t addr, const std::string &host_path, const std::string &name) {
-    memset(g_mem + addr, 0, 0x140);
+void fill_find_data(uint32_t addr, const std::string &host_path, const std::string &name,
+                    bool wide) {
+    memset(g_mem + addr, 0, wide ? 592 : 320);
     OsStat st{};
     if (os_stat(host_path.c_str(), &st) == 0) {
         wr32(addr + 0, attrs_for(st));
@@ -541,8 +543,13 @@ void fill_find_data(uint32_t addr, const std::string &host_path, const std::stri
     } else {
         wr32(addr + 0, FILE_ATTRIBUTE_NORMAL_);
     }
-    gm_put_str(addr + 44, name.c_str(), 260);
-    gm_put_str(addr + 304, name.c_str(), 14);
+    if (wide) {
+        gm_put_wstr(addr + 44, name, 260);
+        gm_put_wstr(addr + 564, name, 14);
+    } else {
+        gm_put_str(addr + 44, name.c_str(), 260);
+        gm_put_str(addr + 304, name.c_str(), 14);
+    }
 }
 
 uint32_t guest_strdup(const char *s) {
@@ -728,64 +735,7 @@ static bool file_promote_for_write(HObj *o) {
 }
 
 void k_CreateFileA(X86 *c) {
-    std::string name = gm_str(arg(c, 0));
-    uint32_t access = arg(c, 1), disp = arg(c, 4);
-    bool want_write = (access & 0x40000000u) != 0; // GENERIC_WRITE
-    bool create = (disp == 1 || disp == 2 || disp == 4 || disp == 5);
-    // A create or a truncation is a write from the start. Writing to an
-    // existing file is not, yet: a game opens its archives read/write and
-    // never writes them, and treating that open as a write copied every
-    // archive into the profile. Such a handle opens through the read tier and
-    // moves to the write tier at its first WriteFile (file_promote_for_write).
-    bool deferred = want_write && !create;
-    int op = (want_write && !deferred) ? WIN32_FILE_WRITE : WIN32_FILE_READ;
-    std::string host = win32_host_path_op(name, op);
-    if (host.empty()) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        LOGV("CreateFileA(%s): not found", name.c_str());
-        set_eax(c, INVALID_HANDLE_VALUE_);
-        return;
-    }
-    int flags = want_write ? (access & 0x80000000u ? OS_O_RDWR : OS_O_WRONLY) : OS_O_RDONLY;
-    int wanted = flags;
-    if (deferred)
-        flags = OS_O_RDONLY;
-    switch (disp) {
-    case 1:
-        flags |= OS_O_CREAT | OS_O_EXCL;
-        break; // CREATE_NEW
-    case 2:
-        flags |= OS_O_CREAT | OS_O_TRUNC;
-        break; // CREATE_ALWAYS
-    case 4:
-        flags |= OS_O_CREAT;
-        break; // OPEN_ALWAYS
-    case 5:
-        flags |= OS_O_TRUNC;
-        break; // TRUNCATE_EXISTING
-    default:
-        break; // OPEN_EXISTING
-    }
-    int fd = os_fd_open(host.c_str(), flags);
-    if (fd < 0) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        set_eax(c, INVALID_HANDLE_VALUE_);
-        return;
-    }
-    if (create)
-        win32_invalidate_dir_cache();
-    uint32_t h = handle_new(H_FILE);
-    handles()[h].fd = fd;
-    handles()[h].path = host;
-    if (deferred) {
-        handles()[h].write_pending = true;
-        handles()[h].write_flags = wanted;
-        handles()[h].guest_name = name;
-    }
-    set_last_error(ERROR_SUCCESS_);
-    LOGV("CreateFileA(%s) -> %s handle %08x%s", name.c_str(), host.c_str(), h,
-         deferred ? " (write tier at the first write)" : "");
-    set_eax(c, h);
+    create_file_named(c, gm_str(arg(c, 0)));
 }
 
 void k_ReadFile(X86 *c) {
@@ -934,60 +884,23 @@ void k_GetFileType(X86 *c) {
 }
 
 void k_GetFileAttributesA(X86 *c) {
-    std::string host = win32_host_path(gm_str(arg(c, 0)));
-    OsStat st{};
-    if (host.empty() || os_stat(host.c_str(), &st) != 0) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        set_eax(c, 0xffffffffu);
-        return;
-    }
-    set_eax(c, attrs_for(st));
+    get_file_attributes_named(c, gm_str(arg(c, 0)));
 }
 
 void k_SetFileAttributesA(X86 *c) {
-    set_eax(c, 1);
+    set_file_attributes_named(c, gm_str(arg(c, 0)));
 }
 
 void k_CreateDirectoryA(X86 *c) {
-    std::string name = gm_str(arg(c, 0));
-    if (!win32_host_path(name).empty()) {
-        set_last_error(ERROR_ALREADY_EXISTS_);
-        set_eax(c, 0);
-        return;
-    }
-    std::string host = win32_host_path(name, true);
-    if (host.empty()) {
-        set_last_error(ERROR_PATH_NOT_FOUND_);
-        set_eax(c, 0);
-        return;
-    }
-    int rc = os_mkdir(host.c_str());
-    win32_invalidate_dir_cache();
-    set_eax(c, rc == 0 ? 1 : 0);
+    create_directory_named(c, gm_str(arg(c, 0)));
 }
 
 void k_RemoveDirectoryA(X86 *c) {
-    std::string host = win32_host_path(gm_str(arg(c, 0)));
-    if (host.empty()) {
-        set_last_error(ERROR_PATH_NOT_FOUND_);
-        set_eax(c, 0);
-        return;
-    }
-    int rc = os_rmdir(host.c_str());
-    win32_invalidate_dir_cache();
-    set_eax(c, rc == 0 ? 1 : 0);
+    remove_directory_named(c, gm_str(arg(c, 0)));
 }
 
 void k_DeleteFileA(X86 *c) {
-    std::string host = win32_host_path_op(gm_str(arg(c, 0)), WIN32_FILE_DELETE);
-    if (host.empty()) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        set_eax(c, 0);
-        return;
-    }
-    int rc = os_unlink(host.c_str());
-    win32_invalidate_dir_cache();
-    set_eax(c, rc == 0 ? 1 : 0);
+    delete_file_named(c, gm_str(arg(c, 0)));
 }
 
 void k_MoveFileA(X86 *c) {
@@ -1004,117 +917,17 @@ void k_MoveFileA(X86 *c) {
 }
 
 void k_CopyFileA(X86 *c) {
-    std::string from = win32_host_path_op(gm_str(arg(c, 0)), WIN32_FILE_READ);
-    std::string to = win32_host_path_op(gm_str(arg(c, 1)), WIN32_FILE_RENAME_DST);
-    bool fail_if_exists = arg(c, 2) != 0;
-    if (from.empty() || to.empty()) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        set_eax(c, 0);
-        return;
-    }
-    OsStat st{};
-    if (fail_if_exists && os_stat(to.c_str(), &st) == 0) {
-        set_last_error(ERROR_ALREADY_EXISTS_);
-        set_eax(c, 0);
-        return;
-    }
-    FILE *in = fopen(from.c_str(), "rb");
-    if (!in) {
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        set_eax(c, 0);
-        return;
-    }
-    FILE *out = fopen(to.c_str(), "wb");
-    if (!out) {
-        fclose(in);
-        set_last_error(ERROR_ACCESS_DENIED_);
-        set_eax(c, 0);
-        return;
-    }
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
-        fwrite(buf, 1, n, out);
-    fclose(in);
-    fclose(out);
-    win32_invalidate_dir_cache();
-    set_eax(c, 1);
+    copy_file_named(c, gm_str(arg(c, 0)), gm_str(arg(c, 1)));
 }
 
 // Open a guest file enumeration using the same normalized paths as file access.
 // Return the first match in the Win32 find-data layout and retain the remaining matches in a handle.
 void k_FindFirstFileA(X86 *c) {
-    std::string pattern = gm_str(arg(c, 0));
-    uint32_t data = arg(c, 1);
-
-    // Split the pattern into a directory and a leaf mask.
-    std::string dirpart, leaf = pattern;
-    size_t slash = pattern.find_last_of("\\/");
-    if (slash != std::string::npos) {
-        dirpart = pattern.substr(0, slash);
-        leaf = pattern.substr(slash + 1);
-    }
-    uint32_t h = handle_new(H_FIND);
-    HObj &o = handles()[h];
-
-    if (g_file_list) {
-        // The lister is given the SAME normalised relative directory a file
-        // open would produce, so a listing and an open agree about what path
-        // they are talking about.
-        // The same serializer the resolver uses, so the root is "" on both
-        // sides rather than "." on one of them.
-        std::string rel = normalised_relative(dirpart);
-        struct Ctx {
-            HObj *o;
-            const char *leaf;
-        } ctx{&o, leaf.c_str()};
-        g_file_list(
-            rel.c_str(),
-            [](void *p, const char *nm, const char *host) {
-                Ctx *cx = (Ctx *)p;
-                if (!wildcard_match(cx->leaf, nm))
-                    return;
-                cx->o->matches.push_back(nm);
-                cx->o->match_paths.push_back(host);
-            },
-            &ctx);
-    } else {
-        std::string host_dir = dirpart.empty() ? win32_host_path_op(".", WIN32_FILE_LIST)
-                                               : win32_host_path_op(dirpart, WIN32_FILE_LIST);
-        if (host_dir.empty()) {
-            handles().erase(h);
-            set_last_error(ERROR_PATH_NOT_FOUND_);
-            set_eax(c, INVALID_HANDLE_VALUE_);
-            return;
-        }
-        o.find_dir = host_dir;
-        for (const auto &kv : listing(host_dir))
-            if (wildcard_match(leaf.c_str(), kv.second.c_str())) {
-                o.matches.push_back(kv.second);
-                o.match_paths.push_back(host_dir + "/" + kv.second);
-            }
-    }
-    if (o.matches.empty()) {
-        handles().erase(h);
-        set_last_error(ERROR_FILE_NOT_FOUND_);
-        set_eax(c, INVALID_HANDLE_VALUE_);
-        return;
-    }
-    fill_find_data(data, o.match_paths[0], o.matches[0]);
-    o.find_pos = 1;
-    set_eax(c, h);
+    find_first_named(c, gm_str(arg(c, 0)), false);
 }
 
 void k_FindNextFileA(X86 *c) {
-    HObj *o = handle_get(arg(c, 0), H_FIND);
-    if (!o || o->find_pos >= o->matches.size()) {
-        set_last_error(ERROR_NO_MORE_FILES_);
-        set_eax(c, 0);
-        return;
-    }
-    fill_find_data(arg(c, 1), o->match_paths[o->find_pos], o->matches[o->find_pos]);
-    ++o->find_pos;
-    set_eax(c, 1);
+    find_next(c, false);
 }
 
 void k_FindClose(X86 *c) {
@@ -1125,13 +938,7 @@ void k_FindClose(X86 *c) {
 void k_GetFullPathNameA(X86 *c) {
     std::string name = gm_str(arg(c, 0));
     uint32_t len = arg(c, 1), buf = arg(c, 2), pfile = arg(c, 3);
-    std::string full;
-    if (name.size() >= 2 && name[1] == ':')
-        full = name;
-    else if (!name.empty() && (name[0] == '\\' || name[0] == '/'))
-        full = "C:" + name;
-    else
-        full = g_cur_dir + "\\" + name;
+    std::string full = full_path_named(name);
     if (buf && len) {
         uint32_t n = gm_put_str(buf, full.c_str(), len);
         if (pfile) {
@@ -1546,40 +1353,15 @@ void k_IsBadCodePtr(X86 *c) {
 }
 
 void k_GetVolumeInformationA(X86 *c) {
-    // No CD check is modelled: report a fixed volume with no label. If the
-    // game turns out to key off the volume name this must come from the trace.
-    uint32_t namebuf = arg(c, 1), namelen = arg(c, 2), pserial = arg(c, 3);
-    uint32_t pmaxcomp = arg(c, 4), pflags = arg(c, 5);
-    uint32_t fsbuf = arg(c, 6), fslen = arg(c, 7);
-    if (namebuf && namelen)
-        gm_put_str(namebuf, "", namelen);
-    if (pserial)
-        wr32(pserial, 0x1a2b3c4d);
-    if (pmaxcomp)
-        wr32(pmaxcomp, 255);
-    if (pflags)
-        wr32(pflags, 0);
-    if (fsbuf && fslen)
-        gm_put_str(fsbuf, "FAT32", fslen);
-    log_once("GetVolumeInformationA",
-             "GetVolumeInformationA: reporting an unlabelled FAT32 volume");
-    set_eax(c, 1);
+    volume_information_named(c, gm_str(arg(c, 0)), false);
 }
 
 void k_GetLogicalDriveStringsA(X86 *c) {
-    static const char drives[] = "C:\\\0";
-    uint32_t len = arg(c, 0), buf = arg(c, 1);
-    uint32_t need = sizeof drives; // includes both NULs
-    if (!buf || len < need) {
-        set_eax(c, need);
-        return;
-    }
-    memcpy(g_mem + buf, drives, need);
-    set_eax(c, need - 1);
+    logical_drive_strings(c, false);
 }
 
 void k_GetDriveTypeA(X86 *c) {
-    set_eax(c, 3); // DRIVE_FIXED
+    drive_type_named(c, gm_str(arg(c, 0)));
 }
 
 // -------------------------------------------------------------------------
@@ -4098,6 +3880,316 @@ void sched_drive_release(void) {
 // ---------------------------------------------------------------------------
 // Table
 // ---------------------------------------------------------------------------
+// Encoding-independent bodies shared by the ANSI and wide import tables.
+void create_file_named(X86 *c, const std::string &name) {
+    uint32_t access = arg(c, 1), disp = arg(c, 4);
+    bool want_write = (access & 0x40000000u) != 0; // GENERIC_WRITE
+    bool create = (disp == 1 || disp == 2 || disp == 4 || disp == 5);
+    // A create or a truncation is a write from the start. Writing to an
+    // existing file is not, yet: a game opens its archives read/write and
+    // never writes them, and treating that open as a write copied every
+    // archive into the profile. Such a handle opens through the read tier and
+    // moves to the write tier at its first WriteFile (file_promote_for_write).
+    bool deferred = want_write && !create;
+    int op = (want_write && !deferred) ? WIN32_FILE_WRITE : WIN32_FILE_READ;
+    std::string host = win32_host_path_op(name, op);
+    if (host.empty()) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        LOGV("CreateFileA(%s): not found", name.c_str());
+        set_eax(c, INVALID_HANDLE_VALUE_);
+        return;
+    }
+    int flags = want_write ? (access & 0x80000000u ? OS_O_RDWR : OS_O_WRONLY) : OS_O_RDONLY;
+    int wanted = flags;
+    if (deferred)
+        flags = OS_O_RDONLY;
+    switch (disp) {
+    case 1:
+        flags |= OS_O_CREAT | OS_O_EXCL;
+        break; // CREATE_NEW
+    case 2:
+        flags |= OS_O_CREAT | OS_O_TRUNC;
+        break; // CREATE_ALWAYS
+    case 4:
+        flags |= OS_O_CREAT;
+        break; // OPEN_ALWAYS
+    case 5:
+        flags |= OS_O_TRUNC;
+        break; // TRUNCATE_EXISTING
+    default:
+        break; // OPEN_EXISTING
+    }
+    int fd = os_fd_open(host.c_str(), flags);
+    if (fd < 0) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, INVALID_HANDLE_VALUE_);
+        return;
+    }
+    if (create)
+        win32_invalidate_dir_cache();
+    uint32_t h = handle_new(H_FILE);
+    handles()[h].fd = fd;
+    handles()[h].path = host;
+    if (deferred) {
+        handles()[h].write_pending = true;
+        handles()[h].write_flags = wanted;
+        handles()[h].guest_name = name;
+    }
+    set_last_error(ERROR_SUCCESS_);
+    LOGV("CreateFileA(%s) -> %s handle %08x%s", name.c_str(), host.c_str(), h,
+         deferred ? " (write tier at the first write)" : "");
+    set_eax(c, h);
+}
+
+void get_file_attributes_named(X86 *c, const std::string &name) {
+    std::string host = win32_host_path(name);
+    OsStat st{};
+    if (host.empty() || os_stat(host.c_str(), &st) != 0) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, 0xffffffffu);
+        return;
+    }
+    set_eax(c, attrs_for(st));
+}
+
+void set_file_attributes_named(X86 *c, const std::string &name) {
+    (void)name; // Attribute changes are advisory, matching the ANSI shim.
+    set_eax(c, 1);
+}
+
+void create_directory_named(X86 *c, const std::string &name) {
+    if (!win32_host_path(name).empty()) {
+        set_last_error(ERROR_ALREADY_EXISTS_);
+        set_eax(c, 0);
+        return;
+    }
+    std::string host = win32_host_path(name, true);
+    if (host.empty()) {
+        set_last_error(ERROR_PATH_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    int rc = os_mkdir(host.c_str());
+    win32_invalidate_dir_cache();
+    set_eax(c, rc == 0 ? 1 : 0);
+}
+
+void remove_directory_named(X86 *c, const std::string &name) {
+    std::string host = win32_host_path_op(name, WIN32_FILE_DELETE);
+    if (host.empty()) {
+        set_last_error(ERROR_PATH_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    int rc = os_rmdir(host.c_str());
+    win32_invalidate_dir_cache();
+    set_eax(c, rc == 0 ? 1 : 0);
+}
+
+void delete_file_named(X86 *c, const std::string &name) {
+    std::string host = win32_host_path_op(name, WIN32_FILE_DELETE);
+    if (host.empty()) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    int rc = os_unlink(host.c_str());
+    win32_invalidate_dir_cache();
+    set_eax(c, rc == 0 ? 1 : 0);
+}
+
+void copy_file_named(X86 *c, const std::string &source, const std::string &dest) {
+    std::string from = win32_host_path_op(source, WIN32_FILE_READ);
+    std::string to = win32_host_path_op(dest, WIN32_FILE_RENAME_DST);
+    bool fail_if_exists = arg(c, 2) != 0;
+    if (from.empty() || to.empty()) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    OsStat st{};
+    if (fail_if_exists && os_stat(to.c_str(), &st) == 0) {
+        set_last_error(ERROR_ALREADY_EXISTS_);
+        set_eax(c, 0);
+        return;
+    }
+    FILE *in = fopen(from.c_str(), "rb");
+    if (!in) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    FILE *out = fopen(to.c_str(), "wb");
+    if (!out) {
+        fclose(in);
+        set_last_error(ERROR_ACCESS_DENIED_);
+        set_eax(c, 0);
+        return;
+    }
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    win32_invalidate_dir_cache();
+    set_eax(c, 1);
+}
+
+void find_first_named(X86 *c, const std::string &pattern, bool wide) {
+    uint32_t data = arg(c, 1);
+
+    // Split the pattern into a directory and a leaf mask.
+    std::string dirpart, leaf = pattern;
+    size_t slash = pattern.find_last_of("\\/");
+    if (slash != std::string::npos) {
+        dirpart = pattern.substr(0, slash);
+        leaf = pattern.substr(slash + 1);
+    }
+    uint32_t h = handle_new(H_FIND);
+    HObj &o = handles()[h];
+
+    if (g_file_list) {
+        // The lister is given the SAME normalised relative directory a file
+        // open would produce, so a listing and an open agree about what path
+        // they are talking about.
+        // The same serializer the resolver uses, so the root is "" on both
+        // sides rather than "." on one of them.
+        std::string rel = normalised_relative(dirpart);
+        struct Ctx {
+            HObj *o;
+            const char *leaf;
+        } ctx{&o, leaf.c_str()};
+        g_file_list(
+            rel.c_str(),
+            [](void *p, const char *nm, const char *host) {
+                Ctx *cx = (Ctx *)p;
+                if (!wildcard_match(cx->leaf, nm))
+                    return;
+                cx->o->matches.push_back(nm);
+                cx->o->match_paths.push_back(host);
+            },
+            &ctx);
+    } else {
+        std::string host_dir = dirpart.empty() ? win32_host_path_op(".", WIN32_FILE_LIST)
+                                               : win32_host_path_op(dirpart, WIN32_FILE_LIST);
+        if (host_dir.empty()) {
+            handles().erase(h);
+            set_last_error(ERROR_PATH_NOT_FOUND_);
+            set_eax(c, INVALID_HANDLE_VALUE_);
+            return;
+        }
+        o.find_dir = host_dir;
+        for (const auto &kv : listing(host_dir))
+            if (wildcard_match(leaf.c_str(), kv.second.c_str())) {
+                o.matches.push_back(kv.second);
+                o.match_paths.push_back(host_dir + "/" + kv.second);
+            }
+    }
+    if (o.matches.empty()) {
+        handles().erase(h);
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, INVALID_HANDLE_VALUE_);
+        return;
+    }
+    fill_find_data(data, o.match_paths[0], o.matches[0], wide);
+    o.find_pos = 1;
+    set_eax(c, h);
+}
+
+void find_next(X86 *c, bool wide) {
+    HObj *o = handle_get(arg(c, 0), H_FIND);
+    if (!o || o->find_pos >= o->matches.size()) {
+        set_last_error(ERROR_NO_MORE_FILES_);
+        set_eax(c, 0);
+        return;
+    }
+    fill_find_data(arg(c, 1), o->match_paths[o->find_pos], o->matches[o->find_pos], wide);
+    ++o->find_pos;
+    set_eax(c, 1);
+}
+
+std::string full_path_named(const std::string &name) {
+    std::string full;
+    if (name.size() >= 2 && name[1] == ':')
+        full = name;
+    else if (!name.empty() && (name[0] == '\\' || name[0] == '/'))
+        full = "C:" + name;
+    else
+        full = g_cur_dir + "\\" + name;
+    return full;
+}
+
+void volume_information_named(X86 *c, const std::string &root, bool wide) {
+    (void)root;
+    auto put = [wide](uint32_t p, const char *s, uint32_t n) {
+        return wide ? gm_put_wstr(p, s, n) : gm_put_str(p, s, n);
+    };
+    // No CD check is modelled: report a fixed volume with no label. If the
+    // game turns out to key off the volume name this must come from the trace.
+    uint32_t namebuf = arg(c, 1), namelen = arg(c, 2), pserial = arg(c, 3);
+    uint32_t pmaxcomp = arg(c, 4), pflags = arg(c, 5);
+    uint32_t fsbuf = arg(c, 6), fslen = arg(c, 7);
+    if (namebuf && namelen)
+        put(namebuf, "", namelen);
+    if (pserial)
+        wr32(pserial, 0x1a2b3c4d);
+    if (pmaxcomp)
+        wr32(pmaxcomp, 255);
+    if (pflags)
+        wr32(pflags, 0);
+    if (fsbuf && fslen)
+        put(fsbuf, "FAT32", fslen);
+    log_once("GetVolumeInformationA",
+             "GetVolumeInformationA: reporting an unlabelled FAT32 volume");
+    set_eax(c, 1);
+}
+
+void drive_type_named(X86 *c, const std::string &root) {
+    (void)root;
+    set_eax(c, 3); // DRIVE_FIXED
+}
+
+void logical_drive_strings(X86 *c, bool wide) {
+    static const char drives[] = "C:\\\0";
+    uint32_t len = arg(c, 0), buf = arg(c, 1);
+    uint32_t need = sizeof drives; // includes both NULs
+    if (!buf || len < need) {
+        set_eax(c, need);
+        return;
+    }
+    if (wide) {
+        gm_put_wstr(buf, "C:\\", len);
+        wr16(buf + 8, 0);
+    } else {
+        memcpy(g_mem + buf, drives, need);
+    }
+    set_eax(c, need - 1);
+}
+
+void get_file_attributes_ex_named(X86 *c, const std::string &name) {
+    uint32_t out = arg(c, 2);
+    if (arg(c, 1) != 0 || !out || !gm_valid(out, 36)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    std::string host = win32_host_path(name);
+    OsStat st{};
+    if (host.empty() || os_stat(host.c_str(), &st) != 0) {
+        set_last_error(ERROR_FILE_NOT_FOUND_);
+        set_eax(c, 0);
+        return;
+    }
+    wr32(out, attrs_for(st));
+    put_filetime(out + 4, st.ctime);
+    put_filetime(out + 12, st.atime);
+    put_filetime(out + 20, st.mtime);
+    wr32(out + 28, (uint32_t)(st.size >> 32));
+    wr32(out + 32, (uint32_t)st.size);
+    set_eax(c, 1);
+}
+
 const ImportShim g_kernel32_shims[] = {
     // memory
     {"KERNEL32.dll", "HeapCreate", 3, k_HeapCreate},
