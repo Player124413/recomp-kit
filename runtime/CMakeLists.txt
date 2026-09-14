@@ -1,7 +1,7 @@
 # The guest runtime. Object libraries, so every source is linked into every
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
-  memory.cpp loader.cpp imports.cpp cpu.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
+  memory.cpp loader.cpp imports.cpp cpu.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp
   mods_seam.cpp user32.cpp misc.cpp gdi32.cpp layout.cpp)
 
 add_library(recomp_runtime OBJECT ${POP_RUNTIME_SOURCES})

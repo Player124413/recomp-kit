@@ -3558,6 +3558,18 @@ static uint64_t call_condition_mask(X86 *c, uint64_t mask, uint32_t type, uint32
     c->r[R_ESP] = saved;
     return ((uint64_t)c->r[R_EDX] << 32) | c->r[R_EAX];
 }
+
+static std::vector<std::string> g_resource_names;
+static uint32_t g_resource_module, g_resource_type, g_resource_param;
+static bool g_resource_stop = false;
+static void resource_enum_callback(X86 *c) {
+    g_resource_module = arg(c, 0);
+    g_resource_type = arg(c, 1);
+    g_resource_param = arg(c, 3);
+    uint32_t name = arg(c, 2);
+    g_resource_names.push_back(name <= 0xffff ? "#" + std::to_string(name) : gm_wstr(name));
+    set_eax(c, g_resource_stop ? 0 : 1);
+}
 static void test_kernel32_wide() {
     X86 c;
     loader_init_context(&c);
@@ -3876,6 +3888,98 @@ static void test_kernel32_wide() {
     uint32_t data = call_import(&c, "KERNEL32.dll", "LoadResource", {0, r});
     check(size > 0x34 && data != 0 && gm_valid(data, size) && rd32(data + 40) == 0xfeef04bdu,
           "the loaded resource is a VS_VERSIONINFO (size %u)", size);
+
+    check(call_import(&c, "KERNEL32.dll", "LockResource", {data}) == data,
+          "LockResource preserves the guest address");
+    check(call_import(&c, "KERNEL32.dll", "FreeResource", {data}) == 0,
+          "FreeResource leaves image-backed resources loaded");
+    gm_put_wstr(s, "#16", 64);
+    gm_put_wstr(s + 128, "#1", 64);
+    check(r && call_import(&c, "KERNEL32.dll", "FindResourceW",
+                           {loader_image_base(), s + 128, s}) == r,
+          "resource integer strings resolve like IDs");
+    check(call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 0xffff, 16}) == 0,
+          "missing resource returns zero");
+    uint32_t resource_cb =
+        imports_alloc_trampoline("test", "resource_enum", resource_enum_callback, 4);
+    g_resource_names.clear();
+    check(call_import(&c, "KERNEL32.dll", "EnumResourceNamesW", {0, 16, resource_cb, 0x1234}) ==
+                  1 &&
+              std::find(g_resource_names.begin(), g_resource_names.end(), "#1") !=
+                  g_resource_names.end() &&
+              g_resource_type == 16 && g_resource_param == 0x1234,
+          "EnumResourceNamesW passes names, type and caller data to the guest");
+    // Replace only guest-memory directory bytes temporarily, then restore them.
+    // The real image stays pinned on disk; this fixture exercises names and
+    // corrupt offsets that need not occur in a particular game's resources.
+    uint32_t image = loader_image_base(), opt = image + rd32(image + 0x3c) + 24;
+    uint32_t root = image + rd32(opt + 112), directory_size = rd32(opt + 116);
+    if (check(directory_size >= 0x300 && gm_valid(root, directory_size),
+              "resource directory can hold the synthetic fixture")) {
+        std::vector<uint8_t> saved(g_mem + root, g_mem + root + 0x300);
+        memset(g_mem + root, 0, 0x300);
+        wr16(root + 12, 1);
+        wr16(root + 14, 1);
+        wr32(root + 16, 0x80000100);
+        wr32(root + 20, 0x80000040);
+        wr32(root + 24, 10);
+        wr32(root + 28, 0x80000040);
+        wr16(root + 0x4c, 1);
+        wr16(root + 0x4e, 1);
+        wr32(root + 0x50, 0x80000120);
+        wr32(root + 0x54, 0x80000080);
+        wr32(root + 0x58, 7);
+        wr32(root + 0x5c, 0x800000a0);
+        wr16(root + 0x8e, 1);
+        wr32(root + 0x90, 0x409);
+        wr32(root + 0x94, 0xc0);
+        wr16(root + 0xae, 1);
+        wr32(root + 0xb0, 0x409);
+        wr32(root + 0xb4, 0xd0);
+        wr32(root + 0xc0, root + 0x200 - image);
+        wr32(root + 0xc4, 4);
+        wr32(root + 0xd0, root + 0x210 - image);
+        wr32(root + 0xd4, 4);
+        wr16(root + 0x100, 4);
+        gm_put_wstr(root + 0x102, "TYPE", 5);
+        wr16(root + 0x120, 6);
+        gm_put_wstr(root + 0x122, "Name \xce\xa9", 7);
+        wr32(root + 0x200, 0x12345678);
+        wr32(root + 0x210, 0xabcdef01);
+        gm_put_wstr(s, "TYPE", 64);
+        gm_put_wstr(s + 128, "Name \xce\xa9", 64);
+        uint32_t named = call_import(&c, "KERNEL32.dll", "FindResourceW", {0, s + 128, s});
+        check(named == root + 0xc0 &&
+                  call_import(&c, "KERNEL32.dll", "LoadResource", {0, named}) == root + 0x200,
+              "named UTF-16 resources resolve type, name and language");
+        check(call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 7, 10}) == root + 0xd0,
+              "integer resource directory entries resolve");
+        g_resource_names.clear();
+        g_resource_stop = false;
+        check(call_import(&c, "KERNEL32.dll", "EnumResourceNamesW",
+                          {image, s, resource_cb, 0x5678}) == 1 &&
+                  g_resource_names == std::vector<std::string>{"Name \xce\xa9", "#7"} &&
+                  g_resource_module == image && g_resource_type == s && g_resource_param == 0x5678,
+              "resource enumeration handles mixed string and integer names");
+        g_resource_names.clear();
+        g_resource_stop = true;
+        call_import(&c, "KERNEL32.dll", "EnumResourceNamesW", {0, s, resource_cb, 0});
+        check(g_resource_names.size() == 1, "resource enumeration stops when the guest asks");
+        g_resource_stop = false;
+        wr32(root + 0xc0, loader_image_size() - 2);
+        check(call_import(&c, "KERNEL32.dll", "LoadResource", {0, named}) == 0 &&
+                  call_import(&c, "KERNEL32.dll", "SizeofResource", {0, named}) == 0,
+              "resource payload cannot cross the image boundary");
+        wr32(root + 20, 0x80000000u | (directory_size - 8));
+        check(call_import(&c, "KERNEL32.dll", "FindResourceW", {0, s + 128, s}) == 0,
+              "truncated resource directory is rejected");
+        wr32(root + 16, 0x80000000u | (directory_size - 1));
+        check(call_import(&c, "KERNEL32.dll", "FindResourceW", {0, s + 128, s}) == 0,
+              "truncated resource name is rejected");
+        check(call_import(&c, "KERNEL32.dll", "LoadResource", {0, GUEST_SIZE - 8}) == 0,
+              "invalid resource handles are rejected");
+        memcpy(g_mem + root, saved.data(), saved.size());
+    }
 }
 
 int main(int argc, char **argv) {

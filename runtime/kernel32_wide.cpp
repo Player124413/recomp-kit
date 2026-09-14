@@ -1,6 +1,7 @@
 // UTF-16 kernel32 entry points. File operations share the ANSI shim's path seam.
 #include "kernel32_internal.h"
 #include "loader.h"
+#include "resources.h"
 #include "memory.h"
 #include "win32.h"
 #include "../platform/os.h"
@@ -716,7 +717,81 @@ void k_WaitForMultipleObjectsEx(X86 *c) {
     wait_multiple_objects(c);
 }
 
+bool resource_module(uint32_t module) {
+    if (!module || module == loader_image_base())
+        return true;
+    set_last_error(1812);
+    return false;
+}
+void k_FindResourceW(X86 *c) {
+    if (!resource_module(arg(c, 0))) {
+        set_eax(c, 0);
+        return;
+    }
+    std::string why;
+    uint32_t entry = resource_find(arg(c, 2), arg(c, 1), &why);
+    if (!entry) {
+        set_last_error(1814);
+        LOGV("FindResourceW: %s", why.c_str());
+    }
+    set_eax(c, entry);
+}
+void k_LoadResource(X86 *c) {
+    uint32_t data = resource_module(arg(c, 0)) ? resource_data(arg(c, 1), nullptr) : 0;
+    if (!data)
+        set_last_error(1812);
+    set_eax(c, data);
+}
+void k_LockResource(X86 *c) {
+    set_eax(c, arg(c, 0));
+}
+void k_SizeofResource(X86 *c) {
+    uint32_t size = 0;
+    if (!resource_module(arg(c, 0)) || !resource_data(arg(c, 1), &size))
+        set_last_error(1812);
+    set_eax(c, size);
+}
+void k_FreeResource(X86 *c) {
+    set_eax(c, 0);
+} // PE resources remain image-backed.
+void k_EnumResourceNamesW(X86 *c) {
+    uint32_t module = arg(c, 0), type = arg(c, 1), callback = arg(c, 2), param = arg(c, 3);
+    std::vector<ResourceName> names;
+    if (!callback || !resource_module(module) || !resource_names(type, &names)) {
+        set_last_error(1814);
+        set_eax(c, 0);
+        return;
+    }
+    for (const auto &name : names) {
+        uint32_t guest_name = name.id, temporary = 0;
+        if (name.is_string) {
+            uint32_t cap = wide_units(name.name) + 1;
+            temporary = heap_alloc(cap * 2, true);
+            if (!temporary) {
+                set_last_error(8);
+                set_eax(c, 0);
+                return;
+            }
+            gm_put_wstr(temporary, name.name, cap);
+            guest_name = temporary;
+        }
+        uint32_t keep_going = guest_call(c, callback, module, type, guest_name, param);
+        if (temporary)
+            heap_free(temporary);
+        if (!keep_going)
+            break;
+    }
+    set_eax(c, 1);
+}
+
 static const ImportShim g_kernel32_wide[] = {
+    {"KERNEL32.dll", "FindResourceW", 3, k_FindResourceW},
+    {"KERNEL32.dll", "LoadResource", 2, k_LoadResource},
+    {"KERNEL32.dll", "LockResource", 1, k_LockResource},
+    {"KERNEL32.dll", "SizeofResource", 2, k_SizeofResource},
+    {"KERNEL32.dll", "FreeResource", 1, k_FreeResource},
+    {"KERNEL32.dll", "EnumResourceNamesW", 4, k_EnumResourceNamesW},
+
     {"KERNEL32.dll", "GetCommandLineW", 0, k_GetCommandLineW},
     {"KERNEL32.dll", "GetStartupInfoW", 1, k_GetStartupInfoW},
     {"KERNEL32.dll", "VerifyVersionInfoW", 4, k_VerifyVersionInfoW},
