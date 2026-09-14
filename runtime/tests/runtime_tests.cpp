@@ -4107,6 +4107,143 @@ static void test_kernel32_wide() {
     }
 }
 
+// Exercise ownership and the x86 Automation layouts, including embedded NULs.
+static void test_delphi_automation() {
+    section("Delphi Automation ownership");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00310000, v = s + 0x100, copy = v + 16;
+    wr16(s, 'a');
+    wr16(s + 2, 0);
+    wr16(s + 4, 'b');
+    uint32_t b = call_import(&c, "OLEAUT32.dll", "SysAllocStringLen", {s, 3});
+    check(b && rd32(b - 4) == 6 && rd16(b + 4) == 'b' && rd16(b + 6) == 0,
+          "BSTR preserves embedded NUL and byte length");
+    wr32(s + 16, b);
+    check(call_import(&c, "OLEAUT32.dll", "SysReAllocStringLen", {s + 16, b, 2}) == 1,
+          "BSTR reallocation accepts its own source");
+    b = rd32(s + 16);
+    check(b && rd32(b - 4) == 4 && rd16(b) == 'a', "BSTR reallocation updates length");
+    memset(g_mem + v, 0xcc, 32);
+    call_import(&c, "OLEAUT32.dll", "VariantInit", {v});
+    call_import(&c, "OLEAUT32.dll", "VariantInit", {copy});
+    check(rd32(v) == 0 && rd32(v + 12) == 0, "VariantInit zeros all 16 bytes");
+    wr16(v, 8);
+    wr32(v + 8, b);
+    check(call_import(&c, "OLEAUT32.dll", "VariantCopy", {copy, v}) == 0 && rd32(copy + 8) != b &&
+              rd32(copy + 8) && rd32(rd32(copy + 8) - 4) == 4,
+          "VariantCopy deep copies BSTR");
+    call_import(&c, "OLEAUT32.dll", "VariantClear", {v});
+    check(!b || !heap_owns(b - 4), "VariantClear releases owned BSTR");
+    call_import(&c, "OLEAUT32.dll", "VariantClear", {copy});
+    wr16(v, 3);
+    wr32(v + 8, (uint32_t)-42);
+    check(call_import(&c, "OLEAUT32.dll", "VariantChangeType", {v, v, 0, 8}) == 0 && rd16(v) == 8 &&
+              gm_wstr(rd32(v + 8)) == "-42",
+          "VariantChangeType I4 to BSTR in place");
+    check(call_import(&c, "OLEAUT32.dll", "VariantChangeType", {copy, v, 0, 5}) == 0 &&
+              rd16(copy) == 5 && rd64(copy + 8) == 0xc045000000000000ull,
+          "VariantChangeType BSTR to R8");
+    check(call_import(&c, "OLEAUT32.dll", "VariantChangeType", {copy, copy, 0, 11}) == 0 &&
+              rd16(copy + 8) == 0xffff,
+          "VariantChangeType numeric true is VARIANT_TRUE");
+    check(call_import(&c, "OLEAUT32.dll", "VariantChangeType", {copy, v, 0, 9}) == 0x80020005u,
+          "VariantChangeType unsupported type mismatch");
+    call_import(&c, "OLEAUT32.dll", "VariantClear", {v});
+    wr16(v, 0x4003);
+    wr32(v + 8, s + 24);
+    wr32(s + 24, 1234);
+    check(call_import(&c, "OLEAUT32.dll", "VariantCopyInd", {copy, v}) == 0 && rd16(copy) == 3 &&
+              rd32(copy + 8) == 1234,
+          "VariantCopyInd dereferences I4");
+    call_import(&c, "OLEAUT32.dll", "VariantClear", {v});
+    check(rd32(s + 24) == 1234, "clearing BYREF leaves the referent alone");
+    wr32(s, 3);
+    wr32(s + 4, (uint32_t)-2);
+    uint32_t a = call_import(&c, "OLEAUT32.dll", "SafeArrayCreate", {3, 1, s});
+    check(a && rd16(a) == 1 && rd32(a + 4) == 4 && rd32(a + 16) == 3 &&
+              rd32(a + 20) == (uint32_t)-2,
+          "SAFEARRAY x86 header includes its first bound in 24 bytes");
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetLBound", {a, 1, s + 8}) == 0 &&
+              rd32(s + 8) == (uint32_t)-2,
+          "SafeArrayGetLBound signed bound");
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetUBound", {a, 1, s + 8}) == 0 &&
+              rd32(s + 8) == 0,
+          "SafeArrayGetUBound");
+    wr32(s + 8, (uint32_t)-1);
+    wr32(s + 12, 9876);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPutElement", {a, s + 8, s + 12}) == 0 &&
+              call_import(&c, "OLEAUT32.dll", "SafeArrayGetElement", {a, s + 8, s + 16}) == 0 &&
+              rd32(s + 16) == 9876,
+          "SafeArray element round trip at a negative index");
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPtrOfIndex", {a, s + 8, s + 16}) == 0 && a &&
+              rd32(s + 16) == rd32(a + 12) + 4,
+          "SafeArrayPtrOfIndex returns guest data address");
+    wr32(s + 8, 1);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetElement", {a, s + 8, s + 16}) == 0x8002000bu,
+          "SafeArray bounds failure");
+    wr16(v, 0x2003);
+    wr32(v + 8, a);
+    check(call_import(&c, "OLEAUT32.dll", "VariantClear", {v}) == 0 && (!a || !heap_owns(a)),
+          "VariantClear releases SAFEARRAY storage");
+    wr32(s, 0xdeadbeef);
+    check(call_import(&c, "OLEAUT32.dll", "GetErrorInfo", {0, s}) == 1 && rd32(s) == 0,
+          "GetErrorInfo clears output and returns S_FALSE");
+}
+
+static void test_delphi_dlls() {
+    section("Delphi DLLs");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00300000;
+    // BSTR: length prefix in bytes, text, terminator.
+    gm_put_wstr(s, "hello", 16);
+    uint32_t b = call_import(&c, "OLEAUT32.dll", "SysAllocStringLen", {s, 5});
+    check(b != 0 && rd32(b - 4) == 10 && gm_wstr(b) == "hello", "SysAllocStringLen");
+    check(call_import(&c, "OLEAUT32.dll", "SysFreeString", {b}) == 0, "SysFreeString");
+    // Registry through the W API, read back through the A one.
+    uint32_t key = s + 0x100, hkey_out = s + 0x200;
+    gm_put_wstr(key, "Software\\RecompTest", 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegCreateKeyExW",
+                      {0x80000001u, key, 0, 0, 0, 0xf003f, 0, hkey_out, 0}) == 0,
+          "RegCreateKeyExW");
+    uint32_t hk = rd32(hkey_out);
+    gm_put_wstr(s + 0x300, "Name", 16);
+    gm_put_wstr(s + 0x400, "value", 16);
+    check(call_import(&c, "ADVAPI32.dll", "RegSetValueExW", {hk, s + 0x300, 0, 1, s + 0x400, 12}) ==
+              0,
+          "RegSetValueExW");
+    gm_put_str(s + 0x500, "Name", 16);
+    wr32(s + 0x600, 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegQueryValueExA",
+                      {hk, s + 0x500, 0, 0, s + 0x700, s + 0x600}) == 0 &&
+              gm_str(s + 0x700) == "value",
+          "RegQueryValueExA reads what RegSetValueExW wrote");
+    // version.dll W over the image's own resource.
+    gm_put_wstr(s, RECOMP_EXECUTABLE, 128);
+    uint32_t size = call_import(&c, "VERSION.dll", "GetFileVersionInfoSizeW", {s, 0});
+    check(size > 0, "GetFileVersionInfoSizeW = %u", size);
+    check(call_import(&c, "VERSION.dll", "GetFileVersionInfoW", {s, 0, size, s + 0x1000}) == 1,
+          "GetFileVersionInfoW");
+    gm_put_wstr(s + 0x800, "\\", 8);
+    check(call_import(&c, "VERSION.dll", "VerQueryValueW",
+                      {s + 0x1000, s + 0x800, s + 0x900, s + 0x904}) == 1 &&
+              rd32(rd32(s + 0x900)) == 0xfeef04bdu,
+          "VerQueryValueW(\\) finds VS_FIXEDFILEINFO");
+    // The rest answer as documented for a machine with nothing attached.
+    wr32(s + 0xa00, 0);
+    check(call_import(&c, "WINSPOOL.DRV", "EnumPrintersW", {2, 0, 2, 0, 0, s + 0xa04, s + 0xa00}) ==
+                  1 &&
+              rd32(s + 0xa00) == 0,
+          "EnumPrintersW: no printers");
+    check(call_import(&c, "NETAPI32.dll", "NetWkstaGetInfo", {0, 100, s + 0xb00}) == 50,
+          "NetWkstaGetInfo: not supported");
+    check(call_import(&c, "OLE32.dll", "OleInitialize", {0}) == 0, "OleInitialize");
+    uint32_t il = call_import(&c, "COMCTL32.dll", "ImageList_Create", {16, 16, 0x20, 4, 4});
+    check(il != 0 && call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 0,
+          "ImageList_Create");
+}
+
 int main(int argc, char **argv) {
     const bool child = argc > 1 && strcmp(argv[1], "--child-setjmp-abort") == 0;
     if (child) {
@@ -4129,6 +4266,8 @@ int main(int argc, char **argv) {
     test_loader();
     test_modules_and_wide();
     test_kernel32_wide();
+    test_delphi_dlls();
+    test_delphi_automation();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

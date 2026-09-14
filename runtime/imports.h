@@ -69,6 +69,7 @@ ImportCallObserver imports_set_call_observer_get(void);
 // Registers the KERNEL32/USER32/GDI32/ADVAPI32/SHELL32/ole32/IMM32/WSOCK32/
 // WINMM tables owned by this runtime. Idempotent; called by loader_load().
 void imports_init();
+void oleaut32_register();
 
 // Allocates (or returns the existing) trampoline for dll!name. If a shim was
 // registered under that name its fn/argc win unless a non-null fn is passed
