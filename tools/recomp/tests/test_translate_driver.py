@@ -73,8 +73,28 @@ def synthetic_image(code_at, base=0x00400000, size=0x2000):
     return img
 
 
+@pytest.mark.parametrize("code,expected", [
+    (b"\xeb\xfe", True),                       # closed unconditional loop
+    (b"\xc3", False),                          # ordinary return
+    (b"\x75\x02\xeb\xfc\xc3", False),          # conditional return path
+    (b"\xeb\x0e", False),                      # outward tail call
+    (b"\xff\xe0", False),                      # computed tail call
+    (b"\xe2\x0e\xeb\xfc", False),              # LOOP escapes the body
+    (b"\xe3\x0e\xeb\xfc", False),              # JECXZ escapes the body
+    (b"\xe8\xfb\x00\x00\x00\xeb\xf9", True), # callback inside a closed loop
+])
+def test_closed_loop_requires_every_return_path_to_stay_inside(code, expected):
+    entry = 0x00401000
+    img = synthetic_image({entry: code})
+    img.md.detail = True
+    insns = [img.to_insn(ci) for ci in img.md.disasm(code, entry)]
+    fn = T.Function(entry, "loop", len(code), insns)
+    fn.measure(img)
+    assert T.Translator.closed_noreturn_loop(fn) == expected
+
+
 @pytest.mark.parametrize("artifact", ["symbols.json", "translate-report.json"])
-@pytest.mark.parametrize("push_ret", [False, True])
+@pytest.mark.parametrize("push_ret", [False, True, "noreturn_loop"])
 def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, push_ret):
     """Nondefault images include omitted PUSH/RET epilogues, without pointer guesses."""
     import json
@@ -82,7 +102,11 @@ def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, p
     base, entry = 0x00600000, 0x00601000
     landing = entry + 6
     code = b"\x68" + struct.pack("<I", landing) + b"\xc3\x40\xc3" if push_ret else b"\xc3"
-    img = synthetic_image({entry: code}, base=base)
+    loop = entry + 0x100
+    if push_ret == "noreturn_loop":
+        # Omitted continuation calls a shutdown loop, followed by non-code.
+        code = code[:6] + b"\xe8" + struct.pack("<i", loop - landing - 5) + b"\x0f\x0b"
+    img = synthetic_image({entry: code, loop: b"\xeb\xfe"}, base=base)
     img.plausible_immediate_target = lambda addr: False
     img.code_pointers = lambda *args, **kwargs: (set(), set())
     listings = tmp_path / "functions"
@@ -92,6 +116,10 @@ def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, p
     (listings / ("%08x.asm" % entry)).write_text(listing)
     table = tmp_path / "functions.tsv"
     table.write_text("address\tname\tsize\n%08x\treturn_only\t1\n" % entry)
+    if push_ret == "noreturn_loop":
+        (listings / ("%08x.asm" % loop)).write_text("%08x  JMP 0x%x\n" % (loop, loop))
+        with table.open("a") as fh:
+            fh.write("%08x\tshutdown_loop\t2\n" % loop)
     binary = tmp_path / "synthetic-image"
     binary.write_bytes(img.data)
     curated = tmp_path / "globals.toml"

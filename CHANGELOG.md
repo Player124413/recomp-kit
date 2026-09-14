@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Translator: recognize closed shutdown loops as nonreturning so recovery
+  stops at their calls before decoding trailing data as instructions.
+
 - Translator: follow adjacent `PUSH imm32; RET` continuations before returning
   to the host caller, while preserving direct entry at a shared `RET`.
 

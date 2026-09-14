@@ -1219,6 +1219,27 @@ class Translator(object):
         t = self.branch_target(ins)
         return t is not None and t in self.noreturn_callees
 
+    @staticmethod
+    def closed_noreturn_loop(fn):
+        """Prove no normal return when every non-call edge stays in the body.
+
+        This deliberately rejects RETs, indirect/outward jumps and listing
+        gaps. Calls may return to their successor or exit/unwind; neither can
+        make a closed loop return to its caller. Shutdown routines use this
+        shape even when their callers retain unreachable RET instructions.
+        """
+        for i, ins in enumerate(fn.insns):
+            if ins.mnem.startswith("RET") or ins.mnem.startswith("IRET"):
+                return False
+            if ins.mnem == "JMP" or ins.mnem in JCC:
+                if Translator.branch_target(ins) not in fn.addrs:
+                    return False
+                if ins.mnem == "JMP":
+                    continue
+            if fn.fallthrough[i] not in fn.addrs:
+                return False
+        return bool(fn.insns)
+
     # -- control flow ------------------------------------------------------
 
     def push_ret_target(self, fn, i):
@@ -2774,6 +2795,8 @@ def main():
     # into the padding and switch tables that follow them.
     image.noreturn_callees = set()
     for fn in parsed:
+        if Translator.closed_noreturn_loop(fn):
+            image.noreturn_callees.add(fn.addr)
         last = fn.insns[-1]
         if last.mnem == "CALL":
             target = Translator.branch_target(last)
