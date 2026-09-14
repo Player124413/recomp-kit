@@ -18,6 +18,15 @@
 extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *, uint32_t *) {
     return false;
 }
+// Runtime-only hosts offer their fallback desktop as a single mode. Linking
+// DirectDraw replaces this with its full, configurable supported-mode table.
+extern "C" __attribute__((weak)) bool ddraw_enum_display_mode(uint32_t index, uint32_t *w,
+                                                              uint32_t *h, uint32_t *bpp) {
+    if (index != 0)
+        return false;
+    ddraw_display_mode(w, h, bpp);
+    return true;
+}
 
 using namespace gdi;
 namespace {

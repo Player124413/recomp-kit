@@ -2239,6 +2239,16 @@ bool ddraw_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
     return true;
 }
 
+bool ddraw_enum_display_mode(uint32_t index, uint32_t *w, uint32_t *h, uint32_t *bpp) {
+    const auto &offered = modes();
+    if (index >= offered.size())
+        return false;
+    *w = offered[index].w;
+    *h = offered[index].h;
+    *bpp = offered[index].bpp;
+    return true;
+}
+
 // The test seam IS the production path: a seam that sealed by another route
 // would let the production one rot.
 extern "C" void pump_present_for_test(void) {

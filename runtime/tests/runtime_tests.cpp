@@ -4,6 +4,7 @@
 //   .venv/bin/python tools/test.py --compile-only && build/recomp/runtime_tests
 #include "../imports.h"
 #include "../../dx/dx.h"
+#include "../../dx/ddraw.h"
 #include "../resources.h"
 #include "../mods_seam.h"
 #include "../intrinsics.h"
@@ -4702,6 +4703,7 @@ static void test_display_settings() {
     const uint32_t p = 0x00310000;
     uint32_t width = 1024, height = 768, bpp = 32;
     ddraw_display_mode(&width, &height, &bpp);
+    check(ddraw_set_modes("1024x768x16"), "set a single offered display mode");
     for (bool wide : {true, false}) {
         const char *name = wide ? "EnumDisplaySettingsW" : "EnumDisplaySettingsA";
         uint32_t size = wide ? 220 : 156, size_offset = wide ? 68 : 36;
@@ -4712,8 +4714,8 @@ static void test_display_settings() {
             wr16(p + size_offset, uint16_t(input_size));
             check(call_import(&c, "USER32.dll", name, {0, 0, p}) == 1 &&
                       rd16(p + size_offset) == size && rd16(p + size_offset + 2) == 0 &&
-                      rd32(p + display) == bpp && rd32(p + display + 4) == width &&
-                      rd32(p + display + 8) == height && rd32(p + display + 12) == 0 &&
+                      rd32(p + display) == 16 && rd32(p + display + 4) == 1024 &&
+                      rd32(p + display + 8) == 768 && rd32(p + display + 12) == 0 &&
                       rd32(p + display + 16) == 60 && rd32(p + size) == 0xa5a5a5a5,
                   "%s accepts dmSize=%u and fills only the standard record", name, input_size);
         }
@@ -4724,6 +4726,19 @@ static void test_display_settings() {
         check(call_import(&c, "USER32.dll", name, {0, 1, p}) == 0,
               "%s ends enumeration after mode zero", name);
     }
+    check(ddraw_set_modes("800x600x16,1280x720x16"), "set two offered display modes");
+    for (const char *name : {"EnumDisplaySettingsW", "EnumDisplaySettingsA"}) {
+        uint32_t display = strcmp(name, "EnumDisplaySettingsW") == 0 ? 168 : 104;
+        check(call_import(&c, "USER32.dll", name, {0, 0, p}) == 1 && rd32(p + display) == 16 &&
+                  rd32(p + display + 4) == 800 && rd32(p + display + 8) == 600,
+              "%s enumerates the first offered mode, independently of the desktop", name);
+        check(call_import(&c, "USER32.dll", name, {0, 1, p}) == 1 && rd32(p + display) == 16 &&
+                  rd32(p + display + 4) == 1280 && rd32(p + display + 8) == 720,
+              "%s enumerates a second mode supported by DirectDraw", name);
+        check(call_import(&c, "USER32.dll", name, {0, 2, p}) == 0,
+              "%s stops after the full offered list", name);
+    }
+    ddraw_reset_modes();
 }
 
 // The pinned frame clock makes message timers deterministic without host sleeps.

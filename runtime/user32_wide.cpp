@@ -445,12 +445,17 @@ void enum_settings(X86 *c, bool wide) {
     uint32_t p = arg(c, 2), mode = arg(c, 1);
     uint32_t size = wide ? 220 : 156, header = wide ? 64 : 32;
     uint32_t display = wide ? 168 : 104;
-    if (!p || !gm_valid(p, size) || (mode != 0 && mode < 0xfffffffeu)) {
+    if (!p || !gm_valid(p, size)) {
         set_eax(c, 0);
         return;
     }
     uint32_t w = 1024, h = 768, bpp = 32;
-    ddraw_display_mode(&w, &h, &bpp);
+    if (mode >= 0xfffffffeu) {
+        ddraw_display_mode(&w, &h, &bpp);
+    } else if (!ddraw_enum_display_mode(mode, &w, &h, &bpp)) {
+        set_eax(c, 0);
+        return;
+    }
     memset(g_mem + p, 0, size);
     put_text(p, 32, "DISPLAY1", wide);
     wr16(p + header, 0x401);
