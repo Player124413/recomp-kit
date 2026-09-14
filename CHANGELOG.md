@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Translator: follow adjacent `PUSH imm32; RET` continuations before returning
+  to the host caller, while preserving direct entry at a shared `RET`.
+
 - Merge integration: profile tests select the first generated entry and are
   omitted when none exists; ANSI and wide disk-space queries share the same
   virtual disk geometry.

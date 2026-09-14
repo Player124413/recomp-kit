@@ -1221,10 +1221,27 @@ class Translator(object):
 
     # -- control flow ------------------------------------------------------
 
+    def push_ret_target(self, fn, i):
+        """An adjacent PUSH imm32 / RET is a jump, including Delphi epilogues.
+
+        Lower it on the PUSH path only: another entry at the RET still returns
+        to its own caller (finally handlers share that instruction).
+        """
+        ins = fn.insns[i]
+        if (ins.mnem == "PUSH" and i + 1 < len(fn.insns) and fn.contiguous[i]
+                and fn.insns[i + 1].mnem == "RET" and not fn.insns[i + 1].ops):
+            op = parse_operand(ins.ops[0])
+            if op.kind == "imm" and operand_size([op], hint=32) == 32:
+                return op.imm & 0xffffffff
+        return None
+
     def successors(self, fn, i):
         """Indices reachable from insn i, and whether flags escape the function."""
         ins = fn.insns[i]
         m = ins.mnem
+        t = self.push_ret_target(fn, i)
+        if t is not None:
+            return [fn.index[t]] if t in fn.index else []
         nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
         if m == "RET":
             return []
@@ -1739,6 +1756,9 @@ class Translator(object):
 
         labels = set()
         for i, ins in enumerate(fn.insns):
+            t = self.push_ret_target(fn, i)
+            if t is not None and t in fn.index:
+                labels.add(t)
             if ins.mnem in JCC or ins.mnem == "JMP":
                 t = self.branch_target(ins)
                 if t is not None and t in fn.index:
@@ -2003,6 +2023,12 @@ class Translator(object):
                 raise TranslateError("non-32-bit PUSH")
             L.append("uint32_t v_ = %s;" % read_op(ops[0], 32))
             L.append("c->r[4] -= 4; wr32(c->r[4], v_);")
+            t = self.push_ret_target(fn, i)
+            if t is not None:
+                # Preserve the guest stack write even though the pair has no
+                # net stack effect, then take the RET's guest continuation.
+                L.append("c->eip = v_; c->r[4] += 4;")
+                L.extend(self.goto_target(fn, t, ins))
             return L
 
         if m == "POP":
@@ -2926,6 +2952,9 @@ def main():
                     changed |= resolve(landing, set(owner), why="seh")
         for fn in list(parsed):
             for i, ins in enumerate(fn.insns):
+                # PUSH imm32 / RET names a continuation just as a direct JMP
+                # does; do not depend on heuristic pointer discovery for it.
+                changed |= resolve(tr.push_ret_target(fn, i), listed, fn)
                 # Direct CALL targets are followed too.  Every one in the
                 # Ghidra corpus was already a listed function, but code found
                 # by the data-pointer scan calls functions Ghidra never listed

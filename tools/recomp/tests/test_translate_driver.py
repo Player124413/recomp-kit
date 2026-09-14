@@ -74,14 +74,22 @@ def synthetic_image(code_at, base=0x00400000, size=0x2000):
 
 
 @pytest.mark.parametrize("artifact", ["symbols.json", "translate-report.json"])
-def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact):
-    """Run the driver on a synthetic RET image at a nondefault load address."""
+@pytest.mark.parametrize("push_ret", [False, True])
+def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, push_ret):
+    """Nondefault images include omitted PUSH/RET epilogues, without pointer guesses."""
     import json
+    import struct
     base, entry = 0x00600000, 0x00601000
-    img = synthetic_image({entry: b"\xc3"}, base=base)
+    landing = entry + 6
+    code = b"\x68" + struct.pack("<I", landing) + b"\xc3\x40\xc3" if push_ret else b"\xc3"
+    img = synthetic_image({entry: code}, base=base)
+    img.plausible_immediate_target = lambda addr: False
+    img.code_pointers = lambda *args, **kwargs: (set(), set())
     listings = tmp_path / "functions"
     listings.mkdir()
-    (listings / ("%08x.asm" % entry)).write_text("%08x  RET\n" % entry)
+    listing = ("%08x  PUSH 0x%x\n%08x  RET\n" % (entry, landing, entry + 5)
+               if push_ret else "%08x  RET\n" % entry)
+    (listings / ("%08x.asm" % entry)).write_text(listing)
     table = tmp_path / "functions.tsv"
     table.write_text("address\tname\tsize\n%08x\treturn_only\t1\n" % entry)
     binary = tmp_path / "synthetic-image"
@@ -102,6 +110,10 @@ def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact):
     assert T.main() == 0
     result = json.loads((out / artifact).read_text())
     assert result["image_base"] == "%08x" % base
+    if push_ret:
+        text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+        assert "void fn_%08x(" % landing in text
+        assert "CALL_FN(%08x); return;" % landing in text
 
 
 def test_a_pushed_destructor_thunk_is_an_entry_candidate():

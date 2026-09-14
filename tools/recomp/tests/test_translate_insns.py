@@ -234,6 +234,14 @@ def fbstp_setup(rng):
 
 
 CASES = [
+    Case("PUSH immediate RET reaches the epilogue before returning", 0x0D01E800,
+         [(0, "PUSH EBP"), (1, "MOV EBP,ESP"),
+          (3, "PUSH 0x0d01e809"), (8, "RET"), (9, "POP EBP"), (10, "RET")],
+         "55 89 e5 68 09 e8 01 0d c3 5d c3"),
+    Case("A branch to the shared RET returns to its own caller", 0x0D01E900,
+         [(0, "JMP 0x0d01e90a"), (5, "PUSH 0x0d01e90b"),
+          (10, "RET"), (11, "INC EAX"), (12, "RET")],
+         "e9 05 00 00 00 68 0b e9 01 0d c3 40 c3"),
     Case("LOOP counts ECX down and branches while it is not zero", 0x0D010000,
          [(0x0, "XOR EAX,EAX"), (0x2, "INC EAX"), (0x3, "LOOP 0x0d010002"), (0x5, "RET")],
          "31 C0  40  E2 FD  C3", loop_setup),
