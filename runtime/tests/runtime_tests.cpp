@@ -3657,6 +3657,52 @@ static void test_kernel32_wide() {
     check(n == 1 && gm_wstr(s + 0x800) == "0", "missing profile key uses the default");
     win32_set_file_ops(nullptr, nullptr);
     remove_tree(g_wide_root);
+
+    section("kernel32 wide synchronisation and mappings");
+    gm_put_wstr(s, "wide-event", 64);
+    uint32_t event = call_import(&c, "KERNEL32.dll", "CreateEventW", {0, 1, 1, s});
+    check(event != 0 && call_import(&c, "KERNEL32.dll", "WaitForSingleObject", {event, 0}) == 0,
+          "CreateEventW initial state");
+    if (event)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {event});
+    gm_put_wstr(s, "wide-mutex", 64);
+    uint32_t mutex = call_import(&c, "KERNEL32.dll", "CreateMutexW", {0, 1, s});
+    uint32_t opened = call_import(&c, "KERNEL32.dll", "OpenMutexW", {0x1f0001, 0, s});
+    check(mutex && opened, "OpenMutexW finds the named mutex");
+    if (mutex)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {mutex});
+    check(opened && call_import(&c, "KERNEL32.dll", "ReleaseMutex", {opened}) == 1,
+          "closing the original handle preserves an open named mutex");
+    if (opened)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {opened});
+    check(call_import(&c, "KERNEL32.dll", "OpenMutexW", {0, 0, s}) == 0,
+          "OpenMutexW fails after the last handle closes");
+    gm_put_str(s + 256, "shared-event", 64);
+    gm_put_wstr(s, "shared-event", 64);
+    uint32_t aevent = call_import(&c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, s + 256});
+    uint32_t wevent = call_import(&c, "KERNEL32.dll", "CreateEventW", {0, 0, 1, s});
+    check(wevent && get_last_error() == 183, "A and W share a named event");
+    call_import(&c, "KERNEL32.dll", "SetEvent", {aevent});
+    check(wevent && call_import(&c, "KERNEL32.dll", "WaitForSingleObject", {wevent, 0}) == 0,
+          "wide handle observes the ANSI event signal");
+    call_import(&c, "KERNEL32.dll", "CloseHandle", {aevent});
+    if (wevent)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {wevent});
+    gm_put_wstr(s, RECOMP_EXECUTABLE, 128);
+    h = call_import(&c, "KERNEL32.dll", "CreateFileW", {s, 0x80000000u, 1, 0, 3, 0, 0});
+    gm_put_wstr(s + 256, "wide-mapping", 64);
+    uint32_t mapping =
+        call_import(&c, "KERNEL32.dll", "CreateFileMappingW", {h, 0, 2, 0, 0, s + 256});
+    check(mapping != 0, "CreateFileMappingW opens an executable mapping");
+    if (mapping) {
+        uint32_t view = call_import(&c, "KERNEL32.dll", "MapViewOfFile", {mapping, 4, 0, 0, 64});
+        check(view && rd16(view) == 0x5a4d, "wide mapping shares the ANSI file-backed body");
+        if (view)
+            call_import(&c, "KERNEL32.dll", "UnmapViewOfFile", {view});
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {mapping});
+    }
+    if (h && h != 0xffffffffu)
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {h});
     section("kernel32 wide locale");
     check(call_import(&c, "KERNEL32.dll", "GetThreadLocale", {}) == 0x0409, "GetThreadLocale");
     check(call_import(&c, "KERNEL32.dll", "GetUserDefaultUILanguage", {}) == 0x0409,

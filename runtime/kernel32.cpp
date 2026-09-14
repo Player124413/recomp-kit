@@ -93,6 +93,8 @@ enum HKind {
 
 struct HObj {
     HKind kind = H_NONE;
+    std::string object_name; // Named events, mutexes and mappings share a kernel object.
+    uint32_t references = 1;
     int fd = -1;      // H_FILE, H_MAPPING
     std::string path; // H_FILE, H_MAPPING, H_MODULE
     // H_FILE opened for writing on an existing file: the open went through
@@ -155,6 +157,28 @@ HObj *handle_get(uint32_t h, HKind kind) {
 HObj *handle_any(uint32_t h) {
     auto it = handles().find(h);
     return it == handles().end() ? nullptr : &it->second;
+}
+
+// A/W names share one object namespace. Repeated opens retain the object until
+// every returned handle is closed; initial state only applies on first creation.
+bool reuse_named_object(X86 *c, const std::string &name, HKind kind) {
+    if (name.empty())
+        return false;
+    for (auto &entry : handles()) {
+        HObj &o = entry.second;
+        if (o.object_name != name)
+            continue;
+        if (o.kind != kind) {
+            set_last_error(ERROR_INVALID_HANDLE_);
+            set_eax(c, 0);
+            return true;
+        }
+        ++o.references;
+        set_last_error(ERROR_ALREADY_EXISTS_);
+        set_eax(c, entry.first);
+        return true;
+    }
+    return false;
 }
 
 // Cooperative guest threads, defined further down. Declared here because the
@@ -851,6 +875,10 @@ void k_CloseHandle(X86 *c) {
         set_eax(c, 0);
         return;
     }
+    if (--o->references) {
+        set_eax(c, 1);
+        return;
+    }
     if ((o->kind == H_FILE || o->kind == H_MAPPING) && o->fd >= 0)
         os_fd_close(o->fd);
     handles().erase(h);
@@ -1106,22 +1134,7 @@ void k_GetProcAddress(X86 *c) {
 // File mappings
 // -------------------------------------------------------------------------
 void k_CreateFileMappingA(X86 *c) {
-    HObj *f = handle_get(arg(c, 0), H_FILE);
-    uint32_t size = arg(c, 4);
-    if (!f) {
-        set_last_error(ERROR_INVALID_HANDLE_);
-        set_eax(c, 0);
-        return;
-    }
-    OsStat st{};
-    os_fd_stat(f->fd, &st);
-    if (!size)
-        size = (uint32_t)st.size;
-    uint32_t h = handle_new(H_MAPPING);
-    handles()[h].fd = os_fd_dup(f->fd);
-    handles()[h].map_size = size;
-    handles()[h].path = f->path;
-    set_eax(c, h);
+    create_mapping_named(c, gm_str(arg(c, 5)));
 }
 
 void k_MapViewOfFile(X86 *c) {
@@ -1607,10 +1620,7 @@ void k_ReleaseSemaphore(X86 *c) {
 }
 
 void k_CreateEventA(X86 *c) {
-    uint32_t h = handle_new(H_EVENT);
-    handles()[h].manual_reset = arg(c, 1) != 0;
-    handles()[h].signalled = arg(c, 2) != 0;
-    set_eax(c, h);
+    create_event_named(c, gm_str(arg(c, 3)));
 }
 void k_ResetEvent(X86 *c) {
     HObj *o = handle_get(arg(c, 0), H_EVENT);
@@ -1619,12 +1629,7 @@ void k_ResetEvent(X86 *c) {
     set_eax(c, o ? 1 : 0);
 }
 void k_CreateMutexA(X86 *c) {
-    uint32_t h = handle_new(H_MUTEX);
-    if (arg(c, 1)) { // bInitialOwner
-        handles()[h].owner_tid = cur_thread_id();
-        handles()[h].owner_recursion = 1;
-    }
-    set_eax(c, h);
+    create_mutex_named(c, gm_str(arg(c, 2)));
 }
 
 // Gives up one level of ownership; at zero the mutex is free and a waiter can
@@ -4188,6 +4193,63 @@ void get_file_attributes_ex_named(X86 *c, const std::string &name) {
     wr32(out + 28, (uint32_t)(st.size >> 32));
     wr32(out + 32, (uint32_t)st.size);
     set_eax(c, 1);
+}
+
+void create_event_named(X86 *c, const std::string &name) {
+    if (reuse_named_object(c, name, H_EVENT))
+        return;
+    uint32_t h = handle_new(H_EVENT);
+    handles()[h].manual_reset = arg(c, 1) != 0;
+    handles()[h].signalled = arg(c, 2) != 0;
+    handles()[h].object_name = name;
+    set_last_error(ERROR_SUCCESS_);
+    set_eax(c, h);
+}
+
+void create_mutex_named(X86 *c, const std::string &name) {
+    if (reuse_named_object(c, name, H_MUTEX))
+        return;
+    uint32_t h = handle_new(H_MUTEX);
+    if (arg(c, 1)) { // bInitialOwner
+        handles()[h].owner_tid = cur_thread_id();
+        handles()[h].owner_recursion = 1;
+    }
+    handles()[h].object_name = name;
+    set_last_error(ERROR_SUCCESS_);
+    set_eax(c, h);
+}
+
+void create_mapping_named(X86 *c, const std::string &name) {
+    if (reuse_named_object(c, name, H_MAPPING))
+        return;
+    HObj *f = handle_get(arg(c, 0), H_FILE);
+    uint32_t size = arg(c, 4);
+    if (!f) {
+        set_last_error(ERROR_INVALID_HANDLE_);
+        set_eax(c, 0);
+        return;
+    }
+    OsStat st{};
+    os_fd_stat(f->fd, &st);
+    if (!size)
+        size = (uint32_t)st.size;
+    uint32_t h = handle_new(H_MAPPING);
+    handles()[h].fd = os_fd_dup(f->fd);
+    handles()[h].map_size = size;
+    handles()[h].path = f->path;
+    handles()[h].object_name = name;
+    set_last_error(ERROR_SUCCESS_);
+    set_eax(c, h);
+}
+
+void open_mutex_named(X86 *c, const std::string &name) {
+    if (reuse_named_object(c, name, H_MUTEX)) {
+        if (c->r[R_EAX])
+            set_last_error(ERROR_SUCCESS_);
+        return;
+    }
+    set_last_error(ERROR_FILE_NOT_FOUND_);
+    set_eax(c, 0);
 }
 
 const ImportShim g_kernel32_shims[] = {

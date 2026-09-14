@@ -320,7 +320,25 @@ void k_WritePrivateProfileStringW(X86 *c) {
     set_eax(c, ok ? 1 : 0);
 }
 
+void k_CreateEventW(X86 *c) {
+    create_event_named(c, gm_wstr(arg(c, 3)));
+}
+void k_CreateMutexW(X86 *c) {
+    create_mutex_named(c, gm_wstr(arg(c, 2)));
+}
+void k_OpenMutexW(X86 *c) {
+    open_mutex_named(c, gm_wstr(arg(c, 2)));
+}
+void k_CreateFileMappingW(X86 *c) {
+    create_mapping_named(c, gm_wstr(arg(c, 5)));
+}
+
 static const ImportShim g_kernel32_wide[] = {
+    {"KERNEL32.dll", "CreateEventW", 4, k_CreateEventW},
+    {"KERNEL32.dll", "CreateMutexW", 3, k_CreateMutexW},
+    {"KERNEL32.dll", "OpenMutexW", 3, k_OpenMutexW},
+    {"KERNEL32.dll", "CreateFileMappingW", 6, k_CreateFileMappingW},
+
     {"KERNEL32.dll", "GetPrivateProfileStringW", 6, k_GetPrivateProfileStringW},
     {"KERNEL32.dll", "WritePrivateProfileStringW", 4, k_WritePrivateProfileStringW},
 

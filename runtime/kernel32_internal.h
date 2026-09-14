@@ -18,3 +18,8 @@ void volume_information_named(X86 *c, const std::string &root, bool wide);
 void drive_type_named(X86 *c, const std::string &root);
 void logical_drive_strings(X86 *c, bool wide);
 void get_file_attributes_ex_named(X86 *c, const std::string &name);
+
+void create_event_named(X86 *c, const std::string &name);
+void create_mutex_named(X86 *c, const std::string &name);
+void create_mapping_named(X86 *c, const std::string &name);
+void open_mutex_named(X86 *c, const std::string &name);
