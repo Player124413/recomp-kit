@@ -43,6 +43,7 @@ void d3d_reset();
 void dsound_reset();
 void dshow_reset();
 void dinput_reset();
+void bink_reset();
 
 // The host calls this after feeding new input through host_input_state. It
 // signals the notification event of every DirectInput device that registered

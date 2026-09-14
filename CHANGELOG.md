@@ -2,13 +2,18 @@
 
 ## Unreleased
 
+- Bink: decode video through FFmpeg into the DirectDraw surface supplied by
+  the game, converting YUV420P to RGB565, RGB555 or XRGB8888. Stream decoded
+  audio through the shared mixer, pace frames with host time and return an
+  empty error string on success. Pending host close ends the video loop;
+  builds without FFmpeg keep the finished-video stub and Smacker stays refused.
+
 - Build: fetch SHA-256-pinned FFmpeg 7.1.1 for macOS with only Bink/Smacker
   decoders and demuxers and file input. `RECOMP_VIDEO` defaults to ON on
   macOS and OFF elsewhere; OFF retains the build without FFmpeg. Link
   avformat, avcodec and avutil dynamically, bundle the three replaceable
   dylibs with relative install names and ad-hoc signatures, and ship the
-  LGPL notice, source identity and build flags. Cinematic playback remains
-  unimplemented in the video shims.
+  LGPL notice, source identity and build flags.
 
 - Touch: taps press and release at the finger's position, including near a
   window edge, without a cursor nudge after release. Held fingers and drags

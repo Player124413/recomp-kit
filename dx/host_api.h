@@ -44,6 +44,10 @@ void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *pal
 // The display mode the guest selected, before any surface exists.
 void host_set_display_mode(int w, int h, int bpp);
 
+// A pending host close lets long-running guest media loops finish cooperatively.
+// Hosts without a boot loop report no request.
+int host_close_requested(void);
+
 // ---------------------------------------------------------------------------
 // Direct3D command list. One host_d3d_draw per DrawPrimitive /
 // DrawIndexedPrimitive, bracketed by begin/end scene.

@@ -16,6 +16,7 @@
 #include "../dx.h"
 #include "../host_api.h"
 #include "../riff.h"
+#include "../video_frame.h"
 #include "../ddraw.h"
 #include "../../runtime/memory.h"
 #include "../../runtime/win32.h"
@@ -228,6 +229,10 @@ void host_d3d_texture_destroyed(uint32_t) {}
 // The play cursor a test wants the mixer to believe in, so a streaming refill
 // can be driven deterministically instead of by waiting.
 static uint32_t g_test_audio_pos = 0;
+static bool g_test_close_requested = false;
+int host_close_requested(void) {
+    return g_test_close_requested;
+}
 // The stream contract, modelled the way the real host implements it:
 // host_audio_stream converts a looping channel at its cursor and reports the
 // offset it resumed from, and host_audio_played_bytes counts on from there and
@@ -5923,6 +5928,11 @@ static void test_bink_smack_stubs() {
     uint32_t name = sc(0x100);
     gm_put_str(name, "intro.bik", 0x100);
     uint32_t bink = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {name, 0});
+#ifdef RECOMP_HAVE_FFMPEG
+    CHECK_EQ(bink, 0u); // a missing file must fail with a readable error
+    if (bink)
+        call_shim(tramp("binkw32.dll", "_BinkClose@4"), {bink});
+#else
     CHECK(bink != 0);
     CHECK_EQ(rd32(bink + 0x00), 640u);
     CHECK_EQ(rd32(bink + 0x04), 480u);
@@ -5935,12 +5945,137 @@ static void test_bink_smack_stubs() {
     CHECK_EQ(rd32(bink + 0x14), 0u); // still finished
     call_shim(tramp("binkw32.dll", "_BinkClose@4"), {bink});
     CHECK(!heap_owns(bink));
+#endif
     uint32_t err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
     CHECK(err != 0);
-    CHECK_EQ(strcmp(gm_str(err).c_str(), "no video decoder"), 0);
+#ifdef RECOMP_HAVE_FFMPEG
+    CHECK(!gm_str(err).empty());
+#else
+    CHECK(gm_str(err).empty());
+#endif
     CHECK_EQ(call_shim(tramp("smackw32.dll", "_SmackOpen@12"), {0, 0, 0}), 0u);
     CHECK_EQ(imports_argc(tramp("binkw32.dll", "_BinkCopyToBuffer@28")), 7u);
     CHECK_EQ(imports_argc(tramp("smackw32.dll", "_SmackToBuffer@28")), 7u);
+}
+
+static void test_video_frame_convert() {
+    // A 4x2 YUV420P image: black/white on the left, saturated red on the
+    // right. Chroma is shared across the two rows; row padding stays intact.
+    const uint8_t y[2][4] = {{16, 235, 81, 81}, {235, 16, 81, 81}};
+    const uint8_t u[] = {128, 90}, v[] = {128, 240};
+    const uint16_t rgb565[2][4] = {{0, 0xffff, 0xf800, 0xf800}, {0xffff, 0, 0xf800, 0xf800}};
+    for (uint32_t row = 0; row < 2; ++row) {
+        uint8_t dest[20];
+        memset(dest, 0xa5, sizeof dest);
+        video_frame_convert_row(dest, y[row], u, v, 4, VIDEO_RGB565);
+        for (uint32_t x = 0; x < 4; ++x)
+            CHECK_EQ((uint32_t)(dest[x * 2] | dest[x * 2 + 1] << 8), rgb565[row][x]);
+        CHECK_EQ(dest[8], 0xa5u);
+        video_frame_convert_row(dest, y[row], u, v, 4, VIDEO_RGB555);
+        CHECK_EQ((uint32_t)(dest[4] | dest[5] << 8), 0x7c00u);
+        video_frame_convert_row(dest, y[row], u, v, 4, VIDEO_XRGB8888);
+        CHECK_EQ(dest[8], 0u);
+        CHECK_EQ(dest[9], 0u);
+        CHECK_EQ(dest[10], 255u);
+        CHECK_EQ(dest[11], 0u);
+        CHECK_EQ(dest[16], 0xa5u);
+    }
+}
+
+static void test_bink_play() {
+#ifdef RECOMP_HAVE_FFMPEG
+    const std::string path =
+        std::string(RECOMP_DEVELOPER_GAME_DIR) + "/BINKS/High/pre_dynastic_big.bik";
+    FILE *file = fopen(path.c_str(), "rb");
+    if (!file) {
+        printf("note: Bink play skipped; developer video is absent\n");
+        return;
+    }
+    fclose(file);
+    cpu_reset();
+    win32_init(RECOMP_DEVELOPER_GAME_DIR);
+    g_plays.clear();
+    g_queues.clear();
+    g_stops.clear();
+    g_queue_enabled = true;
+    g_queued_bytes = 0;
+    g_test_audio_pos = 0;
+    g_ch_streaming = false;
+    uint32_t name = sc(0x100);
+    gm_put_str(name, "binks\\high\\pre_dynastic_big.bik", 0x100);
+    uint32_t rec = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {name, 0});
+    CHECK(rec != 0);
+    if (!rec) {
+        g_queue_enabled = false;
+        return;
+    }
+    CHECK_EQ(heap_size(rec), 0x100u);
+    CHECK_EQ(rd32(rec), 560u);
+    CHECK_EQ(rd32(rec + 4), 333u);
+    CHECK(rd32(rec + 0x10) > 0);
+    CHECK_EQ(rd32(rec + 0x14), 1u);
+    CHECK_EQ(rd32(rec + 8), rd32(rec + 0x10));
+    CHECK_EQ(rd32(rec + 12), 1u);
+    CHECK(g_plays.empty()); // open does not decode or play
+    uint32_t err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+    CHECK(err && gm_str(err).empty());
+    const uint32_t pitch = 1280, height = 333;
+    uint32_t dest = heap_alloc(pitch * height, true, 16);
+    CHECK(dest != 0);
+    for (uint32_t frame = 1; frame <= 2 && dest; ++frame) {
+        call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+        call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+        CHECK_EQ(rd32(rec + 0x14), frame + 1);
+        CHECK_EQ(rd32(rec + 12), frame + 1);
+        memset(g_mem + dest, 0xa5, pitch * height);
+        CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkCopyToBuffer@28"),
+                           {rec, dest, pitch, height, 0, 0, VIDEO_RGB565}),
+                 0u);
+        bool nonuniform = false;
+        for (uint32_t yrow = 0; yrow < height; ++yrow)
+            for (uint32_t x = 0; x < 560; ++x)
+                nonuniform |= rd16(dest + yrow * pitch + x * 2) != rd16(dest);
+        printf("note: Bink frame %u is %s (first pixel %04x)\n", frame,
+               nonuniform ? "non-uniform" : "uniform", rd16(dest));
+        if (frame == 2)
+            CHECK(nonuniform);
+        CHECK_EQ(rd8(dest + 1120), 0xa5u); // the pitch is wider than the video
+        call_shim(tramp("binkw32.dll", "_BinkService@4"), {rec});
+        err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+        CHECK(err && gm_str(err).empty());
+    }
+    CHECK_EQ(g_plays.size(), 1u);
+    CHECK(g_ch_streaming);
+    CHECK(g_queued_bytes > 0);
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays[0].bits, 16);
+        CHECK(g_plays[0].bytes > 0);
+    }
+    // A close must break both the timed wait and the guest's frame loop,
+    // including the NextFrame call that follows a cancelled DoFrame.
+    g_test_close_requested = true;
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkWait@4"), {rec}), 0u);
+    call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+    CHECK_EQ(rd32(rec + 0x14), rd32(rec + 0x10));
+    CHECK_EQ(rd32(rec + 0x0c), rd32(rec + 0x08));
+    call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+    CHECK_EQ(rd32(rec + 0x14), rd32(rec + 0x10));
+    CHECK_EQ(rd32(rec + 0x0c), rd32(rec + 0x08));
+    g_test_close_requested = false;
+    call_shim(tramp("binkw32.dll", "_BinkClose@4"), {rec});
+    CHECK(!heap_owns(rec));
+    if (!g_plays.empty()) {
+        CHECK(!g_stops.empty() && g_stops.back() == g_plays[0].channel);
+        int32_t channel = dx_alloc_audio_channel();
+        CHECK_EQ(channel, g_plays[0].channel);
+        dx_free_audio_channel(channel);
+    }
+    if (dest)
+        heap_free(dest);
+    g_queue_enabled = false;
+#else
+    printf("note: Bink play skipped; video decoding is disabled\n");
+#endif
 }
 
 // QMixer: a session, a channel, and a wave supplied the way the game supplies
@@ -9677,6 +9812,8 @@ int main() {
         {"Miles samples", test_mss32_sample},
         {"Miles streams", test_mss32_stream},
         {"Bink/Smacker stubs", test_bink_smack_stubs},
+        {"video frame conversion", test_video_frame_convert},
+        {"Bink play", test_bink_play},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},

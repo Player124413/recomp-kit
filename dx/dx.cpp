@@ -603,6 +603,7 @@ void dx_reset() {
     dsound_reset();
     dshow_reset();
     dinput_reset();
+    bink_reset();
     audio_channels().clear();
     com_reset();
 }

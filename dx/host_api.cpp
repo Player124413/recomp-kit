@@ -15,6 +15,12 @@
 
 extern "C" {
 
+// Shutdown remains reachable even with RECOMP_NULL_HOST: only graphical and
+// audible callbacks are pinned to no-ops in that build.
+__attribute__((weak)) int host_close_requested(void) {
+    return 0;
+}
+
 // The access counters are the DirectDraw shim's, and a binary that links this
 // file without that shim still has to be able to print the stats line: the
 // host unit tests are exactly that binary. Zeros are the truth for a run with
