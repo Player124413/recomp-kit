@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- DirectDraw: releasing the object that set the display mode, or
+  RestoreDisplayMode, puts the desktop back, so GetSystemMetrics and
+  GetDeviceCaps report the desktop fallback until the next SetDisplayMode.
+  A game that changes resolution by releasing and re-creating DirectDraw reads
+  its screen bounds in between; the stale previous mode had every pointer
+  position past the old width or height count as a screen edge, which
+  scrolled the map whenever the pointer rested there. GetSystemMetrics logs
+  the screen sizes it reports at the verbose level.
 - Smoke: add `tap x y`, driving a stationary finger through TouchMapper and
   the window input gates with the smoke host's clock and presented frames.
   Cover parsing and the mapper-driven finger lifecycle.

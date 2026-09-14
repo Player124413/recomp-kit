@@ -564,6 +564,7 @@ enum {
     DD_EnumDisplayModes = 8,
     DD_GetDisplayMode = 12,
     DD_GetFourCCCodes = 13,
+    DD_RestoreDisplayMode = 19,
     DD_SetCooperativeLevel = 20,
     DD_SetDisplayMode = 21,
     DD_GetAvailableVidMem = 23,
@@ -4898,6 +4899,52 @@ static void test_enum_display_modes() {
     CHECK_EQ(mbpp, 16);
     check_caps(3840, 2160, 16);
     call_shim(tramp("USER32.dll", "ReleaseDC"), {0, hdc});
+}
+
+// Releasing the DirectDraw object that set the mode, or RestoreDisplayMode,
+// puts the desktop back: the screen metrics return to the fallback until the
+// next SetDisplayMode. A game that changes resolution by releasing and
+// re-creating DirectDraw reads its screen bounds in between.
+static void test_release_restores_desktop_mode() {
+    cpu_reset();
+    reset_ddraw_for_test();
+    uint32_t metrics = tramp("USER32.dll", "GetSystemMetrics");
+    uint32_t create = tramp("DDRAW.dll", "DirectDrawCreate");
+    uint32_t mw = 0, mh = 0, mbpp = 0;
+
+    call_shim(create, {0, sc(0), 0});
+    uint32_t dd = rd32(sc(0));
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 16}), DD_OK);
+    CHECK_EQ(call_shim(metrics, {0}), 640u);
+    CHECK_EQ(call_shim(metrics, {1}), 480u);
+    CHECK_EQ(call_method(dd, DD_Release, {}), 0u);
+    CHECK(!ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(call_shim(metrics, {0}), 1024u);
+    CHECK_EQ(call_shim(metrics, {1}), 768u);
+
+    // The next object sets the next mode; a game switching from a 640-wide
+    // mode to an 800-wide one must not read 640 as the width in between.
+    call_shim(create, {0, sc(0), 0});
+    dd = rd32(sc(0));
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {800, 600, 16}), DD_OK);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 800);
+    CHECK_EQ(call_shim(metrics, {0}), 800u);
+    CHECK_EQ(call_method(dd, DD_RestoreDisplayMode, {}), DD_OK);
+    CHECK(!ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(call_shim(metrics, {0}), 1024u);
+    CHECK_EQ(call_shim(metrics, {1}), 768u);
+    // Restoring twice, or releasing an object that never set a mode, is
+    // harmless.
+    CHECK_EQ(call_method(dd, DD_RestoreDisplayMode, {}), DD_OK);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 16}), DD_OK);
+    CHECK_EQ(call_shim(metrics, {0}), 640u);
+    call_shim(create, {0, sc(0x10), 0});
+    uint32_t other = rd32(sc(0x10));
+    CHECK_EQ(call_method(other, DD_Release, {}), 0u);
+    CHECK_EQ(call_shim(metrics, {0}), 640u);
+    CHECK_EQ(call_method(dd, DD_Release, {}), 0u);
+    CHECK_EQ(call_shim(metrics, {0}), 1024u);
 }
 
 // RECOMP_DDRAW_MODES replaces the offered set, and the SAME table decides what
@@ -9801,6 +9848,7 @@ int main() {
         {"colour key at 16 bpp", test_colorkey_16bpp},
         {"QueryInterface", test_query_interface},
         {"display modes", test_enum_display_modes},
+        {"release restores desktop", test_release_restores_desktop_mode},
         {"configurable modes", test_configurable_display_modes},
         {"Classic probe surfaces", test_classic_probe_surface_creation},
         {"Direct3D pipeline", test_d3d_pipeline},
