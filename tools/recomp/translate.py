@@ -1038,7 +1038,7 @@ class Image(object):
     #: 00430ad2 was reaching back 60 KB to 0041fc70.
     RECOVER_WINDOW = 0x8000
 
-    def recover(self, start, listed, limit=None):
+    def recover(self, start, listed, limit=None, bounds=None):
         """Decode the block at `start`, following its branches.
 
         Recursive descent rather than a linear sweep.  A sweep stops at the
@@ -1051,12 +1051,15 @@ class Image(object):
         Following the branches keeps a function whole: its internal targets
         become labels inside one block.  Targets outside the window, or into
         code already translated, are left for the discovery loop to resolve as
-        separate entries, exactly as before.
+        separate entries, exactly as before. Optional bounds constrain an
+        omitted continuation to its original function span and require a clean
+        decode, rejecting padding or an instruction that crosses the bound.
         """
         if limit is None:
             limit = self.RECOVER_LIMIT
         if self.md is None or not (self.base <= start < self.end):
             return []
+        lo, hi = bounds if bounds is not None else (self.base, self.end)
         self.md.detail = True
         seen = {}
         pending = [start]
@@ -1064,14 +1067,20 @@ class Image(object):
         while pending and len(seen) < limit:
             va = pending.pop()
             while len(seen) < limit:
-                if va in seen or va in listed or not (self.base <= va < self.end):
+                if va in seen or va in listed or not (lo <= va < hi):
                     break
                 got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
                                           va, count=1))
-                if not got:
+                if not got or got[0].address + got[0].size > hi:
+                    if bounds is not None:
+                        self.md.detail = False
+                        return []
                     break
                 ci = got[0]
                 if ci.mnemonic in ("int3", "hlt", "(bad)"):
+                    if bounds is not None:
+                        self.md.detail = False
+                        return []
                     break
                 try:
                     seen[va] = self.to_insn(ci)
@@ -1085,7 +1094,7 @@ class Image(object):
                         ci.mnemonic == "jmp" or ci.mnemonic.startswith("j")):
                     t = int(ci.op_str, 16)
                     if (abs(t - start) <= self.RECOVER_WINDOW and t not in listed
-                            and self.is_exec(t)):
+                            and lo <= t < hi and self.is_exec(t)):
                         pending.append(t)
                 if ci.mnemonic in ("ret", "retn", "jmp"):
                     break
@@ -2826,9 +2835,11 @@ def main():
     t0 = time.time()
     entries = load_functions(set(args.only) if args.only else None)
     all_addrs = set()
+    listed_starts = []
     with open(FUNCS_TSV) as fh:
         for l in list(fh)[1:]:
             a = int(l.split("\t")[0], 16)
+            listed_starts.append(a)
             p = os.path.join(LISTINGS, "%08x.asm" % a)
             if os.path.exists(p) and os.path.getsize(p) > 0:
                 all_addrs.add(a)
@@ -2894,6 +2905,15 @@ def main():
         register(fn)
 
     listed_functions = {fn.addr for fn in parsed}
+    # Listing size ends at its last exported instruction, which may be an
+    # early finally RET. Only the next original listing bounds its full span;
+    # newly discovered entries must not shrink that bound during recovery.
+    listed_starts.sort()
+    span_ends = {}
+    for i, addr in enumerate(listed_starts):
+        section_end = next((hi for lo, hi, _ in image.exec_ranges if lo <= addr < hi), addr)
+        span_ends[addr] = min(section_end, listed_starts[i + 1]
+                              if i + 1 < len(listed_starts) else section_end)
     bodies = {fn.addr: fn for fn in parsed}
     extra = {}
     recovered = []
@@ -3030,21 +3050,37 @@ def main():
         A normal edge into that entry belongs to this body, even when the
         listing ended before it. The PUSH immediately before that edge names
         its return continuation, not an unrelated callback. Recover these
-        blocks before the SEH scan can give them separate host frames.
+        blocks before the SEH scan can give them separate host frames. For
+        listed functions, also attach clean pushed continuations and handler
+        landings throughout the span ending at the next listed function.
         """
         changed = False
+        span_end = span_ends.get(fn.addr)
+        stubs = set(seh_frame_sites(fn).values())
 
-        def adopt(target):
+        def adopt(target, in_span=False):
             prior = owner.get(target)
             # A pointer guess may own a real suffix behind an invalid prefix.
             # Follow only the cleanup/epilogue's reachable instructions, not
             # every instruction the previous speculative owner happened to own.
             insns = []
             if target not in fn.addrs:
-                blocked = set(owner) - prior.addrs if prior is not None else owner
-                insns = image.recover(target, blocked)
-                if not insns:
-                    return False
+                if in_span:
+                    if not fn.addr <= target < span_end or target in stubs:
+                        return False
+                    # Existing fragments in the span are not new function
+                    # boundaries. Follow normal edges through them, while the
+                    # handler stubs retain their separate dispatcher entries.
+                    insns = image.recover(target, stubs, bounds=(fn.addr, span_end))
+                    candidate = Function(target, "continuation", 0, insns)
+                    candidate.measure(image)
+                    if not insns or not accepts(candidate):
+                        return False
+                else:
+                    blocked = set(owner) - prior.addrs if prior is not None else owner
+                    insns = image.recover(target, blocked)
+                    if not insns:
+                        return False
                 merged = {ins.addr: ins for ins in fn.insns}
                 merged.update({ins.addr: ins for ins in insns})
                 grown = Function(fn.addr, fn.name, fn.size, [merged[a] for a in sorted(merged)])
@@ -3054,7 +3090,9 @@ def main():
             # An overlapping body may have been independently recovered even
             # when these instructions are already in the establishing body.
             # Retire that definition as well as preserving its alternate entry.
-            for prior in {prior, bodies.get(target)} - {None, fn}:
+            priors = {prior, bodies.get(target)}
+            priors.update(owner.get(ins.addr) for ins in insns)
+            for prior in priors - {None, fn}:
                 # Preserve independently named entries as wrappers into the
                 # establishing body, including the exception path's CALL.
                 for addr, body in list(extra.items()):
@@ -3081,6 +3119,32 @@ def main():
             # standalone body we just retired on every discovery round.
             finally_owners[target] = fn
             return adopted
+
+        if span_end is not None:
+            # A pushed address in the original span can name an omitted
+            # continuation. Repeated discovery rounds find further PUSHes in
+            # the attached blocks, reaching the complete cleanup chain.
+            targets = set()
+            for ins in fn.insns:
+                if ins.mnem == "PUSH" and ins.ops:
+                    op = parse_operand(ins.ops[0])
+                    if op.kind == "imm" and fn.addr <= op.imm < span_end:
+                        targets.add(op.imm)
+            for target in sorted(targets - stubs):
+                changed |= adopt(target, in_span=True)
+            # The normal path can join the suffix of an except landing before
+            # reaching a finally cleanup. Seed those in-span landings into the
+            # same owner too, retaining their callable alternate entries.
+            for stub in sorted(stubs):
+                landings, _ = image.seh_landings(stub)
+                for landing in landings:
+                    if fn.addr <= landing < span_end:
+                        changed |= adopt(landing, in_span=True)
+                        if landing in fn.addrs:
+                            extra[landing] = fn
+                            if landing not in all_addrs:
+                                all_addrs.add(landing)
+                                changed = True
 
         for stub in seh_frame_sites(fn).values():
             landings, table_range = image.seh_landings(stub)

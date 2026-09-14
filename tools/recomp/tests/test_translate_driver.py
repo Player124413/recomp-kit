@@ -141,7 +141,7 @@ def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, p
     if push_ret:
         text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
         assert "void fn_%08x(" % landing in text
-        assert "CALL_FN(%08x); return;" % landing in text
+        assert "case %s: goto L_%08x;" % (T.hexlit(landing), landing) in text
 
 
 def test_computed_returns_use_sorted_call_continuations(tmp_path, monkeypatch):
@@ -565,7 +565,7 @@ def test_except_calls_push_decoded_returns_after_short_jump(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
     assert T.main() == 0
     text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
-    block = text.split("void fn_%08x(X86 *c) {" % cleanup, 1)[1].split("\n}", 1)[0]
+    block = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
     for ret in (cleanup + 5, cleanup + 10, epilogue):
         assert "wr32(c->r[4], %s);" % T.hexlit(ret) in block
     assert "wr32(c->r[4], %s);" % T.hexlit(cleanup + 11) not in block
@@ -593,3 +593,121 @@ def test_ret_classifies_after_pop_without_an_interior_switch_for_plain_returns()
     helper = header.split("static inline void recomp_return(X86 *c)", 1)[1].split("}\n", 1)[0]
     assert helper.index("recomp_is_call_return") < helper.index("recomp_index_of")
     assert "recomp_call(c, c->eip);" in helper
+
+
+def test_nested_except_join_keeps_outer_finally_in_establishing_body(tmp_path, monkeypatch):
+    import struct
+    entry, outer_stub, inner_stub = 0x00601000, 0x00601080, 0x00601040
+    join, cleanup, epilogue = 0x00601050, 0x0060105d, 0x00601090
+    helper, dispatcher, done = 0x00601100, 0x00601110, 0x00601120
+    def rel(op, at, target):
+        return bytes([op]) + struct.pack('<i', target - at - 5)
+    code = bytearray(b'\x55\x89\xe5')
+    for stub in (outer_stub, inner_stub):
+        code += b'\x31\xc0\x55\x68' + struct.pack('<I', stub) + b'\x64\xff\x30\x64\x89\x20'
+    code += b'\x31\xc0\x5a\x59\x59\x64\x89\x10'
+    code += rel(0xe9, entry + len(code), join)
+    blocks = {
+        entry: bytes(code),
+        inner_stub: rel(0xe9, inner_stub, dispatcher)
+            + rel(0xe8, inner_stub + 5, helper)
+            + rel(0xe8, inner_stub + 10, done) + b'\x90',
+        join: b'\x31\xc0\x5a\x59\x59\x64\x89\x10\x68' + struct.pack('<I', epilogue),
+        cleanup: b'\x40\xc3',
+        outer_stub: rel(0xe9, outer_stub, dispatcher)
+            + rel(0xe9, outer_stub + 5, cleanup),
+        epilogue: b'\x89\xec\x5d\xc3',
+        helper: b'\xc3', dispatcher: b'\xc3', done: b'\x5a\xff\xe2',
+    }
+    img = synthetic_image(blocks, base=0x00600000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    img.plausible_immediate_target = lambda addr: False
+    listings = tmp_path / 'functions'
+    listings.mkdir()
+    table = tmp_path / 'functions.tsv'
+    rows = ['address\tname\tsize']
+    img.md.detail = True
+    for addr in (entry, helper, dispatcher, done):
+        insns = [img.to_insn(ci) for ci in img.md.disasm(blocks[addr], addr)]
+        (listings / ('%08x.asm' % addr)).write_text('\n'.join(i.raw for i in insns) + '\n')
+        rows.append('%08x\tfixture_%08x\t%d' % (addr, addr, len(blocks[addr])))
+    img.md.detail = False
+    table.write_text('\n'.join(rows) + '\n')
+    binary, curated, out = tmp_path / 'image', tmp_path / 'globals.toml', tmp_path / 'gen'
+    binary.write_bytes(img.data)
+    curated.write_text('')
+    monkeypatch.setattr(T, 'configure', lambda cfg: None)
+    monkeypatch.setattr(T.game_config, 'load', lambda path: {})
+    for name, value in (('LISTINGS', listings), ('FUNCS_TSV', table), ('BINARY', binary), ('CURATED', curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, 'EXTRA_ENTRY_POINTS', frozenset())
+    monkeypatch.setattr(T, 'Image', lambda path: img)
+    monkeypatch.setattr(sys, 'argv', ['translate.py', '--game', str(tmp_path), '--out', str(out), '--quiet'])
+    assert T.main() == 0
+    text = '\n'.join(p.read_text() for p in out.glob('chunk_*.c'))
+    for stub in (outer_stub, inner_stub):
+        assert "void fn_%08x(X86 *c) {\n    CALL_FN(%08x); return;" % (stub, dispatcher) in text
+    # Normal execution must retain the frame until the epilogue restores ESP/EBP.
+    assert 'void fn_%08x(X86 *c) { body_%08x(c, %s); }' % (cleanup, entry, T.hexlit(cleanup)) in text
+    body = text.split('static void body_%08x(' % entry, 1)[1].split('void fn_%08x(' % entry, 1)[0]
+    assert 'case %s: goto L_%08x;' % (T.hexlit(epilogue), epilogue) in body
+
+
+@pytest.mark.parametrize("second_kind", ["inside", "next_function", "bad_decode"])
+def test_span_recovers_a_chain_of_omitted_pushed_continuations(tmp_path, monkeypatch, second_kind):
+    import struct
+    entry, first, second, next_fn = 0x00601000, 0x00601020, 0x00601040, 0x00601060
+    if second_kind == "next_function":
+        second = next_fn
+    blocks = {entry: b"\x55\x89\xe5\x68" + struct.pack("<I", first) + b"\xc3",
+              first: b"\x68" + struct.pack("<I", second) + b"\xc3",
+              second: b"\x89\xec\x5d\xc3", next_fn: b"\xc3"}
+    if second_kind == "bad_decode":
+        blocks[second] = b"\x0f\x0b\xc3"  # UD2 cannot be translated as a continuation.
+    img = synthetic_image(blocks, base=0x00600000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    img.plausible_immediate_target = lambda addr: False
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    table = tmp_path / "functions.tsv"
+    rows = ["address\tname\tsize"]
+    img.md.detail = True
+    for addr in (entry, next_fn):
+        insns = [img.to_insn(ci) for ci in img.md.disasm(blocks[addr], addr)]
+        (listings / ("%08x.asm" % addr)).write_text("\n".join(i.raw for i in insns) + "\n")
+        rows.append("%08x\tfixture_%08x\t%d" % (addr, addr, len(blocks[addr])))
+    img.md.detail = False
+    table.write_text("\n".join(rows) + "\n")
+    binary, curated, out = tmp_path / "image", tmp_path / "globals.toml", tmp_path / "gen"
+    binary.write_bytes(img.data)
+    curated.write_text("")
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table), ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
+    if second_kind == "bad_decode":
+        # The listed caller must still reject a literal jump to undecodable
+        # code; span recovery must not turn the bad bytes into an owned block.
+        with pytest.raises(T.TranslateError, match="literal dispatch targets"):
+            T.main()
+        return
+    assert T.main() == 0
+    text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+    marker = "static void body_%08x(" % entry
+    if marker not in text:
+        marker = "void fn_%08x(" % entry
+    body = text.split(marker, 1)[1].split("\n}", 1)[0]
+    for target in (first, second):
+        expected = target == first or second_kind == "inside"
+        assert ("L_%08x: ;" % target in body) == expected
+        assert ("case %s: goto L_%08x;" % (T.hexlit(target), target) in body) == expected
+
+
+@pytest.mark.parametrize("code,bound", [(b"\x90\xcc", 2), (b"\xb8\x01\x00\x00\x00", 4)])
+def test_bounded_continuation_recovery_rejects_incomplete_code(code, bound):
+    entry = 0x00601000
+    img = synthetic_image({entry: code}, base=0x00600000)
+    assert img.recover(entry, set(), bounds=(entry, entry + bound)) == []
