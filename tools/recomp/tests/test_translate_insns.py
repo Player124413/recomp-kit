@@ -234,6 +234,17 @@ def fbstp_setup(rng):
 
 
 CASES = [
+    Case("Cleanup RET follows a nonadjacent pushed continuation", 0x0D01EC00,
+         [(0, "PUSH EBP"), (1, "MOV EBP,ESP"), (3, "PUSH 0x0d01ec11"),
+          (8, "LEA EAX,[EBP]"), (11, "MOV EDX,0x3"),
+          (16, "RET"), (17, "POP EBP"), (18, "RET")],
+         "55 89 e5 68 11 ec 01 0d 8d 45 00 ba 03 00 00 00 c3 5d c3",
+         lambda rng: {"regs": rand_regs(rng)}),
+    Case("Cleanup RET immediate adjusts ESP before the continuation", 0x0D01ED00,
+         [(0, "PUSH 0x1234"), (5, "PUSH 0x0d01ed0e"), (10, "NOP"),
+          (11, "RET 0x4"), (14, "INC EAX"), (15, "RET 0x8")],
+         "68 34 12 00 00 68 0e ed 01 0d 90 c2 04 00 40 c2 08 00",
+         lambda rng: {"regs": rand_regs(rng), "args": [11, 22]}),
     Case("Variable argument cleanup returns through a popped address", 0x0D01EA00,
          [(0, "POP EAX"), (1, "LEA ESP,[ESP + EDX*0x4]"), (4, "JMP EAX")],
          "58 8d 24 94 ff e0",

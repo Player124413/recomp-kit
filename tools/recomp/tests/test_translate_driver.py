@@ -189,6 +189,110 @@ def test_computed_returns_use_sorted_call_continuations(tmp_path, monkeypatch):
     assert "recomp_is_call_return" not in call
 
 
+@pytest.mark.parametrize("target,dispatch", [(0x0060100b, True),
+                                           (0x00601002, False),
+                                           (0x00601100, False)])
+def test_return_switch_requires_pushed_instruction_boundary(target, dispatch):
+    """Only a pushed instruction in this body makes RET an interior dispatch."""
+    import struct
+    from test_translate_insns import Opts
+    entry = 0x00601000
+    code = b"\x68" + struct.pack("<I", target) + b"\xb8\x2a\x00\x00\x00\xc3\xc2\x08\x00"
+    img = synthetic_image({entry: code}, base=0x00600000)
+    insns = T.parse_listing_text(
+        "00601000  PUSH 0x%x\n00601005  MOV EAX,0x2a\n0060100a  RET\n0060100b  RET 0x8\n" % target)
+    fn = T.Function(entry, "cleanup", len(code), insns)
+    fn.measure(img)
+    tr = T.Translator(img, {entry}, Opts())
+    tr.prepare(fn)
+    text = "\n".join(tr.translate(fn, [entry + 5]))
+    assert ("switch (r_)" in text) == dispatch
+    if dispatch:
+        assert text.count("switch (r_)") == 2
+        assert text.count("case 0x60100bu: goto L_0060100b;") == 2
+        assert "c->r[4] += 12u;" in text
+        assert text.count("default: c->eip = r_; return;") == 2
+    assert "void fn_00601005(X86 *c) { body_00601000(c, 0x601005u); }" in text
+
+
+@pytest.mark.parametrize("jump_to_cleanup", [False, True])
+@pytest.mark.parametrize("listed_cleanup", [False, True])
+@pytest.mark.parametrize("recovered_owner", [False, True, "speculative_epilogue"])
+def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup, listed_cleanup, recovered_owner):
+    """Omitted normal cleanup is also callable through an alternate SEH entry."""
+    import struct
+    entry, stub, epilogue, helper = 0x00601000, 0x00601040, 0x00601060, 0x00601080
+    dispatcher = 0x00601090
+    code = bytearray(b"\x55\x89\xe5\x31\xc0\x55\x68" + struct.pack("<I", stub)
+                     + b"\x64\xff\x30\x64\x89\x20\x5a\x59\x59\x64\x89\x10\x68"
+                     + struct.pack("<I", epilogue))
+    cleanup = 0x00601050 if jump_to_cleanup else entry + len(code)
+    if jump_to_cleanup:
+        code += b"\xe9" + struct.pack("<i", cleanup - entry - len(code) - 5)
+    listed_end = len(code)
+    cleanup_code = b"\x90\xe8" + struct.pack("<i", helper - cleanup - 6) + b"\xc3"
+    img = synthetic_image({entry: bytes(code), cleanup: cleanup_code,
+                           stub: b"\xe9" + struct.pack("<i", dispatcher - stub - 5)
+                                 + b"\xe9" + struct.pack("<i", cleanup - stub - 10),
+                           epilogue: b"\x89\xec\x5d\xc3", helper: b"\xc3", dispatcher: b"\xc3"},
+                          base=0x00600000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    img.plausible_immediate_target = lambda addr: False
+    img.md.detail = True
+    insns = [img.to_insn(ci) for ci in img.md.disasm(bytes(code), entry)]
+    img.md.detail = False
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    (listings / ("%08x.asm" % entry)).write_text("\n".join(
+        "%08x  %s %s" % (i.addr, i.mnem, ",".join(i.ops)) for i in insns) + "\n")
+    for addr in (helper, dispatcher):
+        (listings / ("%08x.asm" % addr)).write_text("%08x  RET\n" % addr)
+    table = tmp_path / "functions.tsv"
+    table.write_text("address\tname\tsize\n%08x\testablishing\t%d\n%08x\thelper\t1\n%08x\tdispatcher\t1\n"
+                     % (entry, listed_end, helper, dispatcher))
+    if listed_cleanup:
+        (listings / ("%08x.asm" % cleanup)).write_text(
+            "%08x  NOP\n%08x  CALL 0x%x\n%08x  RET\n" % (cleanup, cleanup + 1, helper, cleanup + 6))
+        with table.open("a") as fh:
+            fh.write("%08x\tshared_cleanup\t7\n" % cleanup)
+    if recovered_owner:
+        (listings / ("%08x.asm" % entry)).unlink()
+        table.write_text("\n".join(line for line in table.read_text().splitlines()
+                                   if not line.startswith("%08x\t" % entry)) + "\n")
+        img.code_pointers = lambda *a, **kw: ({entry}, set())
+    if recovered_owner == "speculative_epilogue":
+        # A pointer guess owns the real epilogue, but has an invalid prefix.
+        # Adopting the epilogue must not import that prefix into the real body.
+        prefix = entry - 0x20
+        raw = (b"\x0f\x84" + struct.pack("<i", epilogue - prefix - 6)
+               + b"\xe9" + struct.pack("<i", -0x10000))
+        data = bytearray(img.data)
+        data[prefix - img.base:prefix - img.base + len(raw)] = raw
+        img.data = bytes(data)
+        img.code_pointers = lambda *a, **kw: ({prefix, entry}, set())
+    binary, curated = tmp_path / "image", tmp_path / "globals.toml"
+    binary.write_bytes(img.data)
+    curated.write_text("")
+    out = tmp_path / "gen"
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                        ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
+    assert T.main() == 0
+    text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
+    assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (cleanup, entry, T.hexlit(cleanup)) in text
+    body = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
+    assert "L_%08x: ;" % epilogue in body
+    assert "case %s: goto L_%08x;" % (T.hexlit(epilogue), epilogue) in body
+    assert "CALL_FN(%08x);" % helper in body
+    assert "CALL_FN(%08x);" % cleanup not in body
+
+
 def test_a_pushed_destructor_thunk_is_an_entry_candidate():
     """`atexit` is handed the address of a ten-byte `MOV ECX,obj / JMP dtor`
     thunk packed right after its initializer's RET: unaligned, not preceded

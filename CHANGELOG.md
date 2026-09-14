@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Translator: RET follows pushed interior continuations after cleanup, with
+  shared Delphi finally blocks and their epilogues kept in the establishing
+  body and exposed through alternate entries for exception dispatch.
+
 - Translator: computed jumps to non-entry CALL continuations return to the
   pending host caller without dispatching again or popping the guest stack.
 

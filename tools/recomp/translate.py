@@ -1119,6 +1119,19 @@ class Image(object):
             return got[1].address + got[1].size if len(got) > 1 else None
         return got[0].address + got[0].size
 
+    def instruction_at(self, va):
+        """Decode one structural instruction without walking its successors."""
+        if self.md is None or not self.is_exec(va):
+            return None
+        detail = self.md.detail
+        self.md.detail = True
+        try:
+            ci = next(self.md.disasm(self.data[va - self.base:va - self.base + 16],
+                                    va, count=1), None)
+            return self.to_insn(ci) if ci is not None else None
+        finally:
+            self.md.detail = detail
+
 
 # -------------------------------------------------------------- translator --
 
@@ -1242,6 +1255,20 @@ class Translator(object):
 
     # -- control flow ------------------------------------------------------
 
+    @staticmethod
+    def pushed_continuations(fn):
+        """Instruction boundaries in this body that PUSH names as continuations."""
+        targets = set()
+        for ins in fn.insns:
+            if ins.mnem != "PUSH" or not ins.ops:
+                continue
+            op = parse_operand(ins.ops[0])
+            if op.kind == "imm" and operand_size([op], hint=32) == 32:
+                target = op.imm & 0xffffffff
+                if target in fn.addrs:
+                    targets.add(target)
+        return targets
+
     def push_ret_target(self, fn, i):
         """An adjacent PUSH imm32 / RET is a jump, including Delphi epilogues.
 
@@ -1261,11 +1288,11 @@ class Translator(object):
         ins = fn.insns[i]
         m = ins.mnem
         t = self.push_ret_target(fn, i)
-        if t is not None:
+        if t is not None and t not in fn.pushed_continuations:
             return [fn.index[t]] if t in fn.index else []
         nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
         if m == "RET":
-            return []
+            return [fn.index[t] for t in sorted(fn.pushed_continuations)]
         if m in JCC:
             out = [nxt] if nxt is not None else []
             t = self.branch_target(ins)
@@ -1742,6 +1769,7 @@ class Translator(object):
         is strict and a target that is still not an instruction boundary is an
         error."""
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
+        fn.pushed_continuations = self.pushed_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn)
         self.strict = strict
         for i, ins in enumerate(fn.insns):
@@ -1766,6 +1794,7 @@ class Translator(object):
         # an earlier, shorter version has to be dropped rather than emitted as
         # a goto to a label that was never placed.
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
+        fn.pushed_continuations = self.pushed_continuations(fn)
         dropped = [e for e in entries if e not in fn.index]
         if dropped:
             self.stale_entries.update(dropped)
@@ -1775,7 +1804,7 @@ class Translator(object):
         else:
             live_out = self.liveness(fn)
 
-        labels = set()
+        labels = set(fn.pushed_continuations)
         for i, ins in enumerate(fn.insns):
             t = self.push_ret_target(fn, i)
             if t is not None and t in fn.index:
@@ -2045,7 +2074,7 @@ class Translator(object):
             L.append("uint32_t v_ = %s;" % read_op(ops[0], 32))
             L.append("c->r[4] -= 4; wr32(c->r[4], v_);")
             t = self.push_ret_target(fn, i)
-            if t is not None:
+            if t is not None and t not in fn.pushed_continuations:
                 # Preserve the guest stack write even though the pair has no
                 # net stack effect, then take the RET's guest continuation.
                 L.append("c->eip = v_; c->r[4] += 4;")
@@ -2305,6 +2334,16 @@ class Translator(object):
 
         if m == "RET":
             n = parse_imm(ins.ops[0]) if ins.ops else 0
+            if fn.pushed_continuations:
+                # Normal finally cleanup stays in the establishing C frame.
+                # An alternate entry called by the exception dispatcher has
+                # its own return address and takes the default arm instead.
+                L = ["uint32_t r_ = rd32(c->r[4]); c->r[4] += %du;" % (4 + n),
+                     "switch (r_) {"]
+                L.extend("case %s: goto L_%08x;" % (hexlit(t), t)
+                         for t in sorted(fn.pushed_continuations))
+                L.extend(["default: c->eip = r_; return;", "}"])
+                return L
             return ["c->eip = rd32(c->r[4]); c->r[4] += %du; return;" % (4 + n)]
 
         # --------------------------------------------------------- system --
@@ -2935,6 +2974,96 @@ def main():
                     owner[ins.addr] = new_fn
         return True
 
+    retired_finally_bodies = set()
+
+    def extend_finally_body(fn):
+        """Keep normal cleanup and its pushed epilogue in the establishing body.
+
+        A Delphi untyped stub's landing JMP names the shared cleanup entry.
+        A normal edge into that entry belongs to this body, even when the
+        listing ended before it. The PUSH immediately before that edge names
+        its return continuation, not an unrelated callback. Recover these
+        blocks before the SEH scan can give them separate host frames.
+        """
+        changed = False
+
+        def adopt(target):
+            if target in fn.addrs:
+                return False
+            prior = owner.get(target)
+            # A pointer guess may own a real suffix behind an invalid prefix.
+            # Follow only the cleanup/epilogue's reachable instructions, not
+            # every instruction the previous speculative owner happened to own.
+            blocked = set(owner) - prior.addrs if prior is not None else owner
+            insns = image.recover(target, blocked)
+            if not insns:
+                return False
+            merged = {ins.addr: ins for ins in fn.insns}
+            merged.update({ins.addr: ins for ins in insns})
+            grown = Function(fn.addr, fn.name, fn.size, [merged[a] for a in sorted(merged)])
+            grown.measure(image)
+            fn.__dict__.update(grown.__dict__)
+            if prior is not None:
+                # Preserve independently named entries as wrappers into the
+                # establishing body, including the exception path's CALL.
+                for addr, body in list(extra.items()):
+                    if body is prior and addr in fn.addrs:
+                        extra[addr] = fn
+                if prior.addrs <= fn.addrs:
+                    parsed.remove(prior)
+                    retired_finally_bodies.add(prior)
+                    if prior in recovered:
+                        recovered.remove(prior)
+                    extra[prior.addr] = fn
+            for ins in insns:
+                owner[ins.addr] = fn
+            register(fn)
+            return True
+
+        for stub in seh_frame_sites(fn).values():
+            landings, table_range = image.seh_landings(stub)
+            if table_range or landings != [stub + 5]:
+                continue
+            landing = image.instruction_at(stub + 5)
+            if landing is None or landing.mnem != "JMP":
+                continue
+            cleanup = Translator.branch_target(landing)
+            if cleanup is None:
+                continue
+            # Require a normal fall-through or direct jump from this body;
+            # exception-only handlers remain separately recovered blocks.
+            normal = any((ins.mnem == "JMP" and Translator.branch_target(ins) == cleanup)
+                         or (ins.mnem not in TERMINATORS and not tr.never_returns(ins)
+                             and fn.fallthrough[i] == cleanup)
+                         for i, ins in enumerate(fn.insns))
+            if not normal:
+                continue
+            continuations = set()
+            for i, ins in enumerate(fn.insns):
+                if ins.mnem != "PUSH" or not ins.ops:
+                    continue
+                nxt = fn.fallthrough[i]
+                following = next((x for x in fn.insns if x.addr == nxt), None)
+                if nxt != cleanup and not (following is not None and following.mnem == "JMP"
+                                           and Translator.branch_target(following) == cleanup):
+                    continue
+                op = parse_operand(ins.ops[0])
+                if op.kind == "imm" and operand_size([op], hint=32) == 32:
+                    continuations.add(op.imm & 0xffffffff)
+            changed |= adopt(cleanup)
+            for target in sorted(continuations):
+                changed |= adopt(target)
+            # Both normal flow and the handler stub establish this ownership.
+            # Preserve it when the SEH resolver encounters the same address;
+            # it must not split this body again as a speculative pointer guess.
+            if cleanup in fn.addrs:
+                note_structural(provenance, owner, cleanup, "seh")
+            if cleanup in fn.addrs and cleanup not in all_addrs:
+                extra[cleanup] = fn
+                all_addrs.add(cleanup)
+                changed = True
+        return changed
+
     # Seed before branch recovery can claim fragments of these functions.
     # The later __initterm pass uses the same resolver, but by then recovery
     # stops at owned instructions and cannot reconstruct a whole missing body.
@@ -2958,6 +3087,10 @@ def main():
                 pass                      # reported by the strict pass below
         listed = set(owner)
         changed = False
+        for fn in list(parsed):
+            if fn not in retired_finally_bodies:
+                changed |= extend_finally_body(fn)
+        listed = set(owner)
         # Seed omitted exception blocks before ordinary branch/immediate
         # discovery can claim their fragments. Use the same resolver as
         # explicit configuration entries, including alternate entries into a
