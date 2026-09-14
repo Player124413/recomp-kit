@@ -798,22 +798,42 @@ def test_protected_call_target_truncates_earlier_scan_guess(
     assert "IN AL,DX" not in text
 
 
-@pytest.mark.parametrize("protected", [False, True])
-def test_utf16_run_filter_applies_only_to_speculative_entries(tmp_path, monkeypatch, protected):
+@pytest.mark.parametrize("evidence", ["speculative", "branch", "reloc"])
+def test_utf16_run_filter_applies_only_to_speculative_entries(tmp_path, monkeypatch, evidence):
     """Four printable UTF-16 pairs inside the first 16 bytes reject only guesses."""
     import struct
     entry, target, next_fn = 0x00601000, 0x00601020, 0x00601100
     # At instruction boundaries these are legal instructions; a direct CALL
     # is explicit evidence and must outrank the cheap text heuristic.
     raw = b"\x90\x90" + "ABCD".encode("utf-16le") + b"\x90\xc3"
-    edge = (b"\xe8" + struct.pack("<i", target - entry - 5) if protected else
+    edge = (b"\xe8" + struct.pack("<i", target - entry - 5) if evidence == "branch" else
             b"\xba" + struct.pack("<I", target))
     blocks = {entry: edge + b"\xc3", target: raw, next_fn: b"\xc3"}
     img = synthetic_image(blocks, base=0x00600000)
     img.code_pointers = lambda *args, **kwargs: (set(), set())
+    if evidence == "reloc":
+        img.relocated_pointers = lambda: {target: entry + 1}
     text = translate_entry_fixture(tmp_path, monkeypatch, img,
                                    {a: blocks[a] for a in (entry, next_fn)})
-    assert ("void fn_%08x(" % target in text) == protected
+    assert ("void fn_%08x(" % target in text) == (evidence != "speculative")
+
+
+@pytest.mark.parametrize("relocated", [False, True])
+def test_method_with_zero_local_pushes_is_an_entry(tmp_path, monkeypatch, relocated):
+    """PUSH 0 reserves Delphi locals; its 6a 00 bytes are not a text run."""
+    import struct
+    entry, method, next_fn, slot = 0x00601000, 0x00601020, 0x00601100, 0x00601800
+    blocks = {
+        entry: b"\xc3",
+        method: b"\x55\x8b\xec" + b"\x6a\x00" * 7 + b"\x89\xec\x5d\xc3",
+        next_fn: b"\xc3", slot: struct.pack("<I", method),
+    }
+    img = synthetic_image(blocks, base=0x00600000)
+    if relocated:
+        img.relocated_pointers = lambda: {method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
 
 
 @pytest.mark.parametrize("location", ["inside", "outside", "bad_decode", "chain"])

@@ -782,7 +782,8 @@ class Image(object):
         must win even when instruction bytes happen to resemble text.
         """
         head = self.data[va - self.base:va - self.base + 16]
-        return any(all(0x20 <= head[i] <= 0x7e and head[i + 1] == 0
+        # 6a 00 is PUSH 0; Delphi reserves locals with consecutive PUSHes.
+        return any(all(0x20 <= head[i] <= 0x7e and head[i] != 0x6a and head[i + 1] == 0
                        for i in range(off, off + 8, 2))
                    for off in range(len(head) - 7))
 
@@ -2968,7 +2969,9 @@ def main():
             if image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00":
                 # ADD byte ptr [EAX],AL is data at a speculative function start.
                 return False
-            if image.starts_with_utf16_run(fn.addr):
+            # A relocated dword is linker evidence of an address, which
+            # outranks this byte-pattern heuristic even for a scan candidate.
+            if fn.addr not in relocated and image.starts_with_utf16_run(fn.addr):
                 return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
