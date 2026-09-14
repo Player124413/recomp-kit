@@ -91,7 +91,7 @@ def visual_animation_read(addr, body):
 #: own dispatch goes nowhere may be withdrawn, and every withdrawal is
 #: reported with its provenance and the target that failed, so a real callback
 #: with an unresolvable callee is visible rather than silently dropped.
-STRUCTURAL_PROVENANCE = ("table", "initterm", "config")
+STRUCTURAL_PROVENANCE = ("table", "initterm", "config", "seh")
 
 
 def note_structural(provenance, owner, t, why):
@@ -698,6 +698,35 @@ class Image(object):
     def is_exec(self, va):
         return any(lo <= va < hi for lo, hi, _ in self.exec_ranges)
 
+    def seh_landings(self, stub):
+        """Classify a Delphi handler stub by structure, never by its target's name.
+
+        The five-byte JMP is code; what follows is either a landing block or
+        a bounded count/type/handler table. Stubs and blocks may be absent
+        from every exported listing.
+        """
+        displacement = self.rd32(stub + 1)
+        if (not self.is_exec(stub) or self.rd8(stub) != 0xe9
+                or displacement is None
+                or not self.is_exec((stub + 5 + displacement) & 0xffffffff)):
+            raise TranslateError("SEH stub %08x is not a JMP rel32 to code" % stub)
+        n = self.rd32(stub + 5)
+        if n is not None and 1 <= n <= 64:
+            landings = []
+            for i in range(n):
+                typ = self.rd32(stub + 9 + 8 * i)
+                handler = self.rd32(stub + 13 + 8 * i)
+                if (typ is None or handler is None or not self.is_exec(handler)
+                        or not (typ == 0 or self.is_exec(typ) or any(
+                            lo <= typ < hi for lo, hi, _ in self.data_ranges))):
+                    break
+                landings.append(handler)
+            else:
+                return landings, (stub + 5, stub + 9 + 8 * n)
+        if not self.is_exec(stub + 5):
+            raise TranslateError("SEH landing %08x is not in code" % (stub + 5))
+        return [stub + 5], None
+
     def looks_like_function(self, va):
         """Does `va` look like the start of an MSVC function?
 
@@ -1118,6 +1147,39 @@ class Function(object):
 
 
 TERMINATORS = frozenset(("RET", "JMP"))
+
+
+def seh_chain_operand(op):
+    """Only the Delphi chain-head spellings, not other fields in the TEB."""
+    return (op.kind == "mem" and op.size == 32 and op.seg == "FS"
+            and op.base in (None, 0) and op.index is None and op.disp == 0)
+
+
+def seh_frame_sites(fn):
+    """Map establishing MOV indices to pushed stub addresses in this body."""
+    sites = {}
+    for i in range(2, len(fn.insns)):
+        mov, push = fn.insns[i], fn.insns[i - 1]
+        if mov.mnem != "MOV" or push.mnem != "PUSH" or len(mov.ops) != 2:
+            continue
+        try:
+            dst, src = [parse_operand(o) for o in mov.ops]
+            if (not seh_chain_operand(dst) or src.kind != "reg" or src.reg != 4
+                    or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]))
+                    or not fn.contiguous[i - 1]):
+                continue
+            for j in range(i - 2, max(-1, i - 4), -1):
+                prev = fn.insns[j]
+                if not fn.contiguous[j]:
+                    break
+                if prev.mnem == "PUSH" and prev.ops:
+                    imm = parse_operand(prev.ops[0])
+                    if imm.kind == "imm":
+                        sites[i] = imm.imm
+                    break
+        except TranslateError:
+            continue
+    return sites
 
 
 class Translator(object):
@@ -1642,6 +1704,7 @@ class Translator(object):
         is strict and a target that is still not an instruction boundary is an
         error."""
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
+        fn.seh_sites = seh_frame_sites(fn)
         self.strict = strict
         for i, ins in enumerate(fn.insns):
             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
@@ -1855,6 +1918,12 @@ class Translator(object):
                 # These come from data Ghidra decoded as code.
                 return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
             L.append(write_op(dst, size, read_op(src, size)))
+            if fn.seh_sites and seh_chain_operand(dst) and src.kind == "reg" and src.size == 32:
+                if src.reg == 4:
+                    L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
+                             "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
+                else:
+                    L.append("recomp_seh_frame_leave(c);")
             return L
 
         if m == "LEA":
@@ -2709,6 +2778,7 @@ def main():
     for fn in parsed:
         register(fn)
 
+    listed_functions = {fn.addr for fn in parsed}
     extra = {}
     recovered = []
     discovered_by_scan = [0]
@@ -2751,17 +2821,28 @@ def main():
             tr.stats.clear()
             tr.stats.update(stats)
 
-    def resolve(t, listed, home=None, validate=True, why="branch"):
+    def resolve(t, listed, home=None, validate=True, why="branch", continuation=True):
         """Make `t` an entry point.  Returns True if that changed anything."""
         if t is None:
             return False
+        if (why == "branch" and continuation and home is not None
+                and home.addr not in listed_functions and provenance.get(home.addr) == "seh"):
+            why = "seh"
+        # An SEH continuation can already belong to a speculative recovered
+        # body. Its bad prefix may later withdraw that body. Recover the
+        # structurally named suffix independently instead of promoting the
+        # guess, or dropping the real landing along with its guessed owner.
+        prior = owner.get(t)
+        separate = (why == "seh" and prior is not None and prior.addr != t
+                    and prior.addr not in listed_functions
+                    and provenance.get(prior.addr, "branch") not in STRUCTURAL_PROVENANCE)
         # Before any of the early returns below.  See note_structural.
-        note_structural(provenance, owner, t, why)
-        if t in all_addrs:
+        note_structural(provenance, {} if separate else owner, t, why)
+        if t in all_addrs and not separate:
             return False
         if home is not None and t in home.addrs:
             return False
-        if t in owner:
+        if t in owner and not separate:
             extra[t] = owner[t]
             all_addrs.add(t)
             # Why this address is an entry, which symbols.json turns into hook
@@ -2772,7 +2853,7 @@ def main():
             if why != "branch" and provenance.get(t, "branch") == "branch":
                 provenance[t] = why
             return True
-        insns = image.recover(t, listed)
+        insns = image.recover(t, listed - prior.addrs if separate else listed)
         if not insns:
             return False
         name = ("FUN_%08x" if why == "config" else "recovered_%08x") % t
@@ -2781,6 +2862,10 @@ def main():
         # A block reached from an established one is established too.
         inherited = provenance.get(
             home.addr if home is not None else None, "branch")
+        # Landing provenance describes recovered continuations, not the
+        # System dispatcher or the entire call graph of a listed owner.
+        if inherited == "seh" and (not continuation or home.addr in listed_functions):
+            inherited = "branch"
         # Config names only its explicit entries, not every branch they reach.
         provenance[t] = why if why != "branch" else (
             "branch" if inherited == "config" else inherited)
@@ -2794,6 +2879,11 @@ def main():
         recovered.append(new_fn)
         all_addrs.add(t)
         register(new_fn)
+        if separate:
+            extra.pop(t, None)
+            for ins in new_fn.insns:
+                if owner.get(ins.addr) is prior:
+                    owner[ins.addr] = new_fn
         return True
 
     # Seed before branch recovery can claim fragments of these functions.
@@ -2805,6 +2895,7 @@ def main():
         resolve(addr, set(owner), why="config")
 
     scanned_pointers = False
+    seh_stubs = set()
     converged = False
     for _round in range(64):
         tr.func_addrs = all_addrs
@@ -2818,6 +2909,21 @@ def main():
                 pass                      # reported by the strict pass below
         listed = set(owner)
         changed = False
+        # Seed omitted exception blocks before ordinary branch/immediate
+        # discovery can claim their fragments. Use the same resolver as
+        # explicit configuration entries, including alternate entries into a
+        # listed body. Table bytes must stay out of heuristic pointer scans.
+        for fn in list(parsed):
+            for stub in seh_frame_sites(fn).values():
+                if stub in seh_stubs:
+                    continue
+                seh_stubs.add(stub)
+                landings, table_range = image.seh_landings(stub)
+                if table_range:
+                    tr.table_ranges.add(table_range)
+                changed |= resolve(stub, set(owner), why="immediate")
+                for landing in landings:
+                    changed |= resolve(landing, set(owner), why="seh")
         for fn in list(parsed):
             for i, ins in enumerate(fn.insns):
                 # Direct CALL targets are followed too.  Every one in the
@@ -2825,7 +2931,8 @@ def main():
                 # by the data-pointer scan calls functions Ghidra never listed
                 # either: 0049e800 calls 004c3110 and 004c31e0.
                 if ins.mnem in ("JMP", "CALL") or ins.mnem in JCC:
-                    changed |= resolve(Translator.branch_target(ins), listed, fn)
+                    changed |= resolve(Translator.branch_target(ins), listed, fn,
+                                       continuation=ins.mnem != "CALL")
                 if ins.mnem in TERMINATORS or tr.never_returns(ins):
                     continue
                 if not fn.contiguous[i]:
@@ -3149,7 +3256,7 @@ def main():
     with open(os.path.join(args.out, "funcs.h"), "w") as fh:
         fh.write("/* generated by tools/recomp/translate.py -- do not edit */\n")
         fh.write("#ifndef RECOMP_FUNCS_H\n#define RECOMP_FUNCS_H\n")
-        fh.write('#include "x86.h"\n#include "intrinsics.h"\n')
+        fh.write('#include "x86.h"\n#include "intrinsics.h"\n#include "seh.h"\n')
         fh.write("/* Task 8 replacements: define FN_<addr> to a native function in a\n"
                  " * header named by RECOMP_OVERRIDE_HEADER and every direct call site,\n"
                  " * tail call and jump-table case for that address is redirected. */\n")
@@ -3333,6 +3440,7 @@ void recomp_call(X86 *c, uint32_t target)
  * entry and every decoded jump-table target. */
 void recomp_jump(X86 *c, uint32_t target)
 {
+    if (recomp_seh_pending_target()) recomp_seh_intercept(c, target);
     int32_t i = recomp_lookup(target);
     if (i >= 0) {
         if (recomp_profile_enabled) recomp_profile_push((uint32_t)i);
@@ -3455,7 +3563,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
                 "blocks_withdrawn": [["%08x" % a, why, "%08x" % t]
                                      for a, why, t in sorted(withdrawn)],
                 "provenance": {k: sum(1 for v in provenance.values() if v == k)
-                               for k in ("table", "initterm", "config", "data",
+                               for k in ("table", "initterm", "config", "seh", "data",
                                          "immediate", "branch")},
                 "table_gaps": [["%08x" % f, "%08x" % a, t,
                                 ["%08x" % m for m in ms]]

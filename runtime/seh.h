@@ -1,0 +1,36 @@
+/* Guest x86 SEH checkpoints. Included by generated C as well as the runtime. */
+#ifndef RECOMP_SEH_H
+#define RECOMP_SEH_H
+#include "x86.h"
+#include <setjmp.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* setjmp must be executed by the live generated function, never in enter(). */
+jmp_buf *recomp_seh_frame_enter(X86 *c);
+/* Drop records strictly below ESP; equality belongs to a still-live frame. */
+void recomp_seh_frame_leave(X86 *c);
+void recomp_seh_land(X86 *c);
+uint32_t recomp_seh_pending_target(void);
+void recomp_seh_intercept(X86 *c, uint32_t target);
+
+/* Context reuse/teardown on its owning host thread; NULL drops all its state. */
+void recomp_seh_reset(X86 *c);
+/* Returns zero for an exhausted chain; kernel32 retains its abort diagnostics.
+ * A nonzero return is possible only through the test-only unhandled hook. */
+int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args);
+void recomp_seh_unwind(X86 *c, uint32_t target, uint32_t target_ip, uint32_t record,
+                       uint32_t retval);
+
+#ifdef POPM_TESTING
+typedef void (*RecompSehUnhandledHook)(X86 *, uint32_t record, uint32_t context);
+void recomp_seh_test_unhandled_hook(RecompSehUnhandledHook hook);
+uint32_t recomp_seh_test_frame_count(X86 *c);
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+#endif
