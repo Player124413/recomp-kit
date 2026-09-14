@@ -1723,11 +1723,11 @@ static void test_windows(X86 *c) {
               rd32(msgbuf + 12) == ((600u << 16) | 800u),
           "ShowWindow posts WM_SIZE on the first show");
     call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
-    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 5, 5, 1}) == 0,
           "ShowWindow on a visible window posts no second WM_SIZE");
     call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
     call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
-    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 5, 5, 1}) == 0,
           "ShowWindow after hiding posts no second WM_SIZE");
 
     // Restore the geometry and visibility used by the existing window checks.
@@ -2870,6 +2870,38 @@ static void test_callbacks(X86 *c) {
     check(call_import(c, "USER32.dll", "UpdateWindow", {vwnd}) == 1 && g_painted == 2,
           "InvalidateRect makes the next UpdateWindow paint again");
     while (call_import(c, "USER32.dll", "PeekMessageA", {msg, vwnd, 0x0003, 0x0005, 1})) {
+    }
+    call_import(c, "USER32.dll", "InvalidateRect", {vwnd, 0, 0});
+    host_post_message(vwnd, 0x113, 99, 0);
+    check(call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 0, 0, 1}) == 1 &&
+              rd32(msg + 4) == 0x113,
+          "queued timer precedes synthesized paint");
+    check(call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 0x100, 0x109, 1}) == 0,
+          "keyboard filter excludes pending paint");
+    for (uint32_t remove : {0u, 0u, 1u})
+        check(call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 0, 0, remove}) == 1 &&
+                  rd32(msg) == vwnd && rd32(msg + 4) == 0xf,
+              "pending paint is synthesized without validating the region (flags=%u)", remove);
+    uint32_t ps = scratch_block(64);
+    check(call_import(c, "USER32.dll", "BeginPaint", {vwnd, ps}) != 0 &&
+              call_import(c, "USER32.dll", "EndPaint", {vwnd, ps}) == 1,
+          "BeginPaint validates and EndPaint releases the DC");
+    check(call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 0, 0, 1}) == 0,
+          "validated window produces no second paint");
+    call_import(c, "USER32.dll", "ShowWindow", {vwnd, 0});
+    call_import(c, "USER32.dll", "InvalidateRect", {vwnd, 0, 0});
+    check(call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 0xf, 0xf, 1}) == 0,
+          "hidden window does not synthesize paint");
+    call_import(c, "USER32.dll", "ShowWindow", {vwnd, 1});
+    check(call_import(c, "USER32.dll", "GetMessageW", {msg, vwnd, 0xf, 0xf}) == 1 &&
+              rd32(msg + 4) == 0xf,
+          "GetMessage also synthesizes paint for a shown window");
+    call_import(c, "USER32.dll", "UpdateWindow", {vwnd});
+    call_import(c, "USER32.dll", "SetWindowPos", {vwnd, 0, 0, 0, 72, 72, 6});
+    check(call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 0xf, 0xf, 1}) == 1,
+          "resizing invalidates the visible client area");
+    call_import(c, "USER32.dll", "UpdateWindow", {vwnd});
+    while (call_import(c, "USER32.dll", "PeekMessageW", {msg, vwnd, 3, 5, 1})) {
     }
     call_import(c, "USER32.dll", "DestroyWindow", {vwnd});
     pwnd = vwnd;
@@ -4883,6 +4915,7 @@ static void test_user32_window_model() {
               rd32(s + 0x40c) == rd32(s + 0x308),
           "monitor geometry");
     while (call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1})) {
+        call_import(&c, "USER32.dll", "DispatchMessageW", {msg});
     }
     host_set_time_source_pinned(200, 20);
     cb = imports_alloc_trampoline("test", "vcl_timer", vcl_timer_callback, 4);

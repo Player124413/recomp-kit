@@ -144,6 +144,7 @@ void host_set_client_size(uint32_t hwnd, int32_t w, int32_t h) {
     if (Window *win = find_window(hwnd)) {
         win->w = w;
         win->h = h;
+        win->update_pending = true;
     }
 }
 void host_set_key_state(int vk, bool down) {
@@ -424,6 +425,8 @@ void u_SetWindowPos(X86 *c) {
         if (!(flags & 0x0001)) {
             w->w = (int32_t)arg(c, 4);
             w->h = (int32_t)arg(c, 5);
+            if (!(flags & 0x0008)) // SWP_NOREDRAW
+                w->update_pending = true;
         } // SWP_NOSIZE
         post_geometry(w->hwnd, w, !(flags & 0x0002), !(flags & 0x0001));
     }
@@ -664,6 +667,31 @@ bool msg_matches(const Msg &m, uint32_t filter_hwnd, uint32_t min_msg, uint32_t 
     return m.message >= min_msg && m.message <= max_msg;
 }
 
+// An update region is a persistent source of low-priority messages, not a
+// queued item consumed by PM_REMOVE. Only validation (normally BeginPaint)
+// makes it disappear. Hidden child hierarchies never receive synthesized paint.
+static bool pending_paint(uint32_t p, uint32_t hwnd, uint32_t min_msg, uint32_t max_msg) {
+    for (const auto &kv : windows()) {
+        const Window *w = &kv.second;
+        if (!w->update_pending || !w->visible || w->w <= 0 || w->h <= 0)
+            continue;
+        const Window *ancestor = w;
+        size_t hops = 0;
+        while (ancestor && ancestor->visible && (ancestor->style & 0x40000000u) &&
+               ancestor->parent && hops++ < windows().size())
+            ancestor = find_window(ancestor->parent);
+        if (!ancestor || !ancestor->visible || hops > windows().size())
+            continue;
+        Msg m{w->hwnd, 0xf, 0, 0, host_millis(), uint32_t(g_cursor_x), uint32_t(g_cursor_y)};
+        if (!msg_matches(m, hwnd, min_msg, max_msg))
+            continue;
+        last_message = m;
+        store_msg(p, m);
+        return true;
+    }
+    return false;
+}
+
 Msg last_message{};
 
 void peek_message(X86 *c) {
@@ -687,7 +715,7 @@ void peek_message(X86 *c) {
         set_eax(c, 1);
         return;
     }
-    set_eax(c, 0);
+    set_eax(c, pending_paint(p, filter_hwnd, min_msg, max_msg));
 }
 
 // GetMessage blocks until a message arrives. The runtime cannot block on its
@@ -720,6 +748,10 @@ void u_GetMessageA(X86 *c) {
             last_message = m;
             store_msg(p, m);
             set_eax(c, m.message == 0x0012 ? 0 : 1); // WM_QUIT ends the loop
+            return;
+        }
+        if (pending_paint(p, filter_hwnd, min_msg, max_msg)) {
+            set_eax(c, 1);
             return;
         }
         host_pump_timers(c);
@@ -835,6 +867,11 @@ void def_window_proc(X86 *c, bool wide) {
         return;
     case 0x000e: // WM_GETTEXTLENGTH
         set_eax(c, w ? (wide ? wide_units(w->title_utf8) : uint32_t(w->title_utf8.size())) : 0);
+        return;
+    case 0x000f: // DefWindowProc validates an otherwise unhandled paint.
+        if (w)
+            w->update_pending = false;
+        set_eax(c, 0);
         return;
     case 0x0081: // WM_NCCREATE: TRUE, or creation is cancelled
     case 0x0014: // WM_ERASEBKGND: the background counts as erased
