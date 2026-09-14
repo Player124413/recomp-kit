@@ -4191,6 +4191,127 @@ static void test_delphi_automation() {
           "GetErrorInfo clears output and returns S_FALSE");
 }
 
+static void test_delphi_registry_version() {
+    section("Delphi wide registry, version and COM");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00320000, out = s + 0x800;
+    gm_put_wstr(s, "Software\\RecompWideTest", 128);
+    check(call_import(&c, "ADVAPI32.dll", "RegCreateKeyExW",
+                      {0x80000001u, s, 0, 0, 0, 0, 0, out, 0}) == 0,
+          "create wide registry fixture");
+    uint32_t h = rd32(out);
+    gm_put_wstr(s + 256, "Unicode", 64);
+    gm_put_wstr(s + 512, "café\U0001f600", 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegSetValueExW", {h, s + 256, 0, 1, s + 512, 14}) == 0,
+          "write UTF-16 registry value with surrogate pair");
+    wr32(out, 0);
+    check(call_import(&c, "ADVAPI32.dll", "RegQueryValueExW", {h, s + 256, 0, out + 4, 0, out}) ==
+                  0 &&
+              rd32(out) == 14 && rd32(out + 4) == 1,
+          "wide registry size is UTF-16 bytes including NUL");
+    wr32(out, 12);
+    wr32(out + 16, 0xcccccccc);
+    check(call_import(&c, "ADVAPI32.dll", "RegQueryValueExW", {h, s + 256, 0, 0, out + 16, out}) ==
+                  234 &&
+              rd32(out) == 14 && rd32(out + 16) == 0xcccccccc,
+          "short registry buffer reports size without writing");
+    wr32(out, 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegQueryValueExW", {h, s + 256, 0, 0, out + 16, out}) ==
+                  0 &&
+              gm_wstr(out + 16) == "café\U0001f600",
+          "wide registry read round trips Unicode");
+    gm_put_str(s + 768, "Unicode", 64);
+    wr32(out, 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegQueryValueExA", {h, s + 768, 0, 0, out + 16, out}) ==
+                  0 &&
+              gm_str(out + 16) == "café\U0001f600",
+          "ANSI registry reads UTF-8 backing value");
+    wr32(out, 64);
+    wr32(out + 4, 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegEnumValueW",
+                      {h, 0, out + 128, out, 0, 0, out + 16, out + 4}) == 0 &&
+              gm_wstr(out + 128) == "Unicode" && rd32(out) == 7 && rd32(out + 4) == 14,
+          "RegEnumValueW counts name units and data bytes separately");
+    check(call_import(&c, "ADVAPI32.dll", "RegEnumValueW", {h, 1, out + 128, out, 0, 0, 0, 0}) ==
+              259,
+          "registry value enumeration ends with NO_MORE_ITEMS");
+    gm_put_wstr(s + 1024, "Child", 64);
+    call_import(&c, "ADVAPI32.dll", "RegCreateKeyExW", {h, s + 1024, 0, 0, 0, 0, 0, out + 8, 0});
+    uint32_t child = rd32(out + 8);
+    wr32(out, 64);
+    check(call_import(&c, "ADVAPI32.dll", "RegEnumKeyExW", {h, 0, out + 128, out, 0, 0, 0, 0}) ==
+                  0 &&
+              gm_wstr(out + 128) == "Child" && rd32(out) == 5,
+          "RegEnumKeyExW immediate children");
+    check(call_import(&c, "ADVAPI32.dll", "RegQueryInfoKeyW",
+                      {h, 0, 0, 0, out, out + 4, 0, out + 8, out + 12, out + 16, 0, 0}) == 0 &&
+              rd32(out) == 1 && rd32(out + 4) == 5 && rd32(out + 8) == 1 && rd32(out + 16) == 14,
+          "RegQueryInfoKeyW reports child and value maxima");
+    check(call_import(&c, "ADVAPI32.dll", "RegOpenKeyExW", {h, s + 1024, 0, 0, out}) == 0,
+          "RegOpenKeyExW shares keys");
+    call_import(&c, "ADVAPI32.dll", "RegCloseKey", {rd32(out)});
+    call_import(&c, "ADVAPI32.dll", "RegCloseKey", {child});
+    check(call_import(&c, "ADVAPI32.dll", "RegDeleteKeyW", {h, s + 1024}) == 0 &&
+              call_import(&c, "ADVAPI32.dll", "RegDeleteValueW", {h, s + 256}) == 0 &&
+              call_import(&c, "ADVAPI32.dll", "RegFlushKey", {h}) == 0,
+          "wide registry deletion and flush");
+    call_import(&c, "ADVAPI32.dll", "RegCloseKey", {h});
+    call_import(&c, "ADVAPI32.dll", "RegDeleteKeyW", {0x80000001u, s});
+    for (auto &entry : std::vector<std::pair<const char *, unsigned>>{{"RegConnectRegistryW", 3},
+                                                                      {"RegLoadKeyW", 3},
+                                                                      {"RegUnLoadKeyW", 2},
+                                                                      {"RegSaveKeyW", 3},
+                                                                      {"RegRestoreKeyW", 3},
+                                                                      {"RegReplaceKeyW", 4}})
+        check(call_import(&c, "ADVAPI32.dll", entry.first, std::vector<uint32_t>(entry.second)) ==
+                  5,
+              "%s denies unsupported external registry operations", entry.first);
+    gm_put_wstr(s, RECOMP_EXECUTABLE, 128);
+    uint32_t size = call_import(&c, "VERSION.dll", "GetFileVersionInfoSizeW", {s, out});
+    if (size) {
+        uint32_t block = heap_alloc(size, true);
+        call_import(&c, "VERSION.dll", "GetFileVersionInfoW", {s, 0, size, block});
+        gm_put_wstr(s + 256, "\\VarFileInfo\\Translation", 128);
+        check(call_import(&c, "VERSION.dll", "VerQueryValueW", {block, s + 256, out, out + 4}) ==
+                      1 &&
+                  rd32(out + 4) >= 4,
+              "VerQueryValueW translation table");
+        uint32_t lang = rd32(rd32(out));
+        char path[128];
+        snprintf(path, sizeof path, "\\StringFileInfo\\%04x%04x\\FileVersion", lang & 0xffff,
+                 lang >> 16);
+        gm_put_wstr(s + 256, path, 128);
+        gm_put_str(s + 512, path, 128);
+        check(call_import(&c, "VERSION.dll", "VerQueryValueW", {block, s + 256, out, out + 4}) ==
+                      1 &&
+                  !gm_wstr(rd32(out)).empty(),
+              "VerQueryValueW FileVersion string");
+        std::string version = gm_wstr(rd32(out));
+        check(call_import(&c, "VERSION.dll", "VerQueryValueA", {block, s + 512, out, out + 4}) ==
+                      1 &&
+                  gm_str(rd32(out)) == version,
+              "VerQueryValueA from the same block");
+        check(call_import(&c, "VERSION.dll", "VerQueryValueW", {block, s + 256, out, out + 4}) ==
+                      1 &&
+                  gm_wstr(rd32(out)) == version,
+              "ANSI query preserves wide version data");
+        heap_free(block);
+    }
+    check(call_import(&c, "OLE32.dll", "CoInitializeEx", {0, 2}) == 0, "CoInitializeEx S_OK");
+    call_import(&c, "OLE32.dll", "OleUninitialize", {});
+    uint32_t p = call_import(&c, "OLE32.dll", "CoTaskMemAlloc", {16});
+    check(p && heap_owns(p), "CoTaskMemAlloc is guest heap storage");
+    memset(g_mem + s, 0x5a, 32);
+    check(call_import(&c, "OLE32.dll", "IsEqualGUID", {s, s + 16}) == 1,
+          "IsEqualGUID all 16 bytes equal");
+    wr8(s + 31, 0);
+    check(call_import(&c, "OLE32.dll", "IsEqualGUID", {s, s + 16}) == 0,
+          "IsEqualGUID compares final byte");
+    call_import(&c, "OLE32.dll", "CoTaskMemFree", {p});
+    check(!p || !heap_owns(p), "CoTaskMemFree releases storage");
+}
+
 static void test_delphi_dlls() {
     section("Delphi DLLs");
     X86 c;
@@ -4268,6 +4389,7 @@ int main(int argc, char **argv) {
     test_kernel32_wide();
     test_delphi_dlls();
     test_delphi_automation();
+    test_delphi_registry_version();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

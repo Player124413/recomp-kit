@@ -8,6 +8,8 @@
 #include "memory.h"
 #include "win32.h"
 #include "loader.h"
+#include "resources.h"
+#include <algorithm>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -533,8 +535,7 @@ namespace {
 // -------------------------------------------------------------------------
 // ADVAPI32
 // -------------------------------------------------------------------------
-void a_RegOpenKeyEx(X86 *c, uint32_t hkey, uint32_t psub, uint32_t presult) {
-    std::string sub = gm_str(psub, 512);
+void a_RegOpenKeyEx(X86 *c, uint32_t hkey, const std::string &sub, uint32_t presult) {
     std::string path = key_path(hkey, sub);
     if (path.empty()) {
         set_eax(c, 6);
@@ -554,14 +555,14 @@ void a_RegOpenKeyEx(X86 *c, uint32_t hkey, uint32_t psub, uint32_t presult) {
 }
 
 void a_RegOpenKeyA(X86 *c) {
-    a_RegOpenKeyEx(c, arg(c, 0), arg(c, 1), arg(c, 2));
+    a_RegOpenKeyEx(c, arg(c, 0), gm_str(arg(c, 1), 512), arg(c, 2));
 }
 void a_RegOpenKeyExA(X86 *c) {
-    a_RegOpenKeyEx(c, arg(c, 0), arg(c, 1), arg(c, 4));
+    a_RegOpenKeyEx(c, arg(c, 0), gm_str(arg(c, 1), 512), arg(c, 4));
 }
 
-void a_RegCreateKeyExA(X86 *c) {
-    std::string path = key_path(arg(c, 0), gm_str(arg(c, 1), 512));
+void reg_create(X86 *c, const std::string &sub) {
+    std::string path = key_path(arg(c, 0), sub);
     uint32_t presult = arg(c, 7), pdisp = arg(c, 8);
     if (path.empty()) {
         set_eax(c, 6);
@@ -588,9 +589,49 @@ void a_RegCloseKey(X86 *c) {
     set_eax(c, 0);
 }
 
-void a_RegQueryValueExA(X86 *c) {
+// The backing store is UTF-8. W sizes are UTF-16 units for names and
+// UTF-16 bytes (including NUL) for REG_SZ/REG_EXPAND_SZ data.
+uint32_t reg_units(const std::string &s) {
+    uint32_t n = 0;
+    for (unsigned char ch : s)
+        if ((ch & 0xc0) != 0x80)
+            n += ch >= 0xf0 ? 2 : 1;
+    return n;
+}
+uint32_t reg_value_size(const RegValue &rv, bool wide) {
+    if (rv.type == 1 || rv.type == 2)
+        return wide ? (reg_units(rv.str) + 1) * 2 : uint32_t(rv.str.size() + 1);
+    return rv.type == 4 || rv.type == 5 ? 4 : uint32_t(rv.bin.size());
+}
+uint32_t reg_read_value(const RegValue &rv, bool wide, uint32_t type, uint32_t data,
+                        uint32_t size) {
+    if ((type && !gm_valid(type, 4)) || (size && !gm_valid(size, 4)) || (data && !size))
+        return 87;
+    uint32_t need = reg_value_size(rv, wide), have = size ? rd32(size) : 0;
+    if (type)
+        wr32(type, rv.type);
+    if (size)
+        wr32(size, need);
+    if (!data)
+        return 0;
+    if (have < need)
+        return 234;
+    if (!gm_valid(data, need))
+        return 87;
+    if (rv.type == 1 || rv.type == 2) {
+        if (wide)
+            gm_put_wstr(data, rv.str, need / 2);
+        else
+            gm_put_str(data, rv.str.c_str(), need);
+    } else if (rv.type == 4 || rv.type == 5)
+        wr32(data, rv.dword);
+    else if (need)
+        memcpy(g_mem + data, rv.bin.data(), need);
+    return 0;
+}
+
+void reg_query(X86 *c, const std::string &name, bool wide) {
     uint32_t hkey = arg(c, 0);
-    std::string name = gm_str(arg(c, 1), 256);
     uint32_t ptype = arg(c, 3), pdata = arg(c, 4), pcb = arg(c, 5);
 
     auto ki = regkeys().find(hkey);
@@ -611,37 +652,11 @@ void a_RegQueryValueExA(X86 *c) {
         return;
     }
 
-    const RegValue &rv = vi->second;
-    std::vector<uint8_t> bytes;
-    if (rv.type == 4 || rv.type == 5) {
-        bytes.resize(4);
-        memcpy(bytes.data(), &rv.dword, 4);
-    } else if (rv.type == 1 || rv.type == 2) {
-        bytes.assign(rv.str.begin(), rv.str.end());
-        bytes.push_back(0);
-    } else {
-        bytes = rv.bin;
-    }
-    if (ptype)
-        wr32(ptype, rv.type);
-    uint32_t have = pcb ? rd32(pcb) : 0;
-    if (pcb)
-        wr32(pcb, (uint32_t)bytes.size());
-    if (!pdata) {
-        set_eax(c, 0);
-        return;
-    }
-    if (have < bytes.size()) {
-        set_eax(c, 234);
-        return;
-    } // ERROR_MORE_DATA
-    memcpy(g_mem + pdata, bytes.data(), bytes.size());
-    set_eax(c, 0);
+    set_eax(c, reg_read_value(vi->second, wide, ptype, pdata, pcb));
 }
 
-void a_RegSetValueExA(X86 *c) {
+void reg_set(X86 *c, const std::string &name, bool wide) {
     uint32_t hkey = arg(c, 0);
-    std::string name = gm_str(arg(c, 1), 256);
     uint32_t type = arg(c, 3), pdata = arg(c, 4), cb = arg(c, 5);
 
     auto ki = regkeys().find(hkey);
@@ -657,7 +672,11 @@ void a_RegSetValueExA(X86 *c) {
     if (type == 4 || type == 5) {
         rv.dword = cb >= 4 && pdata ? rd32(pdata) : 0;
     } else if (type == 1 || type == 2) {
-        rv.str = pdata ? gm_str(pdata, cb ? cb : 0x8000) : std::string();
+        if ((wide && (cb & 1)) || (pdata && !gm_valid(pdata, cb))) {
+            set_eax(c, 87);
+            return;
+        }
+        rv.str = pdata ? (wide ? gm_wstr(pdata, cb / 2) : gm_str(pdata, cb)) : std::string();
     } else if (pdata) {
         rv.bin.assign(g_mem + pdata, g_mem + pdata + cb);
     }
@@ -665,6 +684,166 @@ void a_RegSetValueExA(X86 *c) {
     g_registry_dirty = true;
     registry_flush();
     set_eax(c, 0);
+}
+
+void a_RegOpenKeyExW(X86 *c) {
+    a_RegOpenKeyEx(c, arg(c, 0), gm_wstr(arg(c, 1)), arg(c, 4));
+}
+void a_RegCreateKeyExA(X86 *c) {
+    reg_create(c, gm_str(arg(c, 1), 512));
+}
+void a_RegCreateKeyExW(X86 *c) {
+    reg_create(c, gm_wstr(arg(c, 1)));
+}
+void a_RegQueryValueExA(X86 *c) {
+    reg_query(c, gm_str(arg(c, 1), 256), false);
+}
+void a_RegQueryValueExW(X86 *c) {
+    reg_query(c, gm_wstr(arg(c, 1)), true);
+}
+void a_RegSetValueExA(X86 *c) {
+    reg_set(c, gm_str(arg(c, 1), 256), false);
+}
+void a_RegSetValueExW(X86 *c) {
+    reg_set(c, gm_wstr(arg(c, 1)), true);
+}
+
+// Descendants may have been created in one call to RegCreateKeyEx. Enumerate
+// each immediate child once, even when the store only holds its descendant.
+std::vector<std::string> reg_children(const std::string &path) {
+    std::set<std::string, CiLess> names;
+    std::string prefix = path + "\\";
+    for (const auto &kv : regstore()) {
+        if (kv.first.size() > prefix.size() &&
+            !os_strcasecmp(kv.first.substr(0, prefix.size()).c_str(), prefix.c_str())) {
+            std::string tail = kv.first.substr(prefix.size());
+            names.insert(tail.substr(0, tail.find('\\')));
+        }
+    }
+    return {names.begin(), names.end()};
+}
+uint32_t reg_write_name(const std::string &name, uint32_t out, uint32_t len) {
+    if (!len || !gm_valid(len, 4))
+        return 87;
+    uint32_t have = rd32(len), need = reg_units(name);
+    wr32(len, need);
+    if (!out || have <= need)
+        return 234;
+    if (!gm_valid(out, (need + 1) * 2))
+        return 87;
+    gm_put_wstr(out, name, have);
+    return 0;
+}
+void a_RegEnumKeyExW(X86 *c) {
+    std::string path = key_path(arg(c, 0), "");
+    if (path.empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    auto names = reg_children(path);
+    if (arg(c, 1) >= names.size()) {
+        set_eax(c, 259);
+        return;
+    }
+    uint32_t hr = reg_write_name(names[arg(c, 1)], arg(c, 2), arg(c, 3));
+    if (!hr && arg(c, 6))
+        hr = reg_write_name("", arg(c, 5), arg(c, 6));
+    if (!hr && arg(c, 7) && gm_valid(arg(c, 7), 8))
+        wr64(arg(c, 7), 0);
+    set_eax(c, hr);
+}
+void a_RegEnumValueW(X86 *c) {
+    std::string path = key_path(arg(c, 0), "");
+    if (path.empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    auto it = regstore().find(path);
+    if (it == regstore().end() || arg(c, 1) >= it->second.size()) {
+        set_eax(c, 259);
+        return;
+    }
+    auto value = it->second.begin();
+    std::advance(value, arg(c, 1));
+    uint32_t hr = reg_write_name(value->first, arg(c, 2), arg(c, 3));
+    if (!hr)
+        hr = reg_read_value(value->second, true, arg(c, 5), arg(c, 6), arg(c, 7));
+    set_eax(c, hr);
+}
+void a_RegQueryInfoKeyW(X86 *c) {
+    std::string path = key_path(arg(c, 0), "");
+    if (path.empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    auto keys = reg_children(path);
+    auto it = regstore().find(path);
+    uint32_t maxkey = 0, maxname = 0, maxdata = 0, count = 0;
+    for (const auto &name : keys)
+        maxkey = std::max(maxkey, reg_units(name));
+    if (it != regstore().end()) {
+        count = uint32_t(it->second.size());
+        for (const auto &v : it->second) {
+            maxname = std::max(maxname, reg_units(v.first));
+            maxdata = std::max(maxdata, reg_value_size(v.second, true));
+        }
+    }
+    uint32_t hr = 0;
+    if (arg(c, 2)) {
+        if (arg(c, 1))
+            hr = reg_write_name("", arg(c, 1), arg(c, 2));
+        else
+            wr32(arg(c, 2), 0);
+    }
+    uint32_t values[] = {uint32_t(keys.size()), maxkey, 0, count, maxname, maxdata, 0};
+    for (int i = 0; i < 7; ++i)
+        if (arg(c, i + 4))
+            wr32(arg(c, i + 4), values[i]);
+    if (arg(c, 11))
+        wr64(arg(c, 11), 0);
+    set_eax(c, hr);
+}
+void a_RegDeleteKeyW(X86 *c) {
+    std::string path = key_path(arg(c, 0), gm_wstr(arg(c, 1)));
+    if (path.empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    if (!reg_children(path).empty()) {
+        set_eax(c, 5);
+        return;
+    }
+    if (!regstore().erase(path)) {
+        set_eax(c, 2);
+        return;
+    }
+    g_registry_dirty = true;
+    set_eax(c, 0);
+}
+void a_RegDeleteValueW(X86 *c) {
+    std::string path = key_path(arg(c, 0), "");
+    if (path.empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    auto it = regstore().find(path);
+    if (it == regstore().end() || !it->second.erase(gm_wstr(arg(c, 1)))) {
+        set_eax(c, 2);
+        return;
+    }
+    g_registry_dirty = true;
+    set_eax(c, 0);
+}
+void a_RegFlushKey(X86 *c) {
+    if (key_path(arg(c, 0), "").empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    registry_flush();
+    set_eax(c, g_registry_dirty ? 5 : 0);
+}
+void a_RegDenied(X86 *c) {
+    set_eax(c, 5);
 }
 
 // -------------------------------------------------------------------------
@@ -734,6 +913,19 @@ void o_CoInitialize(X86 *c) {
 } // S_OK
 void o_CoUninitialize(X86 *c) {
     set_eax(c, 0);
+}
+
+void o_CoTaskMemAlloc(X86 *c) {
+    set_eax(c, heap_alloc(arg(c, 0)));
+}
+void o_CoTaskMemFree(X86 *c) {
+    if (arg(c, 0))
+        heap_free(arg(c, 0));
+    set_eax(c, 0);
+}
+void o_IsEqualGUID(X86 *c) {
+    uint32_t a = arg(c, 0), b = arg(c, 1);
+    set_eax(c, a && b && gm_valid(a, 16) && gm_valid(b, 16) && !memcmp(g_mem + a, g_mem + b, 16));
 }
 
 // -------------------------------------------------------------------------
@@ -1267,11 +1459,9 @@ void m_mixerNoDriver(X86 *c) {
 // VERSION.dll: the executable's own version resource, read out of the mapped
 // image. A game that shows its version asks for its own module's
 // VS_VERSIONINFO; any other file has none here. GetFileVersionInfoA hands the
-// block over as it is in the image (UTF-16 strings), and VerQueryValueA walks
-// it: "\" is VS_FIXEDFILEINFO, "\VarFileInfo\Translation" the language table,
-// "\StringFileInfo\<lang><codepage>\<name>" a string, narrowed to ANSI in
-// place the first time it is asked for, which is what the A entry point
-// returns a pointer to.
+// block over as it is in the image (UTF-16 strings). VerQueryValue walks
+// the root, translation table and string paths. ANSI queries use scratch
+// space after the tree so a later wide query still sees the original data.
 namespace {
 struct VersionResource {
     uint32_t addr = 0; // guest address of the VS_VERSIONINFO block in the image
@@ -1279,49 +1469,33 @@ struct VersionResource {
 };
 
 VersionResource find_version_resource() {
-    VersionResource none;
-    uint32_t base = loader_image_base();
-    if (!base || !gm_valid(base, 0x40))
-        return none;
-    uint32_t pe = rd32(base + 0x3c);
-    if (!gm_valid(base + pe, 24 + 96 + 16 + 8) || rd32(base + pe) != 0x00004550u)
-        return none;
-    uint32_t rsrc = rd32(base + pe + 24 + 96 + 2 * 8);
-    if (!rsrc)
-        return none;
-    // Three levels: type, name, language; the leaf names the data.
-    auto walk = [&](uint32_t dir, int32_t want_id, uint32_t *entry_out) -> bool {
-        if (!gm_valid(dir, 16))
-            return false;
-        uint32_t named = rd16(dir + 12), ids = rd16(dir + 14);
-        for (uint32_t k = 0; k < named + ids; ++k) {
-            uint32_t e = dir + 16 + 8 * k;
-            if (!gm_valid(e, 8))
-                return false;
-            uint32_t name = rd32(e), data = rd32(e + 4);
-            if (want_id < 0 || name == (uint32_t)want_id) {
-                *entry_out = data;
-                return true;
-            }
-        }
-        return false;
-    };
-    uint32_t root = base + rsrc, e1 = 0, e2 = 0, e3 = 0;
-    if (!walk(root, 16 /* RT_VERSION */, &e1) || !(e1 & 0x80000000u))
-        return none;
-    if (!walk(root + (e1 & 0x7fffffffu), -1, &e2) || !(e2 & 0x80000000u))
-        return none;
-    if (!walk(root + (e2 & 0x7fffffffu), -1, &e3) || (e3 & 0x80000000u))
-        return none;
-    uint32_t leaf = root + e3;
-    if (!gm_valid(leaf, 8))
-        return none;
     VersionResource r;
-    r.addr = base + rd32(leaf);
-    r.size = rd32(leaf + 4);
-    if (!r.size || !gm_valid(r.addr, r.size))
-        return none;
+    std::vector<ResourceName> names;
+    if (!resource_names(16, &names) || names.empty())
+        return r;
+    const auto &name = names.front();
+    uint32_t id = name.id, temp = 0;
+    if (name.is_string) {
+        uint32_t units = reg_units(name.name) + 1;
+        temp = heap_alloc(units * 2);
+        if (!temp)
+            return r;
+        gm_put_wstr(temp, name.name, units);
+        id = temp;
+    }
+    uint32_t entry = resource_find(16, id);
+    if (temp)
+        heap_free(temp);
+    if (entry)
+        r.addr = resource_data(entry, &r.size);
+    if (!r.addr)
+        r.size = 0;
     return r;
+}
+// Reserve ANSI query scratch alongside the untouched UTF-16 resource. Both
+// APIs return pointers within this caller-owned block, without a host cache.
+uint32_t version_buffer_size(const VersionResource &r) {
+    return ((r.size + 3) & ~3u) * 2;
 }
 
 // Whether `name` names the game's own executable: the same file however the
@@ -1348,7 +1522,7 @@ struct VerBlock {
 };
 
 bool read_block(uint32_t at, uint32_t limit, VerBlock *b) {
-    if (!gm_valid(at, 6) || at + 6 > limit)
+    if (at > limit || limit > GUEST_SIZE || !gm_valid(at, 6) || limit - at < 6)
         return false;
     b->at = at;
     b->length = rd16(at);
@@ -1358,17 +1532,24 @@ bool read_block(uint32_t at, uint32_t limit, VerBlock *b) {
         return false;
     b->end = at + b->length;
     uint32_t p = at + 6;
+    bool terminated = false;
     b->key.clear();
     while (p + 2 <= b->end) {
         uint16_t w = rd16(p);
         p += 2;
-        if (!w)
+        if (!w) {
+            terminated = true;
             break;
+        }
         b->key.push_back(w < 256 ? (char)w : '?');
     }
+    if (!terminated)
+        return false;
     p = (p + 3) & ~3u;
     b->value = p;
     uint32_t vbytes = b->type == 1 ? b->value_length * 2 : b->value_length;
+    if (vbytes && (p > b->end || vbytes > b->end - p))
+        return false;
     b->children = (p + vbytes + 3) & ~3u;
     return true;
 }
@@ -1387,14 +1568,9 @@ bool find_child(const VerBlock &parent, const char *key, VerBlock *out) {
     return false;
 }
 
-std::set<uint32_t> &narrowed() {
-    static std::set<uint32_t> s;
-    return s;
-}
 } // namespace
 
-void v_GetFileVersionInfoSizeA(X86 *c) {
-    std::string name = gm_str(arg(c, 0));
+void version_size(X86 *c, const std::string &name) {
     uint32_t handle_out = arg(c, 1);
     if (handle_out && gm_valid(handle_out, 4))
         wr32(handle_out, 0);
@@ -1405,12 +1581,11 @@ void v_GetFileVersionInfoSizeA(X86 *c) {
         return;
     }
     set_last_error(0);
-    set_eax(c, r.size);
+    set_eax(c, version_buffer_size(r));
 }
 
 // GetFileVersionInfoA(name, handle, len, data)
-void v_GetFileVersionInfoA(X86 *c) {
-    std::string name = gm_str(arg(c, 0));
+void version_info(X86 *c, const std::string &name) {
     uint32_t len = arg(c, 2), data = arg(c, 3);
     VersionResource r = names_own_executable(name) ? find_version_resource() : VersionResource();
     if (!r.size) {
@@ -1418,24 +1593,24 @@ void v_GetFileVersionInfoA(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    if (!data || !gm_valid(data, len) || len < r.size) {
+    if (!data || !gm_valid(data, len) || len < version_buffer_size(r)) {
         set_last_error(122); // ERROR_INSUFFICIENT_BUFFER
         set_eax(c, 0);
         return;
     }
     memcpy(g_mem + data, g_mem + r.addr, r.size);
-    narrowed().clear();
+    memset(g_mem + data + r.size, 0, version_buffer_size(r) - r.size);
     set_eax(c, 1);
 }
 
 // VerQueryValueA(block, subblock, ppBuffer, puLen)
-void v_VerQueryValueA(X86 *c) {
+void version_query(X86 *c, bool wide) {
     uint32_t block = arg(c, 0), sub = arg(c, 1), pbuf = arg(c, 2), plen = arg(c, 3);
     if (!block || !gm_valid(block, 6) || !sub || !pbuf || !gm_valid(pbuf, 4)) {
         set_eax(c, 0);
         return;
     }
-    std::string path = gm_str(sub);
+    std::string path = wide ? gm_wstr(sub) : gm_str(sub);
     VerBlock root;
     if (!read_block(block, block + rd16(block), &root)) {
         set_eax(c, 0);
@@ -1467,24 +1642,41 @@ void v_VerQueryValueA(X86 *c) {
     if (parts.empty()) {
         // VS_FIXEDFILEINFO, whatever the header's own length says.
         out_len = b.value_length ? b.value_length : 0x34;
-    } else if (b.type == 1) {
-        // A string, narrowed in place the first time so the A caller reads
-        // an ANSI string where the block held UTF-16.
-        if (narrowed().insert(b.value).second) {
-            uint32_t n = b.value_length;
-            for (uint32_t i = 0; i < n; ++i) {
-                uint16_t w = rd16(b.value + 2 * i);
-                wr8(b.value + i, (uint8_t)(w < 256 ? w : '?'));
-            }
-            for (uint32_t i = n; i < 2 * n; ++i)
-                wr8(b.value + i, 0);
+    } else if (b.type == 1 && !wide) {
+        uint32_t ansi = block + ((root.length + 3) & ~3u) + (b.value - block) / 2;
+        if (!gm_valid(ansi, b.value_length)) {
+            set_eax(c, 0);
+            return;
         }
-        out_len = b.value_length; // characters, as Windows counts them
+        for (uint32_t i = 0; i < b.value_length; ++i) {
+            uint16_t w = rd16(b.value + i * 2);
+            wr8(ansi + i, uint8_t(w < 256 ? w : '?'));
+        }
+        b.value = ansi;
     }
     wr32(pbuf, b.value);
     if (plen && gm_valid(plen, 4))
         wr32(plen, out_len);
     set_eax(c, 1);
+}
+
+void v_GetFileVersionInfoSizeA(X86 *c) {
+    version_size(c, gm_str(arg(c, 0)));
+}
+void v_GetFileVersionInfoSizeW(X86 *c) {
+    version_size(c, gm_wstr(arg(c, 0)));
+}
+void v_GetFileVersionInfoA(X86 *c) {
+    version_info(c, gm_str(arg(c, 0)));
+}
+void v_GetFileVersionInfoW(X86 *c) {
+    version_info(c, gm_wstr(arg(c, 0)));
+}
+void v_VerQueryValueA(X86 *c) {
+    version_query(c, false);
+}
+void v_VerQueryValueW(X86 *c) {
+    version_query(c, true);
 }
 
 // mciGetErrorStringA(error, buffer, length): the one MCI answer given above.
@@ -1610,6 +1802,22 @@ const ImportShim g_misc_shims[] = {
     {"ADVAPI32.dll", "RegCloseKey", 1, a_RegCloseKey},
     {"ADVAPI32.dll", "RegQueryValueExA", 6, a_RegQueryValueExA},
     {"ADVAPI32.dll", "RegSetValueExA", 6, a_RegSetValueExA},
+    {"ADVAPI32.dll", "RegOpenKeyExW", 5, a_RegOpenKeyExW},
+    {"ADVAPI32.dll", "RegCreateKeyExW", 9, a_RegCreateKeyExW},
+    {"ADVAPI32.dll", "RegQueryValueExW", 6, a_RegQueryValueExW},
+    {"ADVAPI32.dll", "RegSetValueExW", 6, a_RegSetValueExW},
+    {"ADVAPI32.dll", "RegEnumKeyExW", 8, a_RegEnumKeyExW},
+    {"ADVAPI32.dll", "RegEnumValueW", 8, a_RegEnumValueW},
+    {"ADVAPI32.dll", "RegQueryInfoKeyW", 12, a_RegQueryInfoKeyW},
+    {"ADVAPI32.dll", "RegDeleteKeyW", 2, a_RegDeleteKeyW},
+    {"ADVAPI32.dll", "RegDeleteValueW", 2, a_RegDeleteValueW},
+    {"ADVAPI32.dll", "RegFlushKey", 1, a_RegFlushKey},
+    {"ADVAPI32.dll", "RegConnectRegistryW", 3, a_RegDenied},
+    {"ADVAPI32.dll", "RegLoadKeyW", 3, a_RegDenied},
+    {"ADVAPI32.dll", "RegUnLoadKeyW", 2, a_RegDenied},
+    {"ADVAPI32.dll", "RegSaveKeyW", 3, a_RegDenied},
+    {"ADVAPI32.dll", "RegRestoreKeyW", 3, a_RegDenied},
+    {"ADVAPI32.dll", "RegReplaceKeyW", 4, a_RegDenied},
     // GDI32
     {"GDI32.dll", "GetStockObject", 1, g_GetStockObject},
     {"GDI32.dll", "GetSystemPaletteEntries", 4, g_GetSystemPaletteEntries},
@@ -1618,6 +1826,12 @@ const ImportShim g_misc_shims[] = {
     {"SHELL32.dll", "SHGetSpecialFolderPathA", 4, s_SHGetSpecialFolderPathA},
     // ole32
     {"ole32.dll", "CoInitialize", 1, o_CoInitialize},
+    {"ole32.dll", "OleInitialize", 1, o_CoInitialize},
+    {"ole32.dll", "OleUninitialize", 0, o_CoUninitialize},
+    {"ole32.dll", "CoInitializeEx", 2, o_CoInitialize},
+    {"ole32.dll", "CoTaskMemAlloc", 1, o_CoTaskMemAlloc},
+    {"ole32.dll", "CoTaskMemFree", 1, o_CoTaskMemFree},
+    {"ole32.dll", "IsEqualGUID", 2, o_IsEqualGUID},
     {"ole32.dll", "CoUninitialize", 0, o_CoUninitialize},
     // IMM32
     {"IMM32.dll", "ImmGetContext", 1, i_ImmGetContext},
@@ -1677,6 +1891,9 @@ const ImportShim g_misc_shims[] = {
     {"VERSION.dll", "GetFileVersionInfoSizeA", 2, v_GetFileVersionInfoSizeA},
     {"VERSION.dll", "GetFileVersionInfoA", 4, v_GetFileVersionInfoA},
     {"VERSION.dll", "VerQueryValueA", 4, v_VerQueryValueA},
+    {"VERSION.dll", "GetFileVersionInfoSizeW", 2, v_GetFileVersionInfoSizeW},
+    {"VERSION.dll", "GetFileVersionInfoW", 4, v_GetFileVersionInfoW},
+    {"VERSION.dll", "VerQueryValueW", 4, v_VerQueryValueW},
     // WINMM: logging-only, correct stdcall pop counts so the guest stack stays
     // balanced. MIDI and aux output belong to the audio task.
     {"WINMM.dll", "auxGetDevCapsA", 3, nullptr},
