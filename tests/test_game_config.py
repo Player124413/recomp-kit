@@ -20,6 +20,31 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_function_alignment_defaults_to_16_and_can_be_overridden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            base = "\n".join(line for line in stub.splitlines()
+                             if not line.startswith("function_alignment ="))
+            (game / "globals.toml").write_text("")
+            for value, expected in ((None, 16), (4, 4)):
+                setting = "" if value is None else "function_alignment = %d\n" % value
+                (game / "game.toml").write_text(base.replace("[translate]\n", "[translate]\n" + setting))
+                self.assertEqual(game_config.load(game)["translate"]["function_alignment"], expected)
+
+    def test_function_alignment_must_be_a_positive_integer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            base = "\n".join(line for line in stub.splitlines()
+                             if not line.startswith("function_alignment ="))
+            (game / "globals.toml").write_text("")
+            for bad in ("0", "-4", '"four"', "4.0", "true"):
+                (game / "game.toml").write_text(base.replace(
+                    "[translate]\n", "[translate]\nfunction_alignment = %s\n" % bad))
+                with self.assertRaisesRegex(ValueError, "function_alignment"):
+                    game_config.load(game)
+
     def test_heap_base_defaults_to_the_kit_layout(self):
         cfg = game_config.load(ROOT / "games/stub")
         self.assertEqual(cfg["game"]["heap_base"], 0x01000000)

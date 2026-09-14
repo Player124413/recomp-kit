@@ -417,6 +417,25 @@ def test_a_pushed_destructor_thunk_is_an_entry_candidate():
     assert img.plausible_immediate_target(dtor)          # an aligned start after padding
 
 
+@pytest.mark.parametrize("alignment,admitted", [(16, False), (4, True)])
+def test_unaligned_frame_callback_uses_configured_alignment(monkeypatch, alignment, admitted):
+    callback = 0x00401108
+    # MOV EAX,EAX padding, then a frame with more than the thunk decoder's
+    # eight instructions before its stdcall return. Only a PUSH names it.
+    code = bytes.fromhex("55 8bec 6a00 53 56 33c0 33db 33f6 8b4508 5e 5b 59 5d c20400")
+    img = synthetic_image({callback - 2: b"\x8b\xc0", callback: code})
+    monkeypatch.setattr(T, "FUNCTION_ALIGNMENT", alignment, raising=False)
+    assert img.is_exec(callback)
+    assert img.recover(callback, set())
+    assert not img.looks_like_thunk(callback)
+    assert img.looks_like_code_start(callback) == admitted
+    assert img.plausible_immediate_target(callback) == admitted
+    # The stronger gate still needs its padding signal as well as alignment.
+    assert not img.looks_like_function(callback)
+    img.data = img.data[:callback - img.base - 1] + b"\x90" + img.data[callback - img.base:]
+    assert img.looks_like_function(callback) == admitted
+
+
 def test_a_wild_jump_is_not_an_entry_candidate():
     # MSVC's three-byte NOP padding `8d 49 00` decodes at its last byte as a
     # JMP to nowhere; an immediate landing there names nothing.

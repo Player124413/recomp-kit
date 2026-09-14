@@ -17,6 +17,8 @@ guest_root = 'C:\Stub'
 developer_exe = "original/STUB.EXE"
 
 [translate]
+# Function-start scan alignment; 16 is the default, compilers may use less.
+function_alignment = 16
 listings = "analysis/STUB.EXE"
 globals = "globals.toml"
 animation_counter = 0x00500000

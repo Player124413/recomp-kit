@@ -40,6 +40,7 @@ LISTINGS = FUNCS_TSV = BINARY = CURATED = None
 ANIMATION_COUNTER = 0
 VISUAL_ANIMATION_READS = frozenset()
 EXTRA_ENTRY_POINTS = frozenset()
+FUNCTION_ALIGNMENT = 16
 
 
 def configure(cfg):
@@ -52,8 +53,9 @@ def configure(cfg):
     CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
     ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
-    global EXTRA_ENTRY_POINTS
+    global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
+    FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
 
 
 def visual_animation_read(addr, body):
@@ -87,7 +89,7 @@ def visual_animation_read(addr, body):
 #: A data pointer and an instruction immediate are guesses.  Any dword that
 #: happens to look like an address is a candidate, and three of the four
 #: blocks that reach nowhere - 00540360, 00540500, 00d18bd0 - are exactly
-#: that: they pass only the weak "16-aligned and decodes" gate.  A guess whose
+#: that: they pass only the weak "aligned and decodes" gate.  A guess whose
 #: own dispatch goes nowhere may be withdrawn, and every withdrawal is
 #: reported with its provenance and the target that failed, so a real callback
 #: with an unresolvable callee is visible rather than silently dropped.
@@ -728,12 +730,12 @@ class Image(object):
         return [stub + 5], None
 
     def looks_like_function(self, va):
-        """Does `va` look like the start of an MSVC function?
+        """Does `va` look like a function start for this game's compiler?
 
         Three signals, all of which the compiler's own output satisfies: the
-        address is 16-byte aligned, the byte before it is padding or the end
-        of the previous function, and it decodes to a real instruction."""
-        if self.md is None or va % 16 or not self.is_exec(va):
+        address has the configured alignment, the byte before it is padding
+        or the end of the previous function, and it decodes to a real instruction."""
+        if self.md is None or va % FUNCTION_ALIGNMENT or not self.is_exec(va):
             return False
         if va <= self.base or self.data[va - self.base - 1] not in (0xCC, 0x90, 0xC3):
             return False
@@ -751,7 +753,7 @@ class Image(object):
         rejected, even though a vtable slot at `005729d6` names it.  What keeps
         this honest is that every recovered block still has to translate.
         """
-        if self.md is None or va % 16 or not self.is_exec(va):
+        if self.md is None or va % FUNCTION_ALIGNMENT or not self.is_exec(va):
             return False
         got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
                                   va, count=1))

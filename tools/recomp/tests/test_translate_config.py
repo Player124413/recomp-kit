@@ -15,6 +15,14 @@ spec.loader.exec_module(translate)
 
 
 class ConfigureTests(unittest.TestCase):
+    def test_function_alignment_follows_the_loaded_game(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        cfg["translate"]["function_alignment"] = 4
+        translate.configure(cfg)
+        self.assertEqual(translate.FUNCTION_ALIGNMENT, 4)
+        translate.configure(game_config.load(ROOT / "games/stub"))
+        self.assertEqual(translate.FUNCTION_ALIGNMENT, 16)
+
     def test_entry_points_default_empty(self):
         cfg = game_config.load(ROOT / "games/stub")
         translate.configure(cfg)

@@ -36,6 +36,9 @@ def load(game_dir):
         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
     game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
     translate = cfg.setdefault("translate", {})
+    alignment = translate.setdefault("function_alignment", 16)
+    if type(alignment) is not int or alignment <= 0:
+        raise ValueError("%s: [translate] function_alignment must be a positive integer" % source)
     cfg.setdefault("hooks", {})
     cfg.setdefault("bundle", {}).setdefault("exclude", [])
     touch = cfg.setdefault("touch", {})
