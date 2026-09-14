@@ -2,10 +2,12 @@
 
 Date: 2026-09-14. Task 12, measured against kit `9345855`.
 
-**Status: design blocked; translator and runtime implementation not started.**
-The measurements below contradict the approved task's landing contract.
-This document records the requested design and the evidence that must be
-resolved before implementing it. It does not claim working SEH or a game run.
+**Status: implemented and validated on macOS; regeneration, four native suites, portable translator suites and kit checks pass. Legacy corpus-specific translator checks remain unavailable.**
+The revised design below resolves the three original landing contradictions
+and corrects normal retirement to use `registration < ESP`. Regeneration
+also identified null default-type entries and a speculative-owner boundary;
+the regressions and resolver now cover both. This document does not claim a
+game run or validation on the other three presets.
 
 ## Goal
 
@@ -125,84 +127,138 @@ another translation wrapper does not by itself abandon those host frames.
 
 ## The setjmp-and-landing design
 
-The approved proposal establishes the host checkpoint inside the live
-generated function, as the existing `_setjmp` intrinsic requires:
+The checkpoint belongs to the live generated function. Immediately after a
+chain establishment store it emits the same two-call pattern as `_setjmp`:
 
 ```c
 { jmp_buf *b_ = recomp_seh_frame_enter(c);
-  if (setjmp(*b_)) goto seh_landing_<function>; }
+  if (setjmp(*b_)) { recomp_seh_land(c); return; } }
 ```
 
-The proposed landing dispatch switches on guest EIP, with entries for the
-stub and the instruction following its JMP. A normal chain restoration
-calls `recomp_seh_frame_leave(c)`. An exceptional transfer asks `seh_resume`
-to match ESP to a saved registration address and longjmp to that record.
-The checkpoint must never be taken inside a helper that returns before use.
+`enter` allocates stable storage for the environment; it never executes
+`setjmp` itself. A normal chain restoration calls `recomp_seh_frame_leave`
+after the store. Retirement removes records **strictly below current ESP**;
+equality is a live record and must be retained. A leave with nothing to
+remove logs at verbose level and returns, since other chain-head stores can
+occur in a function with frames.
 
-**This exact proposal cannot implement the measured executable.**
+`RaiseException` walks the guest registration chain through `guest_call`.
+Disposition 1 searches the next registration. Disposition 0 logs
+`ExceptionContinueExecution requested; not supported` with the record and
+aborts: context restoration is outside this task's implemented subset.
+Exhaustion preserves the existing C++ throw, return-chain, register-object
+and stack-return diagnostics before aborting. Only the testing runtime can
+replace unhandled abort with a recording hook.
 
-1. **The proposed recognizer finds none of the measured stubs.** It requires
-   the handler immediate to be in `fn.addrs`, but all 2,258 stubs are absent
-   even from the union of the original listings. Existing immediate recovery
-   creates separate functions or alternate entries; it does not attach the
-   omitted exception blocks to the establishing function. Recovery and block
-   ownership need an explicit exception-aware design before checkpoints can
-   land in that function.
-2. **A typed stub's next bytes are data.** For example, the stub at
-   `0x00b35f65`, pushed in `00b35eac.asm`, jumps to HandleOnException. Its
-   next three dwords are `1`, `0x0081ea7c`, `0x00b35f76`: a count and one
-   type/handler pair. The routine reads the count at stub+5, begins entries
-   at stub+9, and ultimately executes `JMP dword ptr [EBX + 0x4]` at
-   `0x0080a2b1`. Neither the table address nor the stub is the selected
-   executable landing. All 158 typed sites require table-aware recovery;
-   blindly forcing an instruction label at stub+5 would translate data.
-3. **The accepting path does not restore ESP to the registration.** In
-   `0080a028.asm`, the suffix following RtlUnwind loads the registration into
-   EDI, loads EBP from `[EDI+8]`, changes the registration's handler, computes
-   stub+5 in EBX and executes `JMP EBX` at `0x0080a12a`. It keeps its saved
-   registers and exception bookkeeping on the guest stack. The intervening
-   `00809f90.asm` helper is a debugger notification, not an ESP restoration.
-   A focused Unicorn run of this suffix, with the proposed normal-return
-   RtlUnwind contract, reaches that JMP with ESP `0x0e007fdc` and
-   registration/EDI `0x0e00f000`. An equality lookup against saved ESP misses
-   the correct host checkpoint.
+`RtlUnwind` calls handlers before the target with flag 2 and unlinks their
+registrations. Finally handlers may call their blocks as ordinary nested
+subroutines; those calls do not perform a nonlocal transfer. A non-null
+target is left at `FS:[0]` and stored as the thread's pending registration;
+EAX receives the requested return value. The shim returns normally because
+the measured Delphi TargetIp is its own return address. A null target walks
+the whole chain, writes the empty-chain sentinel `0xffffffff`, clears the
+pending registration and returns. A target absent from the chain aborts.
 
-A revision must identify the accepting registration independently of the
-current guest ESP, distinguish finally callbacks that return from transfers
-that abandon host frames, recover executable typed-handler destinations,
-and intercept resumptions even if a target already has a dispatch-table
-entry. These are changes to the specified interface and control-flow model,
-not moved line numbers or a differently named helper. Implementation stops
-here under the task's blocker instruction.
+The generated `recomp_jump` checks the pending registration **before table
+lookup**, including a destination already in the dispatch table. The
+runtime locates its checkpoint by registration identity, independent of the
+dispatcher's current ESP. It clears pending state, removes checkpoints
+strictly below that registration, truncates profiling and mod-hook state,
+sets guest EIP to the jump destination, and `longjmp`s to the live generated
+frame. An absent checkpoint aborts with registration and destination.
+`recomp_call` does not intercept; the accepting transfer is a computed jump.
+
+`recomp_seh_land` calls the recovered block through `recomp_call(c, c->eip)`.
+That block reaches any remaining listed body through an alternate entry
+and executes the guest RET. When it returns, the checkpoint returns from
+the establishing host frame as well. Guest registers, including the
+accepting dispatcher's ESP, are not restored to a snapshot by the host jump.
 
 ## What is emitted per function
 
-Once the blockers are resolved, only functions with verified registration
-establishments should receive checkpoint and landing code. Other functions
-should retain their present bodies. Both accepted FS spellings require
-coverage, and restore recognition must avoid unrelated TEB writes.
+Discovery recognizes a pushed immediate followed within two instructions
+by `PUSH dword ptr FS:[EAX]` or `FS:[0x0]`, followed by a contiguous
+`MOV dword ptr FS:[EAX|0x0],ESP`. The immediate is a handler stub even when
+its bytes are absent from every exported listing. Other TEB fields do not
+match this pattern.
 
-The requested two-case synthetic fixture is useful for the simple case but
-does not model omitted blocks, typed tables or the measured accepting stack.
-Each actual landing needs an instruction boundary in the owning body and a
-forced label. Functions split into alternate-entry wrappers must retain a
-live checkpoint in that same body. Preserve `[translate].entry_points`
-seeding and `--allow-table-gaps` while changing discovery.
+At each stub S, validate a five-byte `JMP rel32` into executable memory.
+Classify the following bytes without recognizing or naming its target:
+read `n = dword[S+5]`; for `1 <= n <= 64`, require every pair at
+`S+9+8*i` and `S+13+8*i` to name initialized data or code (or null for the
+default handler), then executable code, respectively. If every pair passes,
+the second elements are landing entries and the count/pairs are table
+storage. Otherwise S+5 is the landing.
+The table bytes never become forced executable entries.
+
+The null-type allowance is a measured adjustment to the task's initial
+classifier: stubs `0x0091e551`, `0x0091e611` and `0x0091e6dd` each have two
+pairs, the second with a zero type and an executable default handler. The
+System consumer tests the type at `0x0080a1a6` and branches directly to
+acceptance when zero. Requiring every type to lie inside a section decoded
+these three tables as instructions and produced six unresolved dispatches.
+
+The existing entry-point resolver seeds landings with structural `seh`
+provenance, protecting them from speculative-block withdrawal. Stubs retain
+immediate provenance. SEH provenance follows recovered continuations, not
+ordinary callees or the call graph of an already listed owner. The
+existing recovery implementation follows branches by recursive descent;
+it stops at already owned instructions. A branch back into a listed body
+therefore creates or reuses an alternate entry instead of duplicating that
+body. A structural continuation whose current owner is a speculative
+recovered body is recovered independently: pruning a bad guessed prefix
+must not remove its valid suffix. This fixes the remaining regeneration
+failure at `0x00b5aea3`, which jumps into a suffix owned by a pruned pointer
+guess. Configuration entry points keep their existing precedence and
+`--allow-table-gaps` behavior is unchanged.
+
+Only a function containing a recognized frame site gains checkpoint code.
+Within it, each matching FS chain-head MOV from ESP emits the store plus
+`frame_enter`/`setjmp`/`land`; a matching MOV from another 32-bit register
+emits the store plus `frame_leave`. Other instructions retain their existing
+translation. Functions without sites do not gain checkpoint/leave calls.
+The generated header includes the C-compatible SEH declarations, and the
+computed-jump table calls the pending-target accessor before interception.
 
 ## Runtime records
 
-The proposed minimum is `SehFrame { uint32_t esp; jmp_buf env; }`. Records
-must have stable storage, belong to the guest context and host thread, and
-be removed on normal restoration, unwind and thread/context teardown.
-Recursion, nested registrations and reuse of the same stack address must
-not select a dead checkpoint. Exception/context storage must survive every
-guest callback that references it and be reclaimed after nonlocal transfer.
+Each host thread owns its SEH state. Individually allocated frames keep
+`jmp_buf` stable even when their pointer vector grows. A frame records its
+32-bit registration address, CPU-context identity, host environment,
+profiling depth and exception-dispatch depth. Matching by both context and
+registration prevents selecting another context's checkpoint on that host
+thread. Normal retirement and landing discard only addresses strictly below
+their respective ESP/registration boundary.
 
-The revised design needs registration identity/dispatch state beyond the
-current-ESP equality rule. It must also truncate abandoned profiling and mod
-hook state, following the existing `_longjmp` integration in `runtime/cpu.cpp`.
-Whether CALL_FN needs a post-call transfer check depends on the replacement
-control-flow contract; it is not determined by this blocked proposal.
+The corrected boundary was verified on the pinned image's two nested
+establishments at `0x008811b1` and `0x008811bf`. The normal restoration at
+`0x008811ee` follows three POPs: the retired inner registration is
+`0x0e00efe8`, whereas both ESP and the still-live outer registration are
+`0x0e00eff4`. Thus `<` retires the inner and preserves the equal outer;
+the superseded `>=` predicate selected the wrong frame.
+
+An exception dispatch owns a guest heap allocation containing its 0x50-byte
+record and 0x2cc-byte context. An unwind may reference a supplied record
+while owning a separate context allocation. Dispatch ownership is recorded
+in thread state before callbacks, so a nonlocal transfer cannot leak an
+automatic owner. A checkpoint's saved dispatch depth bounds what its landing
+reclaims **after** the guest block returns; exception data remain valid
+through the accepting routine's cleanup. Nested landings reclaim only their
+own abandoned dispatches. A returned landing also retires its checkpoint if
+no chain store already removed it: its host environment is no longer live.
+
+The walker reads stack bounds from the current TEB, supporting the main
+stack and heap-backed worker stacks. Registrations require eight aligned
+bytes inside those bounds. Repeated addresses, more than 4,096 links,
+invalid records, unsupported dispositions and missing unwind targets fail
+with guest addresses instead of continuing with corrupted state.
+
+Thread exit drops its frames and dispatches before publishing
+completion; host thread-local destruction is a final cleanup. Context reuse
+and guest-arena teardown explicitly reset owned state. A synchronous worker
+return retires frames below its caller's restored ESP. The import dispatcher
+copies its description into a fixed character buffer, so no local
+`std::string` remains live across the shim call that can longjmp.
 
 ## Failure modes
 
@@ -210,9 +266,8 @@ control-flow contract; it is not determined by this blocked proposal.
   not abandon a lock owner; the scheduler's unlocked callback convention
   remains mandatory.
 - Audit C++ object lifetime across every proposed longjmp boundary as well
-  as locks. In particular, `runtime/imports.cpp` currently keeps a local
-  `std::string desc` alive across `fn(c)`. A new nonlocal exit through this
-  path needs a safe lifetime design; a lock-only rule is insufficient.
+  as locks. The import dispatcher now uses a fixed description buffer across
+  `fn(c)`; future changes must not reintroduce an automatic C++ owner there.
 - An unhandled raise must log its record and preserve the current useful
   register/stack diagnostics, then abort. The test-only unhandled hook must
   not turn production unhandled exceptions into apparent success.
@@ -224,36 +279,62 @@ control-flow contract; it is not determined by this blocked proposal.
 
 ## Testing
 
-Completed design verification only:
+The original hash/stub/table/accepting-stack measurements remain reproducible
+with the private local `build/task12-seh-measure.py`. The corrected normal
+retirement boundary is recorded by the private
+`build/task12-seh-revised-measure.py` probe. Neither script is a game run;
+no image bytes or generated code are committed.
 
-- Rehashed the pinned image and counted all establishment/restore sites.
-- Decoded every pushed stub from the PE, confirmed its five-byte JMP and
-  counted the three shared targets; checked absence from all `.asm` files.
-- Decoded the example typed table and traced the System routine's consumer.
-- Executed the accepting suffix in Unicorn with intercepted normal-return
-  RtlUnwind, TLS lookup and debugger notification calls. This is evidence
-  about stack arithmetic, not a run of the runtime or the full handler.
+The synthetic translator regressions use
+`translate_case` from `test_translate_insns.py` for checkpoint emission,
+and the driver's synthetic image fixture for omitted-byte discovery. The
+original helper deliberately uses `NoImage` and cannot recover machine-code
+entries by itself. Both FS spellings, an unrelated TEB write, plain and
+typed/default omitted blocks, speculative-owner recovery, alternate entries
+and interception before lookup are covered without game inputs.
 
-The reproducible measurement script and output are private local artifacts
-at the game repository's ignored `build/task12-seh-measure.py` and
-`build/task12-seh-measure.log`. No image bytes or generated code are committed.
+The native `seh_tests` CTest target is labelled `nogame` and builds through
+the game repository's test wrapper. It checks chain order and record fields,
+unwind flags/return value, normal retirement's strict inequality, exit
+unwind, a real host nonlocal landing, skipped callee continuation, guest RET
+state, profile/mod-hook truncation, allocation cleanup, context reuse, thread
+teardown and fatal malformed-chain/unsupported-continuation/missing-checkpoint
+paths. The final run reports **113 checks, 0 failures**.
 
-Not run because implementation stopped in Step 1: the failing/passing
-translator cycle, native SEH/runtime/host suites and regeneration. After the
-design revision, start with the requested translator regression at
-`0x0d02a000`. The existing emitted-C helper is named `translate_case` in
-`test_translate_insns.py`; it can be reused without inventing another helper.
-Add actual omitted-block, typed-table and nested nonlocal-transfer tests
-before implementing the corresponding paths. Verify guest context resume
-and normal import return behavior as distinct outcomes.
+Validation on 2026-09-14, from the game repository root with its Python:
 
-Native tests must build through the game repository's build/test tools;
-add `seh_tests` to the local `build/task-k1-native.py` suite selector and
-CTest with label `nogame`. Run `seh_tests`, `runtime_tests`, `host_tests`,
-both translator suites and finally
-`tools/build.py --regenerate --target headless --jobs 8`. Record exact
-commands, exit status, translation-report entry count and compile time.
-No compile time or new report count is claimed in this design-only change.
+- Translator tests were written and run before implementation: the initial
+  SEH suite failed four tests, then passed. The null-default table,
+  speculative-owner, provenance and thread-teardown regressions also failed
+  before their corresponding fixes.
+- `.venv/bin/python -m pytest -q kit/tools/recomp/tests
+  --ignore=kit/tools/recomp/tests/test_translate.py
+  --ignore=kit/tools/recomp/tests/test_eaxa.py
+  --ignore=kit/tools/recomp/tests/test_translate_hooks.py`:
+  **87 passed, 1 skipped**. The first two exclusions are standalone
+  game-backed differential scripts, not portable pytest suites. The hook
+  suite was attempted separately and produced **13 failures** because its
+  paths, executable hash and expected symbols require the legacy game's
+  generated corpus, which is absent in this checkout. Its assertions were
+  not weakened or represented as passing.
+- `.venv/bin/python build/task-k1-native.py <suite>` for each of
+  `runtime_tests`, `host_tests`, `dx_tests` and `seh_tests`: **1/1 CTest passed**
+  for each suite. The existing local selector now includes `seh_tests`.
+- `.venv/bin/python -m pytest -q kit/tests`: **37 passed, 2 skipped**.
+- `.venv/bin/python -m pytest -q tests`: **4 passed**.
+- `.venv/bin/python tools/build.py --regenerate --target headless --jobs 8`:
+  successful translation and headless link. The report has **38,196 entries**
+  (**5,602** above the previous 32,594), **5,391 alternate entries**, and
+  **8,181** entries with `seh` provenance. Provenance includes recovered
+  continuations and promoted owners, so it is not a count of frame sites.
+  There are no translation failures, jump-table gaps, undecoded table sites
+  or stale alternate entries. `fn_008812e8` is defined in the generated C.
+  Translation took **89.36 seconds**; the 166 generated-C compilation steps
+  spanned **19.77 seconds** in Ninja's log. Build/link spanned **20.18 seconds**;
+  the complete regeneration/build command took **110.33 seconds** wall time.
+
+Build and test logs are private local artifacts under `build/`, not committed
+inputs. Formatting, game-literal and staged repository checks also pass.
 
 ## Out of scope
 
@@ -262,5 +343,6 @@ abort diagnostics. A later implementation could reuse safe guest exception
 dispatch and host checkpoint infrastructure, but compiler-specific frame
 decoding is separate work. Hardware-fault delivery, debugger integration,
 vectored handlers and a complete Windows exception subsystem are also outside
-this task. No game progress log, changelog, assets or submodule pointer is
-changed by this blocked design step.
+this task. No game progress log, changelog, assets or parent-repository
+submodule update is committed by this task; the orchestrator records
+game-port progress.
