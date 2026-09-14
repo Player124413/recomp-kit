@@ -12,6 +12,18 @@ build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
 
 
+def test_mods_targets_match_the_game_fixture(tmp_path):
+    spec = importlib.util.spec_from_file_location("test_runner", build.ROOT / "tools/test.py")
+    test_runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(test_runner)
+
+    assert test_runner.mods_targets(tmp_path) == ["pop_fixture", "mods_tests"]
+    fixture = tmp_path / "mods/examples/luawalk/main.lua"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text("-- fixture\n")
+    assert test_runner.mods_targets(tmp_path) == ["pop_fixture", "mods_tests", "present_events_tests"]
+
+
 def test_android_templates_render(tmp_path):
     cfg = {"game": {"app_name": "StubRecomp", "bundle_id": "dev.recompkit.stub", "id": "stub"}}
     out = build.android_project(tmp_path, cfg, gen_dir=tmp_path / "gen")

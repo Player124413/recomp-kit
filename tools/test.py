@@ -59,11 +59,19 @@ def native(preset, env, jobs, run_tests, game_dir, build_root):
         ctest(build_dir, "nogame|game|gpu|device", env)
 
 
+def mods_targets(game_dir):
+    """Match the mod targets CMake defines for the selected game."""
+    targets = ["pop_fixture", "mods_tests"]
+    if (game_dir / "mods/examples/luawalk/main.lua").is_file():
+        targets.append("present_events_tests")
+    return targets
+
+
 def mods(preset, env, jobs, game_dir, build_root):
     """Generate the real entity fixture locally, then run the mod suites under one build lock."""
     with buildlock.BuildLock(build_root.parent, "mod tests"):
         build_dir = configure(preset, game_dir, build_root)
-        build_py.build(preset, ["pop_fixture", "mods_tests", "present_events_tests"], jobs, build_dir=build_dir)
+        build_py.build(preset, mods_targets(game_dir), jobs, build_dir=build_dir)
         output = build_root / "tests"
         output.mkdir(parents=True, exist_ok=True)
         case = Path(tempfile.mkdtemp(prefix="mod-fixture-", dir=output))
