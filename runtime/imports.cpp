@@ -5,6 +5,8 @@ void sched_checkpoint();
 #include "memory.h"
 
 #include <map>
+#include <set>
+#include <cctype>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -34,6 +36,10 @@ std::map<std::string, ImportShim> &registry() {
     static auto *m = new std::map<std::string, ImportShim>();
     return *m;
 }
+std::set<std::string> &registered_dlls() {
+    static auto *s = new std::set<std::string>();
+    return *s;
+}
 
 struct DataImport {
     uint32_t size = 0;
@@ -45,10 +51,15 @@ std::map<std::string, DataImport> &data_imports() {
     return *m;
 }
 
-std::string key_of(const char *dll, const char *name) {
+std::string lower_dll(const char *dll) {
     std::string k(dll ? dll : "");
     std::transform(k.begin(), k.end(), k.begin(),
                    [](unsigned char ch) { return (char)tolower(ch); });
+    return k;
+}
+
+std::string key_of(const char *dll, const char *name) {
+    std::string k = lower_dll(dll);
     k += '!';
     k += name ? name : "";
     return k;
@@ -59,6 +70,8 @@ std::string key_of(const char *dll, const char *name) {
 void imports_register(const ImportShim *shims, size_t count) {
     for (size_t i = 0; i < count; ++i) {
         const ImportShim &s = shims[i];
+        if (s.dll && *s.dll)
+            registered_dlls().insert(lower_dll(s.dll));
         std::string k = key_of(s.dll, s.name);
         auto it = registry().find(k);
         if (it != registry().end() && it->second.fn && !s.fn)
@@ -73,6 +86,10 @@ void imports_register(const ImportShim *shims, size_t count) {
             t.argc = s.argc_stdcall;
         }
     }
+}
+
+bool imports_has_dll(const char *dll_lower) {
+    return registered_dlls().count(lower_dll(dll_lower)) != 0;
 }
 
 uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(X86 *),

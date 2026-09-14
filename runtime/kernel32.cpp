@@ -1170,8 +1170,8 @@ void k_SetCurrentDirectoryA(X86 *c) {
     set_eax(c, 1);
 }
 
-void k_GetModuleFileNameA(X86 *c) {
-    uint32_t hmod = arg(c, 0), buf = arg(c, 1), size = arg(c, 2);
+// Both encodings expose the same guest path, never a host filesystem path.
+std::string module_file_name(uint32_t hmod) {
     std::string path = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
@@ -1180,16 +1180,21 @@ void k_GetModuleFileNameA(X86 *c) {
                 break;
             }
     }
-    set_eax(c, gm_put_str(buf, path.c_str(), size));
+    return path;
 }
 
-void k_GetModuleHandleA(X86 *c) {
-    uint32_t p = arg(c, 0);
-    if (!p) {
-        set_eax(c, IMAGE_BASE);
-        return;
-    }
-    std::string name = lower(gm_str(p));
+void k_GetModuleFileNameA(X86 *c) {
+    std::string path = module_file_name(arg(c, 0));
+    set_eax(c, gm_put_str(arg(c, 1), path.c_str(), arg(c, 2)));
+}
+
+void k_GetModuleFileNameW(X86 *c) {
+    std::string path = module_file_name(arg(c, 0));
+    set_eax(c, gm_put_wstr(arg(c, 1), path, arg(c, 2)));
+}
+
+void get_module_handle_named(X86 *c, const std::string &module_name) {
+    std::string name = lower(module_name);
     auto it = modules().find(name);
     if (it != modules().end()) {
         set_eax(c, it->second);
@@ -1204,21 +1209,33 @@ void k_GetModuleHandleA(X86 *c) {
     set_eax(c, 0);
 }
 
+void k_GetModuleHandleA(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (!p) {
+        set_eax(c, IMAGE_BASE);
+        return;
+    }
+    get_module_handle_named(c, gm_str(p));
+}
+
+void k_GetModuleHandleW(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (!p) {
+        set_eax(c, IMAGE_BASE);
+        return;
+    }
+    get_module_handle_named(c, gm_wstr(p));
+}
+
 // A module handle is only handed out for a DLL the runtime has shims for.
 // Anything else fails the way a missing DLL does, so the guest takes its own
 // "feature unavailable" path instead of calling into nothing.
 bool runtime_serves_module(const std::string &lower_name) {
-    static const char *const known[] = {"kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll",
-                                        "shell32.dll",  "ole32.dll",  "imm32.dll", "wsock32.dll",
-                                        "winmm.dll",    nullptr};
-    for (int i = 0; known[i]; ++i)
-        if (lower_name == known[i])
-            return true;
-    return false;
+    return imports_has_dll(lower_name.c_str());
 }
 
-void k_LoadLibraryA(X86 *c) {
-    std::string name = lower(gm_str(arg(c, 0)));
+void load_library_named(X86 *c, const std::string &module_name) {
+    std::string name = lower(module_name);
     if (name.find('\\') != std::string::npos || name.find('/') != std::string::npos)
         name = name.substr(name.find_last_of("\\/") + 1);
     if (name.find(".dll") == std::string::npos)
@@ -1230,7 +1247,7 @@ void k_LoadLibraryA(X86 *c) {
     }
     if (!runtime_serves_module(name)) {
         log_once(("loadlib:" + name).c_str(),
-                 "LoadLibraryA(\"%s\"): no shims for that module, reporting it as missing",
+                 "LoadLibrary(\"%s\"): no shims for that module, reporting it as missing",
                  name.c_str());
         set_last_error(126); // ERROR_MOD_NOT_FOUND
         set_eax(c, 0);
@@ -1239,8 +1256,21 @@ void k_LoadLibraryA(X86 *c) {
     uint32_t h = g_next_module;
     g_next_module += 0x10000;
     modules()[name] = h;
-    LOGV("LoadLibraryA(\"%s\") -> pseudo module %08x", name.c_str(), h);
+    LOGV("LoadLibrary(\"%s\") -> pseudo module %08x", name.c_str(), h);
     set_eax(c, h);
+}
+
+void k_LoadLibraryA(X86 *c) {
+    load_library_named(c, gm_str(arg(c, 0)));
+}
+
+void k_LoadLibraryW(X86 *c) {
+    load_library_named(c, gm_wstr(arg(c, 0)));
+}
+
+void k_LoadLibraryExW(X86 *c) {
+    // File and flags are ignored: registered shim tables do not map a real DLL.
+    k_LoadLibraryW(c);
 }
 
 void k_FreeLibrary(X86 *c) {
@@ -4116,8 +4146,12 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "GetDriveTypeA", 1, k_GetDriveTypeA},
     // modules and process state
     {"KERNEL32.dll", "GetModuleFileNameA", 3, k_GetModuleFileNameA},
+    {"KERNEL32.dll", "GetModuleFileNameW", 3, k_GetModuleFileNameW},
     {"KERNEL32.dll", "GetModuleHandleA", 1, k_GetModuleHandleA},
+    {"KERNEL32.dll", "GetModuleHandleW", 1, k_GetModuleHandleW},
     {"KERNEL32.dll", "LoadLibraryA", 1, k_LoadLibraryA},
+    {"KERNEL32.dll", "LoadLibraryW", 1, k_LoadLibraryW},
+    {"KERNEL32.dll", "LoadLibraryExW", 3, k_LoadLibraryExW},
     {"KERNEL32.dll", "FreeLibrary", 1, k_FreeLibrary},
     {"KERNEL32.dll", "GetProcAddress", 2, k_GetProcAddress},
     {"KERNEL32.dll", "GetCommandLineA", 0, k_GetCommandLineA},

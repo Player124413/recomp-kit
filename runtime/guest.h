@@ -56,6 +56,13 @@ std::string gm_str(uint32_t a, size_t max_len = 0x8000);
 // Write a NUL-terminated string into guest memory, truncating to cap bytes
 // including the terminator. Returns the number of bytes written excluding NUL.
 uint32_t gm_put_str(uint32_t a, const char *s, uint32_t cap);
+// Read a NUL-terminated UTF-16LE guest string as UTF-8 (bounded in code units).
+// a == 0 yields "". Unpaired surrogates become U+FFFD.
+std::string gm_wstr(uint32_t a, size_t max_chars = 0x8000);
+// Write s as UTF-16LE, stopping at NUL and truncating to cap units including
+// the terminator, without splitting surrogate pairs or leaving the guest arena.
+// Invalid UTF-8 bytes become U+FFFD. Returns units written excluding NUL.
+uint32_t gm_put_wstr(uint32_t a, const std::string &s, uint32_t cap);
 
 // ---------------------------------------------------------------------------
 // Logging. RECOMP_LOG=0 silences everything, 1 (default) prints warnings and

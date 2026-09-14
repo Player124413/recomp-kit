@@ -202,6 +202,102 @@ static void fake_loader_tls_callback(X86 *c) {
           "TLS callback sees the initialized main thread block");
 }
 
+static void test_modules_and_wide() {
+    section("modules and wide strings");
+    X86 c;
+    loader_init_context(&c);
+    // This runtime-only binary does not link DirectX. Register a fixture with
+    // the same DLL/export spelling to exercise run-time lookup of an extra table.
+    static const ImportShim shims[] = {{"DDRAW.dll", "DirectDrawCreate", 3, nullptr}};
+    imports_register(shims, sizeof shims / sizeof shims[0]);
+    uint32_t name = 0x00300000; // scratch in the arena below the image
+    gm_put_str(name, "ddraw.dll", 64);
+    uint32_t h = call_import(&c, "KERNEL32.dll", "LoadLibraryA", {name});
+    check(h != 0, "LoadLibraryA(ddraw.dll) -> %08x", h);
+    gm_put_str(name + 64, "DirectDrawCreate", 64);
+    check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {h, name + 64}) != 0,
+          "GetProcAddress(ddraw, DirectDrawCreate) resolves");
+    gm_put_wstr(name + 128, "soaddraw.dll", 64);
+    check(call_import(&c, "KERNEL32.dll", "LoadLibraryW", {name + 128}) == 0,
+          "LoadLibraryW(soaddraw.dll): no shims, reported missing");
+    check(call_import(&c, "KERNEL32.dll", "GetLastError", {}) == 126,
+          "missing wide module reports ERROR_MOD_NOT_FOUND");
+    gm_put_wstr(name + 128, "DDRAW.DLL", 64);
+    check(call_import(&c, "KERNEL32.dll", "LoadLibraryW", {name + 128}) == h,
+          "LoadLibraryW(DDRAW.DLL) returns the same module");
+    check(call_import(&c, "KERNEL32.dll", "GetModuleHandleW", {name + 128}) == h,
+          "GetModuleHandleW agrees");
+    check(gm_wstr(name + 128) == "DDRAW.DLL", "gm_wstr round-trips");
+    gm_put_wstr(name + 256, "abc", 3);
+    check(gm_wstr(name + 256) == "ab", "gm_put_wstr truncates to the cap");
+
+    check(imports_has_dll("ddraw.dll") && imports_has_dll("DdRaW.DlL"),
+          "registered DLL lookup is case-insensitive");
+    check(!imports_has_dll("soaddraw.dll") && !imports_has_dll("") && !imports_has_dll(nullptr),
+          "unregistered and empty DLL names are absent");
+    gm_put_wstr(name + 128, "C:\\WINDOWS\\SYSTEM32\\DDRAW", 64);
+    check(call_import(&c, "KERNEL32.dll", "LoadLibraryExW", {name + 128, 0, 8}) == h,
+          "LoadLibraryExW normalizes paths and extension and pops three arguments");
+    check(call_import(&c, "KERNEL32.dll", "GetModuleHandleW", {0}) == IMAGE_BASE,
+          "GetModuleHandleW(NULL) returns the image");
+    gm_put_wstr(name + 128, "unregistered.dll", 64);
+    check(call_import(&c, "KERNEL32.dll", "GetModuleHandleW", {name + 128}) == 0,
+          "GetModuleHandleW reports an unloaded module as missing");
+
+    for (uint32_t module : {0u, IMAGE_BASE, h}) {
+        uint32_t narrow = name + 512, wide = name + 1024;
+        call_import(&c, "KERNEL32.dll", "GetModuleFileNameA", {module, narrow, 260});
+        uint32_t n = call_import(&c, "KERNEL32.dll", "GetModuleFileNameW", {module, wide, 260});
+        check(n == gm_str(narrow).size() && gm_wstr(wide) == gm_str(narrow),
+              "GetModuleFileNameW(%08x) agrees with the guest path from A", module);
+    }
+    uint32_t out = name + 2048;
+    uint32_t n = call_import(&c, "KERNEL32.dll", "GetModuleFileNameW", {h, out, 3});
+    check(n == 2 && gm_wstr(out) == "C:", "GetModuleFileNameW truncates in UTF-16 units");
+    wr16(out, 0x1234);
+    check(call_import(&c, "KERNEL32.dll", "GetModuleFileNameW", {h, out, 0}) == 0 &&
+              rd16(out) == 0x1234,
+          "GetModuleFileNameW with zero capacity leaves the buffer alone");
+
+    // Independent code-unit expectations catch mutually wrong encoders/decoders.
+    const std::string unicode = "A\xc3\xa9\xe6\xb0\xb4\xf0\x9f\x98\x80";
+    check(gm_put_wstr(out, unicode, 6) == 5 && rd16(out) == 'A' && rd16(out + 2) == 0x00e9 &&
+              rd16(out + 4) == 0x6c34 && rd16(out + 6) == 0xd83d && rd16(out + 8) == 0xde00 &&
+              rd16(out + 10) == 0,
+          "gm_put_wstr encodes BMP characters and a surrogate pair");
+    check(gm_wstr(out) == unicode, "gm_wstr decodes BMP characters and a surrogate pair");
+    check(gm_wstr(out, 3) == "A\xc3\xa9\xe6\xb0\xb4", "gm_wstr respects the code-unit bound");
+    check(gm_wstr(out + 6, 1) == "\xef\xbf\xbd",
+          "gm_wstr does not consume a surrogate beyond its bound");
+    check(gm_put_wstr(out, "\xf0\x9f\x98\x80", 2) == 0 && rd16(out) == 0,
+          "gm_put_wstr never writes half a surrogate pair");
+    wr16(out + 2, 0x1234);
+    check(gm_put_wstr(out, "abc", 1) == 0 && rd16(out) == 0 && rd16(out + 2) == 0x1234,
+          "gm_put_wstr capacity one writes only the terminator");
+    check(gm_put_wstr(out + 2, "abc", 0) == 0 && rd16(out + 2) == 0x1234,
+          "gm_put_wstr capacity zero writes nothing");
+    check(gm_wstr(0).empty() && gm_wstr(out, 0).empty() && gm_put_wstr(0, "abc", 8) == 0,
+          "wide helpers accept null addresses and zero read bounds");
+    check(gm_put_wstr(out, std::string("a\0b", 3), 8) == 1 && gm_wstr(out) == "a",
+          "gm_put_wstr stops at an embedded NUL");
+    wr16(out, 0xdc00);
+    wr16(out + 2, 0);
+    check(gm_wstr(out) == "\xef\xbf\xbd", "gm_wstr replaces an unpaired surrogate");
+    check(gm_put_wstr(out, std::string("\xe2\x82", 2), 8) == 2 && rd16(out) == 0xfffd &&
+              rd16(out + 2) == 0xfffd,
+          "gm_put_wstr replaces incomplete UTF-8 without reading past the string");
+    check(gm_put_wstr(out, std::string("\xc0\xaf", 2), 8) == 2 &&
+              gm_wstr(out) == "\xef\xbf\xbd\xef\xbf\xbd",
+          "gm_put_wstr rejects overlong UTF-8");
+    wr16(GUEST_SIZE - 2, 'Z');
+    check(gm_wstr(GUEST_SIZE - 2) == "Z" && gm_wstr(0xfffffffeu).empty(),
+          "gm_wstr stops at the arena boundary without wrapping guest addresses");
+    check(gm_put_wstr(GUEST_SIZE - 2, "abc", 8) == 0 && rd16(GUEST_SIZE - 2) == 0,
+          "gm_put_wstr reserves a terminator at the arena boundary");
+    check(gm_put_wstr(0xfffffffeu, "abc", 8) == 0,
+          "gm_put_wstr rejects addresses outside the arena");
+}
+
 static void test_loader() {
     section("loader");
     bool ok = loader_load(nullptr);
@@ -500,8 +596,8 @@ static void test_memory_shims_2(X86 *c) {
           "and it consumed both");
 
     // LoadLibraryA only succeeds for modules the runtime can serve.
-    check(call_import(c, "KERNEL32.dll", "LoadLibraryA", {put_str("ddraw.dll")}) == 0,
-          "LoadLibraryA(\"ddraw.dll\") fails: no shims for it");
+    check(call_import(c, "KERNEL32.dll", "LoadLibraryA", {put_str("unregistered.dll")}) == 0,
+          "LoadLibraryA(\"unregistered.dll\") fails: no shims for it");
     uint32_t hmod = call_import(c, "KERNEL32.dll", "LoadLibraryA", {put_str("winmm.dll")});
     check(hmod != 0, "LoadLibraryA(\"winmm.dll\") -> %08x", hmod);
     uint32_t proc =
@@ -3293,6 +3389,7 @@ int main(int argc, char **argv) {
     }
 
     test_loader();
+    test_modules_and_wide();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);

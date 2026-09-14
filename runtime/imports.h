@@ -28,6 +28,8 @@ struct ImportShim {
 // Registers a shim table. Later registrations override earlier ones for the
 // same (dll, name); a null fn never overrides a non-null one.
 void imports_register(const ImportShim *shims, size_t count);
+// True if a shim table registered an entry for this DLL (case-insensitive).
+bool imports_has_dll(const char *dll_lower);
 
 // ---------------------------------------------------------------------------
 // Return observer. Called after every dispatched shim with the trampoline's
