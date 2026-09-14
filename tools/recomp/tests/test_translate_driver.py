@@ -144,6 +144,51 @@ def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, p
         assert "CALL_FN(%08x); return;" % landing in text
 
 
+def test_computed_returns_use_sorted_call_continuations(tmp_path, monkeypatch):
+    """Direct and indirect CALL lengths name returns, not new dispatch entries."""
+    import re
+    import struct
+    entry, callee = 0x00601000, 0x00601080
+    code = (b"\xb8" + struct.pack("<I", callee) + b"\xff\xd0\xe8"
+            + struct.pack("<i", callee - entry - 12)
+            + b"\xff\x15\x00\x18\x60\x00\xc3")
+    img = synthetic_image({entry: code, callee: b"\xc3"}, base=0x00600000)
+    img.code_pointers = lambda *args, **kwargs: (set(), set())
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    (listings / ("%08x.asm" % entry)).write_text(
+        "00601000  MOV EAX,0x601080\n00601005  CALL EAX\n"
+        "00601007  CALL 0x601080\n0060100c  CALL dword ptr [0x601800]\n00601012  RET\n")
+    (listings / ("%08x.asm" % callee)).write_text("00601080  RET\n")
+    table = tmp_path / "functions.tsv"
+    table.write_text("address\tname\tsize\n00601000\tcaller\t19\n00601080\tcallee\t1\n")
+    binary, curated = tmp_path / "image", tmp_path / "globals.toml"
+    binary.write_bytes(img.data)
+    curated.write_text("")
+    out = tmp_path / "gen"
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                        ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
+                                     "--out", str(out), "--quiet"])
+    assert T.main() == 0
+    text = (out / "table.c").read_text()
+    assert "int recomp_is_call_return(uint32_t target)" in text
+    array = text.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]
+    assert [int(a, 16) for a in re.findall(r"0x([0-9a-f]+)u", array)] == [
+        entry + 7, entry + 12, entry + 18]
+    jump = text.split("void recomp_jump(", 1)[1].split("void recomp_unknown_jump(", 1)[0]
+    assert jump.index("if (i >= 0)") < jump.index("recomp_is_call_return(target)")
+    assert "if (recomp_is_call_return(target)) { c->eip = target; return; }" in jump
+    assert jump.index("recomp_is_call_return(target)") < jump.index("recomp_unknown_jump(c, target)")
+    call = text.split("void recomp_call(", 1)[1].split("void recomp_jump(", 1)[0]
+    assert "recomp_is_call_return" not in call
+
+
 def test_a_pushed_destructor_thunk_is_an_entry_candidate():
     """`atexit` is handed the address of a ten-byte `MOV ECX,obj / JMP dtor`
     thunk packed right after its initializer's RET: unaligned, not preceded

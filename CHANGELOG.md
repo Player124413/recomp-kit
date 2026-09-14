@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Translator: computed jumps to non-entry CALL continuations return to the
+  pending host caller without dispatching again or popping the guest stack.
+
 - Translator: recognize closed shutdown loops as nonreturning so recovery
   stops at their calls before decoding trailing data as instructions.
 

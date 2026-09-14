@@ -234,6 +234,10 @@ def fbstp_setup(rng):
 
 
 CASES = [
+    Case("Variable argument cleanup returns through a popped address", 0x0D01EA00,
+         [(0, "POP EAX"), (1, "LEA ESP,[ESP + EDX*0x4]"), (4, "JMP EAX")],
+         "58 8d 24 94 ff e0",
+         lambda rng: {"regs": rand_regs(rng, EDX=3), "args": [11, 22, 33]}),
     Case("PUSH immediate RET reaches the epilogue before returning", 0x0D01E800,
          [(0, "PUSH EBP"), (1, "MOV EBP,ESP"),
           (3, "PUSH 0x0d01e809"), (8, "RET"), (9, "POP EBP"), (10, "RET")],
@@ -432,7 +436,12 @@ def built():
             fh.write("    case 0x%08xu: fn_%08x(c); return;\n" % (case.addr, case.addr))
         fh.write("    default: recomp_unknown_call(c, target); c->eip = rd32(c->r[R_ESP]); c->r[R_ESP] += 4;\n"
                  "    }\n}\n")
-        fh.write("void recomp_jump(X86 *c, uint32_t target) { recomp_call(c, target); }\n")
+        # The harness calls each case from MAGIC_RET outside the code arena.
+        # Like a non-entry CALL continuation, it returns without popping or
+        # dispatching: the case's computed-return epilogue already cleaned ESP.
+        fh.write("void recomp_jump(X86 *c, uint32_t target) {\n"
+                 "    if (target == 0x%08xu) { c->eip = target; return; }\n"
+                 "    recomp_call(c, target);\n}\n" % MAGIC_RET)
     lib = os.path.join(work, "libinsns" + (".dylib" if platform.system() == "Darwin" else ".so"))
     subprocess.check_call([clang, "-O1", "-g", "-std=c11", "-Wall", "-Wextra", "-Wno-unused",
                            "-fPIC", "-shared", "-I", os.path.join(ROOT, "runtime"),
