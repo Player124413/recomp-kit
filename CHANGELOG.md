@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Smoke: add `tap x y`, driving a stationary finger through TouchMapper and
+  the window input gates with the smoke host's clock and presented frames.
+  Cover parsing and the mapper-driven finger lifecycle.
+- Touch: place a tap's pointer first, then press after one presented frame
+  (60 ms when presented-frame counts are unavailable), so a game can sample
+  the new cursor position before handling the click. Start the existing
+  90 ms / two-frame release hold at the actual press. A new finger finishes
+  a pending tap's press and release before starting the next gesture; focus
+  loss drops an unissued press. Drag and edge-hold behavior is unchanged.
+  Mapper and host suites pass; device menu/minimap confirmation is pending.
+
 - Build: default FFmpeg ON on Linux, import its major-version shared objects
   and package them beside the executable with an `$ORIGIN` rpath and notice.
   On Windows, detect MSYS2 bash/make and require a MinGW-compatible compiler;
