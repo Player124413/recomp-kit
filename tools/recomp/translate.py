@@ -255,11 +255,11 @@ class Op(object):
         return "Op(%s,%s)" % (self.kind, self.size)
 
 
-PTR_SIZE = {"byte": 8, "word": 16, "dword": 32, "qword": 64,
+PTR_SIZE = {"byte": 8, "word": 16, "dword": 32, "qword": 64, "tword": 80,
             "float": 32, "double": 64, "extended double": 80}
 
 MEM_RE = re.compile(
-    r"^(?:(byte|word|dword|qword|float|double|extended double) ptr )?"
+    r"^(?:(byte|word|dword|qword|tword|float|double|extended double) ptr )?"
     r"(?:([CDEFGS]S):)?"
     r"\[([^\]]*)\]$")
 
@@ -2193,7 +2193,7 @@ class Translator(object):
         if m == "STMXCSR":
             # No translated SSE arithmetic changes MXCSR, so expose its reset value.
             return ["wr32(%s, 0x1f80u);" % addr_expr(ops[0])]
-        if m == "FNCLEX":
+        if m in ("FNCLEX", "FCLEX"):
             return ["c->fpu_sw &= (uint16_t)~0x80ffu;"]
 
         # ------------------------------------------------------------ x87 --
@@ -2327,6 +2327,12 @@ class Translator(object):
             return ["fpush(c, 0.0);"]
         if m == "FLDPI":
             return ["fpush(c, 3.14159265358979323846);"]
+        if m == "FLDLN2":
+            return ["fpush(c, 0.69314718055994530942);"]
+        if m == "FLDL2E":
+            return ["fpush(c, 1.44269504088896340736);"]
+        if m == "FBSTP":
+            return ["wrbcd80(%s, fpop(c));" % addr_expr(ops[0])]
         if m == "FILD":
             return ["fpush(c, %s);" % self.x87_int_value(ops[0])]
 

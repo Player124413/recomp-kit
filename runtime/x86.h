@@ -142,6 +142,31 @@ static inline void wrf80(uint32_t a, double v) {
     wr16(a + 8, se);
 }
 
+/* FBSTP: 18 packed BCD digits, little-endian, sign in bit 7 of byte 9. Rounds
+ * to nearest even as the default control word does. Out-of-range values store
+ * the BCD indefinite (0xffff c000 0000 0000 0000), as the hardware does. */
+static inline void wrbcd80(uint32_t a, double v) {
+    uint8_t out[10];
+    memset(out, 0, sizeof out);
+    double r = nearbyint(v);
+    if (!(fabs(r) < 1e18)) {
+        static const uint8_t indefinite[10] = {0, 0, 0, 0, 0, 0, 0, 0xc0, 0xff, 0xff};
+        memcpy(g_mem + a, indefinite, 10);
+        return;
+    }
+    uint64_t m = (uint64_t)fabs(r);
+    for (int i = 0; i < 9; ++i) {
+        uint8_t lo = (uint8_t)(m % 10);
+        m /= 10;
+        uint8_t hi = (uint8_t)(m % 10);
+        m /= 10;
+        out[i] = (uint8_t)(hi << 4 | lo);
+    }
+    if (r < 0 || (r == 0 && signbit(v)))
+        out[9] = 0x80;
+    memcpy(g_mem + a, out, 10);
+}
+
 /* ------------------------------------------------------------- cpu state */
 
 /* Register indices into X86.r */

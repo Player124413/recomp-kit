@@ -207,6 +207,21 @@ def check_fsave(native, emu):
             % (what, bytes(native[area + lo:area + hi]).hex(), bytes(emu[area + lo:area + hi]).hex()))
 
 
+def check_x87_constants(native, emu):
+    # FLDL2E is pushed last, so it is the first value FSTP stores.
+    for mem in (native, emu):
+        l2e = rd_double(mem, SCRATCH + 0x100)
+        ln2 = rd_double(mem, SCRATCH + 0x108)
+        assert abs(l2e - 1.4426950408889634) < 1e-15, l2e
+        assert abs(ln2 - 0.6931471805599453) < 1e-15, ln2
+
+
+def fbstp_setup(rng):
+    value = rng.randint(-999999999, 999999999)
+    return {"regs": rand_regs(rng, ECX=SCRATCH + 0x200),
+            "mem": [(SCRATCH + 0x210, struct.pack("<i", value))]}
+
+
 CASES = [
     Case("LOOP counts ECX down and branches while it is not zero", 0x0D010000,
          [(0x0, "XOR EAX,EAX"), (0x2, "INC EAX"), (0x3, "LOOP 0x0d010002"), (0x5, "RET")],
@@ -280,6 +295,19 @@ CASES = [
     Case("STMXCSR stores the default MXCSR", 0x0D023000,
          [(0x0, "STMXCSR dword ptr [ECX]"), (0x3, "RET")],
          "0F AE 19  C3", lambda rng: {"regs": rand_regs(rng, ECX=SCRATCH + 0x80)}),
+    Case("FLDLN2 and FLDL2E push the x87 constants", 0x0D024000,
+         [(0x0, "FLDLN2"), (0x2, "FLDL2E"), (0x4, "FSTP double ptr [ECX]"),
+          (0x6, "FSTP double ptr [ECX + 0x8]"), (0x9, "RET")],
+         "D9 ED  D9 EA  DD 19  DD 59 08  C3", lambda rng: {"regs": rand_regs(rng, ECX=SCRATCH + 0x100)},
+         ignore=((SCRATCH + 0x100, 16),), check=check_x87_constants),
+    Case("FCLEX clears the status word like FNCLEX", 0x0D025000,
+         [(0x0, "FLDZ"), (0x2, "FLDZ"), (0x4, "FDIVP ST1,ST0"), (0x6, "FCLEX"),
+          (0x9, "FNSTSW word ptr [ECX]"), (0xb, "FSTP double ptr [ECX + 0x8]"), (0xe, "RET")],
+         "D9 EE  D9 EE  DE F9  9B DB E2  DD 39  DD 59 08  C3",
+         lambda rng: {"regs": rand_regs(rng, ECX=SCRATCH + 0x100)}, ignore=((SCRATCH + 0x108, 8),)),
+    Case("FBSTP stores packed BCD and pops", 0x0D026000,
+         [(0x0, "FILD dword ptr [ECX + 0x10]"), (0x3, "FBSTP tword ptr [ECX]"), (0x5, "RET")],
+         "DB 41 10  DF 31  C3", fbstp_setup),
 ]
 
 
