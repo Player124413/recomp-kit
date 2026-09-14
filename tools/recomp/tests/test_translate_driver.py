@@ -1103,7 +1103,9 @@ def test_pruned_cleanup_alias_falls_back_to_listed_span(tmp_path, monkeypatch, l
             assert "case %s: goto L_%08x;" % (T.hexlit(target), target) in body
 
 
-def test_pushed_data_fragment_cannot_hide_later_called_method(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_seh", [False, True])
+@pytest.mark.parametrize("relocated_literal", [False, True])
+def test_pushed_data_fragment_cannot_hide_later_called_method(tmp_path, monkeypatch, relocated_literal, with_seh):
     """A span PUSH argument is still a guess until its whole sweep is code.
 
     The listed owner pushes a short, headerless string. Its speculative
@@ -1122,8 +1124,18 @@ def test_pushed_data_fragment_cannot_hide_later_called_method(tmp_path, monkeypa
         callback: b"\xe8" + struct.pack("<i", method - callback - 5) + b"\xc3",
         slot: struct.pack("<I", callback),
     }
+    if with_seh:
+        stub, epilogue = method + 0x30, method + 0x40
+        code = (b"\x55\x8b\xec\x33\xc0\x55\x68" + struct.pack("<I", stub)
+                + b"\x64\xff\x30\x64\x89\x20\x33\xc0\x5a\x59\x59\x64\x89\x10\x68"
+                + struct.pack("<I", epilogue))
+        cleanup = method + len(code)
+        blocks[method] = code + b"\x90\xc3"
+        blocks[stub] = b"\xe9" + struct.pack("<i", next_fn - stub - 5) + b"\xe9" + struct.pack("<i", cleanup - stub - 10)
+        blocks[epilogue] = b"\x5d\xc3"
     img = synthetic_image(blocks, base=0x00600000)
-    img.relocated_pointers = lambda: {callback: slot}
+    img.relocated_pointers = lambda: ({callback: slot, literal: entry + 1}
+                                     if relocated_literal else {callback: slot})
     img.code_pointers = lambda *args, **kwargs: (set(), set())
     text = translate_entry_fixture(tmp_path, monkeypatch, img,
                                    {a: blocks[a] for a in (entry, next_fn)})

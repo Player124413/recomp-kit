@@ -3182,6 +3182,8 @@ def main():
         # A relocated pointer can still name text. Reject its content before
         # it can displace another candidate or become a recovery boundary.
         established_boundary = t in owner and owner[t].addr in protected_entries
+        if strength < 2 and t in withdrawn_span_guesses:
+            return False
         if strength < 2 and not established_boundary and (
                 image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                 or image.data[t - image.base:t - image.base + 2] == b"\x00\x00"):
@@ -3211,7 +3213,8 @@ def main():
         seh_cleanup = (why == "seh" and t in owner
                        and owner[t] in finally_owners.values())
         fragment_truncated = (truncate_span_guess(t)
-                              if (independent or not continuation) and not own_interior else False)
+                              if (independent or not continuation) and not own_interior
+                              and t not in finally_owners and not seh_cleanup else False)
         if fragment_truncated:
             remember_candidate(t)
         truncated = (truncate_speculative(t)
