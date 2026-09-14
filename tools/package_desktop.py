@@ -8,7 +8,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None) -> Path:
+def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None, build_dir=None) -> Path:
     """Copy the app and host resources into a folder, plus a Linux tarball.
 
     Only named build resources are copied. Shaders are embedded in the host;
@@ -41,6 +41,29 @@ def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None) -> Path:
     else:
         (resources / "symbols.json").unlink(missing_ok=True)
 
+    # Read the actual preset's cache, including an explicit video-OFF override.
+    # Exact SONAMEs avoid bundling build tools or unrelated files from ffmpeg/.
+    video = False
+    if build_dir is not None:
+        build_dir = Path(build_dir)
+        cache = (build_dir / "CMakeCache.txt").read_text().splitlines()
+        video = any(line.startswith("RECOMP_VIDEO:BOOL=") and
+                    line.partition("=")[2].upper() in {"1", "ON", "YES", "TRUE", "Y"}
+                    for line in cache)
+    for component, major in (("avformat", 61), ("avcodec", 61), ("avutil", 59)):
+        name = f"{component}-{major}.dll" if system == "Windows" else f"lib{component}.so.{major}"
+        if video:
+            libdir = "bin" if system == "Windows" else "lib"
+            # Dereference Linux's major-version symlinks into self-contained files.
+            copy(build_dir / "ffmpeg" / libdir / name, staged / name)
+        else:
+            (staged / name).unlink(missing_ok=True)
+    notice = resources / "ffmpeg-NOTICE.md"
+    if video:
+        copy(ROOT / "third_party/ffmpeg/NOTICE.md", notice)
+    else:
+        notice.unlink(missing_ok=True)
+
     executable = game["executable"]
     if system == "Windows":
         launch = (f'In PowerShell, from this folder:\n'
@@ -61,7 +84,9 @@ def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None) -> Path:
         "path, the host tries the configured developer executable, then a\n"
         "previously saved executable path, then opens a file picker. It does\n"
         "not search a game/ directory beside this binary.\n\n"
-        "Keep resources/ beside the app. Shaders are embedded in the binary;\n"
+        "Keep resources/ and any FFmpeg shared libraries beside the app.\n"
+        "See resources/ffmpeg-NOTICE.md when video is enabled.\n"
+        "Shaders are embedded in the binary;\n"
         "any game SoundFont stays in your installation. See LICENSE and NOTICE.\n",
         encoding="utf-8")
     files.append(readme)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Build: default FFmpeg ON on Linux, import its major-version shared objects
+  and package them beside the executable with an `$ORIGIN` rpath and notice.
+  On Windows, detect MSYS2 bash/make and require a MinGW-compatible compiler;
+  keep video OFF with a status message when prerequisites are missing or
+  the compiler uses the MSVC ABI. Package enabled builds' DLLs and notice;
+  remove staged video files on OFF without touching player files. Windows
+  CI stays video OFF and Linux needs no new packages. macOS configure and
+  fake-file staging checks pass; Linux/Windows builds and playback are unverified.
+
 - Build: enable shared FFmpeg by default on iOS and Android. Cross-build
   arm64 iOS 17 dylibs with relative install names and use Xcode's Embed
   Frameworks phase to copy and sign them with the app's identity/team.

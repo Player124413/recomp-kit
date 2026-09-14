@@ -81,6 +81,7 @@ jobs:
           sudo apt-get update -qq
           # SDL3's documented Linux build dependencies (README-linux), so the
           # X11 and Wayland backends configure without a per-extension hunt.
+          # FFmpeg builds from source with build-essential; no FFmpeg packages.
           sudo apt-get install -y -qq clang lld build-essential pkg-config libasound2-dev \
             libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev \
             libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
@@ -110,7 +111,11 @@ jobs:
             echo "$PWD/$BIN" >> "$GITHUB_PATH"
           fi
       - name: Configure
+        if: runner.os != 'Windows'
         run: cmake --preset ${{ matrix.preset }}
+      - name: Configure without video (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --preset ${{ matrix.preset }} -DRECOMP_VIDEO=OFF
       - name: Build every test binary this platform has
         if: matrix.preset != 'ios-stub'
         run: cmake --build --preset ${{ matrix.preset }} --target check_binaries

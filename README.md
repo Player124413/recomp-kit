@@ -76,7 +76,7 @@ SDL3 is fetched at its pinned release and linked statically; Lua,
 TinySoundFont, minimp3, volk and Vulkan headers are vendored with their
 upstream notices. See [NOTICE](NOTICE) for licenses.
 
-On macOS, iOS and Android, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the
+On macOS, iOS, Android and Linux, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the
 SHA-256-pinned FFmpeg 7.1.1 release and builds shared `avformat`, `avcodec`
 and `avutil` libraries with only Bink/Smacker video and audio decoders,
 Bink/Smacker demuxers and file input. The macOS app carries the three dylibs in
@@ -95,13 +95,28 @@ beside `libmain.so` under `lib/arm64-v8a/`. No Gradle packaging override is
 needed. The mobile cross builds and Android APK contents are verified;
 iOS embedded signatures and mobile device playback remain unverified.
 
+Linux uses CMake's native C compiler and `--enable-pic`. The desktop packager
+copies `libavformat.so.61`, `libavcodec.so.61` and `libavutil.so.59` beside
+the executable, whose rpath includes `$ORIGIN`. The package also carries
+`resources/ffmpeg-NOTICE.md`. FFmpeg builds from source using the existing
+compiler and make; no distribution FFmpeg package is needed.
+
+On Windows, CMake looks for `bash` and `make` on `PATH` (MSYS2). Video
+defaults to ON only with both tools and a MinGW-compatible compiler;
+missing tools or an MSVC-ABI compiler keep it OFF with a status message.
+`--toolchain=msvc`/clang-cl builds are out of scope. The enabled path imports
+the three versioned DLLs and their MinGW import libraries, and packages the
+DLLs beside the executable with the notice under `resources/`. Windows CI
+explicitly keeps video OFF. Linux/Windows configuration branches have been
+reviewed and packaging tested with fake files on macOS; native builds,
+dynamic loading and cinematic playback on either platform remain unverified.
+
 FFmpeg is LGPL-2.1-or-later and dynamically linked. Its full license,
 source URL, checksum, configure command and library replacement instructions
 are in [the FFmpeg notice](third_party/ffmpeg/NOTICE.md), also shipped as
 `Contents/Resources/ffmpeg-NOTICE.md` on macOS, at the iOS bundle root,
 and as `assets/ffmpeg-NOTICE.md` in Android APKs. CMake `-DRECOMP_VIDEO=OFF`
-disables the dependency. It defaults to `OFF` on Linux and Windows;
-enabling it there is not supported yet. Existing mobile CMake caches that
+disables the dependency. Existing mobile or Linux CMake caches that
 explicitly have video OFF need `-DRECOMP_VIDEO=ON` once when configuring.
 See [Contributing](CONTRIBUTING.md) for the CMake cache workflow and the
 [notice](third_party/ffmpeg/NOTICE.md) for each platform's configure flags.

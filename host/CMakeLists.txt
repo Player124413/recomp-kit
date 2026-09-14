@@ -161,6 +161,10 @@ if(TARGET recomp_gen)
     pop_ios_bundle(recomp_app)
   elseif(APPLE)
     pop_mac_bundle(recomp_app)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND RECOMP_VIDEO)
+    # The desktop packager places all three directly linked FFmpeg libraries
+    # beside the executable. Retain CMake's build-tree paths for local runs.
+    set_target_properties(recomp_app PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
   endif()
 
   if(APPLE AND NOT IOS AND NOT ANDROID AND EXISTS ${RECOMP_GAME_DIR}/mods/examples/luawalk/main.lua) # Objective-C++ source; a desktop test

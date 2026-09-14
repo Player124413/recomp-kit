@@ -26,17 +26,35 @@ endfunction()
 
 # Video is enabled on the hosts with shared-library packaging support.
 set(RECOMP_VIDEO_DEFAULT OFF)
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR IOS OR ANDROID)
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR IOS OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(RECOMP_VIDEO_DEFAULT ON)
+elseif(WIN32)
+  # FFmpeg's configure needs the MSYS2 shell and GNU make on PATH. The
+  # native MinGW compiler path is supported; clang-cl/MSVC is out of scope.
+  find_program(RECOMP_FFMPEG_SHELL NAMES bash PATHS ENV PATH NO_DEFAULT_PATH)
+  find_program(RECOMP_FFMPEG_MAKE NAMES make PATHS ENV PATH NO_DEFAULT_PATH)
+  if(NOT RECOMP_FFMPEG_SHELL OR NOT RECOMP_FFMPEG_MAKE)
+    message(STATUS "RECOMP_VIDEO stays OFF: Windows requires bash and make (MSYS2) on PATH")
+  elseif(MSVC OR CMAKE_C_SIMULATE_ID STREQUAL "MSVC")
+    message(STATUS "RECOMP_VIDEO stays OFF: use a MinGW compiler; clang-cl/MSVC FFmpeg builds are out of scope")
+  else()
+    set(RECOMP_VIDEO_DEFAULT ON)
+  endif()
 endif()
 option(RECOMP_VIDEO "Build the shared FFmpeg Bink and Smacker dependency" ${RECOMP_VIDEO_DEFAULT})
+if(WIN32 AND NOT RECOMP_VIDEO_DEFAULT)
+  set(RECOMP_VIDEO OFF CACHE BOOL "Build the shared FFmpeg Bink and Smacker dependency" FORCE)
+endif()
 
 if(RECOMP_VIDEO)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT IOS AND NOT ANDROID)
-    message(FATAL_ERROR "RECOMP_VIDEO currently supports macOS, iOS and Android only")
+  if(NOT APPLE AND NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT WIN32)
+    message(FATAL_ERROR "RECOMP_VIDEO is not supported on ${CMAKE_SYSTEM_NAME}")
   endif()
   include(ExternalProject)
-  find_program(RECOMP_FFMPEG_MAKE NAMES make REQUIRED)
+  if(NOT WIN32)
+    set(RECOMP_FFMPEG_SHELL /bin/sh)
+    find_program(RECOMP_FFMPEG_MAKE NAMES make REQUIRED)
+  endif()
   set(RECOMP_FFMPEG_PREFIX "${CMAKE_BINARY_DIR}/ffmpeg")
   set(RECOMP_FFMPEG_CONFIGURE
     --prefix=${RECOMP_FFMPEG_PREFIX}
@@ -77,34 +95,53 @@ if(RECOMP_VIDEO)
       --ranlib=${RECOMP_FFMPEG_TOOLCHAIN_BIN}/llvm-ranlib
       --strip=${RECOMP_FFMPEG_TOOLCHAIN_BIN}/llvm-strip
       --sysroot=${RECOMP_FFMPEG_SYSROOT} --disable-symver)
-  else()
+  elseif(APPLE)
     list(APPEND RECOMP_FFMPEG_CONFIGURE
       --install-name-dir=@rpath --cc=${CMAKE_C_COMPILER})
+  else()
+    list(APPEND RECOMP_FFMPEG_CONFIGURE --cc=${CMAKE_C_COMPILER})
+    if(WIN32)
+      list(APPEND RECOMP_FFMPEG_CONFIGURE --target-os=mingw32)
+    endif()
   endif()
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$" OR "x86_64" IN_LIST CMAKE_OSX_ARCHITECTURES)
     list(APPEND RECOMP_FFMPEG_CONFIGURE --disable-x86asm)
   endif()
   set(RECOMP_FFMPEG_LIBRARIES)
+  set(RECOMP_FFMPEG_IMPLIBRARIES)
   foreach(component avformat avcodec avutil)
+    if(component STREQUAL "avutil")
+      set(major 59)
+    else()
+      set(major 61)
+    endif()
+    set(libdir lib)
     if(ANDROID)
       # FFmpeg's Android target installs unversioned names and SONAMEs.
       set(filename lib${component}.so)
       set(soname ${filename})
-    else()
-      if(component STREQUAL "avutil")
-        set(major 59)
-      else()
-        set(major 61)
-      endif()
+    elseif(APPLE)
       set(filename lib${component}.${major}.dylib)
       set(soname @rpath/${filename})
+    elseif(WIN32)
+      set(libdir bin)
+      set(filename ${component}-${major}.dll)
+      set(soname ${filename})
+    else()
+      set(filename lib${component}.so.${major})
+      set(soname ${filename})
     endif()
-    list(APPEND RECOMP_FFMPEG_LIBRARIES "${RECOMP_FFMPEG_PREFIX}/lib/${filename}")
+    list(APPEND RECOMP_FFMPEG_LIBRARIES "${RECOMP_FFMPEG_PREFIX}/${libdir}/${filename}")
     add_library(ffmpeg::${component} SHARED IMPORTED GLOBAL)
     set_target_properties(ffmpeg::${component} PROPERTIES
-      IMPORTED_LOCATION "${RECOMP_FFMPEG_PREFIX}/lib/${filename}"
+      IMPORTED_LOCATION "${RECOMP_FFMPEG_PREFIX}/${libdir}/${filename}"
       IMPORTED_SONAME "${soname}"
       INTERFACE_INCLUDE_DIRECTORIES "${RECOMP_FFMPEG_PREFIX}/include")
+    if(WIN32)
+      set(implib "${RECOMP_FFMPEG_PREFIX}/lib/lib${component}.dll.a")
+      set_target_properties(ffmpeg::${component} PROPERTIES IMPORTED_IMPLIB "${implib}")
+      list(APPEND RECOMP_FFMPEG_IMPLIBRARIES "${implib}")
+    endif()
   endforeach()
   # FFmpeg uses a shell configure script and GNU make, not CMake or Ninja.
   # CMAKE_COMMAND is the same (venv) CMake that configured the kit.
@@ -112,10 +149,10 @@ if(RECOMP_VIDEO)
     URL https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
     URL_HASH SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    CONFIGURE_COMMAND /bin/sh <SOURCE_DIR>/configure ${RECOMP_FFMPEG_CONFIGURE}
+    CONFIGURE_COMMAND ${RECOMP_FFMPEG_SHELL} <SOURCE_DIR>/configure ${RECOMP_FFMPEG_CONFIGURE}
     BUILD_COMMAND ${CMAKE_COMMAND} -E env ${RECOMP_FFMPEG_MAKE} -j8
     INSTALL_COMMAND ${CMAKE_COMMAND} -E env ${RECOMP_FFMPEG_MAKE} install
-    BUILD_BYPRODUCTS ${RECOMP_FFMPEG_LIBRARIES})
+    BUILD_BYPRODUCTS ${RECOMP_FFMPEG_LIBRARIES} ${RECOMP_FFMPEG_IMPLIBRARIES})
   # Imported include paths must exist at generation time, before installation.
   file(MAKE_DIRECTORY "${RECOMP_FFMPEG_PREFIX}/include")
   foreach(component avformat avcodec avutil)

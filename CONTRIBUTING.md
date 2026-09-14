@@ -9,7 +9,10 @@ portable tests and mod examples. Open an issue before a large architecture chang
 - Python 3.9 or later; create `.venv` and install `requirements-dev.txt`.
 - Native builds on macOS: Apple Silicon, Xcode Command Line Tools and Git. CMake
   and Ninja come from `requirements-dev.txt`.
-- Native builds on Linux: clang and lld (`apt-get install clang lld`).
+- Native builds on Linux: clang, lld and GNU make
+  (`apt-get install clang lld build-essential`), plus SDL's platform headers
+  listed in `.github/workflows/checks.yml`. FFmpeg builds from source; no
+  FFmpeg development package is needed.
 - Native builds on Windows: LLVM's clang and a Visual Studio developer
   command prompt for the Windows SDK. On Windows, use `.venv/Scripts/python.exe`
   in place of `.venv/bin/python` in the commands below.
@@ -87,8 +90,35 @@ game-free configure is
 `cmake --preset macos-stub -DPython3_EXECUTABLE=/abs/path/to/.venv/bin/python`;
 the explicit interpreter avoids macOS finding Xcode's Python without the
 required Python packages. Subsequent runs can use `cmake --preset macos-stub`. Add
-`-DRECOMP_VIDEO=OFF` to exercise the path without FFmpeg. Other platforms
-default to `OFF` and do not support enabling video yet.
+`-DRECOMP_VIDEO=OFF` to exercise the path without FFmpeg. iOS, Android and
+Linux also default to ON. Existing caches keep an explicit OFF until
+reconfigured with `-DRECOMP_VIDEO=ON`.
+
+On Linux use the same cache workflow with `--preset linux` and
+`-B /abs/path/to/<game>/build/cmake/linux`. FFmpeg configures natively with
+`--cc=${CMAKE_C_COMPILER}` and `--enable-pic`. Desktop staging copies the
+three major-version `.so` files beside the executable and includes
+`resources/ffmpeg-NOTICE.md`; CMake adds the executable's `$ORIGIN` rpath.
+The Linux tarball contains these files too. The executable retains
+build-tree rpaths for local runs.
+Verify the package on Linux with `readelf -d` and `ldd` after moving it away
+from the build tree, then launch it and check cinematic playback.
+
+On Windows, FFmpeg's configure requires MSYS2 `bash` and GNU `make` on
+`PATH`. CMake uses `find_program` for both; missing either forces video OFF
+with a status message, including when a cache previously enabled it. With
+both tools, a MinGW-compatible compiler defaults video ON and configure uses
+`--target-os=mingw32` and CMake's C compiler. Select a matching MinGW clang
+toolchain for the entire kit. The Visual Studio/MSVC-ABI compiler path stays
+video OFF: `--toolchain=msvc` and clang-cl support are out of scope. An
+explicit `-DRECOMP_VIDEO=OFF` always disables video; Windows CI sets it.
+The packager copies `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll` and
+the notice; MinGW import libraries stay in the build tree. Repackaging with
+video OFF removes only the staged FFmpeg files and preserves player files.
+
+Linux and Windows video builds, DLL/ELF loading and playback have not been
+run here. Verification is limited to reviewing their CMake branches,
+macOS stub configurations with video ON/OFF and fake-file packaging tests.
 
 For a video-enabled macOS app, check the executable and all three dylibs
 with `otool -L`: only Apple system paths and the bundled `@rpath/libav*`

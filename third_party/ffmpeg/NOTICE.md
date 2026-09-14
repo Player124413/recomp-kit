@@ -14,6 +14,8 @@ are enabled. The full LGPL 2.1 license from the release follows below.
 - macOS/iOS shared libraries: `libavformat.61.dylib`, `libavcodec.61.dylib`,
   `libavutil.59.dylib`.
 - Android shared libraries: `libavformat.so`, `libavcodec.so`, `libavutil.so`.
+- Linux shared libraries: `libavformat.so.61`, `libavcodec.so.61`, `libavutil.so.59`.
+- Windows shared libraries: `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll`.
 
 ## Build configuration
 
@@ -44,7 +46,29 @@ macOS uses CMake's selected C compiler (`/usr/bin/cc` in the verified build):
   --install-name-dir=@rpath --cc="$CMAKE_C_COMPILER"
 ```
 
-On x86_64 macOS, append `--disable-x86asm` so nasm/yasm is not required.
+On x86_64 desktop targets, append `--disable-x86asm` so nasm/yasm is not required.
+
+Linux uses the same common arguments (including `--enable-pic`) with the
+native C compiler:
+
+```sh
+/bin/sh "$SOURCE_DIR/configure" "$@" --cc="$CMAKE_C_COMPILER"
+```
+
+Windows requires `bash` and `make` from MSYS2 on `PATH` and a MinGW-compatible
+C compiler. CMake finds both programs before enabling video; it keeps video
+OFF with a status message if either is missing or the compiler uses the
+MSVC ABI. `--toolchain=msvc`/clang-cl support is out of scope. The native
+MinGW configure command is:
+
+```sh
+bash "$SOURCE_DIR/configure" "$@" --cc="$CMAKE_C_COMPILER" --target-os=mingw32
+```
+
+The DLLs install into `ffmpeg/bin`; their `libavformat.dll.a`,
+`libavcodec.dll.a` and `libavutil.dll.a` import libraries install into
+`ffmpeg/lib`. Linux and Windows builds/loading/playback remain unverified;
+the configure branches were reviewed on macOS.
 
 iOS targets arm64 devices, minimum iOS 17.0. `CMAKE_OSX_SYSROOT` is the
 absolute iPhoneOS SDK path; when CMake supplies an SDK name, resolve it
@@ -82,8 +106,8 @@ on both mobile targets, so they remain enabled as isolation measures. The
 ExternalProject runs `make -j8` and `make install` through `cmake -E env`.
 Native kit builds use `tools/build.py` or `tools/test.py`; FFmpeg's configure
 and make are managed by that build. `RECOMP_VIDEO` defaults to ON for
-macOS, iOS and Android; OFF omits FFmpeg entirely. Linux and Windows remain
-OFF with no enabled-video support in this change.
+macOS, iOS, Android and Linux, and on Windows with the prerequisites above;
+OFF omits FFmpeg entirely. Windows CI explicitly configures OFF.
 
 Automatic optional dependency discovery and external compression/UI/media
 libraries are disabled to avoid dependencies on Homebrew or other local
@@ -122,6 +146,16 @@ with ABI-compatible modified builds using the same SONAMEs, then rebuild
 the APK with `tools/build.py --target android` and sign it for your own
 installation. Stub and real-translation APK contents and ELF dependencies
 have been verified; installation and playback on a device have not.
+
+Linux stages the three major-version shared objects beside the executable,
+dereferencing installed symlinks so the package is self-contained. The
+executable's rpath includes `$ORIGIN`; all three libraries are linked
+directly. Windows stages the three versioned DLLs beside the executable.
+Both include this notice at `resources/ffmpeg-NOTICE.md`. Replace those
+files with ABI-compatible modified libraries using the same filenames and,
+on Linux, SONAMEs. No signing or relinking is needed for these desktop
+libraries. Fake-file staging tests cover package contents and video-OFF
+cleanup; native dynamic loading still needs verification on each platform.
 
 ## GNU Lesser General Public License version 2.1
 

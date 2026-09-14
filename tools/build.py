@@ -417,7 +417,8 @@ def main():
                     binary = args.build_root / "recomp" / (cfg["game"]["app_name"] + suffix)
                     if not binary.is_file():
                         parser.exit(1, "No desktop app binary at %s after the build\n" % binary)
-                    packaged = package_desktop.stage(binary, cfg, args.build_root / "package", system=system)
+                    packaged = package_desktop.stage(binary, cfg, args.build_root / "package",
+                                                     system=system, build_dir=build_dir)
                     print("Packaged %s" % packaged)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")

@@ -78,6 +78,69 @@ def test_windows_folder(tmp_path):
     assert ".\\StubRecomp.exe" in readme
 
 
+@pytest.mark.parametrize("system", ["Linux", "Windows"])
+def test_video_libraries_and_notice(tmp_path, monkeypatch, system):
+    exe = tmp_path / "recomp_app"
+    exe.write_bytes(b"fake native binary")
+    cfg = {"game": {"app_name": "StubRecomp", "name": "Stub Game", "executable": "STUB.EXE"}}
+    build_dir = tmp_path / "cmake" / "custom-preset"
+    libdir = build_dir / "ffmpeg" / ("bin" if system == "Windows" else "lib")
+    libdir.mkdir(parents=True)
+    cache = build_dir / "CMakeCache.txt"
+    cache.write_text("RECOMP_VIDEO:BOOL=ON\n")
+    names = (["avformat-61.dll", "avcodec-61.dll", "avutil-59.dll"] if system == "Windows" else
+             ["libavformat.so.61", "libavcodec.so.61", "libavutil.so.59"])
+    for name in names:
+        if system == "Linux":
+            # Installed SONAME symlinks must not point outside the final package.
+            real = libdir / (name + ".1.100")
+            real.write_bytes(name.encode())
+            (libdir / name).symlink_to(real.name)
+        else:
+            (libdir / name).write_bytes(name.encode())
+    (libdir / "unrelated-private-file").write_bytes(b"private")
+    monkeypatch.setattr(package_desktop.platform, "machine", lambda: "x86_64")
+    out = package_desktop.stage(exe, cfg, tmp_path / "out", system=system, build_dir=build_dir)
+    for name in names:
+        assert (out / name).read_bytes() == name.encode()
+        assert not (out / name).is_symlink()
+    notice = "resources/ffmpeg-NOTICE.md"
+    assert (out / notice).read_bytes() == (package_desktop.ROOT / "third_party/ffmpeg/NOTICE.md").read_bytes()
+    assert not (out / "unrelated-private-file").exists()
+    archive = tmp_path / "out/StubRecomp-linux-x86_64.tar.gz"
+    if system == "Linux":
+        with tarfile.open(archive) as tar:
+            for name in names:
+                assert tar.getmember(f"StubRecomp/{name}").isfile()
+                assert tar.extractfile(f"StubRecomp/{name}").read() == name.encode()
+            assert f"StubRecomp/{notice}" in tar.getnames()
+            assert not any("unrelated-private-file" in name for name in tar.getnames())
+
+    # An explicit OFF overrides leftover installed libraries in a reused tree.
+    (out / "player.sav").write_bytes(b"keep this save")
+    cache.write_text("RECOMP_VIDEO:BOOL=OFF\n")
+    package_desktop.stage(exe, cfg, tmp_path / "out", system=system, build_dir=build_dir)
+    assert all(not (out / name).exists() for name in names)
+    assert not (out / notice).exists()
+    assert (out / "player.sav").read_bytes() == b"keep this save"
+    if system == "Linux":
+        with tarfile.open(archive) as tar:
+            assert all(f"StubRecomp/{name}" not in tar.getnames() for name in names + [notice, "player.sav"])
+
+
+@pytest.mark.parametrize("system", ["Linux", "Windows"])
+def test_video_enabled_requires_installed_libraries(tmp_path, system):
+    exe = tmp_path / "recomp_app"
+    exe.write_bytes(b"fake native binary")
+    cfg = {"game": {"app_name": "StubRecomp", "name": "Stub Game", "executable": "STUB.EXE"}}
+    build_dir = tmp_path / "cmake"
+    build_dir.mkdir()
+    (build_dir / "CMakeCache.txt").write_text("RECOMP_VIDEO:BOOL=ON\n")
+    with pytest.raises(FileNotFoundError):
+        package_desktop.stage(exe, cfg, tmp_path / "out", system=system, build_dir=build_dir)
+    assert not list((tmp_path / "out").glob("*.tar.gz"))
+
+
 @pytest.mark.parametrize("system,target,stub,packages", [
     ("Linux", "app", False, True), ("Windows", "app", False, True),
     ("Darwin", "app", False, False), ("Linux", "app", True, False),
@@ -104,12 +167,13 @@ def test_build_packages_only_successful_desktop_apps(tmp_path, monkeypatch, syst
         binary.write_bytes(b"fake native binary")
         calls.append("built")
 
-    def fake_stage(app_binary, config, out_dir, system=None):
+    def fake_stage(app_binary, config, out_dir, system=None, build_dir=None):
         assert calls == ["built"]
         assert app_binary == binary and app_binary.is_file()
         assert config == cfg
         assert out_dir == tmp_path / "build/package"
         assert system in {"Linux", "Windows"}
+        assert build_dir == tmp_path / "build/cmake" / system.lower()
         calls.append("packaged")
         return out_dir / "StubRecomp"
 
