@@ -2867,10 +2867,16 @@ def main():
         register(fn)
 
     listed_functions = {fn.addr for fn in parsed}
+    bodies = {fn.addr: fn for fn in parsed}
     extra = {}
     recovered = []
     discovered_by_scan = [0]
     provenance = {}
+    # Entry evidence is independent of instructions swept into a body. In
+    # particular, finding an SEH frame in a pointer guess does not establish
+    # that guess's entry (which may precede the real function in data).
+    protected_entries = set(listed_functions)
+    finally_owners = {}
     interior_entries = [0]
     initterm_found = [0]
     immediate_entries = [0]
@@ -2895,6 +2901,10 @@ def main():
         compiler never emits - `POP ES`, `DAS`, `LJMP` - and the emitter says
         so.  Using it as the filter means the vocabulary check can never drift
         from what the translator actually supports."""
+        if (fn.addr not in protected_entries
+                and image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00"):
+            # ADD byte ptr [EAX],AL is data at a speculative function start.
+            return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
             tr.prepare(fn)
@@ -2913,6 +2923,11 @@ def main():
         """Make `t` an entry point.  Returns True if that changed anything."""
         if t is None:
             return False
+        protected = (why in ("config", "seh")
+                     or (why == "branch" and home is not None and home.addr in protected_entries))
+        newly_protected = protected and t not in protected_entries
+        if protected:
+            protected_entries.add(t)
         if (why == "branch" and continuation and home is not None
                 and home.addr not in listed_functions and provenance.get(home.addr) == "seh"):
             why = "seh"
@@ -2922,12 +2937,16 @@ def main():
         # guess, or dropping the real landing along with its guessed owner.
         prior = owner.get(t)
         separate = (why == "seh" and prior is not None and prior.addr != t
+                    and t not in bodies
                     and prior.addr not in listed_functions
+                    and prior.addr not in protected_entries and t not in finally_owners
                     and provenance.get(prior.addr, "branch") not in STRUCTURAL_PROVENANCE)
         # Before any of the early returns below.  See note_structural.
-        note_structural(provenance, {} if separate else owner, t, why)
+        promote_owner = not separate and (why != "seh" or prior is None
+                                          or prior.addr in protected_entries)
+        note_structural(provenance, owner if promote_owner else {}, t, why)
         if t in all_addrs and not separate:
-            return False
+            return newly_protected
         if home is not None and t in home.addrs:
             return False
         if t in owner and not separate:
@@ -2964,6 +2983,7 @@ def main():
             rejected.add(t)
             return False
         parsed.append(new_fn)
+        bodies[t] = new_fn
         recovered.append(new_fn)
         all_addrs.add(t)
         register(new_fn)
@@ -2988,22 +3008,26 @@ def main():
         changed = False
 
         def adopt(target):
-            if target in fn.addrs:
-                return False
             prior = owner.get(target)
             # A pointer guess may own a real suffix behind an invalid prefix.
             # Follow only the cleanup/epilogue's reachable instructions, not
             # every instruction the previous speculative owner happened to own.
-            blocked = set(owner) - prior.addrs if prior is not None else owner
-            insns = image.recover(target, blocked)
-            if not insns:
-                return False
-            merged = {ins.addr: ins for ins in fn.insns}
-            merged.update({ins.addr: ins for ins in insns})
-            grown = Function(fn.addr, fn.name, fn.size, [merged[a] for a in sorted(merged)])
-            grown.measure(image)
-            fn.__dict__.update(grown.__dict__)
-            if prior is not None:
+            insns = []
+            if target not in fn.addrs:
+                blocked = set(owner) - prior.addrs if prior is not None else owner
+                insns = image.recover(target, blocked)
+                if not insns:
+                    return False
+                merged = {ins.addr: ins for ins in fn.insns}
+                merged.update({ins.addr: ins for ins in insns})
+                grown = Function(fn.addr, fn.name, fn.size, [merged[a] for a in sorted(merged)])
+                grown.measure(image)
+                fn.__dict__.update(grown.__dict__)
+            adopted = bool(insns)
+            # An overlapping body may have been independently recovered even
+            # when these instructions are already in the establishing body.
+            # Retire that definition as well as preserving its alternate entry.
+            for prior in {prior, bodies.get(target)} - {None, fn}:
                 # Preserve independently named entries as wrappers into the
                 # establishing body, including the exception path's CALL.
                 for addr, body in list(extra.items()):
@@ -3011,14 +3035,25 @@ def main():
                         extra[addr] = fn
                 if prior.addrs <= fn.addrs:
                     parsed.remove(prior)
+                    bodies.pop(prior.addr, None)
                     retired_finally_bodies.add(prior)
                     if prior in recovered:
                         recovered.remove(prior)
                     extra[prior.addr] = fn
+                    finally_owners[prior.addr] = fn
+                    adopted = True
+                for addr in prior.addrs & fn.addrs:
+                    if owner.get(addr) is prior:
+                        owner[addr] = fn
             for ins in insns:
                 owner[ins.addr] = fn
-            register(fn)
-            return True
+            if insns:
+                register(fn)
+            # Pushed epilogues share this ownership rule with cleanup entries.
+            # A handler that also names the epilogue must not recreate the
+            # standalone body we just retired on every discovery round.
+            finally_owners[target] = fn
+            return adopted
 
         for stub in seh_frame_sites(fn).values():
             landings, table_range = image.seh_landings(stub)
@@ -3057,11 +3092,18 @@ def main():
             # Preserve it when the SEH resolver encounters the same address;
             # it must not split this body again as a speculative pointer guess.
             if cleanup in fn.addrs:
-                note_structural(provenance, owner, cleanup, "seh")
-            if cleanup in fn.addrs and cleanup not in all_addrs:
+                # Keep the shared normal/exception entry in this body without
+                # letting its SEH content protect a speculative body from
+                # pruning. A later independently recovered owner can retain
+                # the cleanup when an overlapping invalid prefix withdraws.
+                finally_owners[cleanup] = fn
+                owner[cleanup] = fn
+                note_structural(provenance, {cleanup: fn} if fn.addr in protected_entries else {},
+                                cleanup, "seh")
                 extra[cleanup] = fn
-                all_addrs.add(cleanup)
-                changed = True
+                if cleanup not in all_addrs:
+                    all_addrs.add(cleanup)
+                    changed = True
         return changed
 
     # Seed before branch recovery can claim fragments of these functions.

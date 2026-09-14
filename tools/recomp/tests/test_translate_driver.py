@@ -217,9 +217,11 @@ def test_return_switch_requires_pushed_instruction_boundary(target, dispatch):
 
 @pytest.mark.parametrize("jump_to_cleanup", [False, True])
 @pytest.mark.parametrize("listed_cleanup", [False, True])
-@pytest.mark.parametrize("recovered_owner", [False, True, "speculative_epilogue"])
+@pytest.mark.parametrize("recovered_owner", [False, True, "speculative_epilogue",
+                                           "speculative_body", "zero_prefix", "config", "direct"])
 def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
-        tmp_path, monkeypatch, jump_to_cleanup, listed_cleanup, recovered_owner):
+        tmp_path, monkeypatch, jump_to_cleanup, listed_cleanup, recovered_owner,
+        complete_listing=False, epilogue_handler=False):
     """Omitted normal cleanup is also callable through an alternate SEH entry."""
     import struct
     entry, stub, epilogue, helper = 0x00601000, 0x00601040, 0x00601060, 0x00601080
@@ -241,6 +243,8 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
     img.plausible_immediate_target = lambda addr: False
     img.md.detail = True
     insns = [img.to_insn(ci) for ci in img.md.disasm(bytes(code), entry)]
+    if complete_listing:
+        insns += [img.to_insn(ci) for ci in img.md.disasm(cleanup_code, cleanup)]
     img.md.detail = False
     listings = tmp_path / "functions"
     listings.mkdir()
@@ -261,16 +265,59 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
         table.write_text("\n".join(line for line in table.read_text().splitlines()
                                    if not line.startswith("%08x\t" % entry)) + "\n")
         img.code_pointers = lambda *a, **kw: ({entry}, set())
-    if recovered_owner == "speculative_epilogue":
+    if recovered_owner == "direct":
+        # Entry protection follows a listed caller's direct edge, even though
+        # the callee itself is absent from the listings.
+        caller = entry + 0x100
+        raw = b"\xe8" + struct.pack("<i", entry - caller - 5) + b"\xc3"
+        data = bytearray(img.data)
+        data[caller - img.base:caller - img.base + len(raw)] = raw
+        img.data = bytes(data)
+        (listings / ("%08x.asm" % caller)).write_text(
+            "%08x  CALL 0x%x\n%08x  RET\n" % (caller, entry, caller + 5))
+        with table.open("a") as fh:
+            fh.write("%08x\tcaller\t6\n" % caller)
+    if recovered_owner in ("speculative_epilogue", "speculative_body", "zero_prefix"):
         # A pointer guess owns the real epilogue, but has an invalid prefix.
         # Adopting the epilogue must not import that prefix into the real body.
         prefix = entry - 0x20
-        raw = (b"\x0f\x84" + struct.pack("<i", epilogue - prefix - 6)
+        target = epilogue if recovered_owner == "speculative_epilogue" else entry + 6
+        raw = (b"\x0f\x84" + struct.pack("<i", target - prefix - 6)
                + b"\xe9" + struct.pack("<i", -0x10000))
+        if recovered_owner == "zero_prefix":
+            # This completely translatable block is nevertheless a data guess.
+            # Its first instruction is ADD byte ptr [EAX],AL (00 00).
+            raw = b"\x00\x00\xc3"
         data = bytearray(img.data)
         data[prefix - img.base:prefix - img.base + len(raw)] = raw
         img.data = bytes(data)
         img.code_pointers = lambda *a, **kw: ({prefix, entry}, set())
+    if epilogue_handler:
+        # A separately established handler branches into the same epilogue.
+        # Resolving that structural entry must not split it out again after
+        # the normal owner adopts it, or discovery never reaches a fixed point.
+        other, other_stub = entry + 0x200, entry + 0x240
+        raw = (b"\x31\xc0\x55\x68" + struct.pack("<I", other_stub)
+               + b"\x64\xff\x30\x64\x89\x20\xc3")
+        data = bytearray(img.data)
+        data[other - img.base:other - img.base + len(raw)] = raw
+        handler_target = epilogue + 2 if epilogue_handler == "interior" else epilogue
+        if epilogue_handler == "prefix":
+            handler_target = entry + 17  # restore the chain, then push and run cleanup
+        data[other_stub - img.base:other_stub - img.base + 10] = (
+            b"\xe9" + struct.pack("<i", dispatcher - other_stub - 5)
+            + b"\xe9" + struct.pack("<i", handler_target - other_stub - 10))
+        img.data = bytes(data)
+        img.md.detail = True
+        other_insns = [img.to_insn(ci) for ci in img.md.disasm(raw, other)]
+        img.md.detail = False
+        (listings / ("%08x.asm" % other)).write_text("\n".join(
+            "%08x  %s %s" % (i.addr, i.mnem, ",".join(i.ops)) for i in other_insns) + "\n")
+        if epilogue_handler in ("interior", "prefix"):
+            img.code_pointers = lambda *a, **kw: ({entry, other}, set())
+        else:
+            with table.open("a") as fh:
+                fh.write("%08x\tother_frame\t%d\n" % (other, len(raw)))
     binary, curated = tmp_path / "image", tmp_path / "globals.toml"
     binary.write_bytes(img.data)
     curated.write_text("")
@@ -280,17 +327,57 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
     for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
                         ("BINARY", binary), ("CURATED", curated)):
         monkeypatch.setattr(T, name, str(value))
-    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    seeds = {entry} if recovered_owner == "config" else set()
+    if epilogue_handler is True:
+        seeds.add(epilogue)
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset(seeds))
     monkeypatch.setattr(T, "Image", lambda path: img)
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
     assert T.main() == 0
     text = "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
     assert "void fn_%08x(X86 *c) { body_%08x(c, %s); }" % (cleanup, entry, T.hexlit(cleanup)) in text
+    assert text.count("void fn_%08x(" % cleanup) == 1
     body = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
     assert "L_%08x: ;" % epilogue in body
     assert "case %s: goto L_%08x;" % (T.hexlit(epilogue), epilogue) in body
     assert "CALL_FN(%08x);" % helper in body
     assert "CALL_FN(%08x);" % cleanup not in body
+    if recovered_owner in ("speculative_epilogue", "speculative_body", "zero_prefix"):
+        assert "void fn_%08x(" % prefix not in text
+    if recovered_owner:
+        import json
+        symbols = json.loads((out / "symbols.json").read_text())
+        establishing = next(f for f in symbols["functions"] if f["addr"] == "%08x" % entry)
+        if recovered_owner == "config":
+            assert establishing["provenance"] == "config"
+        elif recovered_owner == "direct":
+            assert establishing["provenance"] == "seh"
+        else:
+            assert establishing["provenance"] != "seh", "SEH content cannot promote a scan guess"
+
+
+def test_overlapping_cleanup_body_is_retired_when_already_in_owner(tmp_path, monkeypatch):
+    test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=True,
+        recovered_owner=False, complete_listing=True)
+
+
+def test_adopted_epilogue_is_not_split_again_by_seh_resolution(tmp_path, monkeypatch):
+    test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
+        recovered_owner=True, epilogue_handler=True)
+
+
+def test_adopted_body_keeps_interior_handler_entries(tmp_path, monkeypatch):
+    test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
+        recovered_owner=True, epilogue_handler="interior")
+
+
+def test_retired_cleanup_prefix_remains_an_alternate_entry(tmp_path, monkeypatch):
+    test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
+        recovered_owner=True, epilogue_handler="prefix")
 
 
 def test_a_pushed_destructor_thunk_is_an_entry_candidate():
