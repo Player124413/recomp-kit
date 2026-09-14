@@ -1303,7 +1303,7 @@ class Translator(object):
             if ins.ops and ins.ops[0].startswith("0x"):
                 t = int(ins.ops[0], 16)
                 return [fn.index[t]] if t in fn.index else []
-            tgts = self.jumptables.get((fn.addr, ins.addr), [])
+            tgts = self.jumptables.get((fn.addr, ins.addr)) or fn.addrs
             return [fn.index[t] for t in tgts if t in fn.index]
         return [nxt] if nxt is not None else []
 
@@ -1805,6 +1805,11 @@ class Translator(object):
             live_out = self.liveness(fn)
 
         labels = set(fn.pushed_continuations)
+        # RTL fill/move routines compute addresses within unrolled code rather
+        # than loading a table. Only bodies with such jumps need every label.
+        if any(ins.mnem == "JMP" and self.branch_target(ins) is None
+               and not self.jumptables.get((fn.addr, ins.addr)) for ins in fn.insns):
+            labels.update(fn.addrs)
         for i, ins in enumerate(fn.insns):
             t = self.push_ret_target(fn, i)
             if t is not None and t in fn.index:
@@ -2401,7 +2406,14 @@ class Translator(object):
         targets = self.jumptables.get((fn.addr, ins.addr))
         L = ["uint32_t t_ = %s;" % read_op(op, 32)]
         if not targets:
-            # Not a switch: an indirect tail call (import thunk, vtable jump).
+            # A table-less jump may enter any instruction of this body. Keep
+            # that transfer in the current host frame; nonlocal targets and
+            # holes in the listing retain the existing runtime dispatch.
+            L.append("if (t_ >= %s && t_ < %s) {" % (hexlit(fn.insns[0].addr), hexlit(fn.end)))
+            L.append("switch (t_) {")
+            for t in sorted(fn.addrs):
+                L.append("case %s: goto L_%08x;" % (hexlit(t), t))
+            L.extend(["default: break;", "}", "}"])
             self.stats["_jmp_indirect_tail"] += 1
             L.append("c->eip = %s; recomp_jump(c, t_); return;" % hexlit(ins.addr))
             return L

@@ -215,6 +215,30 @@ def test_return_switch_requires_pushed_instruction_boundary(target, dispatch):
     assert "void fn_00601005(X86 *c) { body_00601000(c, 0x601005u); }" in text
 
 
+@pytest.mark.parametrize("indirect", [False, True])
+def test_tableless_jump_uses_all_local_instruction_labels(indirect):
+    from test_translate_insns import Opts
+    entry = 0x00601000
+    code = b"\xff\xe0\x90\xc3" if indirect else b"\x89\xc0\x90\xc3"
+    img = synthetic_image({entry: code}, base=0x00600000)
+    listing = "00601000  %s\n00601002  NOP\n00601003  RET\n" % (
+        "JMP EAX" if indirect else "MOV EAX,EAX")
+    fn = T.Function(entry, "local_dispatch", len(code), T.parse_listing_text(listing))
+    fn.measure(img)
+    tr = T.Translator(img, {entry}, Opts())
+    tr.prepare(fn)
+    text = "\n".join(tr.translate(fn))
+    assert ("switch (t_)" in text) == indirect
+    if indirect:
+        assert "if (t_ >= 0x601000u && t_ < 0x601004u)" in text
+        for addr in sorted(fn.addrs):
+            assert "case %s: goto L_%08x;" % (T.hexlit(addr), addr) in text
+            assert "L_%08x: ;" % addr in text
+        assert "default: break;" in text
+        assert text.index("default: break;") < text.index("recomp_jump(c, t_)")
+        assert "case 0x601001u:" not in text  # inside an instruction uses the existing fallback
+
+
 @pytest.mark.parametrize("jump_to_cleanup", [False, True])
 @pytest.mark.parametrize("listed_cleanup", [False, True])
 @pytest.mark.parametrize("recovered_owner", [False, True, "speculative_epilogue",

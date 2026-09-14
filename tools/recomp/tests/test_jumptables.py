@@ -123,7 +123,12 @@ def test_indirect_jump_through_a_structure_field_is_not_a_table(operand):
     source = "\n".join(tr.translate(fn))
     assert "uint32_t t_ = rd32(" in source
     assert "recomp_jump(c, t_); return;" in source
-    assert "switch (t_)" not in source
+    # A computed jump first checks local instruction boundaries, then uses
+    # runtime dispatch. This does not turn the operand into a decoded table.
+    assert "switch (t_)" in source
+    for addr in sorted(fn.addrs):
+        assert "case %s: goto L_%08x;" % (T.hexlit(addr), addr) in source
+    assert "default: break;" in source
     assert tr.table_sites == {}
     assert tr.jumptables == {}
 
