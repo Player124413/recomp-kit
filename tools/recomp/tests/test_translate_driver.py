@@ -245,7 +245,7 @@ def test_tableless_jump_uses_all_local_instruction_labels(indirect):
                                            "speculative_body", "zero_prefix", "config", "direct"])
 def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
         tmp_path, monkeypatch, jump_to_cleanup, listed_cleanup, recovered_owner,
-        complete_listing=False, epilogue_handler=False):
+        complete_listing=False, epilogue_handler=False, edx_frame=False):
     """Omitted normal cleanup is also callable through an alternate SEH entry."""
     import struct
     entry, stub, epilogue, helper = 0x00601000, 0x00601040, 0x00601060, 0x00601080
@@ -253,6 +253,11 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
     code = bytearray(b"\x55\x89\xe5\x31\xc0\x55\x68" + struct.pack("<I", stub)
                      + b"\x64\xff\x30\x64\x89\x20\x5a\x59\x59\x64\x89\x10\x68"
                      + struct.pack("<I", epilogue))
+    if edx_frame:
+        code[3:5] = b"\x31\xd2"  # XOR EDX,EDX before the three frame pushes
+        code[13] = 0x32           # PUSH FS:[EDX]
+        code[16] = 0x22           # MOV FS:[EDX],ESP
+        code[17:17] = b"\x31\xc0"  # restore later through FS:[EAX]
     cleanup = 0x00601050 if jump_to_cleanup else entry + len(code)
     if jump_to_cleanup:
         code += b"\xe9" + struct.pack("<i", cleanup - entry - len(code) - 5)
@@ -384,6 +389,12 @@ def test_overlapping_cleanup_body_is_retired_when_already_in_owner(tmp_path, mon
     test_finally_cleanup_and_epilogue_belong_to_establishing_body(
         tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=True,
         recovered_owner=False, complete_listing=True)
+
+
+def test_zero_edx_frame_keeps_cleanup_in_its_owner(tmp_path, monkeypatch):
+    test_finally_cleanup_and_epilogue_belong_to_establishing_body(
+        tmp_path, monkeypatch, jump_to_cleanup=False, listed_cleanup=False,
+        recovered_owner=False, complete_listing=True, edx_frame=True)
 
 
 def test_adopted_epilogue_is_not_split_again_by_seh_resolution(tmp_path, monkeypatch):

@@ -1164,10 +1164,10 @@ class Function(object):
 TERMINATORS = frozenset(("RET", "JMP"))
 
 
-def seh_chain_operand(op):
+def seh_chain_operand(op, zero_base=0):
     """Only the Delphi chain-head spellings, not other fields in the TEB."""
     return (op.kind == "mem" and op.size == 32 and op.seg == "FS"
-            and op.base in (None, 0) and op.index is None and op.disp == 0)
+            and op.base in (None, zero_base) and op.index is None and op.disp == 0)
 
 
 def seh_frame_sites(fn):
@@ -1179,8 +1179,19 @@ def seh_frame_sites(fn):
             continue
         try:
             dst, src = [parse_operand(o) for o in mov.ops]
-            if (not seh_chain_operand(dst) or src.kind != "reg" or src.reg != 4
-                    or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]))
+            # The same frame idiom can zero another register before its
+            # three PUSHes. Prove that spelling locally; an arbitrary FS
+            # register operand can address a different TEB field.
+            zero_base = 0
+            if i >= 4 and all(fn.contiguous[i - 4:i]):
+                init, saved = fn.insns[i - 4], fn.insns[i - 3]
+                if init.mnem == "XOR" and len(init.ops) == 2 and saved.mnem == "PUSH":
+                    a, b = [parse_operand(o) for o in init.ops]
+                    if (a.kind == b.kind == "reg" and a.size == b.size == 32
+                            and a.reg == b.reg == dst.base and a.reg != 4):  # PUSH changes ESP
+                        zero_base = a.reg
+            if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
+                    or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
                     or not fn.contiguous[i - 1]):
                 continue
             for j in range(i - 2, max(-1, i - 4), -1):
@@ -1995,7 +2006,8 @@ class Translator(object):
                 # These come from data Ghidra decoded as code.
                 return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
             L.append(write_op(dst, size, read_op(src, size)))
-            if fn.seh_sites and seh_chain_operand(dst) and src.kind == "reg" and src.size == 32:
+            if (fn.seh_sites and (seh_chain_operand(dst) or i in fn.seh_sites)
+                    and src.kind == "reg" and src.size == 32):
                 if src.reg == 4:
                     L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
                              "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")

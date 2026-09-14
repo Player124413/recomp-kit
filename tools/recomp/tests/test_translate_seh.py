@@ -61,6 +61,36 @@ def test_other_teb_writes_do_not_create_checkpoints():
     assert "recomp_seh_" not in translate_case(case)
 
 
+@pytest.mark.parametrize("reg,zeroed,checkpoint", [("EDX", True, True), ("EDX", False, False),
+                                                 ("ESP", True, False)])
+def test_frame_establishment_through_edx_needs_a_zero_base(reg, zeroed, checkpoint):
+    stub = BASE + 0x40
+    lines, code = [], bytearray()
+
+    def add(text, raw):
+        lines.append((len(code), text))
+        code.extend(raw)
+
+    r = 2 if reg == "EDX" else 4
+    sib = b"\x24" if reg == "ESP" else b""
+    add(("XOR" if zeroed else "OR") + " %s,%s" % (reg, reg),
+        bytes([0x31 if zeroed else 0x09, 0xc0 + 9 * r]))
+    add("PUSH EBP", b"\x55")
+    add("PUSH 0x%x" % stub, b"\x68" + struct.pack("<I", stub))
+    add("PUSH dword ptr FS:[%s]" % reg, bytes([0x64, 0xff, 0x30 + r]) + sib)
+    add("MOV dword ptr FS:[%s],ESP" % reg, bytes([0x64, 0x89, 0x20 + r]) + sib)
+    add("XOR EAX,EAX", b"\x31\xc0")
+    add("POP EDX", b"\x5a")
+    add("POP ECX", b"\x59")
+    add("POP ECX", b"\x59")
+    add("MOV dword ptr FS:[EAX],EDX", b"\x64\x89\x10")
+    add("RET", b"\xc3")
+    # PUSH changes ESP even after it was zeroed; it cannot stay FS:[0].
+    text = translate_case(Case("edx_frame", BASE, lines, code.hex()))
+    assert ("recomp_seh_frame_enter(c)" in text) == checkpoint
+    assert ("recomp_seh_frame_leave(c)" in text) == checkpoint
+
+
 @pytest.mark.parametrize("typed,default,speculative", [
     (False, False, False), (True, False, False), (True, True, False),
     (False, False, True)])
