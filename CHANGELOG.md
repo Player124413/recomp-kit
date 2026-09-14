@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Build: enable shared FFmpeg by default on iOS and Android. Cross-build
+  arm64 iOS 17 dylibs with relative install names and use Xcode's Embed
+  Frameworks phase to copy and sign them with the app's identity/team.
+  Cross-build Android API-29 libraries and package the three unversioned
+  `.so` files beside `libmain.so`; remove staged copies when video is OFF.
+  Include the FFmpeg notice in mobile bundles and document all configure
+  flags. Android stub/real APKs and the standalone iOS FFmpeg build pass;
+  embedded iOS signatures and mobile device playback remain unverified.
+
 - Bink: decode video through FFmpeg into the DirectDraw surface supplied by
   the game, converting YUV420P to RGB565, RGB555 or XRGB8888. Stream decoded
   audio through the shared mixer, pace frames with host time and return an

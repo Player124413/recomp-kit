@@ -11,61 +11,117 @@ are enabled. The full LGPL 2.1 license from the release follows below.
 - Project: https://ffmpeg.org/
 - Exact source archive: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
 - SHA-256: `733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1`
-- Shared libraries: `libavformat.61.dylib`, `libavcodec.61.dylib`,
+- macOS/iOS shared libraries: `libavformat.61.dylib`, `libavcodec.61.dylib`,
   `libavutil.59.dylib`.
+- Android shared libraries: `libavformat.so`, `libavcodec.so`, `libavutil.so`.
 
 ## Build configuration
 
-The exact configure argument sequence used by `cmake/Dependencies.cmake`
-on arm64 macOS is below. `<SOURCE_DIR>` is the extracted FFmpeg source,
-`<CMAKE_BINARY_DIR>` is the configured kit build directory, and
-`<CMAKE_C_COMPILER>` is CMake's selected C compiler (`/usr/bin/cc` in the
-verified build). Configure runs in the ExternalProject build directory,
-`<CMAKE_BINARY_DIR>/ffmpeg-prefix/src/ffmpeg-build`.
+These are the configure argument sequences in `cmake/Dependencies.cmake`.
+`SOURCE_DIR` is the extracted FFmpeg source; `CMAKE_BINARY_DIR` is the
+configured kit build directory. Run configure in the ExternalProject build
+directory, `CMAKE_BINARY_DIR/ffmpeg-prefix/src/ffmpeg-build`. First set the
+common arguments below, then use the invocation for the desired platform.
 
 ```sh
-/bin/sh "<SOURCE_DIR>/configure" \
-  --prefix="<CMAKE_BINARY_DIR>/ffmpeg" \
+set -- \
+  --prefix="$CMAKE_BINARY_DIR/ffmpeg" \
   --enable-shared --disable-static --disable-programs --disable-doc \
   --disable-everything --disable-avdevice --disable-avfilter \
   --disable-swscale --disable-swresample --disable-postproc --disable-network \
-  --enable-pic --install-name-dir=@rpath \
+  --enable-pic \
   --enable-decoder=bink,binkaudio_rdft,binkaudio_dct,smacker,smackaud \
   --enable-demuxer=bink,smacker --enable-protocol=file \
   --disable-autodetect --disable-xlib --disable-libxcb --disable-sdl2 \
   --disable-iconv --disable-zlib --disable-bzlib --disable-lzma \
-  --disable-securetransport --disable-audiotoolbox --disable-videotoolbox \
-  --cc="<CMAKE_C_COMPILER>"
+  --disable-securetransport --disable-audiotoolbox --disable-videotoolbox
 ```
 
-On x86_64 macOS, append `--disable-x86asm` after the compiler argument so
-nasm/yasm is not required. The ExternalProject then runs `make -j8` and
-`make install` through `cmake -E env`. Native kit builds are invoked through
-`tools/build.py` or `tools/test.py`; FFmpeg's configure and make are managed
-by that build. `RECOMP_VIDEO=OFF` omits FFmpeg entirely. Other platforms
-currently default to OFF and have no enabled-video build support.
+macOS uses CMake's selected C compiler (`/usr/bin/cc` in the verified build):
+
+```sh
+/bin/sh "$SOURCE_DIR/configure" "$@" \
+  --install-name-dir=@rpath --cc="$CMAKE_C_COMPILER"
+```
+
+On x86_64 macOS, append `--disable-x86asm` so nasm/yasm is not required.
+
+iOS targets arm64 devices, minimum iOS 17.0. `CMAKE_OSX_SYSROOT` is the
+absolute iPhoneOS SDK path; when CMake supplies an SDK name, resolve it
+with `xcrun -sdk iphoneos --show-sdk-path`. The standalone verification used
+that command's iPhoneOS 26.5 SDK and the same flags with a scratch prefix:
+
+```sh
+/bin/sh "$SOURCE_DIR/configure" "$@" \
+  --enable-cross-compile --target-os=darwin --arch=arm64 \
+  --cc="xcrun -sdk iphoneos clang" --sysroot="$CMAKE_OSX_SYSROOT" \
+  --extra-cflags="-arch arm64 -miphoneos-version-min=17.0" \
+  --extra-ldflags="-arch arm64 -miphoneos-version-min=17.0" \
+  --install-name-dir=@rpath
+```
+
+Android targets arm64-v8a, minimum API 29 (Android 10). `NDK_TOOLCHAIN` is
+the NDK LLVM prebuilt directory containing `bin/` and `sysroot/`. CMake
+finds it from its selected compiler's directory; on the verified Mac it is
+`$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64`, using NDK
+27.2.12479018:
+
+```sh
+/bin/sh "$SOURCE_DIR/configure" "$@" \
+  --enable-cross-compile --target-os=android --arch=aarch64 \
+  --cc="$NDK_TOOLCHAIN/bin/aarch64-linux-android29-clang" \
+  --ar="$NDK_TOOLCHAIN/bin/llvm-ar" \
+  --nm="$NDK_TOOLCHAIN/bin/llvm-nm" \
+  --ranlib="$NDK_TOOLCHAIN/bin/llvm-ranlib" \
+  --strip="$NDK_TOOLCHAIN/bin/llvm-strip" \
+  --sysroot="$NDK_TOOLCHAIN/sysroot" --disable-symver
+```
+
+All three Apple-framework disable flags above are accepted by FFmpeg 7.1.1
+on both mobile targets, so they remain enabled as isolation measures. The
+ExternalProject runs `make -j8` and `make install` through `cmake -E env`.
+Native kit builds use `tools/build.py` or `tools/test.py`; FFmpeg's configure
+and make are managed by that build. `RECOMP_VIDEO` defaults to ON for
+macOS, iOS and Android; OFF omits FFmpeg entirely. Linux and Windows remain
+OFF with no enabled-video support in this change.
 
 Automatic optional dependency discovery and external compression/UI/media
 libraries are disabled to avoid dependencies on Homebrew or other local
-packages. The dylibs may depend on each other and Apple system libraries
-and frameworks. `config_components.h` records the five enabled decoders
-(Bink video, Bink RDFT/DCT audio, Smacker video and Smacker audio), two
-demuxers and file protocol; all other decoders/demuxers are disabled.
+packages. The libraries may depend on each other and target system
+libraries/frameworks. `config_components.h` records the five enabled
+decoders (Bink video, Bink RDFT/DCT audio, Smacker video and Smacker audio),
+two demuxers and file protocol; all other decoders/demuxers are disabled.
 
 ## Dynamic linking and replacement
 
-The macOS app links these three libraries dynamically and copies them into
-`Contents/Frameworks`. Their install names and cross-library references are
-`@rpath/libav*.dylib`, resolved by the executable's
-`@executable_path/../Frameworks` rpath. This notice is copied into
-`Contents/Resources/ffmpeg-NOTICE.md`.
-
-You may replace them with ABI-compatible modified builds using the same
-major-version filenames and install names. After replacement, sign each
+macOS copies the three dylibs into `Contents/Frameworks`, with `@rpath`
+install names and cross-library references resolved by the executable's
+`@executable_path/../Frameworks` rpath. The notice is copied into
+`Contents/Resources/ffmpeg-NOTICE.md`. To replace them, use ABI-compatible
+modified builds with the same filenames and install names, sign each
 changed dylib ad hoc with `codesign --force --sign - /path/to/library.dylib`,
 then sign the app with `codesign --force --deep --sign - /path/to/App.app`
-and verify it with `codesign --verify --deep --strict /path/to/App.app`.
-The kit's build performs this library-before-app signing automatically.
+and verify with `codesign --verify --deep --strict /path/to/App.app`.
+The kit signs the libraries before the app automatically.
+
+iOS uses the same dylib filenames and install names, embedded under the
+app's `Frameworks/` by Xcode's Embed Frameworks phase, with signing on copy
+using the app's selected development identity/team. The executable's rpath
+is `@executable_path/Frameworks`; this notice is at the bundle root. Replace
+libraries in the build's `ffmpeg/lib/` with ABI-compatible builds and rebuild
+and sign the app with your development team before installing it. Inspect
+the embedded copies with `codesign -dv` and verify the app's signature.
+The standalone cross build and library dependencies have been checked;
+actual embedded signatures and device launch still require verification.
+
+Android installs unversioned `.so` filenames and SONAMEs. The packager
+stages all three beside `libmain.so` in `jniLibs/arm64-v8a`, which Gradle
+places under `lib/arm64-v8a/` in the APK, and includes this notice as
+`assets/ffmpeg-NOTICE.md`. Replace the libraries in the build's `ffmpeg/lib/`
+with ABI-compatible modified builds using the same SONAMEs, then rebuild
+the APK with `tools/build.py --target android` and sign it for your own
+installation. Stub and real-translation APK contents and ELF dependencies
+have been verified; installation and playback on a device have not.
 
 ## GNU Lesser General Public License version 2.1
 

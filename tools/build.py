@@ -175,7 +175,7 @@ def android_project(build_root, cfg, *, gen_dir):
 
 
 def android_apk(build_root, cfg, *, gen_dir):
-    """Stage libmain.so beside the rendered SDL activity and assemble a debug APK."""
+    """Stage the native libraries beside the SDL activity and assemble a debug APK."""
     library = Path(gen_dir) / "host/libmain.so"
     sdl_activity = Path(gen_dir) / "_deps/sdl3-src/android-project/app/src/main/java/org/libsdl/app/SDLActivity.java"
     for path in (library, sdl_activity):
@@ -185,6 +185,24 @@ def android_apk(build_root, cfg, *, gen_dir):
     jni = out / "app/src/main/jniLibs/arm64-v8a"
     jni.mkdir(parents=True, exist_ok=True)
     shutil.copy2(library, jni / "libmain.so")
+    # Read the configured option, not leftover installed libraries: switching
+    # video off must remove the previous build's copies from the APK too.
+    cache = (Path(gen_dir) / "CMakeCache.txt").read_text().splitlines()
+    video = any(line.startswith("RECOMP_VIDEO:BOOL=") and
+                line.partition("=")[2].upper() in {"1", "ON", "YES", "TRUE", "Y"}
+                for line in cache)
+    for component in ("avformat", "avcodec", "avutil"):
+        name = "lib%s.so" % component
+        if video:
+            shutil.copy2(Path(gen_dir) / "ffmpeg/lib" / name, jni / name)
+        else:
+            (jni / name).unlink(missing_ok=True)
+    notice = out / "app/src/main/assets/ffmpeg-NOTICE.md"
+    if video:
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "third_party/ffmpeg/NOTICE.md", notice)
+    else:
+        notice.unlink(missing_ok=True)
     wrapper = "gradlew.bat" if platform.system() == "Windows" else "./gradlew"
     subprocess.run([wrapper, "assembleDebug"], cwd=out, check=True)
     apk = out / "app/build/outputs/apk/debug/app-debug.apk"

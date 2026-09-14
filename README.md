@@ -76,22 +76,42 @@ SDL3 is fetched at its pinned release and linked statically; Lua,
 TinySoundFont, minimp3, volk and Vulkan headers are vendored with their
 upstream notices. See [NOTICE](NOTICE) for licenses.
 
-On macOS, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the
+On macOS, iOS and Android, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the
 SHA-256-pinned FFmpeg 7.1.1 release and builds shared `avformat`, `avcodec`
 and `avutil` libraries with only Bink/Smacker video and audio decoders,
-Bink/Smacker demuxers and file input. The app carries the three dylibs in
+Bink/Smacker demuxers and file input. The macOS app carries the three dylibs in
 `Contents/Frameworks`, using `@rpath` install names and an executable rpath
 of `@executable_path/../Frameworks`; each dylib is signed ad hoc before the
 app. Apple system libraries/frameworks are allowed; no Homebrew libraries
-are required. This adds the dependency only; the video shims still skip
-cinematics.
+are required. Bink cinematics decode through these libraries; Smacker
+still refuses to open a video.
+
+iOS cross-builds for arm64 and iOS 17.0 with the iPhoneOS SDK. Xcode embeds
+the three dylibs in `Frameworks/` and signs them on copy with the app's
+development identity/team; the executable uses `@executable_path/Frameworks`.
+Android cross-builds with the selected NDK's arm64 API-29 compiler and
+packages unversioned `libavformat.so`, `libavcodec.so` and `libavutil.so`
+beside `libmain.so` under `lib/arm64-v8a/`. No Gradle packaging override is
+needed. The mobile cross builds and Android APK contents are verified;
+iOS embedded signatures and mobile device playback remain unverified.
 
 FFmpeg is LGPL-2.1-or-later and dynamically linked. Its full license,
 source URL, checksum, configure command and library replacement instructions
 are in [the FFmpeg notice](third_party/ffmpeg/NOTICE.md), also shipped as
-`Contents/Resources/ffmpeg-NOTICE.md`. CMake `-DRECOMP_VIDEO=OFF` disables
-the dependency. It defaults to `OFF` on other platforms; enabling it there
-is not supported yet. See [Contributing](CONTRIBUTING.md) for configuration.
+`Contents/Resources/ffmpeg-NOTICE.md` on macOS, at the iOS bundle root,
+and as `assets/ffmpeg-NOTICE.md` in Android APKs. CMake `-DRECOMP_VIDEO=OFF`
+disables the dependency. It defaults to `OFF` on Linux and Windows;
+enabling it there is not supported yet. Existing mobile CMake caches that
+explicitly have video OFF need `-DRECOMP_VIDEO=ON` once when configuring.
+See [Contributing](CONTRIBUTING.md) for the CMake cache workflow and the
+[notice](third_party/ffmpeg/NOTICE.md) for each platform's configure flags.
+
+For Android, set `ANDROID_NDK_HOME`, `ANDROID_HOME` and `JAVA_HOME` for
+your NDK, SDK and Android Studio JBR, then run `tools/build.py --target android`
+from the prepared game repository (`--stub` needs no translation).
+The APK is `build/android/app/build/outputs/apk/debug/app-debug.apk`.
+`--push-game` still stages and pushes the original game data separately;
+without a ready device the default build skips install and launch.
 
 ## Run on an iPad
 
