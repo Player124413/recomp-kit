@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bink: start and refill audio from DoFrame, NextFrame and Wait, so movies
+  have sound when the game never calls the optional BinkService helper.
+  All four entry points share the same audio routine and paused guard.
 - Bink: serve the DirectSound token, decoded-frame rectangles and pause
   entry points. Pausing holds the frame clock and stops audio refills;
   resuming shifts frame deadlines by the paused interval. Builds without

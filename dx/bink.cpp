@@ -379,6 +379,66 @@ void BinkOpen(X86 *c) {
     set_eax(c, rec);
 }
 
+// Start with PCM, convert the shared channel to a stream, then append until
+// a second is queued. Refused chunks stay pending for the next service call.
+void service_audio(uint32_t rec, BinkPlayer &p) {
+    if (p.paused || !p.audio || p.failed || p.audio_unavailable)
+        return;
+    uint32_t block = (uint32_t)p.audio->ch_layout.nb_channels * 2;
+    uint32_t ahead = (uint32_t)p.audio->sample_rate * block;
+    while (!p.audio_started || host_audio_queued_bytes(p.channel) < ahead) {
+        if (p.pending_pos == p.pending.size()) {
+            p.pending.clear();
+            p.pending_pos = 0;
+            while (p.pending.empty() && !p.eof && !p.failed)
+                p.failed = !read_packet(p);
+            if (p.failed || p.pending.empty())
+                break;
+        }
+        uint32_t bytes = (uint32_t)(p.pending.size() - p.pending_pos) * 2;
+        if (!p.audio_started) {
+            p.channel = dx_alloc_audio_channel();
+            if (p.channel >= 0) {
+                HostAudioPlay play{};
+                play.channel = p.channel;
+                play.pcm = p.pending.data() + p.pending_pos;
+                play.bytes = bytes;
+                play.sample_rate = p.audio->sample_rate;
+                play.channels = p.audio->ch_layout.nb_channels;
+                play.bits = 16;
+                host_audio_play(&play);
+                p.audio_started = host_audio_stream(p.channel) >= 0;
+            }
+            if (!p.audio_started) {
+                if (p.channel >= 0) {
+                    host_audio_stop(p.channel);
+                    dx_free_audio_channel(p.channel);
+                    p.channel = -1;
+                }
+                LOGW("bink: host audio streaming unavailable");
+                p.audio_unavailable = true;
+                p.pending.clear();
+                p.pending_pos = 0;
+                break;
+            }
+            p.pending_pos += bytes / 2;
+        } else {
+            bytes = std::min(bytes, ahead - host_audio_queued_bytes(p.channel));
+            bytes -= bytes % block;
+            if (!bytes)
+                break;
+            int32_t taken = host_audio_queue(p.channel, p.pending.data() + p.pending_pos, bytes);
+            if (taken <= 0)
+                break;
+            p.pending_pos += (uint32_t)taken / 2;
+        }
+    }
+    if (p.failed) {
+        p.current = p.count;
+        write_frame_count(rec, p);
+    }
+}
+
 // Decode exactly one visible frame. Audio prefetch may already have retained
 // its compressed packet, but never changes the guest frame counter.
 void BinkDoFrame(X86 *c) {
@@ -407,6 +467,7 @@ void BinkDoFrame(X86 *c) {
                 break;
             }
             p->have_frame = true;
+            service_audio(rec, *p);
             return;
         }
         if (rc != AVERROR(EAGAIN)) {
@@ -440,12 +501,14 @@ void BinkDoFrame(X86 *c) {
 }
 
 void BinkNextFrame(X86 *c) {
-    if (BinkPlayer *p = player_for(arg(c, 0))) {
+    uint32_t rec = arg(c, 0);
+    if (BinkPlayer *p = player_for(rec)) {
         if (host_close_requested())
             p->current = p->count;
         else if (p->current < UINT32_MAX)
             ++p->current;
-        write_frame_count(arg(c, 0), *p);
+        write_frame_count(rec, *p);
+        service_audio(rec, *p);
     }
     set_eax(c, 0);
 }
@@ -492,7 +555,10 @@ void BinkPause(X86 *c) {
 // The wait ends at that counter's boundary using host time, never a guest
 // rendering clock; unsigned subtraction also handles host_millis wrapping.
 void BinkWait(X86 *c) {
-    BinkPlayer *p = player_for(arg(c, 0));
+    uint32_t rec = arg(c, 0);
+    BinkPlayer *p = player_for(rec);
+    if (p)
+        service_audio(rec, *p);
     uint32_t wait = 0;
     if (p && !p->failed && !host_close_requested()) {
         // The ABI's millisecond expression truncates, rather than rounding.
@@ -503,66 +569,11 @@ void BinkWait(X86 *c) {
     set_eax(c, wait);
 }
 
-// Start with PCM, convert the shared channel to a stream, then append until
-// a second is queued. Refused chunks stay pending for the next service call.
 void BinkService(X86 *c) {
     set_eax(c, 0);
-    BinkPlayer *p = player_for(arg(c, 0));
-    if (!p || p->paused || !p->audio || p->failed || p->audio_unavailable)
-        return;
-    uint32_t block = (uint32_t)p->audio->ch_layout.nb_channels * 2;
-    uint32_t ahead = (uint32_t)p->audio->sample_rate * block;
-    while (!p->audio_started || host_audio_queued_bytes(p->channel) < ahead) {
-        if (p->pending_pos == p->pending.size()) {
-            p->pending.clear();
-            p->pending_pos = 0;
-            while (p->pending.empty() && !p->eof && !p->failed)
-                p->failed = !read_packet(*p);
-            if (p->failed || p->pending.empty())
-                break;
-        }
-        uint32_t bytes = (uint32_t)(p->pending.size() - p->pending_pos) * 2;
-        if (!p->audio_started) {
-            p->channel = dx_alloc_audio_channel();
-            if (p->channel >= 0) {
-                HostAudioPlay play{};
-                play.channel = p->channel;
-                play.pcm = p->pending.data() + p->pending_pos;
-                play.bytes = bytes;
-                play.sample_rate = p->audio->sample_rate;
-                play.channels = p->audio->ch_layout.nb_channels;
-                play.bits = 16;
-                host_audio_play(&play);
-                p->audio_started = host_audio_stream(p->channel) >= 0;
-            }
-            if (!p->audio_started) {
-                if (p->channel >= 0) {
-                    host_audio_stop(p->channel);
-                    dx_free_audio_channel(p->channel);
-                    p->channel = -1;
-                }
-                LOGW("bink: host audio streaming unavailable");
-                p->audio_unavailable = true;
-                p->pending.clear();
-                p->pending_pos = 0;
-                break;
-            }
-            p->pending_pos += bytes / 2;
-        } else {
-            bytes = std::min(bytes, ahead - host_audio_queued_bytes(p->channel));
-            bytes -= bytes % block;
-            if (!bytes)
-                break;
-            int32_t taken = host_audio_queue(p->channel, p->pending.data() + p->pending_pos, bytes);
-            if (taken <= 0)
-                break;
-            p->pending_pos += (uint32_t)taken / 2;
-        }
-    }
-    if (p->failed) {
-        p->current = p->count;
-        write_frame_count(arg(c, 0), *p);
-    }
+    uint32_t rec = arg(c, 0);
+    if (BinkPlayer *p = player_for(rec))
+        service_audio(rec, *p);
 }
 
 // Validate the entire destination rectangle before writing any row, using

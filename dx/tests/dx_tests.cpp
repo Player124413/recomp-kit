@@ -6162,6 +6162,41 @@ static void test_bink_open_from_handle() {
     });
 }
 
+static void test_bink_audio_without_service() {
+    with_bink_container([](uint32_t rec, uint32_t) {
+        g_plays.clear();
+        g_queues.clear();
+        g_queue_enabled = true;
+        g_queued_bytes = 0;
+        g_test_audio_pos = 0;
+        g_ch_streaming = false;
+        const uint32_t calls[] = {
+            tramp("binkw32.dll", "_BinkDoFrame@4"),
+            tramp("binkw32.dll", "_BinkNextFrame@4"),
+            tramp("binkw32.dll", "_BinkWait@4"),
+        };
+        for (unsigned frame = 0; frame < 3; ++frame) {
+            for (uint32_t entry : calls) {
+                // Model playback between calls so each entry must refill
+                // the same stream, rather than only starting it once.
+                uint32_t consumed = std::min(g_queued_bytes, 1024u);
+                g_queued_bytes -= consumed;
+                g_stream_played += consumed;
+                uint64_t accepted = g_queued_accepted;
+                call_shim(entry, {rec});
+                CHECK_EQ(g_plays.size(), 1u);
+                CHECK(g_ch_streaming);
+                if (!g_plays.empty())
+                    CHECK(host_audio_queued_bytes(g_plays[0].channel) > 0);
+                if (consumed)
+                    CHECK(g_queued_accepted > accepted);
+            }
+        }
+        CHECK_EQ(rd32(rec + 0x14), 4u);
+        g_queue_enabled = false;
+    });
+}
+
 static void test_bink_rects_and_pause() {
     cpu_reset();
     CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkOpenDirectSound@4"), {0}), 1u);
@@ -10073,6 +10108,7 @@ int main() {
         {"Bink open from handle", test_bink_open_from_handle},
         {"Bink handle flag errors", test_bink_handle_flag_errors},
         {"Bink rects and pause", test_bink_rects_and_pause},
+        {"Bink audio without service", test_bink_audio_without_service},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},
