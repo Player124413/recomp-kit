@@ -490,6 +490,7 @@ uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
 }
 
 void win32_init(const std::string &game_dir) {
+    kernel32_wide_reset();
     g_game_dir = game_dir.empty() ? std::string(".") : game_dir;
     g_cur_dir = RECOMP_GUEST_ROOT;
     g_last_error = 0;

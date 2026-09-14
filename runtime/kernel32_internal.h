@@ -23,3 +23,5 @@ void create_event_named(X86 *c, const std::string &name);
 void create_mutex_named(X86 *c, const std::string &name);
 void create_mapping_named(X86 *c, const std::string &name);
 void open_mutex_named(X86 *c, const std::string &name);
+
+void kernel32_wide_reset();

@@ -3535,6 +3535,13 @@ static int wide_resolver(const char *relative, int op, char *out, size_t cap) {
     return 1;
 }
 
+static std::string g_wide_enum_text;
+static uint32_t g_wide_enum_calls = 0;
+static void wide_enum_callback(X86 *c) {
+    ++g_wide_enum_calls;
+    g_wide_enum_text = gm_wstr(arg(c, 0));
+    set_eax(c, 1);
+}
 static void test_kernel32_wide() {
     X86 c;
     loader_init_context(&c);
@@ -3754,6 +3761,33 @@ static void test_kernel32_wide() {
     check(call_import(&c, "KERNEL32.dll", "GetThreadLocale", {}) == 0x0409, "GetThreadLocale");
     check(call_import(&c, "KERNEL32.dll", "GetUserDefaultUILanguage", {}) == 0x0409,
           "GetUserDefaultUILanguage");
+
+    check(call_import(&c, "KERNEL32.dll", "SetThreadLocale", {0x0411}) == 1 &&
+              call_import(&c, "KERNEL32.dll", "GetThreadLocale", {}) == 0x0411,
+          "SetThreadLocale stores the process-wide LCID");
+    call_import(&c, "KERNEL32.dll", "SetThreadLocale", {0x0409});
+    check(call_import(&c, "KERNEL32.dll", "GetSystemDefaultUILanguage", {}) == 0x0409,
+          "GetSystemDefaultUILanguage");
+    check(call_import(&c, "KERNEL32.dll", "IsDBCSLeadByteEx", {1252, 0x81}) == 0,
+          "IsDBCSLeadByteEx");
+    check(call_import(&c, "KERNEL32.dll", "GetConsoleCP", {}) == 437 &&
+              call_import(&c, "KERNEL32.dll", "GetConsoleOutputCP", {}) == 437,
+          "console code pages");
+    memset(g_mem + fd, 0xa5, 548);
+    check(call_import(&c, "KERNEL32.dll", "GetCPInfoExW", {0, 0, fd}) == 1 && rd32(fd) == 1 &&
+              rd32(fd + 20) == 1252 && rd16(fd + 18) == '?' && !gm_wstr(fd + 24).empty() &&
+              rd32(fd + 544) == 0xa5a5a5a5,
+          "CPINFOEXW fields and bounds");
+    uint32_t enum_cb = imports_alloc_trampoline("test", "wide_enum", wide_enum_callback, 1);
+    g_wide_enum_calls = 0;
+    check(call_import(&c, "KERNEL32.dll", "EnumSystemLocalesW", {enum_cb, 1}) == 1 &&
+              g_wide_enum_calls == 1 && g_wide_enum_text == "00000409",
+          "EnumSystemLocalesW calls the guest once");
+    g_wide_enum_calls = 0;
+    check(call_import(&c, "KERNEL32.dll", "EnumCalendarInfoW", {enum_cb, 0x409, 0xffffffffu, 1}) ==
+                  1 &&
+              g_wide_enum_calls == 1 && g_wide_enum_text == "1",
+          "EnumCalendarInfoW calls the guest once");
     section("kernel32 wide resources");
     uint32_t r = call_import(&c, "KERNEL32.dll", "FindResourceW", {0, 1, 16});
     check(r != 0, "FindResourceW(VS_VERSION_INFO)");

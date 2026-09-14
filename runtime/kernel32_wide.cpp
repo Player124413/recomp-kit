@@ -479,7 +479,85 @@ void k_GetDateFormatW(X86 *c) {
     set_eax(c, gm_put_wstr(out, text, cap) + 1);
 }
 
+uint32_t g_thread_lcid = 0x0409; // The runtime exposes one process-wide locale.
+void k_GetThreadLocale(X86 *c) {
+    set_eax(c, g_thread_lcid);
+}
+void k_SetThreadLocale(X86 *c) {
+    g_thread_lcid = arg(c, 0);
+    set_eax(c, 1);
+}
+void k_GetUserDefaultUILanguage(X86 *c) {
+    set_eax(c, 0x0409);
+}
+void k_GetSystemDefaultUILanguage(X86 *c) {
+    set_eax(c, 0x0409);
+}
+void k_IsDBCSLeadByteEx(X86 *c) {
+    set_eax(c, 0);
+}
+void k_GetConsoleCP(X86 *c) {
+    set_eax(c, 437);
+}
+void k_GetConsoleOutputCP(X86 *c) {
+    set_eax(c, 437);
+}
+// The callback receives temporary guest storage. guest_call dispatches through
+// recomp_call and restores the caller's registers/stack; no host lock is held.
+void enumerate_text(X86 *c, const char *text) {
+    uint32_t callback = arg(c, 0);
+    if (!callback) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t tmp = heap_alloc(((uint32_t)strlen(text) + 1) * 2, true);
+    if (!tmp) {
+        set_last_error(8);
+        set_eax(c, 0);
+        return;
+    }
+    gm_put_wstr(tmp, text, (uint32_t)strlen(text) + 1);
+    guest_call(c, callback, tmp);
+    heap_free(tmp);
+    set_eax(c, 1);
+}
+void k_EnumSystemLocalesW(X86 *c) {
+    enumerate_text(c, "00000409");
+}
+void k_EnumCalendarInfoW(X86 *c) {
+    enumerate_text(c, "1");
+}
+void k_GetCPInfoExW(X86 *c) {
+    uint32_t p = arg(c, 2);
+    if (!p || !gm_valid(p, 544)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    // CPINFOEXW: DefaultChar[2], LeadByte[12], WCHAR default, UINT code page,
+    // then CodePageName[260]. The 32-bit guest record is exactly 544 bytes.
+    memset(g_mem + p, 0, 544);
+    wr32(p, 1);
+    wr8(p + 4, '?');
+    wr16(p + 18, '?');
+    wr32(p + 20, 1252);
+    gm_put_wstr(p + 24, "1252 (ANSI - Latin I)", 260);
+    set_eax(c, 1);
+}
+
 static const ImportShim g_kernel32_wide[] = {
+    {"KERNEL32.dll", "GetThreadLocale", 0, k_GetThreadLocale},
+    {"KERNEL32.dll", "SetThreadLocale", 1, k_SetThreadLocale},
+    {"KERNEL32.dll", "EnumSystemLocalesW", 2, k_EnumSystemLocalesW},
+    {"KERNEL32.dll", "EnumCalendarInfoW", 4, k_EnumCalendarInfoW},
+    {"KERNEL32.dll", "GetCPInfoExW", 3, k_GetCPInfoExW},
+    {"KERNEL32.dll", "GetUserDefaultUILanguage", 0, k_GetUserDefaultUILanguage},
+    {"KERNEL32.dll", "GetSystemDefaultUILanguage", 0, k_GetSystemDefaultUILanguage},
+    {"KERNEL32.dll", "IsDBCSLeadByteEx", 2, k_IsDBCSLeadByteEx},
+    {"KERNEL32.dll", "GetConsoleCP", 0, k_GetConsoleCP},
+    {"KERNEL32.dll", "GetConsoleOutputCP", 0, k_GetConsoleOutputCP},
+
     {"KERNEL32.dll", "lstrlenW", 1, k_lstrlenW},
     {"KERNEL32.dll", "lstrcatW", 2, k_lstrcatW},
     {"KERNEL32.dll", "FormatMessageW", 7, k_FormatMessageW},
@@ -519,4 +597,8 @@ static const ImportShim g_kernel32_wide[] = {
 
 void kernel32_wide_register() {
     imports_register(g_kernel32_wide, sizeof g_kernel32_wide / sizeof g_kernel32_wide[0]);
+}
+
+void kernel32_wide_reset() {
+    g_thread_lcid = 0x0409;
 }
