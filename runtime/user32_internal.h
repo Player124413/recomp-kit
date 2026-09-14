@@ -76,6 +76,10 @@ extern Msg last_message;
 constexpr uint32_t desktop_handle = 0x00020000;
 void pump_window_timers();
 void window_created(uint32_t hwnd);
+// Siblings in back-to-front stacking order, respecting WS_EX_TOPMOST.
+std::vector<uint32_t> window_z_order(uint32_t parent);
+void reorder_window(uint32_t hwnd, uint32_t after);
+void pump_mouse_input(X86 *c);
 void forget_window_services(uint32_t hwnd);
 bool destroy_window(X86 *c, uint32_t hwnd);
 void client_origin(uint32_t hwnd, int32_t *x, int32_t *y);

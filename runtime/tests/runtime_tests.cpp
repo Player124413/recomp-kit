@@ -4982,6 +4982,91 @@ static void test_user32_window_model() {
     }
 }
 
+// The host has screen coordinates; USER32 owns hit testing, activation and capture.
+static void test_host_mouse_routing() {
+    section("host mouse routing across VCL windows");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00313000, msg = s + 0x200;
+    static uint32_t activations, activation_top, activation_data, activate_result;
+    activations = 0;
+    activate_result = 1;
+    uint32_t proc = imports_alloc_trampoline(
+        "TEST", "MouseWindowProc",
+        [](X86 *cc) {
+            if (arg(cc, 1) == 0x21) {
+                ++activations;
+                activation_top = arg(cc, 2);
+                activation_data = arg(cc, 3);
+                set_eax(cc, activate_result);
+            } else
+                set_eax(cc, arg(cc, 1) == 0x81 ? 1 : 0);
+        },
+        4);
+    memset(g_mem + s, 0, 40);
+    wr32(s + 4, proc);
+    gm_put_wstr(s + 0x100, "MouseRouting", 32);
+    wr32(s + 36, s + 0x100);
+    call_import(&c, "USER32.dll", "RegisterClassW", {s});
+    auto window = [&](uint32_t ex, uint32_t style, int x, int y, uint32_t parent = 0) {
+        return call_import(&c, "USER32.dll", "CreateWindowExW",
+                           {ex, s + 0x100, 0, style, uint32_t(x), uint32_t(y), 100, 100, parent, 0,
+                            IMAGE_BASE, 0});
+    };
+    uint32_t top = window(8, 0x10000000, 100, 120);
+    uint32_t ordinary = window(0, 0x10000000, 110, 130);
+    uint32_t hidden = window(8, 0, 100, 120);
+    uint32_t disabled = window(8, 0x18000000, 100, 120);
+    call_import(&c, "USER32.dll", "SetActiveWindow", {ordinary});
+    auto take = [&](uint32_t message, uint32_t mk, int x, int y, uint32_t expected, int cx,
+                    int cy) {
+        host_post_mouse_message(message, mk, x, y);
+        uint32_t got = call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x200, 0x209, 1});
+        check(got == 1 && rd32(msg) == expected && rd32(msg + 4) == message &&
+                  rd32(msg + 8) == mk && int16_t(rd32(msg + 12)) == cx &&
+                  int16_t(rd32(msg + 12) >> 16) == cy && int32_t(rd32(msg + 20)) == x &&
+                  int32_t(rd32(msg + 24)) == y,
+              "mouse %x goes to %08x at client (%d,%d), preserving MK flags and screen point",
+              message, expected, cx, cy);
+    };
+    take(0x201, 0xd, 125, 150, top, 25, 30);
+    check(activations == 1 && activation_top == top && activation_data == ((0x201u << 16) | 1) &&
+              call_import(&c, "USER32.dll", "GetActiveWindow", {}) == top,
+          "inactive topmost receives WM_MOUSEACTIVATE before its press");
+    take(0x202, 0, 125, 150, top, 25, 30);
+    check(activations == 1, "release does not activate again");
+    uint32_t child = window(0, 0x50000000, 10, 12, top);
+    take(0x200, 2, 125, 150, child, 15, 18);
+    host_set_key_state(0x10, true);
+    host_set_key_state(0x11, true);
+    host_post_mouse_message(0x200, 0, 125, 150);
+    check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x200, 0x209, 1}) == 1 &&
+              rd32(msg + 8) == 0xc,
+          "host mouse messages include held Shift and Control MK flags");
+    host_set_key_state(0x10, false);
+    host_set_key_state(0x11, false);
+    call_import(&c, "USER32.dll", "SetCapture", {child});
+    take(0x204, 2, 50, 60, child, -60, -72);
+    take(0x205, 0, 50, 60, child, -60, -72);
+    call_import(&c, "USER32.dll", "ReleaseCapture", {});
+    take(0x201, 1, 125, 150, child, 15, 18);
+    call_import(&c, "USER32.dll", "EnableWindow", {top, 0});
+    take(0x201, 1, 125, 150, ordinary, 15, 20);
+    call_import(&c, "USER32.dll", "EnableWindow", {top, 1});
+    call_import(&c, "USER32.dll", "ShowWindow", {hidden, 5});
+    take(0x201, 1, 125, 150, hidden, 25, 30);
+    call_import(&c, "USER32.dll", "SetWindowPos", {top, 0xffffffffu, 0, 0, 0, 0, 3});
+    take(0x201, 1, 125, 150, child, 15, 18);
+    activate_result = 4; // MA_NOACTIVATEANDEAT consumes the press.
+    call_import(&c, "USER32.dll", "SetActiveWindow", {ordinary});
+    host_post_mouse_message(0x201, 1, 125, 150);
+    check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x200, 0x209, 1}) == 0 &&
+              call_import(&c, "USER32.dll", "GetActiveWindow", {}) == ordinary,
+          "WM_MOUSEACTIVATE can refuse activation and eat the press");
+    for (uint32_t w : {top, ordinary, hidden, disabled})
+        call_import(&c, "USER32.dll", "DestroyWindow", {w});
+}
+
 static void test_user32_services() {
     section("menus, scrollbars, clipboard, resources and drawing");
     X86 c;
@@ -5291,6 +5376,7 @@ int main(int argc, char **argv) {
     test_display_settings();
     test_user32_vcl();
     test_user32_window_model();
+    test_host_mouse_routing();
     test_user32_services();
     X86 *c = loader_context();
     if (child)

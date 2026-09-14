@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Smoke mouse input follows visible, enabled windows in stacking order,
+  delivers client coordinates and modifier flags, respects capture, and
+  asks inactive windows to activate before a button press.
+
 - Smoke: screen metrics, retained GDI captures and pointer bounds share the
   virtual desktop selected by RECOMP_SMOKE_DRAWABLE until DirectDraw sets
   a mode. Script dumps and pointer coordinates assert matching dimensions.

@@ -1072,15 +1072,11 @@ namespace {
 // pixels cover the base, while untouched storage leaves DirectDraw visible.
 std::vector<user32::Window *> visible_surfaces() {
     std::vector<user32::Window *> result;
-    for (auto &kv : user32::windows()) {
-        auto &w = kv.second;
-        if (w.visible && !(w.style & 0x40000000u) && !w.surface.argb.empty())
+    for (uint32_t hwnd : user32::window_z_order(0)) {
+        auto &w = *user32::find_window(hwnd);
+        if (w.visible && !w.surface.argb.empty())
             result.push_back(&w);
     }
-    // Handles increase in creation order. Topmost windows remain above the
-    // ordinary group even when another ordinary window is created later.
-    std::stable_sort(result.begin(), result.end(),
-                     [](auto *a, auto *b) { return (a->exstyle & 8) < (b->exstyle & 8); });
     return result;
 }
 } // namespace

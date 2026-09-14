@@ -384,6 +384,8 @@ void u_ShowWindow(X86 *c) {
         w->style &= ~0x21000000u;
     set_eax(c, was ? 1 : 0);
     if (!was && w->visible) {
+        if (cmd != 4 && cmd != 7 && cmd != 8) // SW_*NOACTIVATE preserves stacking.
+            reorder_window(w->hwnd, 0);
         w->update_pending = true;
         if (!w->shown) {
             w->shown = true;
@@ -418,6 +420,8 @@ void u_SetWindowPos(X86 *c) {
     Window *w = find_window(arg(c, 0));
     uint32_t flags = arg(c, 6);
     if (w) {
+        if (!(flags & 4)) // SWP_NOZORDER
+            reorder_window(w->hwnd, arg(c, 1));
         // A WM_SIZE handler may set the same size while arranging children.
         // Only actual changes notify it again, or paint is starved forever.
         bool moved =
@@ -711,6 +715,7 @@ void peek_message(X86 *c) {
     // back, and only a thread holding the scheduler baton may do that.
     host_pump_timers(c);
     pump_window_timers();
+    pump_mouse_input(c);
     gdi_present_windows();
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3), flags = arg(c, 4);
@@ -749,6 +754,7 @@ void u_GetMessageA(X86 *c) {
 
     for (;;) {
         pump_window_timers();
+        pump_mouse_input(c);
         gdi_present_windows();
         for (auto it = queue().begin(); it != queue().end(); ++it) {
             if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
@@ -882,6 +888,11 @@ void def_window_proc(X86 *c, bool wide) {
         if (w)
             w->update_pending = false;
         set_eax(c, 0);
+        return;
+    case 0x0021: // WM_MOUSEACTIVATE: children ask their parent first.
+        set_eax(c, w && w->parent
+                       ? host_dispatch_to_wndproc(c, w->parent, msg, arg(c, 2), arg(c, 3))
+                       : 1);
         return;
     case 0x0081: // WM_NCCREATE: TRUE, or creation is cancelled
     case 0x0014: // WM_ERASEBKGND: the background counts as erased

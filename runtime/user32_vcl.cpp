@@ -11,6 +11,14 @@ void sched_checkpoint();
 namespace user32 {
 namespace {
 uint32_t active = 0, focus = 0, capture = 0;
+std::vector<uint32_t> z_order;
+struct MouseInput {
+    uint32_t message, mk;
+    int32_t x, y;
+    uint32_t time;
+};
+std::deque<MouseInput> mouse_input;
+bool routing_mouse = false;
 struct Timer {
     uint32_t hwnd, id, interval, due, callback, thread;
 };
@@ -19,10 +27,116 @@ uint32_t next_timer = 1;
 std::set<uint32_t> destroying;
 } // namespace
 void window_created(uint32_t hwnd) {
+    z_order.push_back(hwnd);
     if (!active)
         active = hwnd;
     if (!focus)
         focus = hwnd;
+}
+std::vector<uint32_t> window_z_order(uint32_t parent) {
+    std::vector<uint32_t> result;
+    for (uint32_t hwnd : z_order) {
+        auto *w = find_window(hwnd);
+        if (w && w->parent == parent)
+            result.push_back(hwnd);
+    }
+    if (!parent)
+        std::stable_sort(result.begin(), result.end(), [](uint32_t a, uint32_t b) {
+            return (find_window(a)->exstyle & 8) < (find_window(b)->exstyle & 8);
+        });
+    return result;
+}
+void reorder_window(uint32_t hwnd, uint32_t after) {
+    auto *w = find_window(hwnd);
+    if (!w || hwnd == after)
+        return;
+    auto *other = find_window(after);
+    if (after > 1 && after < 0xfffffffeu && (!other || other->parent != w->parent))
+        return;
+    if (!w->parent) {
+        if (after == 0xffffffffu || (other && (other->exstyle & 8)))
+            w->exstyle |= 8; // HWND_TOPMOST, or after another topmost window
+        else if (after == 0xfffffffeu || after == 1 || other)
+            w->exstyle &= ~8u; // HWND_NOTOPMOST / HWND_BOTTOM / ordinary sibling
+    }
+    z_order.erase(std::remove(z_order.begin(), z_order.end(), hwnd), z_order.end());
+    if (after == 1)
+        z_order.insert(z_order.begin(), hwnd);
+    else if (other)
+        z_order.insert(std::find(z_order.begin(), z_order.end(), after), hwnd);
+    else
+        z_order.push_back(hwnd);
+}
+// Descend only through an eligible parent. A hidden/disabled modal owner and
+// its children cannot intercept input; an owned popup remains a top-level peer.
+uint32_t mouse_window(uint32_t parent, int32_t x, int32_t y, size_t depth = 0) {
+    if (depth > windows().size())
+        return 0;
+    auto order = window_z_order(parent);
+    for (auto i = order.rbegin(); i != order.rend(); ++i) {
+        auto *w = find_window(*i);
+        int32_t wx, wy;
+        client_origin(*i, &wx, &wy);
+        if (!w->visible || !w->enabled || x < wx || y < wy || int64_t(x) >= int64_t(wx) + w->w ||
+            int64_t(y) >= int64_t(wy) + w->h)
+            continue;
+        uint32_t child = mouse_window(*i, x, y, depth + 1);
+        return child ? child : *i;
+    }
+    return 0;
+}
+// Host events carry screen points until the guest retrieves input. Only here
+// can activation synchronously invoke a guest WNDPROC. One event per pump lets
+// the preceding press establish capture before its subsequent move/release.
+void pump_mouse_input(X86 *c) {
+    if (routing_mouse || mouse_input.empty())
+        return;
+    struct Guard {
+        Guard() {
+            routing_mouse = true;
+        }
+        ~Guard() {
+            routing_mouse = false;
+        }
+    } guard;
+    MouseInput input = mouse_input.front();
+    mouse_input.pop_front();
+    uint32_t hwnd = find_window(capture) ? capture : mouse_window(0, input.x, input.y);
+    auto *w = find_window(hwnd);
+    if (!w)
+        return;
+    uint32_t top = hwnd;
+    for (size_t n = 0; w->parent && n < windows().size(); ++n) {
+        top = w->parent;
+        w = find_window(top);
+        if (!w)
+            return;
+    }
+    host_set_cursor_pos(input.x, input.y);
+    bool press = input.message == 0x201 || input.message == 0x204 || input.message == 0x207;
+    if (!capture && press && top != active) {
+        uint32_t result = host_dispatch_to_wndproc(c, hwnd, 0x21, top, (input.message << 16) | 1);
+        if (result == 1 || result == 2) {
+            uint32_t old = active;
+            active = top;
+            reorder_window(top, 0);
+            if (find_window(old))
+                host_dispatch_to_wndproc(c, old, 6, 0, top);
+            if (find_window(top))
+                host_dispatch_to_wndproc(c, top, 6, 2, old); // WA_CLICKACTIVE
+        }
+        if (result == 2 || result == 4)
+            return; // MA_*ANDEAT
+    }
+    if (!find_window(hwnd))
+        return; // activation may destroy its recipient
+    int32_t x, y;
+    client_origin(hwnd, &x, &y);
+    uint32_t lp = (uint32_t(uint16_t(int64_t(input.y) - y)) << 16) | uint16_t(int64_t(input.x) - x);
+    LOGV("host mouse %04x screen=(%d,%d) -> hwnd=%08x client=(%d,%d) mk=%x", input.message, input.x,
+         input.y, hwnd, int16_t(lp), int16_t(lp >> 16), input.mk);
+    queue().push_back(
+        {hwnd, input.message, input.mk, lp, input.time, uint32_t(input.x), uint32_t(input.y)});
 }
 // Queue each expired timer at most once. Signed subtraction handles DWORD
 // clock wrap; no host thread mutates guest memory or invokes a callback here.
@@ -60,6 +174,7 @@ bool destroy_window(X86 *c, uint32_t hwnd) {
     forget_window_services(hwnd);
     gdi_destroy_window(hwnd);
     windows().erase(hwnd);
+    z_order.erase(std::remove(z_order.begin(), z_order.end(), hwnd), z_order.end());
     win32_forget_scrollbars(hwnd);
     for (auto i = timers.begin(); i != timers.end();)
         if (i->second.hwnd == hwnd)
@@ -198,11 +313,7 @@ void enum_thread(X86 *c) {
     enumerate_windows(c, 2);
 }
 std::vector<uint32_t> siblings(uint32_t parent) {
-    std::vector<uint32_t> list;
-    for (const auto &kv : windows())
-        if (kv.second.parent == parent)
-            list.push_back(kv.first);
-    return list;
+    return window_z_order(parent);
 }
 void top_window(X86 *c) {
     auto list = siblings(arg(c, 0) == desktop_handle ? 0 : arg(c, 0));
@@ -350,19 +461,7 @@ void release_capture(X86 *c) {
     set_eax(c, 1);
 }
 void window_at_point(X86 *c) {
-    int32_t x = int32_t(arg(c, 0)), y = int32_t(arg(c, 1));
-    uint32_t result = 0;
-    for (auto i = windows().rbegin(); i != windows().rend(); ++i) {
-        const auto &w = i->second;
-        int32_t wx, wy;
-        client_origin(w.hwnd, &wx, &wy);
-        if (w.visible && w.enabled && x >= wx && y >= wy && int64_t(x) < int64_t(wx) + w.w &&
-            int64_t(y) < int64_t(wy) + w.h) {
-            result = w.hwnd;
-            break;
-        }
-    }
-    set_eax(c, result);
+    set_eax(c, mouse_window(0, int32_t(arg(c, 0)), int32_t(arg(c, 1))));
 }
 void desktop(X86 *c) {
     set_eax(c, desktop_handle);
@@ -1339,4 +1438,13 @@ void user32::forget_window_services(uint32_t hwnd) {
         destroy_menu_tree(i->second);
         system_menus.erase(i);
     }
+}
+
+void host_post_mouse_message(uint32_t msg, uint32_t mk, int32_t x, int32_t y) {
+    if (user32::g_key_state[0x10] & 0x80)
+        mk |= 4;
+    if (user32::g_key_state[0x11] & 0x80)
+        mk |= 8;
+    if (msg >= 0x200 && msg <= 0x209)
+        user32::mouse_input.push_back({msg, mk, x, y, host_millis()});
 }
