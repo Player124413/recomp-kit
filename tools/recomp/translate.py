@@ -524,6 +524,7 @@ FLAG_EFFECT = {
     "ADD": (ARITH_ALL, NO_FLAGS),
     "SUB": (ARITH_ALL, NO_FLAGS),
     "CMP": (ARITH_ALL, NO_FLAGS),
+    "CMPXCHG8B": (frozenset(("zf",)), NO_FLAGS),
     "NEG": (ARITH_ALL, NO_FLAGS),
     "ADC": (ARITH_ALL, frozenset(("cf",))),
     "SBB": (ARITH_ALL, frozenset(("cf",))),
@@ -1895,6 +1896,17 @@ class Translator(object):
             L.extend(self.flags_arith("sub", size, live))
             return L
 
+        if m == "CMPXCHG8B":
+            # LOCK needs no host atomic under the cooperative guest scheduler.
+            # Capture the guest address before the failure path changes EDX:EAX.
+            L.append("uint32_t ad_ = %s;" % addr_expr(ops[0]))
+            L.append("uint64_t dst_ = rd64(ad_);")
+            L.append("uint64_t expected_ = ((uint64_t)c->r[2] << 32) | c->r[0];")
+            L.append("c->eflags_zf = (expected_ == dst_);")
+            L.append("if (c->eflags_zf) { wr64(ad_, ((uint64_t)c->r[1] << 32) | c->r[3]); }")
+            L.append("else { c->r[0] = (uint32_t)dst_; c->r[2] = (uint32_t)(dst_ >> 32); }")
+            return L
+
         if m == "XADD":
             size = operand_size(ops)
             dst, src = ops
@@ -2199,7 +2211,7 @@ class Translator(object):
             port = read_op(ops[0], 32) if ops[0].kind == "reg" else read_op(ops[0], 32)
             L.append("recomp_out(c, %s, %s, %d);" % (port, read_op(ops[1], size), size // 8))
             return L
-        if m in ("NOP", "WAIT", "PAUSE"):
+        if m in ("NOP", "WAIT", "PAUSE", "EMMS"):
             return [";"]
         if m == "STMXCSR":
             # No translated SSE arithmetic changes MXCSR, so expose its reset value.

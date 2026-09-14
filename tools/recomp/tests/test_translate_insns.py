@@ -113,6 +113,17 @@ def cmpxchg_setup(rng):
             "mem": [(SCRATCH + 0x40, struct.pack("<I", mem))]}
 
 
+def cmpxchg8b_setup(rng):
+    """Compare equal qwords and mismatches confined to either dword."""
+    mem = rng.getrandbits(64)
+    expected = mem
+    if rng.random() < 0.5:
+        expected ^= 1 << rng.randrange(64)
+    return {"regs": rand_regs(rng, EDI=SCRATCH + 0x40,
+                              EAX=expected & 0xffffffff, EDX=expected >> 32),
+            "mem": [(SCRATCH + 0x40, struct.pack("<Q", mem))]}
+
+
 def loop_setup(rng):
     # ECX = 0 would spin 2^32 times; the CRT never enters a LOOP that way.
     return {"regs": rand_regs(rng, ECX=rng.randint(1, 40))}
@@ -308,6 +319,16 @@ CASES = [
     Case("FBSTP stores packed BCD and pops", 0x0D026000,
          [(0x0, "FILD dword ptr [ECX + 0x10]"), (0x3, "FBSTP tword ptr [ECX]"), (0x5, "RET")],
          "DB 41 10  DF 31  C3", fbstp_setup),
+    Case("CMPXCHG8B compares EDX:EAX and stores ECX:EBX changing only ZF", 0x0D027000,
+         # Materialize CMP's flags: Unicorn otherwise corrupts its lazy
+         # flag path through CMPXCHG8B. PUSHFD after it also checks preserved AF.
+         [(0x0, "CMP ESI,EBP"), (0x2, "PUSHFD"), (0x3, "POPFD"),
+          (0x4, "CMPXCHG8B.LOCK qword ptr [EDI]"),
+          (0x8, "PUSHFD"), (0x9, "POP ESI"), (0xa, "RET")],
+         "39 EE  9C  9D  F0 0F C7 0F  9C  5E  C3", cmpxchg8b_setup),
+    Case("EMMS changes no integer registers or flags", 0x0D028000,
+         [(0x0, "CMP ESI,EBP"), (0x2, "EMMS"), (0x4, "RET")],
+         "39 EE  0F 77  C3", lambda rng: {"regs": rand_regs(rng)}),
 ]
 
 
