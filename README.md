@@ -70,6 +70,29 @@ against a stub translation of the stub game: `.venv/bin/python tools/build.py
 --stub`; its outputs live under `build/stub/` so they never replace a real
 build.
 
+## Dependencies
+
+SDL3 is fetched at its pinned release and linked statically; Lua,
+TinySoundFont, minimp3, volk and Vulkan headers are vendored with their
+upstream notices. See [NOTICE](NOTICE) for licenses.
+
+On macOS, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the
+SHA-256-pinned FFmpeg 7.1.1 release and builds shared `avformat`, `avcodec`
+and `avutil` libraries with only Bink/Smacker video and audio decoders,
+Bink/Smacker demuxers and file input. The app carries the three dylibs in
+`Contents/Frameworks`, using `@rpath` install names and an executable rpath
+of `@executable_path/../Frameworks`; each dylib is signed ad hoc before the
+app. Apple system libraries/frameworks are allowed; no Homebrew libraries
+are required. This adds the dependency only; the video shims still skip
+cinematics.
+
+FFmpeg is LGPL-2.1-or-later and dynamically linked. Its full license,
+source URL, checksum, configure command and library replacement instructions
+are in [the FFmpeg notice](third_party/ffmpeg/NOTICE.md), also shipped as
+`Contents/Resources/ffmpeg-NOTICE.md`. CMake `-DRECOMP_VIDEO=OFF` disables
+the dependency. It defaults to `OFF` on other platforms; enabling it there
+is not supported yet. See [Contributing](CONTRIBUTING.md) for configuration.
+
 ## Run on an iPad
 
 Requires Xcode with the iOS SDK, an Apple developer team signed in to Xcode,

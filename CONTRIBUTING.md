@@ -65,6 +65,39 @@ translation or its C helpers, regenerate explicitly:
 .venv/bin/python tools/build.py --regenerate --jobs 8
 ```
 
+On macOS, the first native build also downloads and builds FFmpeg 7.1.1
+when CMake's `RECOMP_VIDEO` option is `ON` (the default). It uses the Xcode
+Command Line Tools' compiler and make plus the existing Python/CMake/Ninja
+environment; no Homebrew FFmpeg or assembler is needed. Intel macOS builds
+pass `--disable-x86asm`. Source is pinned by SHA-256, automatic external
+library detection is disabled, and only Bink/Smacker decoders and demuxers
+and the file protocol are enabled. The exact command and LGPL license are
+in [third_party/ffmpeg/NOTICE.md](third_party/ffmpeg/NOTICE.md).
+
+To disable video for an already configured game tree, run from the kit
+with the venv on `PATH` (use the same build tree as `tools/build.py`):
+
+```sh
+cmake --preset macos -B /abs/path/to/<game>/build/cmake/macos -DRECOMP_VIDEO=OFF
+.venv/bin/python tools/build.py --game-dir /abs/path/to/<game> --jobs 8
+```
+
+Use `-DRECOMP_VIDEO=ON` in that configure command to restore it. A fresh
+game-free configure is
+`cmake --preset macos-stub -DPython3_EXECUTABLE=/abs/path/to/.venv/bin/python`;
+the explicit interpreter avoids macOS finding Xcode's Python without the
+required Python packages. Subsequent runs can use `cmake --preset macos-stub`. Add
+`-DRECOMP_VIDEO=OFF` to exercise the path without FFmpeg. Other platforms
+default to `OFF` and do not support enabling video yet.
+
+For a video-enabled macOS app, check the executable and all three dylibs
+with `otool -L`: only Apple system paths and the bundled `@rpath/libav*`
+libraries may appear. `otool -l` must show the executable rpath
+`@executable_path/../Frameworks`. Run `codesign -dv` on each dylib and
+`codesign --verify --deep --strict /path/to/<AppName>.app`, then launch
+using an isolated `RECOMP_PROFILE_DIR`. Bundling signs the libraries before
+the app and includes the FFmpeg notice in `Contents/Resources`.
+
 `--target smoke` builds the offscreen scripted host, `--target headless` the
 minimal boot host, `--target fixture` the parity fixture and `--target plugins`
 every mod plugin. `--preset` and `--config Debug` pick the CMake preset; the

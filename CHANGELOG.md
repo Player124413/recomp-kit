@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Build: fetch SHA-256-pinned FFmpeg 7.1.1 for macOS with only Bink/Smacker
+  decoders and demuxers and file input. `RECOMP_VIDEO` defaults to ON on
+  macOS and OFF elsewhere; OFF retains the build without FFmpeg. Link
+  avformat, avcodec and avutil dynamically, bundle the three replaceable
+  dylibs with relative install names and ad-hoc signatures, and ship the
+  LGPL notice, source identity and build flags. Cinematic playback remains
+  unimplemented in the video shims.
+
 - Touch: taps press and release at the finger's position, including near a
   window edge, without a cursor nudge after release. Held fingers and drags
   retain edge snapping so holding an edge still scrolls; lifting an edge

@@ -4,6 +4,7 @@ set(POP_DX_SOURCES
 
 add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
 target_link_libraries(recomp_dx PUBLIC recomp_runtime)
+pop_link_video(recomp_dx)
 target_compile_options(recomp_dx PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx 2)
 
@@ -12,6 +13,7 @@ pop_optimize(recomp_dx 2)
 # tests use it.
 add_library(recomp_dx_null OBJECT ${POP_DX_SOURCES})
 target_link_libraries(recomp_dx_null PUBLIC recomp_runtime)
+pop_link_video(recomp_dx_null)
 target_compile_definitions(recomp_dx_null PUBLIC RECOMP_NULL_HOST)
 target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)

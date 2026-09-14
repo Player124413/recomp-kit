@@ -20,6 +20,21 @@ def rename_identity(plist_path, name, version):
     plist_path.write_bytes(plistlib.dumps(data))
 
 
+def bundle_ffmpeg(contents, libraries):
+    """Copy replaceable shared libraries, set their IDs, then sign before the app."""
+    if not libraries:
+        return
+    frameworks = contents / "Frameworks"
+    frameworks.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "third_party/ffmpeg/NOTICE.md", contents / "Resources/ffmpeg-NOTICE.md")
+    for source in libraries:
+        # Follow the installed major-version symlink into a standalone file.
+        dest = frameworks / source.name
+        shutil.copy2(source, dest)
+        subprocess.run(["install_name_tool", "-id", "@rpath/" + dest.name, str(dest)], check=True)
+        subprocess.run(["codesign", "--force", "--sign", "-", str(dest)], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
@@ -30,6 +45,8 @@ def main():
                         help="Where this build's outputs live (texture pack, symbols.json)")
     parser.add_argument("--game-dir", type=Path, required=True, help="The game directory (its mods/core is installed)")
     parser.add_argument("--pack", type=Path, default=None)
+    parser.add_argument("--ffmpeg-library", type=Path, action="append", default=[],
+                        help="FFmpeg shared library to copy into Contents/Frameworks (repeatable)")
     args = parser.parse_args()
     if args.pack is None:
         args.pack = Path(os.environ.get("RECOMP_TEXTURE_PACK_DIR") or args.build_root / "texture-pack")
@@ -57,6 +74,7 @@ def main():
     if (args.pack / "manifest.json").is_file():
         subprocess.run([sys.executable, str(ROOT / "tools/recomp/package_texture_pack.py"),
                         str(args.pack), str(resources / "texture-pack")], check=True, cwd=ROOT)
+    bundle_ffmpeg(contents, args.ffmpeg_library)
     # Seal after every resource is in place: the linker signature alone does
     # not cover the resource envelope.
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(args.bundle)], check=True)
