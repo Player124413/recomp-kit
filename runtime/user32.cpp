@@ -5,6 +5,7 @@
 // (Task 7) pushes real events in with host_post_message() and the guest pulls
 // them out through PeekMessageA/GetMessageA exactly as it would on Win32.
 #include "imports.h"
+#include "gdi_image.h"
 #include "win32.h"
 #include "memory.h"
 
@@ -918,9 +919,23 @@ void u_IsWindowUnicode(X86 *c) {
 // the host, which paints its own pointer.
 static uint32_t g_next_icon = 0x0002b000u;
 void u_CreateIconIndirect(X86 *c) {
+    uint32_t info = arg(c, 0);
+    GdiImage image, mask;
+    if (info && gm_valid(info, 20) && gdi_read_bitmap(rd32(info + 16), &image)) {
+        if (rd32(info + 12) && gdi_read_bitmap(rd32(info + 12), &mask) &&
+            mask.width >= image.width && mask.height >= image.height) {
+            for (int32_t y = 0; y < image.height; ++y)
+                for (int32_t x = 0; x < image.width; ++x)
+                    if (mask.pixels[size_t(y) * mask.width + x] & 0xffffff)
+                        image.pixels[size_t(y) * image.width + x] = 0;
+        }
+        set_eax(c, gdi_create_icon(image));
+        return;
+    }
     set_eax(c, arg(c, 0) ? g_next_icon++ : 0);
 }
 void u_DestroyIcon(X86 *c) {
+    gdi_delete_icon(arg(c, 0));
     set_eax(c, arg(c, 0) ? 1 : 0);
 }
 void u_LoadIconA(X86 *c) {

@@ -8,6 +8,8 @@
 // API. Text output is accepted and not drawn, which is worth one line.
 
 #include "imports.h"
+#include "gdi_image.h"
+#include <algorithm>
 #include "memory.h"
 #include "win32.h"
 
@@ -111,6 +113,222 @@ uint32_t make_dib(int32_t width, int32_t height, uint16_t bpp, uint32_t compress
 }
 
 } // namespace
+
+namespace {
+// Convert the existing DIB representation to the common controls' 32-bpp
+// snapshot. Handle row orientation and palette/bitfield formats here once.
+bool snapshot_dib(const Dib &d, GdiImage *image, bool preserve_alpha = false) {
+    int64_t height = d.height < 0 ? -int64_t(d.height) : d.height;
+    if (d.width <= 0 || height <= 0 || uint64_t(d.width) * height > GUEST_SIZE / 4 ||
+        !gm_valid(d.bits, d.size))
+        return false;
+    GdiImage result;
+    result.width = d.width;
+    result.height = int32_t(height);
+    result.pixels.resize(size_t(d.width) * size_t(height));
+    bool alpha = false;
+    auto component = [](uint32_t pixel, uint32_t mask) -> uint32_t {
+        if (!mask)
+            return 0;
+        while (!(mask & 1)) {
+            mask >>= 1;
+            pixel >>= 1;
+        }
+        return uint32_t(uint64_t(pixel & mask) * 255 / mask);
+    };
+    for (int32_t y = 0; y < height; ++y) {
+        uint32_t row = d.bits + uint32_t(d.height > 0 ? height - 1 - y : y) * d.stride;
+        for (int32_t x = 0; x < d.width; ++x) {
+            uint32_t pixel = 0;
+            if (d.bpp <= 8) {
+                uint32_t index = d.bpp == 1   ? (rd8(row + x / 8) >> (7 - x % 8)) & 1
+                                 : d.bpp == 4 ? (rd8(row + x / 2) >> (x % 2 ? 0 : 4)) & 15
+                                              : rd8(row + x);
+                pixel = index < d.colors.size() ? d.colors[index] & 0xffffff : index ? 0xffffff : 0;
+            } else if (d.bpp == 16) {
+                uint32_t v = rd16(row + x * 2);
+                pixel = component(v, d.masks[0] ? d.masks[0] : 0x7c00) << 16 |
+                        component(v, d.masks[1] ? d.masks[1] : 0x03e0) << 8 |
+                        component(v, d.masks[2] ? d.masks[2] : 0x001f);
+            } else if (d.bpp == 24) {
+                uint32_t at = row + x * 3;
+                pixel = rd8(at) | rd8(at + 1) << 8 | rd8(at + 2) << 16;
+            } else if (d.bpp == 32) {
+                pixel = rd32(row + x * 4);
+                alpha |= (pixel >> 24) != 0;
+            } else
+                return false;
+            result.pixels[size_t(y) * d.width + x] = pixel;
+        }
+    }
+    // Legacy RGB bitmaps leave the reserved byte zero. Only treat alpha as
+    // meaningful when at least one pixel supplies it.
+    if (!alpha && !preserve_alpha)
+        for (auto &p : result.pixels)
+            p |= 0xff000000;
+    *image = std::move(result);
+    return true;
+}
+std::map<uint32_t, GdiImage> &icons() {
+    static std::map<uint32_t, GdiImage> m;
+    return m;
+}
+uint32_t next_image_icon = 0x00090000;
+} // namespace
+bool gdi_read_bitmap(uint32_t bitmap, GdiImage *image, bool preserve_alpha) {
+    Dib *d = dib_of(bitmap);
+    return d && snapshot_dib(*d, image, preserve_alpha);
+}
+uint32_t gdi_image_bitmap(const GdiImage &image) {
+    if (image.width <= 0 || image.height <= 0 ||
+        uint64_t(image.width) * image.height != image.pixels.size())
+        return 0;
+    uint32_t h = make_dib(image.width, -image.height, 32, 0, 0);
+    if (h)
+        memcpy(g_mem + dib_of(h)->bits, image.pixels.data(), image.pixels.size() * 4);
+    return h;
+}
+uint32_t gdi_image_mask(const GdiImage &image) {
+    if (image.width <= 0 || image.height <= 0 ||
+        uint64_t(image.width) * image.height != image.pixels.size())
+        return 0;
+    uint32_t h = make_dib(image.width, -image.height, 1, 0, 0);
+    if (!h)
+        return 0;
+    Dib &d = *dib_of(h);
+    d.colors = {0, 0x00ffffff};
+    for (int32_t y = 0; y < image.height; ++y)
+        for (int32_t x = 0; x < image.width; ++x)
+            if (!(image.pixels[size_t(y) * image.width + x] >> 24)) {
+                uint32_t at = d.bits + uint32_t(y) * d.stride + uint32_t(x) / 8;
+                wr8(at, rd8(at) | uint8_t(0x80 >> (x % 8)));
+            }
+    return h;
+}
+void gdi_delete_bitmap(uint32_t bitmap) {
+    auto it = dibs().find(bitmap);
+    if (it == dibs().end())
+        return;
+    heap_free(it->second.bits);
+    dibs().erase(it);
+    for (auto &dc : dcs())
+        if (dc.second.bitmap == bitmap)
+            dc.second.bitmap = 0;
+}
+// Writes only into an existing DIB-backed DC. A window without a backing
+// surface is a failure, so success always means that pixels were available.
+bool gdi_draw_image(uint32_t dc, const GdiImage &image, int32_t x, int32_t y, int32_t w,
+                    int32_t h) {
+    Dib *dst = dib_in_dc(dc);
+    if (!dst || !(dst->bpp == 16 || dst->bpp == 24 || dst->bpp == 32))
+        return false;
+    int64_t dh = dst->height < 0 ? -int64_t(dst->height) : dst->height;
+    int64_t x0 = std::max<int64_t>(0, -int64_t(x));
+    int64_t y0 = std::max<int64_t>(0, -int64_t(y));
+    int64_t x1 = std::min<int64_t>({w, image.width, int64_t(dst->width) - x});
+    int64_t y1 = std::min<int64_t>({h, image.height, dh - y});
+    for (int64_t sy = y0; sy < y1; ++sy)
+        for (int64_t sx = x0; sx < x1; ++sx) {
+            uint32_t pixel = image.pixels[size_t(sy) * image.width + sx], alpha = pixel >> 24;
+            if (!alpha)
+                continue;
+            uint32_t row = uint32_t(dst->height > 0 ? dh - 1 - (y + sy) : y + sy);
+            uint32_t at = dst->bits + row * dst->stride + uint32_t(x + sx) * (dst->bpp / 8);
+            if (dst->bpp == 16) {
+                uint32_t r = (pixel >> 16) & 255, g = (pixel >> 8) & 255, b = pixel & 255;
+                auto packed = [](uint32_t v, uint32_t mask) {
+                    if (!mask)
+                        return 0u;
+                    uint32_t shift = 0;
+                    while (!(mask & 1)) {
+                        mask >>= 1;
+                        ++shift;
+                    }
+                    return ((v * mask + 127) / 255) << shift;
+                };
+                wr16(at, uint16_t(packed(r, dst->masks[0] ? dst->masks[0] : 0x7c00) |
+                                  packed(g, dst->masks[1] ? dst->masks[1] : 0x03e0) |
+                                  packed(b, dst->masks[2] ? dst->masks[2] : 0x001f)));
+            } else {
+                for (uint32_t channel = 0; channel < 3; ++channel) {
+                    uint32_t value = (pixel >> (channel * 8)) & 255;
+                    wr8(at + channel,
+                        uint8_t((value * alpha + rd8(at + channel) * (255 - alpha) + 127) / 255));
+                }
+                if (dst->bpp == 32)
+                    wr8(at + 3, uint8_t(alpha + rd8(at + 3) * (255 - alpha) / 255));
+            }
+        }
+    return true;
+}
+// Validate the packed DIB before reading colors or rows. Resources and BMP
+// files share this format; compressed RLE/JPEG/PNG data is not a DIB here.
+bool gdi_decode_image(uint32_t at, uint32_t bytes, GdiImage *image, uint32_t pixel_offset) {
+    if (!at || bytes < 40 || !gm_valid(at, bytes))
+        return false;
+    uint32_t header = rd32(at);
+    if (header < 40 || header > bytes || rd16(at + 12) != 1)
+        return false;
+    Dib d;
+    d.width = int32_t(rd32(at + 4));
+    d.height = int32_t(rd32(at + 8));
+    d.bpp = rd16(at + 14);
+    d.compression = rd32(at + 16);
+    if (d.width <= 0 || !d.height ||
+        !(d.bpp == 1 || d.bpp == 4 || d.bpp == 8 || d.bpp == 16 || d.bpp == 24 || d.bpp == 32) ||
+        !(d.compression == 0 || (d.compression == 3 && (d.bpp == 16 || d.bpp == 32))))
+        return false;
+    uint64_t rows = d.height < 0 ? -int64_t(d.height) : d.height;
+    uint64_t stride = ((uint64_t(d.width) * d.bpp + 31) / 32) * 4;
+    uint64_t offset = header;
+    if (d.compression == 3) {
+        uint32_t masks = header >= 52 ? at + 40 : at + header;
+        if (masks - at + 12 > bytes)
+            return false;
+        for (int i = 0; i < 3; ++i)
+            d.masks[i] = rd32(masks + i * 4);
+        if (header < 52)
+            offset += 12;
+    }
+    if (d.bpp <= 8) {
+        uint32_t count = rd32(at + 32);
+        if (!count)
+            count = 1u << d.bpp;
+        if (count > (1u << d.bpp) || offset + count * 4 > bytes)
+            return false;
+        for (uint32_t i = 0; i < count; ++i)
+            d.colors.push_back(rd32(at + uint32_t(offset) + i * 4));
+        offset += count * 4;
+    }
+    if (pixel_offset) {
+        if (pixel_offset < offset)
+            return false;
+        offset = pixel_offset;
+    }
+    if (offset + stride * rows > bytes)
+        return false;
+    d.bits = at + uint32_t(offset);
+    d.stride = uint32_t(stride);
+    d.size = uint32_t(stride * rows);
+    return snapshot_dib(d, image);
+}
+uint32_t gdi_create_icon(const GdiImage &image) {
+    if (image.pixels.empty())
+        return 0;
+    uint32_t handle = next_image_icon++;
+    icons()[handle] = image;
+    return handle;
+}
+bool gdi_read_icon(uint32_t icon, GdiImage *image) {
+    auto it = icons().find(icon);
+    if (it == icons().end())
+        return false;
+    *image = it->second;
+    return true;
+}
+bool gdi_delete_icon(uint32_t icon) {
+    return icons().erase(icon) != 0;
+}
 
 // CreateDIBSection(hdc, pbmi, usage, ppvBits, hSection, offset)
 void g_CreateDIBSection(X86 *c) {

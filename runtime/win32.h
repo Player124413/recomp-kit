@@ -17,6 +17,12 @@ static inline const char *win32_guest_root_name() {
 }
 
 // ---------------------------------------------------------------------------
+// Shared scrollbar bodies (plain Win32 layouts), also used by FlatSB.
+void win32_get_scroll_pos(X86 *c);
+void win32_set_scroll_pos(X86 *c);
+void win32_get_scroll_info(X86 *c);
+void win32_set_scroll_info(X86 *c);
+
 // Process-wide state
 // ---------------------------------------------------------------------------
 // Called by the loader once the image is mapped. `game_dir` is the host

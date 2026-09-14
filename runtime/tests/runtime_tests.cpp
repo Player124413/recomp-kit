@@ -3,6 +3,7 @@
 // Run from the repository root:
 //   .venv/bin/python tools/test.py --compile-only && build/recomp/runtime_tests
 #include "../imports.h"
+#include "../resources.h"
 #include "../mods_seam.h"
 #include "../intrinsics.h"
 #include "../loader.h"
@@ -2960,6 +2961,29 @@ static void test_import_coverage(X86 *c) {
             else
                 data.insert(value);
         }
+        const std::set<std::string> delphi_dlls = {
+            "oleaut32.dll", "advapi32.dll", "version.dll",  "comctl32.dll", "winspool.drv",
+            "netapi32.dll", "msvcrt.dll",   "shfolder.dll", "shell32.dll",  "ole32.dll"};
+        uint32_t checked = 0, missing = 0;
+        for (const auto &import : expect.imports) {
+            std::string dll = import.dll;
+            std::transform(dll.begin(), dll.end(), dll.begin(),
+                           [](unsigned char ch) { return char(std::tolower(ch)); });
+            // CoCreateInstance belongs to DX, which this runtime-only binary
+            // does not link. Only the six COM additions are part of this task.
+            const std::set<std::string> com_additions = {"OleInitialize",  "OleUninitialize",
+                                                         "CoInitializeEx", "CoTaskMemAlloc",
+                                                         "CoTaskMemFree",  "IsEqualGUID"};
+            if (dll == "ole32.dll" && !com_additions.count(import.name))
+                continue;
+            if (delphi_dlls.count(dll)) {
+                ++checked;
+                if (imports_argc(rd32(import.slot)) == ARGC_UNKNOWN)
+                    ++missing;
+            }
+        }
+        check(missing == 0, "Delphi DLL argument counts: %u imports checked, %u unknown", checked,
+              missing);
         check(imports_count() >= trampolines.size(),
               "%u trampolines allocated; the IAT references %zu distinct trampolines",
               imports_count(), trampolines.size());
@@ -4363,6 +4387,178 @@ static void test_delphi_misc() {
           "Shell_NotifyIconW accepts notifications");
 }
 
+static void test_delphi_controls() {
+    section("Delphi image lists and flat scroll bars");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00340000;
+    uint32_t il = call_import(&c, "COMCTL32.dll", "ImageList_Create", {2, 2, 0x20, 4, 4});
+    check(il && call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 0,
+          "initial capacity does not set image count");
+    memset(g_mem + s, 0, 40);
+    wr32(s, 40);
+    wr32(s + 4, 4);
+    wr32(s + 8, (uint32_t)-2);
+    wr16(s + 12, 1);
+    wr16(s + 14, 32);
+    uint32_t bitmap = call_import(&c, "GDI32.dll", "CreateDIBSection", {0, s, 0, s + 64, 0, 0});
+    uint32_t pixels = rd32(s + 64);
+    for (uint32_t i = 0; i < 8; ++i)
+        wr32(pixels + 4 * i, i % 4 < 2 ? 0xffff0000 : 0xff00ff00);
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Add", {il, bitmap, 0}) == 0 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 2,
+          "ImageList_Add splits strips");
+    uint32_t dc = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, bitmap});
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Draw", {il, 1, dc, 0, 0, 0}) == 1 &&
+              rd32(pixels) == 0xff00ff00,
+          "ImageList_Draw writes DC backing pixels");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_DrawEx",
+                      {il, 0, dc, 1, 0, 1, 1, 0xffffffffu, 0, 0}) == 1 &&
+              rd32(pixels + 4) == 0xffff0000 && rd32(pixels + 16) == 0xff00ff00,
+          "ImageList_DrawEx bounds");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_GetImageInfo", {il, 1, s + 128}) == 1 &&
+              rd32(s + 128) && rd32(s + 152) - rd32(s + 144) == 2,
+          "ImageList_GetImageInfo bitmap rectangle");
+    call_import(&c, "GDI32.dll", "GetObjectA", {rd32(s + 128), 24, s + 256});
+    uint32_t shared_bits = rd32(s + 276);
+    wr32(shared_bits + 8, 0xff0000ff);
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Draw", {il, 1, dc, 0, 0, 0}) == 1 &&
+              rd32(pixels) == 0xff0000ff,
+          "image info bitmap edits remain visible to drawing");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_GetIconSize", {il, s + 128, s + 132}) == 1 &&
+              rd32(s + 128) == 2 && rd32(s + 132) == 2,
+          "ImageList_GetIconSize");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_SetBkColor", {il, 0x123456}) == 0xffffffffu &&
+              call_import(&c, "COMCTL32.dll", "ImageList_GetBkColor", {il}) == 0x123456,
+          "image list background state");
+    uint32_t icon = call_import(&c, "COMCTL32.dll", "ImageList_GetIcon", {il, 0, 0});
+    check(icon && call_import(&c, "COMCTL32.dll", "ImageList_ReplaceIcon",
+                              {il, 0xffffffffu, icon}) == 2,
+          "image list icon round trip");
+    call_import(&c, "USER32.dll", "DestroyIcon", {icon});
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Replace", {il, 1, bitmap, 0}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_Copy", {il, 2, il, 1, 0}) == 1,
+          "image replace and copy");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Remove", {il, 1}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 2,
+          "remove compacts image list");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_SetImageCount", {il, 4}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 4,
+          "grow image count");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_SetOverlayImage", {il, 0, 1}) == 1,
+          "set overlay");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_BeginDrag", {il, 0, 1, 1}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_DragEnter", {0, 10, 20}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_DragMove", {30, 40}) == 1,
+          "drag image state");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_GetDragImage", {s + 128, s + 136}) &&
+              rd32(s + 128) == 30 && rd32(s + 132) == 40 && rd32(s + 136) == 1,
+          "drag position and hotspot");
+    call_import(&c, "COMCTL32.dll", "ImageList_DragShowNolock", {0});
+    call_import(&c, "COMCTL32.dll", "ImageList_DragLeave", {0});
+    call_import(&c, "COMCTL32.dll", "ImageList_EndDrag", {});
+    check(call_import(&c, "COMCTL32.dll", "ImageList_GetDragImage", {0, 0}) == 0, "drag release");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_SetIconSize", {il, 3, 4}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 0,
+          "resize discards images");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Read", {0}) == 0 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_Write", {il, 0}) == 0,
+          "image list persistence fails");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_LoadImageW", {0, 0xffff, 2, 4, 0, 0, 0}) == 0,
+          "image list missing resource fails");
+    check(call_import(&c, "COMCTL32.dll", "ImageList_Destroy", {il}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "ImageList_Destroy", {il}) == 0,
+          "destroy invalidates image list");
+    uint32_t masked = call_import(&c, "COMCTL32.dll", "ImageList_Create", {2, 2, 0x21, 1, 1});
+    call_import(&c, "COMCTL32.dll", "ImageList_Add", {masked, bitmap, 0});
+    check(call_import(&c, "COMCTL32.dll", "ImageList_GetImageInfo", {masked, 0, s + 128}) == 1 &&
+              rd32(s + 132) != 0 &&
+              call_import(&c, "GDI32.dll", "GetObjectA", {rd32(s + 132), 24, s + 256}) == 24 &&
+              rd16(s + 274) == 1,
+          "masked image list exposes an owned monochrome mask bitmap");
+    wr32(s + 512, 1);
+    wr32(s + 516, 0);
+    wr32(s + 520, 0);
+    wr32(s + 524, 0);
+    wr32(s + 528, bitmap);
+    uint32_t indirect = call_import(&c, "USER32.dll", "CreateIconIndirect", {s + 512});
+    check(indirect &&
+              call_import(&c, "COMCTL32.dll", "ImageList_ReplaceIcon", {masked, 0, indirect}) == 0,
+          "ImageList_ReplaceIcon reads copied CreateIconIndirect pixels");
+    call_import(&c, "USER32.dll", "DestroyIcon", {indirect});
+    call_import(&c, "COMCTL32.dll", "ImageList_Destroy", {masked});
+    std::vector<ResourceName> names;
+    if (resource_names(2, &names) && !names.empty()) {
+        const auto &name = names.front();
+        uint32_t id = name.id;
+        if (name.is_string) {
+            gm_put_wstr(s + 512, name.name, 256);
+            id = s + 512;
+        }
+        uint32_t bytes = 0, data = resource_data(resource_find(2, id), &bytes);
+        uint32_t loaded =
+            call_import(&c, "COMCTL32.dll", "ImageList_LoadImageW",
+                        {loader_image_base(), id, rd32(data + 4), 1, 0xffffffffu, 0, 0});
+        check(loaded && call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {loaded}) == 1,
+              "ImageList_LoadImageW decodes an image-backed bitmap resource");
+        call_import(&c, "COMCTL32.dll", "ImageList_Destroy", {loaded});
+    }
+    call_import(&c, "GDI32.dll", "DeleteDC", {dc});
+    call_import(&c, "GDI32.dll", "DeleteObject", {bitmap});
+    std::string saved_seam_root = g_seam_root;
+    g_seam_root = "build/recomp/image-list-file-test";
+    mkdir_p(g_seam_root + "/read");
+    memset(g_mem + s, 0, 74);
+    wr16(s, 0x4d42);
+    wr32(s + 2, 74);
+    wr32(s + 10, 70); // bfOffBits includes a 16-byte gap.
+    wr32(s + 14, 40);
+    wr32(s + 18, 1);
+    wr32(s + 22, (uint32_t)-1);
+    wr16(s + 26, 1);
+    wr16(s + 28, 32);
+    wr32(s + 70, 0xff1256ab);
+    FILE *bmp_file = fopen((g_seam_root + "/read/gap.bmp").c_str(), "wb");
+    check(bmp_file && fwrite(g_mem + s, 1, 74, bmp_file) == 74, "write isolated BMP fixture");
+    if (bmp_file)
+        fclose(bmp_file);
+    win32_set_file_ops(test_resolver, nullptr);
+    gm_put_wstr(s + 512, "gap.bmp", 64);
+    uint32_t file_list = call_import(&c, "COMCTL32.dll", "ImageList_LoadImageW",
+                                     {0, s + 512, 1, 1, 0xffffffffu, 0, 0x10});
+    check(file_list &&
+              call_import(&c, "COMCTL32.dll", "ImageList_GetImageInfo", {file_list, 0, s + 128}) ==
+                  1 &&
+              call_import(&c, "GDI32.dll", "GetObjectA", {rd32(s + 128), 24, s + 256}) == 24 &&
+              rd32(rd32(s + 276)) == 0xff1256ab,
+          "ImageList_LoadImageW honors BMP pixel offset through file overlay");
+    call_import(&c, "COMCTL32.dll", "ImageList_Destroy", {file_list});
+    win32_set_file_ops(nullptr, nullptr);
+    remove_tree(g_seam_root);
+    g_seam_root = saved_seam_root;
+    check(call_import(&c, "COMCTL32.dll", "InitializeFlatSB", {1}) == 1, "InitializeFlatSB");
+    wr32(s, 28);
+    wr32(s + 4, 7);
+    wr32(s + 8, 0);
+    wr32(s + 12, 100);
+    wr32(s + 16, 10);
+    wr32(s + 20, 35);
+    check(call_import(&c, "COMCTL32.dll", "FlatSB_SetScrollInfo", {1, 0, s, 1}) == 35 &&
+              call_import(&c, "COMCTL32.dll", "FlatSB_GetScrollPos", {1, 0}) == 35,
+          "flat scrollbar range page position");
+    check(call_import(&c, "COMCTL32.dll", "FlatSB_SetScrollPos", {1, 0, 200, 0}) == 35 &&
+              call_import(&c, "COMCTL32.dll", "FlatSB_GetScrollPos", {1, 0}) == 91,
+          "flat scrollbar clamp and previous position");
+    wr32(s + 4, 0x17);
+    check(call_import(&c, "COMCTL32.dll", "FlatSB_GetScrollInfo", {1, 0, s}) == 1 &&
+              rd32(s + 20) == 91,
+          "flat scrollbar query fields");
+    check(call_import(&c, "COMCTL32.dll", "FlatSB_SetScrollProp", {1, 1, 16, 0}) == 1 &&
+              call_import(&c, "COMCTL32.dll", "_TrackMouseEvent", {s}) == 1,
+          "flat properties and tracking");
+}
+
 static void test_delphi_dlls() {
     section("Delphi DLLs");
     X86 c;
@@ -4414,6 +4610,8 @@ static void test_delphi_dlls() {
     uint32_t il = call_import(&c, "COMCTL32.dll", "ImageList_Create", {16, 16, 0x20, 4, 4});
     check(il != 0 && call_import(&c, "COMCTL32.dll", "ImageList_GetImageCount", {il}) == 0,
           "ImageList_Create");
+    call_import(&c, "COMCTL32.dll", "ImageList_Destroy", {il});
+    call_import(&c, "ADVAPI32.dll", "RegCloseKey", {hk});
 }
 
 int main(int argc, char **argv) {
@@ -4442,6 +4640,7 @@ int main(int argc, char **argv) {
     test_delphi_automation();
     test_delphi_registry_version();
     test_delphi_misc();
+    test_delphi_controls();
     X86 *c = loader_context();
     if (child)
         child_setjmp_abort(c);
