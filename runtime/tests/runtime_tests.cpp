@@ -4695,6 +4695,37 @@ static void test_delphi_controls() {
           "flat properties and tracking");
 }
 
+static void test_display_settings() {
+    section("display mode enumeration with uninitialized dmSize");
+    X86 c{};
+    loader_init_context(&c);
+    const uint32_t p = 0x00310000;
+    uint32_t width = 1024, height = 768, bpp = 32;
+    ddraw_display_mode(&width, &height, &bpp);
+    for (bool wide : {true, false}) {
+        const char *name = wide ? "EnumDisplaySettingsW" : "EnumDisplaySettingsA";
+        uint32_t size = wide ? 220 : 156, size_offset = wide ? 68 : 36;
+        // DEVMODEW also widens dmFormName: display fields start at 168, not 104.
+        uint32_t display = wide ? 168 : 104;
+        for (uint32_t input_size : {0u, 4u, size}) {
+            memset(g_mem + p, 0xa5, size + 4);
+            wr16(p + size_offset, uint16_t(input_size));
+            check(call_import(&c, "USER32.dll", name, {0, 0, p}) == 1 &&
+                      rd16(p + size_offset) == size && rd16(p + size_offset + 2) == 0 &&
+                      rd32(p + display) == bpp && rd32(p + display + 4) == width &&
+                      rd32(p + display + 8) == height && rd32(p + display + 12) == 0 &&
+                      rd32(p + display + 16) == 60 && rd32(p + size) == 0xa5a5a5a5,
+                  "%s accepts dmSize=%u and fills only the standard record", name, input_size);
+        }
+        for (uint32_t mode : {0xffffffffu, 0xfffffffeu})
+            check(call_import(&c, "USER32.dll", name, {0, mode, p}) == 1 &&
+                      rd32(p + display + 4) == width && rd32(p + display + 8) == height,
+                  "%s current/registry mode %08x", name, mode);
+        check(call_import(&c, "USER32.dll", name, {0, 1, p}) == 0,
+              "%s ends enumeration after mode zero", name);
+    }
+}
+
 // The pinned frame clock makes message timers deterministic without host sleeps.
 static void test_user32_vcl() {
     section("wide windows and VCL model");
@@ -5166,6 +5197,7 @@ int main(int argc, char **argv) {
     test_delphi_registry_version();
     test_delphi_misc();
     test_delphi_controls();
+    test_display_settings();
     test_user32_vcl();
     test_user32_window_model();
     test_user32_services();

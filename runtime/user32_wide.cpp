@@ -439,24 +439,34 @@ void spi_w(X86 *c) {
     } else
         alias_ansi(c, "SystemParametersInfoA");
 }
-void enum_settings(X86 *c) {
+// Some callers leave dmSize uninitialized. Enumeration supplies the complete
+// standard DEVMODE, without reading that field or writing driver-private bytes.
+void enum_settings(X86 *c, bool wide) {
     uint32_t p = arg(c, 2), mode = arg(c, 1);
-    if (!p || !gm_valid(p, 220) || rd16(p + 68) < 220 || (mode != 0 && mode < 0xfffffffeu)) {
+    uint32_t size = wide ? 220 : 156, header = wide ? 64 : 32;
+    uint32_t display = wide ? 168 : 104;
+    if (!p || !gm_valid(p, size) || (mode != 0 && mode < 0xfffffffeu)) {
         set_eax(c, 0);
         return;
     }
     uint32_t w = 1024, h = 768, bpp = 32;
     ddraw_display_mode(&w, &h, &bpp);
-    memset(g_mem + p, 0, 220);
-    gm_put_wstr(p, "DISPLAY1", 32);
-    wr16(p + 64, 0x401);
-    wr16(p + 68, 220);
-    wr32(p + 72, 0x5c0000);
-    wr32(p + 168, bpp);
-    wr32(p + 172, w);
-    wr32(p + 176, h);
-    wr32(p + 184, 60);
+    memset(g_mem + p, 0, size);
+    put_text(p, 32, "DISPLAY1", wide);
+    wr16(p + header, 0x401);
+    wr16(p + header + 4, uint16_t(size));
+    wr32(p + header + 8, 0x5c0000);
+    wr32(p + display, bpp);
+    wr32(p + display + 4, w);
+    wr32(p + display + 8, h);
+    wr32(p + display + 16, 60);
     set_eax(c, 1);
+}
+void enum_settings_w(X86 *c) {
+    enum_settings(c, true);
+}
+void enum_settings_a(X86 *c) {
+    enum_settings(c, false);
 }
 void enum_devices(X86 *c) {
     uint32_t p = arg(c, 2);
@@ -522,7 +532,8 @@ const ImportShim shims[] = {
     W("GetKeyboardLayoutNameW", 1, layout_name),
     W("LoadKeyboardLayoutW", 2, load_layout),
     W("SystemParametersInfoW", 4, spi_w),
-    W("EnumDisplaySettingsW", 3, enum_settings),
+    W("EnumDisplaySettingsW", 3, enum_settings_w),
+    W("EnumDisplaySettingsA", 3, enum_settings_a),
     W("EnumDisplayDevicesW", 4, enum_devices),
     W("GetMonitorInfoW", 2, monitor_info),
     W("IsDialogMessageW", 2, dialog_message),
