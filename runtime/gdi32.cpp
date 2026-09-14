@@ -847,7 +847,8 @@ uint32_t raw_dib(const Dib &d, uint32_t at, int x) {
                          : rd32(at);
 }
 // One path handles both borrowed DirectDraw pixels and owned guest DIBs.
-bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool blend) {
+bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool blend,
+           bool preserve_alpha = false) {
     auto *dc = dc_of(hdc);
     if (!dc)
         return false;
@@ -880,7 +881,8 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     } else
         value = s->argb[size_t(y) * s->w + x];
     if (!write) {
-        *p = value | 0xff000000;
+        *p =
+            preserve_alpha && d && d->bpp == 32 && d->compression == 0 ? value : value | 0xff000000;
         return true;
     }
     uint32_t result = *p;
@@ -939,8 +941,12 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     return true;
 }
 } // namespace
-bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *p) {
-    return pixel(dc, x, y, p, false, false);
+bool dc_has_alpha(uint32_t dc) {
+    auto *d = dib_in_dc(dc);
+    return d && d->bpp == 32 && d->compression == 0;
+}
+bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *p, bool preserve_alpha) {
+    return pixel(dc, x, y, p, false, false, preserve_alpha);
 }
 bool write_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t p, bool blend) {
     return pixel(dc, x, y, &p, true, blend);

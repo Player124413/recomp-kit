@@ -401,6 +401,129 @@ static void test_text() {
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
     call_import(&c, "GDI32.dll", "DeleteObject", {font});
 }
+// Exercise msimg32 through real stdcall trampolines and top-down guest DIBs.
+static void test_msimg32() {
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t s = 0x00310000;
+    struct Canvas {
+        uint32_t dc, bitmap, bits;
+    };
+    auto canvas = [&](uint32_t w, uint32_t h) {
+        uint32_t dc = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+        memset(g_mem + s, 0, 40);
+        wr32(s, 40);
+        wr32(s + 4, w);
+        wr32(s + 8, -h);
+        wr16(s + 12, 1);
+        wr16(s + 14, 32);
+        uint32_t bitmap =
+            call_import(&c, "GDI32.dll", "CreateDIBSection", {dc, s, 0, s + 64, 0, 0});
+        call_import(&c, "GDI32.dll", "SelectObject", {dc, bitmap});
+        return Canvas{dc, bitmap, rd32(s + 64)};
+    };
+    auto dst = canvas(8, 8), src = canvas(2, 1);
+    uint32_t vertices = s + 128, mesh = s + 256;
+    auto vertex = [&](uint32_t i, uint32_t x, uint32_t y, uint32_t rgb) {
+        uint32_t p = vertices + 16 * i;
+        wr32(p, x);
+        wr32(p + 4, y);
+        wr16(p + 8, ((rgb >> 16) & 255) * 257);
+        wr16(p + 10, ((rgb >> 8) & 255) * 257);
+        wr16(p + 12, (rgb & 255) * 257);
+        wr16(p + 14, 0);
+    };
+    // The right/bottom edge is exclusive: pixel 7 is 7/8 along this ramp.
+    auto strip = canvas(8, 1);
+    vertex(0, 0, 0, 0);
+    vertex(1, 8, 1, 0xffffff);
+    wr32(mesh, 0);
+    wr32(mesh + 4, 1);
+    check(call_import(&c, "msimg32.dll", "GradientFill", {strip.dc, vertices, 2, mesh, 1, 0}) ==
+                  1 &&
+              rd32(strip.bits) == 0xff000000 && rd32(strip.bits + 16) == 0xff808080 &&
+              rd32(strip.bits + 28) == 0xffdfdfdf,
+          "horizontal gradient endpoints and midpoint in an 8x1 DIB");
+    vertex(1, 1, 8, 0xffffff);
+    check(call_import(&c, "msimg32.dll", "GradientFill", {dst.dc, vertices, 2, mesh, 1, 1}) == 1 &&
+              rd32(dst.bits + 4 * 8 * 4) == 0xff808080,
+          "vertical gradient midpoint");
+    memset(g_mem + dst.bits, 0, 8 * 8 * 4);
+    vertex(0, 0, 0, 0xff0000);
+    vertex(1, 8, 0, 0x00ff00);
+    vertex(2, 0, 8, 0x0000ff);
+    wr32(mesh + 8, 2);
+    check(call_import(&c, "msimg32.dll", "GradientFill", {dst.dc, vertices, 3, mesh, 1, 2}) == 1 &&
+              rd32(dst.bits + 4 * 9) == 0xff9f3030 && rd32(dst.bits + 4 * 63) == 0,
+          "triangle barycentric interior and untouched exterior");
+    memset(g_mem + dst.bits, 0, 8 * 8 * 4);
+    call_import(&c, "GDI32.dll", "SaveDC", {dst.dc});
+    call_import(&c, "GDI32.dll", "SetViewportOrgEx", {dst.dc, 2, 2, 0});
+    call_import(&c, "GDI32.dll", "IntersectClipRect", {dst.dc, 1, 0, 3, 1});
+    vertex(0, 0, 0, 0xff0000);
+    vertex(1, 4, 1, 0xff0000);
+    check(call_import(&c, "msimg32.dll", "GradientFill", {dst.dc, vertices, 2, mesh, 1, 0}) == 1 &&
+              rd32(dst.bits + 4 * 19) == 0xffff0000 && rd32(dst.bits + 4 * 18) == 0 &&
+              rd32(dst.bits + 4 * 21) == 0,
+          "gradient honors the DC origin and clip");
+    call_import(&c, "GDI32.dll", "RestoreDC", {dst.dc, uint32_t(-1)});
+    auto blue = [&] {
+        for (unsigned i = 0; i < 64; ++i)
+            wr32(dst.bits + 4 * i, 0xff0000ff);
+    };
+    blue();
+    wr32(src.bits, 0x80800000);
+    wr32(src.bits + 4, 0);
+    check(call_import(&c, "msimg32.dll", "AlphaBlend",
+                      {dst.dc, 0, 0, 4, 1, src.dc, 0, 0, 2, 1, 0x01ff0000}) == 1 &&
+              rd32(dst.bits) == 0xff80007f && rd32(dst.bits + 4) == 0xff80007f &&
+              rd32(dst.bits + 8) == 0xff0000ff,
+          "premultiplied half-alpha red over blue with nearest-neighbor scaling");
+    blue();
+    check(call_import(&c, "msimg32.dll", "AlphaBlend",
+                      {dst.dc, 0, 0, 1, 1, src.dc, 0, 0, 1, 1, 0x01800000}) == 1 &&
+              rd32(dst.bits) == 0xff4000bf,
+          "constant alpha multiplies per-pixel alpha and premultiplied color");
+    blue();
+    wr32(src.bits, 0x00ff0000);
+    check(call_import(&c, "msimg32.dll", "AlphaBlend",
+                      {dst.dc, 0, 0, 1, 1, src.dc, 0, 0, 1, 1, 0x00800000}) == 1 &&
+              rd32(dst.bits) == 0xff80007f,
+          "constant-only alpha ignores the source alpha byte");
+    blue();
+    wr32(src.bits, 0x12345678);
+    wr32(src.bits + 4, 0x4400ff00);
+    check(call_import(&c, "msimg32.dll", "TransparentBlt",
+                      {dst.dc, 0, 0, 4, 1, src.dc, 0, 0, 2, 1, 0x00785634}) == 1 &&
+              rd32(dst.bits) == 0xff0000ff && rd32(dst.bits + 4) == 0xff0000ff &&
+              rd32(dst.bits + 8) == 0x4400ff00,
+          "scaled color-key blit leaves keyed pixels untouched and copies alpha");
+    uint32_t empty = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    set_last_error(0);
+    check(call_import(&c, "msimg32.dll", "GradientFill", {empty, vertices, 2, mesh, 1, 0}) == 0 &&
+              get_last_error() == 6,
+          "gradient rejects a DC without storage with ERROR_INVALID_HANDLE");
+    set_last_error(0);
+    check(call_import(&c, "msimg32.dll", "AlphaBlend",
+                      {dst.dc, 0, 0, 1, 1, empty, 0, 0, 1, 1, 0x00ff0000}) == 0 &&
+              get_last_error() == 6,
+          "alpha blend rejects a source without storage");
+    set_last_error(0);
+    check(call_import(&c, "msimg32.dll", "TransparentBlt",
+                      {empty, 0, 0, 1, 1, src.dc, 0, 0, 1, 1, 0}) == 0 &&
+              get_last_error() == 6,
+          "transparent blit rejects a destination without storage");
+    wr32(mesh + 4, 3);
+    check(call_import(&c, "msimg32.dll", "GradientFill", {dst.dc, vertices, 2, mesh, 1, 0}) == 0 &&
+              get_last_error() == 87,
+          "gradient rejects an out-of-range vertex index");
+    for (auto item : {dst, src, strip}) {
+        call_import(&c, "GDI32.dll", "DeleteDC", {item.dc});
+        call_import(&c, "GDI32.dll", "DeleteObject", {item.bitmap});
+    }
+    call_import(&c, "GDI32.dll", "DeleteDC", {empty});
+}
+
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
@@ -409,6 +532,7 @@ int main(int argc, char **argv) {
         test_text();
     if (argc < 2 || strcmp(argv[1], "model") != 0) {
         test_drawing();
+        test_msimg32();
         test_dib_rows_and_regions();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
     }

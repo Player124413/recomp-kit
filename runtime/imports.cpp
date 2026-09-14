@@ -472,4 +472,6 @@ void imports_init() {
     gdi_bitmaps_register();
     gdi::register_draw();
     gdi::register_text();
+    extern void msimg32_register();
+    msimg32_register();
 }

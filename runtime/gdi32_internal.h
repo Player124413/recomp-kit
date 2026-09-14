@@ -45,7 +45,9 @@ uint32_t colorref(uint32_t argb); // Swapping R and B is its own inverse.
 uint32_t argb(uint32_t color);
 bool brush_color(uint32_t brush, uint32_t *pixel);
 bool dc_size(uint32_t dc, int *w, int *h);
-bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *pixel);
+// Preserve alpha only for 32-bit BI_RGB DIB storage; normal GDI reads are opaque.
+bool dc_has_alpha(uint32_t dc);
+bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *pixel, bool preserve_alpha = false);
 bool write_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t pixel, bool blend = false);
 Rect clip_box(uint32_t dc);
 bool drawable(uint32_t dc, int64_t x, int64_t y);
