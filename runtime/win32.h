@@ -25,6 +25,10 @@ static inline const char *win32_guest_root_name() {
 void win32_init(const std::string &game_dir);
 const std::string &win32_game_dir();
 
+// Reserves a process-wide TLS slot for the loader or TlsAlloc; 0xffffffff
+// when every slot is in use. win32_init resets the reservation map.
+uint32_t tls_reserve_slot();
+
 void set_last_error(uint32_t code);
 // Signals a kernel event object by handle (pulse = signal then immediately
 // reset). False when the handle is not an event. Used by WINMM's event-mode

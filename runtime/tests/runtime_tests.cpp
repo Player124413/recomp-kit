@@ -188,6 +188,20 @@ static bool pefile_sections(std::vector<ExpectedSection> &out, std::string &err)
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+// The unit binary dispatches import trampolines and stubs the translated entry.
+// Temporarily supply two TLS callbacks so an empty image list still exercises
+// argument order, the return sentinel, and both caller and callee stack cleanup.
+static uint32_t g_tls_callback_hits = 0;
+static void fake_loader_tls_callback(X86 *c) {
+    ++g_tls_callback_hits;
+    check(rd32(c->r[R_ESP]) == GUEST_RETURN_SENTINEL, "TLS callback has the return sentinel");
+    check(arg(c, 0) == loader_image_base() && arg(c, 1) == 1 && arg(c, 2) == 0,
+          "TLS callback receives the image base, process attach, and null reserved argument");
+    const LoaderTls &tls = loader_tls();
+    check(rd32(rd32(c->fs_base + 0x2c) + 4 * tls.index) != 0,
+          "TLS callback sees the initialized main thread block");
+}
+
 static void test_loader() {
     section("loader");
     bool ok = loader_load(nullptr);
@@ -202,6 +216,40 @@ static void test_loader() {
           loader_iat_data_imports());
     check(loader_image_limit() == 0x00d4c000, "the image ends at %08x, derived from SizeOfImage",
           loader_image_limit());
+
+    // A Delphi image carries a TLS directory; the loader reserves a slot, writes
+    // its index where the image reads it, and gives the main thread a block that
+    // starts with the directory's raw bytes.
+    const LoaderTls &tls = loader_tls();
+    if (tls.raw_end > tls.raw_start) {
+        check(tls.index < TLS_SLOTS, "TLS slot %u reserved", tls.index);
+        check(rd32(tls.index_addr) == tls.index, "the image's TLS index reads %u",
+              rd32(tls.index_addr));
+        uint32_t block = rd32(TLS_BASE + 4 * tls.index);
+        check(block != 0, "main thread TLS block at %08x", block);
+        check(memcmp(g_mem + block, g_mem + tls.raw_start, tls.raw_end - tls.raw_start) == 0,
+              "the block starts with the directory's raw data");
+    } else {
+        check(tls.index == 0xffffffffu, "no TLS directory: no slot reserved");
+    }
+
+    if (tls.index < TLS_SLOTS && tls.callbacks) {
+        uint32_t saved[3];
+        memcpy(saved, g_mem + tls.callbacks, sizeof saved);
+        wr32(tls.callbacks,
+             imports_alloc_trampoline("test", "tls_callback_cdecl", fake_loader_tls_callback, 0));
+        wr32(tls.callbacks + 4,
+             imports_alloc_trampoline("test", "tls_callback_stdcall", fake_loader_tls_callback, 3));
+        wr32(tls.callbacks + 8, 0);
+        X86 c = *loader_context();
+        uint32_t esp = c.r[R_ESP];
+        g_tls_callback_hits = 0;
+        run_entry(&c);
+        check(g_tls_callback_hits == 2, "both TLS callbacks ran in the entry path");
+        check(c.r[R_ESP] == esp && rd32(esp) == GUEST_RETURN_SENTINEL,
+              "TLS callbacks preserve the entry stack and its return sentinel");
+        memcpy(g_mem + tls.callbacks, saved, sizeof saved);
+    }
 
     std::vector<ExpectedSection> expect;
     std::string err;
@@ -1580,9 +1628,20 @@ static uint32_t g_tls_index = 0;
 static uint32_t g_tls_seen_before[4] = {0, 0, 0, 0};
 static uint32_t g_tls_read_back[4] = {0, 0, 0, 0};
 static uint32_t g_tls_next_slot = 0;
+static uint32_t g_image_tls_blocks[4] = {};
+static bool g_image_tls_initialized[4] = {};
 
 static void fake_tls_thread(X86 *c) {
     uint32_t slot = g_tls_next_slot++;
+    const LoaderTls &tls = loader_tls();
+    if (slot < 4 && tls.index < TLS_SLOTS && tls.raw_end > tls.raw_start) {
+        uint32_t block = rd32(rd32(c->fs_base + 0x2c) + 4 * tls.index);
+        g_image_tls_blocks[slot] = block;
+        g_image_tls_initialized[slot] =
+            block && memcmp(g_mem + block, g_mem + tls.raw_start, tls.raw_end - tls.raw_start) == 0;
+        if (block)
+            g_mem[block] ^= (uint8_t)(slot + 1);
+    }
     uint32_t get = imports_resolve("KERNEL32.dll", "TlsGetValue");
     uint32_t set = imports_resolve("KERNEL32.dll", "TlsSetValue");
     uint32_t esp = c->r[R_ESP], sp;
@@ -1889,6 +1948,7 @@ static void test_scheduling(X86 *c) {
     // --- TLS is per thread -------------------------------------------------
     g_tls_index = call_import(c, "KERNEL32.dll", "TlsAlloc", {});
     check(g_tls_index != 0xffffffffu, "TlsAlloc gave index %u", g_tls_index);
+    check(g_tls_index != loader_tls().index, "TlsAlloc skips the image's reserved slot");
     call_import(c, "KERNEL32.dll", "TlsSetValue", {g_tls_index, 0x11111111});
     g_tls_next_slot = 0;
     uint32_t tlsfn = imports_alloc_trampoline("test", "tls_thread", fake_tls_thread, 1);
@@ -1896,6 +1956,17 @@ static void test_scheduling(X86 *c) {
     uint32_t tb = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, tlsfn, 0, 0, 0});
     poll_exit_code(c, ta, pcode, 64);
     poll_exit_code(c, tb, pcode, 64);
+    const LoaderTls &tls = loader_tls();
+    if (tls.index < TLS_SLOTS && tls.raw_end > tls.raw_start) {
+        uint32_t main_block = rd32(TLS_BASE + 4 * tls.index);
+        check(g_image_tls_initialized[0] && g_image_tls_initialized[1],
+              "both new threads start with the image's TLS raw data");
+        check(g_image_tls_blocks[0] != g_image_tls_blocks[1] &&
+                  g_image_tls_blocks[0] != main_block && g_image_tls_blocks[1] != main_block,
+              "the main thread and both workers have distinct image TLS blocks");
+        check(memcmp(g_mem + main_block, g_mem + tls.raw_start, tls.raw_end - tls.raw_start) == 0,
+              "worker TLS writes leave the main thread's image TLS data intact");
+    }
     check(g_tls_seen_before[0] == 0 && g_tls_seen_before[1] == 0,
           "each thread's slot started at zero, not at the creator's value");
     check(g_tls_read_back[0] == 0xd00d0000u && g_tls_read_back[1] == 0xd00d0001u,

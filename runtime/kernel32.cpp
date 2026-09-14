@@ -439,6 +439,31 @@ bool win32_signal_event(uint32_t handle, bool pulse) {
     return true;
 }
 
+uint32_t tls_reserve_slot() {
+    for (uint32_t i = 0; i < TLS_SLOTS; ++i)
+        if (!g_tls_used[i]) {
+            g_tls_used[i] = true;
+            return i;
+        }
+    return 0xffffffffu;
+}
+
+uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
+    const LoaderTls &t = loader_tls();
+    if (t.index == 0xffffffffu)
+        return 0;
+    uint32_t raw = t.raw_end - t.raw_start;
+    uint64_t bytes = (uint64_t)raw + t.zero_fill + 16;
+    if (bytes > 0xffffffffu)
+        return 0;
+    uint32_t block = heap_alloc((uint32_t)bytes, true, 16);
+    if (!block)
+        return 0;
+    memcpy(g_mem + block, g_mem + t.raw_start, raw);
+    wr32(tls_array + 4 * t.index, block);
+    return block;
+}
+
 void win32_init(const std::string &game_dir) {
     g_game_dir = game_dir.empty() ? std::string(".") : game_dir;
     g_cur_dir = RECOMP_GUEST_ROOT;
@@ -1637,10 +1662,8 @@ void k_GetTimeZoneInformation(X86 *c) {
 void tls_clear_slot_everywhere(uint32_t i);
 
 void k_TlsAlloc(X86 *c) {
-    for (uint32_t i = 0; i < TLS_SLOTS; ++i) {
-        if (g_tls_used[i])
-            continue;
-        g_tls_used[i] = true;
+    uint32_t i = tls_reserve_slot();
+    if (i != 0xffffffffu) {
         tls_clear_slot_everywhere(i); // a fresh slot starts at zero
         set_eax(c, i);
         return;
@@ -3006,7 +3029,8 @@ bool request_process_exit(uint32_t code) {
 
 // Sets up a guest thread's own address-space furniture: a committed stack, a
 // TEB with the SEH head empty and the stack bounds Windows records there, and
-// a zeroed TLS array.  Returns false when the guest heap cannot supply them.
+// a TLS array with the image's initial block and all other slots zeroed.
+// Returns false when the guest heap cannot supply them.
 bool thread_prepare_context(GuestThread *t) {
     t->stack_lo = heap_alloc(THREAD_STACK_BYTES, true, 16);
     if (!t->stack_lo)
@@ -3033,6 +3057,12 @@ bool thread_prepare_context(GuestThread *t) {
     wr32(t->teb + 0x08, t->stack_lo);
     wr32(t->teb + 0x18, t->teb);
     wr32(t->teb + 0x2c, t->tls);
+    if (!loader_tls_block_for_thread(t->tls) && loader_tls().index != 0xffffffffu) {
+        heap_free(t->teb);
+        heap_free(t->stack_lo);
+        t->teb = t->tls = t->stack_lo = t->stack_hi = 0;
+        return false;
+    }
     t->ctx.r[R_ESP] = (t->stack_hi - 0x20) & ~0xfu;
     t->ctx.r[R_EBP] = 0;
     return true;
@@ -3093,6 +3123,8 @@ bool thread_spawn(uint32_t h) {
     OsThread *host = os_thread_create(thread_host_main, t, 0);
     if (!host) {
         threads().pop_back();
+        if (loader_tls().index != 0xffffffffu)
+            heap_free(rd32(t->tls + 4 * loader_tls().index));
         heap_free(t->stack_lo);
         heap_free(t->teb);
         delete t;

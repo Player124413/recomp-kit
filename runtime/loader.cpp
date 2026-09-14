@@ -23,6 +23,7 @@ std::string g_exe_path;
 uint32_t g_base = 0, g_size = 0, g_entry = 0, g_iat_patched = 0, g_iat_data = 0;
 std::vector<SectionInfo> g_sections;
 X86 g_ctx;
+LoaderTls g_tls = {0, 0, 0, 0, 0, 0xffffffffu};
 
 // --------------------------------------------------------------------------
 // SHA-256 (FIPS 180-4), just enough to fingerprint the image.
@@ -281,6 +282,9 @@ uint32_t loader_iat_data_imports() {
 X86 *loader_context() {
     return &g_ctx;
 }
+const LoaderTls &loader_tls() {
+    return g_tls;
+}
 
 // Verify the supported executable hash, map PE sections and bind its imports.
 // All later address-based translation assumes this exact image; a mismatch is a hard failure.
@@ -401,6 +405,45 @@ bool loader_load(const char *exe_path) {
     imports_init();
     win32_init(dirname_of(g_exe_path));
 
+    // TLS directory (data directory 9). Reserve after win32_init, which clears
+    // the slot map, and before IAT binding or any guest code can call TlsAlloc.
+    g_tls = LoaderTls{0, 0, 0, 0, 0, 0xffffffffu};
+    if (rd<uint32_t>(file, opt_off + 92) > 9) {
+        size_t dd_tls = opt_off + 96 + 9 * 8;
+        if (opt_size < 96 + 10 * 8) {
+            g_error = "PE TLS data directory is truncated";
+            return false;
+        }
+        uint32_t tls_rva = rd<uint32_t>(file, dd_tls);
+        uint32_t tls_size = rd<uint32_t>(file, dd_tls + 4);
+        if (tls_rva) {
+            if (tls_size < 24 || !rva_ok(tls_rva, tls_size)) {
+                g_error = "TLS directory is truncated or lies outside the image";
+                return false;
+            }
+            uint32_t d = image_base + tls_rva;
+            g_tls.raw_start = rd32(d + 0);
+            g_tls.raw_end = rd32(d + 4);
+            g_tls.index_addr = rd32(d + 8);
+            g_tls.callbacks = rd32(d + 12);
+            g_tls.zero_fill = rd32(d + 16);
+            if (g_tls.raw_end < g_tls.raw_start ||
+                (g_tls.raw_end > g_tls.raw_start &&
+                 !rva_ok(g_tls.raw_start - image_base, g_tls.raw_end - g_tls.raw_start)) ||
+                !rva_ok(g_tls.index_addr - image_base, 4) ||
+                (g_tls.callbacks && !rva_ok(g_tls.callbacks - image_base, 4))) {
+                g_error = "TLS directory points outside the image";
+                return false;
+            }
+            g_tls.index = tls_reserve_slot();
+            if (g_tls.index == 0xffffffffu) {
+                g_error = "no TLS slot available for the image";
+                return false;
+            }
+            wr32(g_tls.index_addr, g_tls.index);
+        }
+    }
+
     // RECOMP_IMPORT_STATS=1 prints the implemented / not-reached / logging-only
     // classification at exit, which is how the "not reached" column of the
     // coverage table gets filled in from a real run.
@@ -419,6 +462,10 @@ bool loader_load(const char *exe_path) {
         LOGW("entry point is %08x, expected %08x", g_entry, LOADER_EXPECTED_ENTRY);
 
     loader_init_context(&g_ctx);
+    if (g_tls.index != 0xffffffffu && !rd32(TLS_BASE + 4 * g_tls.index)) {
+        g_error = "cannot allocate the main thread TLS block";
+        return false;
+    }
     LOGV("loaded %s: base %08x size %08x entry %08x, %u IAT slots, %u trampolines",
          g_exe_path.c_str(), g_base, g_size, g_entry, g_iat_patched, imports_count());
     return true;
@@ -448,6 +495,7 @@ void loader_init_context(X86 *c) {
     wr32(TEB_BASE + 0x2c, TLS_BASE);
     wr32(TEB_BASE + 0x30, TEB_BASE - 0x1000); // PEB placeholder (zeroed page)
     memset(g_mem + TLS_BASE, 0, TLS_SLOTS * 4);
+    loader_tls_block_for_thread(TLS_BASE);
 
     // Stack: 16-byte aligned, sentinel return address on top so a RET from the
     // entry point lands somewhere recognisable.
@@ -482,9 +530,30 @@ void run_entry(X86 *c) {
     // thread claim to be this one.
     sched_set_guest_thread(true);
     // ExitProcess/TerminateProcess/ExitThread-outside-a-thread longjmp here.
-    if (setjmp(*process_exit_jmp()) == 0)
+    if (setjmp(*process_exit_jmp()) == 0) {
+        uint32_t count = 0;
+        for (uint32_t p = g_tls.callbacks; p && rva_ok(p - g_base, 4); p += 4) {
+            uint32_t cb = rd32(p);
+            if (!cb)
+                break;
+            // The guest sees a pushed call frame, never host pointers. Restore
+            // ESP explicitly so both caller and callee cleanup leave the entry
+            // point's original frame intact.
+            uint32_t esp = c->r[R_ESP];
+            wr32(esp - 4, 0);
+            wr32(esp - 8, 1); // DLL_PROCESS_ATTACH
+            wr32(esp - 12, g_base);
+            wr32(esp - 16, GUEST_RETURN_SENTINEL);
+            c->r[R_ESP] = esp - 16;
+            c->eip = cb;
+            recomp_call(c, cb);
+            c->r[R_ESP] = esp;
+            ++count;
+        }
+        LOGV("ran %u TLS process-attach callbacks", count);
+        c->eip = g_entry;
         recomp_call(c, g_entry);
-    else
+    } else
         LOGW("guest process exited with code %u", process_exit_code());
     sched_set_guest_thread(false);
 }

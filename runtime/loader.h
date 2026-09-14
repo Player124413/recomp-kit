@@ -45,6 +45,17 @@ const std::string &loader_exe_path();
 uint32_t loader_iat_patched();
 uint32_t loader_iat_data_imports();
 
+// The PE TLS directory, if the image has one. index is the slot the loader
+// reserved in every thread's TLS array; 0xffffffff when there is none.
+struct LoaderTls {
+    uint32_t raw_start, raw_end, index_addr, callbacks, zero_fill, index;
+};
+const LoaderTls &loader_tls();
+// Allocates and initialises one thread's TLS block (raw data plus zero fill)
+// from the guest heap and stores its address in slot `index` of `tls_array`.
+// Returns the block, 0 when the image has no TLS directory or the heap is full.
+uint32_t loader_tls_block_for_thread(uint32_t tls_array);
+
 // Resets `c` to the process-start state: zeroed registers, ESP just below
 // STACK_TOP with a sentinel return address pushed, FS base at the TEB, x87
 // control word 0x027f.
