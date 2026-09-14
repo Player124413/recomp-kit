@@ -56,6 +56,7 @@ void fill(uint32_t dc, Rect r, uint32_t pixel);
 void line(uint32_t dc, int32_t x, int32_t y, int32_t x1, int32_t y1);
 void register_draw();
 void register_text();
+uint32_t draw_text(uint32_t dc, uint32_t text, uint32_t count, uint32_t rect, uint32_t flags);
 } // namespace gdi
 uint32_t gdi_window_dc(uint32_t window);
 bool gdi_release_window_dc(uint32_t window, uint32_t dc);

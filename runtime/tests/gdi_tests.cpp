@@ -401,6 +401,94 @@ static void test_text() {
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
     call_import(&c, "GDI32.dll", "DeleteObject", {font});
 }
+// DrawText must paint through the same selected-font canvas as ExtTextOut,
+// including its colour and clipping. Successful metrics alone are not drawing.
+static void test_draw_text() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00309000, rect = s + 256, str = s + 320;
+    uint32_t hwnd = make_test_window(&c, s, 64, 64);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    uint32_t brush = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0xff00ff});
+    auto bounds = [&](uint32_t l, uint32_t t, uint32_t r, uint32_t b) {
+        wr32(rect, l);
+        wr32(rect + 4, t);
+        wr32(rect + 8, r);
+        wr32(rect + 12, b);
+    };
+    bounds(0, 0, 64, 64);
+    call_import(&c, "USER32.dll", "FillRect", {dc, rect, brush});
+    call_import(&c, "GDI32.dll", "SetTextColor", {dc, 0});
+    call_import(&c, "GDI32.dll", "SetBkMode", {dc, 1});
+    gm_put_wstr(str, "AB", 8);
+    bounds(4, 4, 36, 28);
+    check(call_import(&c, "USER32.dll", "DrawTextW", {dc, str, 2, rect, 0x25}) == 20,
+          "DrawTextW centered single line returns bottom offset");
+    // Reference at (12,8): centered horizontally and vertically in the rectangle.
+    call_import(&c, "GDI32.dll", "ExtTextOutW", {dc, 12, 40, 0, 0, str, 2, 0});
+    bool same = true, ink = false;
+    for (uint32_t y = 0; y < 16; ++y)
+        for (uint32_t x = 0; x < 16; ++x) {
+            uint32_t actual = call_import(&c, "GDI32.dll", "GetPixel", {dc, 12 + x, 8 + y});
+            same &= actual == call_import(&c, "GDI32.dll", "GetPixel", {dc, 12 + x, 40 + y});
+            ink |= actual == 0;
+        }
+    check(same && ink, "DrawTextW paints the bitmap font in black on magenta");
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 12, 8}) == 0xff00ff,
+          "transparent text preserves the background between glyph pixels");
+    memset(g_mem + s, 0, 92);
+    wr32(s, uint32_t(-32));
+    uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s});
+    uint32_t old_font = call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+    bounds(1, 2, 60, 60);
+    check(call_import(&c, "USER32.dll", "DrawTextW", {dc, str, 2, rect, 0x420}) == 32 &&
+              rd32(rect + 8) == 33 && rd32(rect + 12) == 34,
+          "DrawTextW CALCRECT uses the selected font's 16x32 cells");
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 2, 2}) == 0xff00ff,
+          "CALCRECT leaves pixels untouched");
+    uint32_t screen_dc = call_import(&c, "USER32.dll", "GetDC", {0});
+    call_import(&c, "GDI32.dll", "SelectObject", {screen_dc, font});
+    bounds(1, 2, 60, 60);
+    check(call_import(&c, "USER32.dll", "DrawTextW", {screen_dc, str, 2, rect, 0x420}) == 32 &&
+              rd32(rect + 8) == 33 && rd32(rect + 12) == 34,
+          "CALCRECT measures a screen DC without a backing surface");
+    call_import(&c, "USER32.dll", "ReleaseDC", {0, screen_dc});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, old_font});
+    bounds(0, 0, 64, 64);
+    call_import(&c, "USER32.dll", "FillRect", {dc, rect, brush});
+    bounds(0, 0, 4, 8);
+    uint32_t params = s + 400;
+    memset(g_mem + params, 0, 20);
+    wr32(params, 20);
+    check(call_import(&c, "USER32.dll", "DrawTextExW", {dc, str, 2, rect, 0, params}) == 16 &&
+              rd32(params + 16) == 2,
+          "DrawTextExW paints and reports consumed UTF-16 units");
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 3, 0}) == 0 &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 4, 0}) == 0xff00ff &&
+              call_import(&c, "GDI32.dll", "GetPixel", {dc, 1, 8}) == 0xff00ff,
+          "DrawText clips glyphs to the supplied rectangle");
+    check(call_import(&c, "GDI32.dll", "SetPixel", {dc, 20, 20, 0xff}) == 0xff,
+          "DrawText restores the caller's clipping state");
+    gm_put_wstr(str, "AB CD", 16);
+    bounds(0, 0, 24, 64);
+    check(call_import(&c, "USER32.dll", "DrawTextW", {dc, str, UINT32_MAX, rect, 0x410}) == 32 &&
+              rd32(rect + 8) == 16 && rd32(rect + 12) == 32,
+          "DrawText wraps between words when measuring a narrow rectangle");
+    gm_put_wstr(str, "A\r\nB", 16);
+    bounds(0, 0, 64, 64);
+    check(call_import(&c, "USER32.dll", "DrawTextW", {dc, str, UINT32_MAX, rect, 0x400}) == 32 &&
+              rd32(rect + 8) == 8,
+          "DrawText treats CRLF as one line break");
+    gm_put_wstr(str, "&A&&B", 16);
+    bounds(0, 0, 64, 64);
+    check(call_import(&c, "USER32.dll", "DrawTextW", {dc, str, UINT32_MAX, rect, 0x420}) == 16 &&
+              rd32(rect + 8) == 24,
+          "DrawText measures mnemonic prefixes and escaped ampersands");
+    call_import(&c, "GDI32.dll", "DeleteObject", {font});
+    call_import(&c, "GDI32.dll", "DeleteObject", {brush});
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
 // Exercise msimg32 through real stdcall trampolines and top-down guest DIBs.
 static void test_msimg32() {
     X86 c;
@@ -528,8 +616,10 @@ int main(int argc, char **argv) {
     mem_init();
     imports_init();
     test_model();
-    if (argc < 2)
+    if (argc < 2) {
         test_text();
+        test_draw_text();
+    }
     if (argc < 2 || strcmp(argv[1], "model") != 0) {
         test_drawing();
         test_msimg32();

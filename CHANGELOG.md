@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- GDI: DrawTextW and DrawTextExW now paint bitmap-font glyphs with the DC's
+  colours, rectangle clipping and basic text layout. Measurement uses the
+  selected font, including screen DCs without a backing surface.
+
 - Translator: RET follows pushed interior continuations after cleanup, with
   shared Delphi finally blocks and their epilogues kept in the establishing
   body and exposed through alternate entries for exception dispatch.

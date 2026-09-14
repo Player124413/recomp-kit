@@ -298,28 +298,8 @@ void load_icon(X86 *c) {
     heap_free(copy);
     set_eax(c, ok ? gdi_create_icon(image) : 0);
 }
-// Text rasterization is the GDI layer's job. Match its current fixed metrics
-// for layout queries; drawing is accepted just as TextOutA is today.
 void draw_text(X86 *c) {
-    uint32_t p = arg(c, 1), n = arg(c, 2), rect = arg(c, 3), flags = arg(c, 4);
-    std::string text = gm_wstr(p, n == 0xffffffffu ? 0x8000 : n);
-    uint32_t lines = 1, cols = 0, maxcols = 0;
-    for (char ch : text) {
-        if (ch == '\n' && !(flags & 0x20)) {
-            maxcols = std::max(maxcols, cols);
-            cols = 0;
-            ++lines;
-        } else if ((ch & 0xc0) != 0x80)
-            ++cols;
-    }
-    maxcols = std::max(maxcols, cols);
-    if (rect && gm_valid(rect, 16) && (flags & 0x400)) {
-        wr32(rect + 8, rd32(rect) + maxcols * 7);
-        wr32(rect + 12, rd32(rect + 4) + lines * 16);
-    }
-    log_once("user32.drawtext",
-             "DrawTextW uses fixed GDI metrics; text rasterization is not available");
-    set_eax(c, text.empty() ? 0 : lines * 16);
+    set_eax(c, gdi::draw_text(arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3), arg(c, 4)));
 }
 void draw_text_ex(X86 *c) {
     uint32_t p = arg(c, 5);
