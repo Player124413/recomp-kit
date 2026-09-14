@@ -6029,6 +6029,111 @@ static void test_video_frame_convert() {
     }
 }
 
+// An optional private container exercises the real guest file API and decoder.
+// The player must use its own descriptor so decoding never seeks the guest's.
+static void test_bink_open_from_handle() {
+    const char *container = recomp_env("TEST_BINK_CONTAINER");
+    if (!container || !*container) {
+        printf("bink container test: RECOMP_TEST_BINK_CONTAINER unset, skipped\n");
+        return;
+    }
+    std::string spec = container;
+    size_t comma = spec.rfind(',');
+    CHECK(comma != std::string::npos);
+    if (comma == std::string::npos)
+        return;
+    std::string host = spec.substr(0, comma);
+    unsigned long long offset = 0;
+    char extra = 0;
+    bool valid_offset =
+        sscanf(spec.c_str() + comma + 1, "%llu%c", &offset, &extra) == 1 && offset <= INT64_MAX;
+    CHECK(valid_offset);
+    if (!valid_offset)
+        return;
+    size_t slash = host.find_last_of("/\\");
+    CHECK(slash != std::string::npos);
+    if (slash == std::string::npos)
+        return;
+    cpu_reset();
+    std::string previous_dir = win32_game_dir();
+    win32_init(host.substr(0, slash ? slash : 1));
+    std::string guest = win32_guest_path(host);
+    uint32_t name = heap_alloc((uint32_t)guest.size() + 1, true, 16);
+    CHECK(name != 0);
+    if (!name) {
+        win32_init(previous_dir);
+        return;
+    }
+    gm_put_str(name, guest.c_str(), (uint32_t)guest.size() + 1);
+    uint32_t handle =
+        call_shim(tramp("KERNEL32.dll", "CreateFileA"), {name, 0x80000000, 1, 0, 3, 0, 0});
+    CHECK(handle != 0 && handle != 0xffffffffu);
+    if (handle != 0 && handle != 0xffffffffu) {
+        uint32_t seek = tramp("KERNEL32.dll", "SetFilePointer");
+        wr32(sc(0x100), (uint32_t)(offset >> 32));
+        CHECK_EQ(call_shim(seek, {handle, (uint32_t)offset, sc(0x100), 0}), (uint32_t)offset);
+        CHECK_EQ(rd32(sc(0x100)), (uint32_t)(offset >> 32));
+        uint32_t rec = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {handle, 0x00800000});
+        CHECK(rec != 0);
+        if (rec) {
+            uint32_t width = rd32(rec), height = rd32(rec + 4);
+            CHECK(width >= 16 && width <= 4096);
+            CHECK(height >= 16 && height <= 4096);
+            CHECK(rd32(rec + 0x10) > 0);
+            CHECK_EQ(rd32(rec + 0x14), 1u);
+            printf("bink container test: %ux%u, %u frames\n", width, height, rd32(rec + 0x10));
+            if (width >= 16 && width <= 4096 && height >= 16 && height <= 4096) {
+                uint32_t pitch = width * 2, bytes = pitch * height;
+                uint32_t dest = heap_alloc(bytes, true, 16);
+                CHECK(dest != 0);
+                if (dest) {
+                    // A video may fade in from black. Decode until RGB565
+                    // contains different pixels, with a bounded frame budget.
+                    bool nonuniform = false;
+                    uint32_t decoded_frames = 0;
+                    while (decoded_frames < 45 && !nonuniform) {
+                        call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+                        ++decoded_frames;
+                        call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+                        CHECK_EQ(rd32(rec + 0x14), decoded_frames + 1);
+                        memset(g_mem + dest, 0xa5, bytes);
+                        call_shim(tramp("binkw32.dll", "_BinkCopyToBuffer@28"),
+                                  {rec, dest, pitch, height, 0, 0, 10});
+                        for (uint32_t i = 2; i < bytes; i += 2)
+                            nonuniform |= rd16(dest + i) != rd16(dest);
+                    }
+                    printf("bink container test: %s after decoding %u frames (limit 45)\n",
+                           nonuniform ? "non-uniform RGB565" : "still uniform RGB565",
+                           decoded_frames);
+                    CHECK(nonuniform);
+                    uint32_t error = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+                    CHECK(error && gm_str(error).empty());
+                    heap_free(dest);
+                }
+            }
+            call_shim(tramp("binkw32.dll", "_BinkClose@4"), {rec});
+            CHECK(!heap_owns(rec));
+        }
+        CHECK_EQ(call_shim(seek, {handle, 0, 0, 1}), (uint32_t)offset);
+        CHECK_EQ(call_shim(tramp("KERNEL32.dll", "CloseHandle"), {handle}), 1u);
+    }
+    heap_free(name);
+    win32_init(previous_dir);
+}
+
+static void test_bink_handle_flag_errors() {
+    cpu_reset();
+    uint32_t open = tramp("binkw32.dll", "_BinkOpen@8");
+    uint32_t get_error = tramp("binkw32.dll", "_BinkGetError@0");
+    CHECK_EQ(call_shim(open, {0x12345678, 0x00800000}), 0u);
+    uint32_t error = call_shim(get_error, {});
+    CHECK(error && !gm_str(error).empty());
+    gm_put_str(sc(0), "intro.bik", 0x100);
+    CHECK_EQ(call_shim(open, {sc(0), 0x04000000}), 0u);
+    error = call_shim(get_error, {});
+    CHECK(error && gm_str(error) == "memory-resident video is not supported");
+}
+
 static void test_bink_play() {
 #ifdef RECOMP_HAVE_FFMPEG
     const std::string path =
@@ -9862,6 +9967,8 @@ int main() {
         {"Bink/Smacker stubs", test_bink_smack_stubs},
         {"video frame conversion", test_video_frame_convert},
         {"Bink play", test_bink_play},
+        {"Bink open from handle", test_bink_open_from_handle},
+        {"Bink handle flag errors", test_bink_handle_flag_errors},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},

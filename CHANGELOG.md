@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Bink: open a video from a guest file handle at its current offset using
+  FFmpeg custom I/O over the remainder of the host file. The player reopens
+  the file read-only and owns its I/O context, leaving the guest's position
+  and descriptor intact. Reject memory-resident video with a readable error;
+  log and ignore other open flags. Cover decoding from an optional private
+  container selected by `RECOMP_TEST_BINK_CONTAINER=<host path>,<offset>`.
 - DirectDraw: releasing the object that set the display mode, or
   RestoreDisplayMode, puts the desktop back, so GetSystemMetrics and
   GetDeviceCaps report the desktop fallback until the next SetDisplayMode.

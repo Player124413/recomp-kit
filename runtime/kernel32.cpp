@@ -248,6 +248,22 @@ const std::string &win32_game_dir() {
     return g_game_dir;
 }
 
+// Called with the guest baton held, like the file shims. Reopening this path
+// gives a host service an independent descriptor without exposing the guest's.
+bool win32_file_handle_position(uint32_t handle, std::string *host_path, int64_t *offset) {
+    HObj *o = handle_get(handle, H_FILE);
+    if (!o || o->fd < 0)
+        return false;
+    int64_t pos = os_fd_seek(o->fd, 0, OS_SEEK_CUR);
+    if (pos < 0)
+        return false;
+    if (host_path)
+        *host_path = o->path;
+    if (offset)
+        *offset = pos;
+    return true;
+}
+
 // The overlay seam. Null in an unmodded build, which is every build until the
 // mod foundation installs one.
 static int (*g_file_resolve)(const char *, int, char *, size_t) = nullptr;
