@@ -24,8 +24,12 @@ function(pop_ios_bundle target)
       BUILD_WITH_INSTALL_RPATH ON
       INSTALL_RPATH "@executable_path/Frameworks"
       XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/Frameworks"
-      XCODE_EMBED_FRAMEWORKS "ffmpeg::avformat;ffmpeg::avcodec;ffmpeg::avutil"
+      # Paths, not the imported target names: the Xcode generator resolves
+      # embedded items by file, and the dylibs exist once the ffmpeg project
+      # has built (the app depends on it through pop_link_video).
+      XCODE_EMBED_FRAMEWORKS "${RECOMP_FFMPEG_LIBRARIES}"
       XCODE_EMBED_FRAMEWORKS_CODE_SIGN_ON_COPY YES)
+    add_dependencies(${target} ffmpeg)
     set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
       ${POP_ROOT}/third_party/ffmpeg/NOTICE.md)
     add_custom_command(TARGET ${target} POST_BUILD
