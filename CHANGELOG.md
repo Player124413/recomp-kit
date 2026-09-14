@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bink: close any movie left open at guest exit before host audio teardown.
+  Release decoder state, audio channels and guest records in the shared
+  smoke, headless and SDL host shutdown path, preventing a process-exit abort.
 - Bink: start and refill audio from DoFrame, NextFrame and Wait, so movies
   have sound when the game never calls the optional BinkService helper.
   All four entry points share the same audio routine and paused guard.

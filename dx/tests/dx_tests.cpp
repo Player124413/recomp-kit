@@ -6197,6 +6197,52 @@ static void test_bink_audio_without_service() {
     });
 }
 
+static void test_bink_shutdown_with_open_player() {
+    with_bink_container([](uint32_t rec, uint32_t handle) {
+        g_plays.clear();
+        g_queues.clear();
+        g_stops.clear();
+        g_queue_enabled = true;
+        g_queued_bytes = 0;
+        g_test_audio_pos = 0;
+        g_ch_streaming = false;
+        uint32_t open = tramp("binkw32.dll", "_BinkOpen@8");
+        uint32_t decode = tramp("binkw32.dll", "_BinkDoFrame@4");
+        uint32_t close = tramp("binkw32.dll", "_BinkClose@4");
+        CHECK_EQ(call_shim(decode, {rec}), 0u);
+        CHECK_EQ(g_plays.size(), 1u);
+        CHECK(g_ch_streaming);
+        CHECK(g_queued_bytes > 0);
+
+        // Leave the player open, as a guest ExitProcess can do mid-movie.
+        bink_shutdown();
+        CHECK(!heap_owns(rec));
+        CHECK_EQ(g_stops.size(), 1u);
+        if (!g_plays.empty() && !g_stops.empty())
+            CHECK_EQ(g_stops[0], g_plays[0].channel);
+        CHECK_EQ(g_queued_bytes, 0u);
+        CHECK_EQ(call_shim(decode, {rec}), 0u);
+        CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkGetRects@8"), {rec, 0}), 0u);
+        CHECK_EQ(call_shim(close, {rec}), 0u);
+        CHECK_EQ(g_plays.size(), 1u);
+        CHECK_EQ(g_stops.size(), 1u);
+
+        // The handle is still at the stream start, and the channel is reusable.
+        uint32_t reopened = call_shim(open, {handle, 0x00800000});
+        CHECK(reopened != 0);
+        if (reopened) {
+            CHECK_EQ(call_shim(decode, {reopened}), 0u);
+            CHECK_EQ(g_plays.size(), 2u);
+            CHECK(g_ch_streaming);
+            CHECK(g_queued_bytes > 0);
+            if (g_plays.size() == 2)
+                CHECK_EQ(g_plays[1].channel, g_plays[0].channel);
+            CHECK_EQ(call_shim(close, {reopened}), 0u);
+        }
+        g_queue_enabled = false;
+    });
+}
+
 static void test_bink_rects_and_pause() {
     cpu_reset();
     CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkOpenDirectSound@4"), {0}), 1u);
@@ -10109,6 +10155,7 @@ int main() {
         {"Bink handle flag errors", test_bink_handle_flag_errors},
         {"Bink rects and pause", test_bink_rects_and_pause},
         {"Bink audio without service", test_bink_audio_without_service},
+        {"Bink shutdown with open player", test_bink_shutdown_with_open_player},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},

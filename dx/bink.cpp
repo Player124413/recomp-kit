@@ -721,6 +721,19 @@ const ImportShim g_video_shims[] = {
 
 } // namespace
 
+void bink_shutdown() {
+#ifdef RECOMP_HAVE_FFMPEG
+    // Unlike reset, shutdown runs before the guest heap is discarded. Destroy
+    // players here so their audio stops before the host's static state dies.
+    while (!g_players.empty()) {
+        auto it = g_players.begin();
+        uint32_t rec = it->first;
+        g_players.erase(it);
+        heap_free(rec);
+    }
+#endif
+}
+
 void bink_reset() {
 #ifdef RECOMP_HAVE_FFMPEG
     g_players.clear();

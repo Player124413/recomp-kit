@@ -549,6 +549,10 @@ void boot_run() {
     sched_drive_until_stopped(2.0);
     bool torn_down = mods_shutdown_complete();
     g_mods_torn_down = torn_down;
+    // Every host returns from here before ending audio or other host state.
+    // Only close players once no guest worker can still access them.
+    if (sched_guest_threads_stopped())
+        bink_shutdown();
     // The drive left this thread registered and holding the baton on purpose:
     // the exits above are mod code and need it. This is where it goes back.
     sched_drive_release();
