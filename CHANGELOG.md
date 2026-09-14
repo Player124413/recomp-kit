@@ -2,6 +2,117 @@
 
 ## Unreleased
 
+- Merge integration: profile tests select the first generated entry and are
+  omitted when none exists; ANSI and wide disk-space queries share the same
+  virtual disk geometry.
+
+- Build: default FFmpeg ON on Linux, import its major-version shared objects
+  and package them beside the executable with an `$ORIGIN` rpath and notice.
+  On Windows, detect MSYS2 bash/make and require a MinGW-compatible compiler;
+  keep video OFF with a status message when prerequisites are missing or
+  the compiler uses the MSVC ABI. Package enabled builds' DLLs and notice;
+  remove staged video files on OFF without touching player files. Windows
+  CI stays video OFF and Linux needs no new packages. macOS configure and
+  fake-file staging checks pass; Linux/Windows builds and playback are unverified.
+
+- Build: enable shared FFmpeg by default on iOS and Android. Cross-build
+  arm64 iOS 17 dylibs with relative install names and use Xcode's Embed
+  Frameworks phase to copy and sign them with the app's identity/team.
+  Cross-build Android API-29 libraries and package the three unversioned
+  `.so` files beside `libmain.so`; remove staged copies when video is OFF.
+  Include the FFmpeg notice in mobile bundles and document all configure
+  flags. Android stub/real APKs and the standalone iOS FFmpeg build pass;
+  embedded iOS signatures and mobile device playback remain unverified.
+
+- Bink: decode video through FFmpeg into the DirectDraw surface supplied by
+  the game, converting YUV420P to RGB565, RGB555 or XRGB8888. Stream decoded
+  audio through the shared mixer, pace frames with host time and return an
+  empty error string on success. Pending host close ends the video loop;
+  builds without FFmpeg keep the finished-video stub and Smacker stays refused.
+
+- Build: fetch SHA-256-pinned FFmpeg 7.1.1 for macOS with only Bink/Smacker
+  decoders and demuxers and file input. `RECOMP_VIDEO` defaults to ON on
+  macOS and OFF elsewhere; OFF retains the build without FFmpeg. Link
+  avformat, avcodec and avutil dynamically, bundle the three replaceable
+  dylibs with relative install names and ad-hoc signatures, and ship the
+  LGPL notice, source identity and build flags.
+
+- Touch: taps press and release at the finger's position, including near a
+  window edge, without a cursor nudge after release. Held fingers and drags
+  retain edge snapping so holding an edge still scrolls; lifting an edge
+  hold moves the cursor back inside to stop scrolling.
+
+- Load saved host settings before symbol-table validation, so window mode and
+  other profile settings survive relaunch even without a usable symbol table.
+  Hide renderer and native Options rows from the fallback settings page until
+  symbols are available; retain window mode, frame limit and performance overlay.
+
+- SDL: confine a captured pointer in a plain window as well as borderless
+  and fullscreen modes. Click inside to capture, hold Escape to release,
+  and drag into the window's resize margin to release capture for resizing.
+
+- Android reads game data from SDL's external files directory under `game/`,
+  reads `switches.txt` beside it, and defaults to a writable `profile/` there.
+  Missing data logs the expected executable and `adb push` command, then exits.
+  Enable fullscreen touch/keypad behavior and background audio/presenter
+  suspension; end the process after SDL teardown when the game exits.
+  `--push-game` stages the configured install using `[bundle].exclude`, then
+  pushes before launch, and fails clearly without a ready Android device.
+
+- Build `--target android` through the NDK preset, then package its
+  `libmain.so` with an SDLActivity subclass and the matching FetchContent
+  Java sources. Add a Gradle 9.7.1 wrapper and AGP 9.1.1 templates for
+  arm64-v8a, API 29 minimum, compile/target SDK 36 and required Vulkan 1.1.
+  Install and launch on a ready adb device, stream logcat with `--console`,
+  and skip device actions when none is attached. Stub APK packaging is
+  verified on macOS; Android device execution remains unverified.
+
+- Add `android` and `android-stub` NDK presets for arm64-v8a, API 29 and
+  static libc++. Build the SDL host as `libmain.so` with static SDL3 and
+  NDK Vulkan/log libraries, omit desktop tests and add an Android stub CI
+  build. Read arm64 Linux/Android page-fault writes from the kernel's ESR
+  signal-frame record. APK packaging and device execution are not implemented here.
+
+- Package successful desktop app builds under `build/package`: a Linux
+  folder and architecture-named tarball, or a Windows folder. Include the
+  kit notices, display-mode baseline, available translation symbol index
+  and launch instructions using `RECOMP_EXE`; exclude original game files.
+- Build: allow the app, smoke and headless hosts on Linux and Windows,
+  including translation with `--regenerate`. Only the iOS packager requires
+  macOS, including stub builds.
+- Miles streams decode MP3 through the decoder shared with DirectShow.
+  Streams refill from the guest frame pump, support volume and loop counts,
+  and remain playing until queued PCM drains.
+- USER32: queue `WM_MOVE` and `WM_SIZE` after window creation and the
+  corresponding `SetWindowPos` operations, plus `WM_SIZE` on the first show.
+  Screen and fullscreen metrics follow the accepted DirectDraw display mode,
+  retaining the caption-height deduction and 1024x768 fallback without a mode.
+  Games can now size their fullscreen blit rectangles from window messages.
+- DirectDraw: writes through a writable pointer retained after `Unlock` reach
+  the renderer before `Blt`, `BltFast` and primary presentation. Whole-rectangle
+  hashes detect the writes and share the written-lock CPU recording path;
+  surfaces never locked writable keep their existing path without hashing.
+- Bink: `BinkOpen` returns a 256-byte guest heap record with 640x480
+  dimensions and zero frame counters, so a game skips an unavailable
+  cinematic instead of treating an open failure as fatal. `BinkClose`
+  frees the record; decoding and waiting remain no-ops, and `SmackOpen`
+  still returns 0. No video decoder is included.
+- GDI: `GetDeviceCaps` reports the accepted DirectDraw mode and depth-dependent
+  palette capabilities, falling back to 640x480x8 before a mode is set.
+  `GetTextExtentPointA` shares the fixed 7-pixel width and 16-pixel height of
+  `GetTextMetricsA`; `SetBkColor` stores each DC's background color and returns
+  its previous value, initially white. Text output remains undrawn.
+- Build: define `profile_tests` only when the translation's `funcs.h` defines
+  its target function `FN_00500040`, so other translations can build all
+  native test binaries without that game-specific suite.
+- Runtime: optional `[game] heap_base` sets the heap arena start through the
+  generated config and build definitions, so images ending above 16 MB can
+  load. The default remains `0x01000000`; the value must be page aligned,
+  above `0x00400000` and below `0x0e000000`. A rejected image now reports
+  both its end and the heap start, with the setting to raise.
+- Build: `tools/build.py --regenerate --allow-table-gaps "<reason>"` passes
+  the waiver and its reason to the translator. Omitting the flag keeps
+  jump-table gap checks unchanged.
 - Touch: a tap's synthesized click now stays pressed until the game has
   presented two frames after the press (`TouchMapper::frames_presented`, fed
   by the SDL host from the present count), as well as for the 90 ms it

@@ -9,11 +9,13 @@ portable tests and mod examples. Open an issue before a large architecture chang
 - Python 3.9 or later; create `.venv` and install `requirements-dev.txt`.
 - Native builds on macOS: Apple Silicon, Xcode Command Line Tools and Git. CMake
   and Ninja come from `requirements-dev.txt`.
-- Portable-layer builds on Linux: clang and lld (`apt-get install clang lld`).
-- Portable-layer builds on Windows: LLVM's clang, a Visual Studio developer
-  command prompt for the Windows SDK, and `tools/build.py --target fixture`
-  or `tools/test.py --compile-only`. Linux and Windows build and test the
-  runtime, adapters and mod foundation only; no game host exists for them yet.
+- Native builds on Linux: clang, lld and GNU make
+  (`apt-get install clang lld build-essential`), plus SDL's platform headers
+  listed in `.github/workflows/checks.yml`. FFmpeg builds from source; no
+  FFmpeg development package is needed.
+- Native builds on Windows: LLVM's clang and a Visual Studio developer
+  command prompt for the Windows SDK. On Windows, use `.venv/Scripts/python.exe`
+  in place of `.venv/bin/python` in the commands below.
 - First translation: [Ghidra 12.1.3](https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.1.3_build).
 - A Java runtime compatible with that Ghidra distribution. The documented setup
   was tested with OpenJDK 26.0.1; set `JAVA_HOME` to the JDK directory.
@@ -21,6 +23,10 @@ portable tests and mod examples. Open an issue before a large architecture chang
   `game.toml` names the executable and its SHA-256; the loader refuses other
   binaries because translated addresses and data layouts are tied to that
   image. Do not bypass the hash to add support for another version.
+
+`tools/build.py --target app` builds the desktop host on macOS, Linux and
+Windows; `--regenerate` runs the Python translator on each. Only the iOS
+packager (`--target ios`, including `--stub`) requires macOS.
 
 ## Prepare a game installation
 
@@ -61,6 +67,66 @@ translation or its C helpers, regenerate explicitly:
 ```sh
 .venv/bin/python tools/build.py --regenerate --jobs 8
 ```
+
+On macOS, the first native build also downloads and builds FFmpeg 7.1.1
+when CMake's `RECOMP_VIDEO` option is `ON` (the default). It uses the Xcode
+Command Line Tools' compiler and make plus the existing Python/CMake/Ninja
+environment; no Homebrew FFmpeg or assembler is needed. Intel macOS builds
+pass `--disable-x86asm`. Source is pinned by SHA-256, automatic external
+library detection is disabled, and only Bink/Smacker decoders and demuxers
+and the file protocol are enabled. The exact command and LGPL license are
+in [third_party/ffmpeg/NOTICE.md](third_party/ffmpeg/NOTICE.md).
+
+To disable video for an already configured game tree, run from the kit
+with the venv on `PATH` (use the same build tree as `tools/build.py`):
+
+```sh
+cmake --preset macos -B /abs/path/to/<game>/build/cmake/macos -DRECOMP_VIDEO=OFF
+.venv/bin/python tools/build.py --game-dir /abs/path/to/<game> --jobs 8
+```
+
+Use `-DRECOMP_VIDEO=ON` in that configure command to restore it. A fresh
+game-free configure is
+`cmake --preset macos-stub -DPython3_EXECUTABLE=/abs/path/to/.venv/bin/python`;
+the explicit interpreter avoids macOS finding Xcode's Python without the
+required Python packages. Subsequent runs can use `cmake --preset macos-stub`. Add
+`-DRECOMP_VIDEO=OFF` to exercise the path without FFmpeg. iOS, Android and
+Linux also default to ON. Existing caches keep an explicit OFF until
+reconfigured with `-DRECOMP_VIDEO=ON`.
+
+On Linux use the same cache workflow with `--preset linux` and
+`-B /abs/path/to/<game>/build/cmake/linux`. FFmpeg configures natively with
+`--cc=${CMAKE_C_COMPILER}` and `--enable-pic`. Desktop staging copies the
+three major-version `.so` files beside the executable and includes
+`resources/ffmpeg-NOTICE.md`; CMake adds the executable's `$ORIGIN` rpath.
+The Linux tarball contains these files too. The executable retains
+build-tree rpaths for local runs.
+Verify the package on Linux with `readelf -d` and `ldd` after moving it away
+from the build tree, then launch it and check cinematic playback.
+
+On Windows, FFmpeg's configure requires MSYS2 `bash` and GNU `make` on
+`PATH`. CMake uses `find_program` for both; missing either forces video OFF
+with a status message, including when a cache previously enabled it. With
+both tools, a MinGW-compatible compiler defaults video ON and configure uses
+`--target-os=mingw32` and CMake's C compiler. Select a matching MinGW clang
+toolchain for the entire kit. The Visual Studio/MSVC-ABI compiler path stays
+video OFF: `--toolchain=msvc` and clang-cl support are out of scope. An
+explicit `-DRECOMP_VIDEO=OFF` always disables video; Windows CI sets it.
+The packager copies `avformat-61.dll`, `avcodec-61.dll`, `avutil-59.dll` and
+the notice; MinGW import libraries stay in the build tree. Repackaging with
+video OFF removes only the staged FFmpeg files and preserves player files.
+
+Linux and Windows video builds, DLL/ELF loading and playback have not been
+run here. Verification is limited to reviewing their CMake branches,
+macOS stub configurations with video ON/OFF and fake-file packaging tests.
+
+For a video-enabled macOS app, check the executable and all three dylibs
+with `otool -L`: only Apple system paths and the bundled `@rpath/libav*`
+libraries may appear. `otool -l` must show the executable rpath
+`@executable_path/../Frameworks`. Run `codesign -dv` on each dylib and
+`codesign --verify --deep --strict /path/to/<AppName>.app`, then launch
+using an isolated `RECOMP_PROFILE_DIR`. Bundling signs the libraries before
+the app and includes the FFmpeg notice in `Contents/Resources`.
 
 `--target smoke` builds the offscreen scripted host, `--target headless` the
 minimal boot host, `--target fixture` the parity fixture and `--target plugins`

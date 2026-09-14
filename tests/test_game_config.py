@@ -20,6 +20,19 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_heap_base_defaults_to_the_kit_layout(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        self.assertEqual(cfg["game"]["heap_base"], 0x01000000)
+        self.assertIn("#define RECOMP_HEAP_BASE 0x01000000u", gen_game_config.render_header(cfg))
+        self.assertIn("set(RECOMP_HEAP_BASE 0x01000000u)", gen_game_config.render_cmake(cfg))
+
+    def test_heap_base_is_validated(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        for bad in (0x01000010, 0x0e000000, 0x00400000):
+            with self.assertRaises(ValueError):
+                game_config.validate_heap_base(bad)
+        self.assertEqual(game_config.validate_heap_base(0x01400000), 0x01400000)
+
     def test_the_stub_game_loads_with_every_required_key(self):
         cfg = game_config.load(ROOT / "games/stub")
         self.assertEqual(cfg["game"]["id"], "stub")

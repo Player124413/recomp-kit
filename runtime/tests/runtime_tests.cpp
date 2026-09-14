@@ -1294,6 +1294,20 @@ static void test_misc_shims(X86 *c) {
     uint32_t out = scratch_block(128);
     call_import(c, "USER32.dll", "wvsprintfA", {out, fmt, va});
     check(gm_str(out) == "blue has 12 units (002a)", "wvsprintfA -> \"%s\"", gm_str(out).c_str());
+
+    uint32_t spc = scratch_block(4), bps = scratch_block(4), fr = scratch_block(4),
+             tot = scratch_block(4);
+    uint32_t root = put_str("C:\\");
+    check(call_import(c, "KERNEL32.dll", "GetDiskFreeSpaceA", {root, spc, bps, fr, tot}) == 1,
+          "GetDiskFreeSpaceA succeeds");
+    check(rd32(spc) == 8 && rd32(bps) == 512 && rd32(fr) == 0x00100000 && rd32(tot) == 0x00200000,
+          "GetDiskFreeSpaceA reports 4 GB free of 8 GB");
+    uint32_t sysdir = scratch_block(64);
+    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 64}) == 17 &&
+              gm_str(sysdir) == "C:\\WINDOWS\\SYSTEM",
+          "GetSystemDirectoryA");
+    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 4}) == 18,
+          "GetSystemDirectoryA reports the size needed when the buffer is short");
 }
 
 // What a C++ throw looks like from the runtime: the MSVC exception record
@@ -1401,6 +1415,34 @@ static void test_gdi_and_com(X86 *c) {
     uint32_t bits = scratch_block(4);
     wr32(bits, 0);
     uint32_t hdc = call_import(c, "USER32.dll", "GetDC", {0});
+    // Read the same mode hook as GDI. Runtime-only builds use its weak default.
+    uint32_t mw = 640, mh = 480, mbpp = 8;
+    ddraw_display_mode(&mw, &mh, &mbpp);
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 8}) == mw &&
+              call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 10}) == mh,
+          "GetDeviceCaps HORZRES/VERTRES are the mode");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 12}) == mbpp,
+          "BITSPIXEL is the mode's depth");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 14}) == 1, "PLANES");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 38}) == (mbpp == 8 ? 0x100u : 0u),
+          "RASTERCAPS has RC_PALETTE only at 8 bpp");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 104}) == (mbpp == 8 ? 256u : 0u),
+          "SIZEPALETTE is 256 only at 8 bpp");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 24}) ==
+              (mbpp == 8 ? 256u : 0xffffffffu),
+          "NUMCOLORS is 256 at 8 bpp, otherwise -1");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 0x2000}) == 0,
+          "an unknown index is 0");
+    uint32_t sz = scratch_block(8), text = put_str("ABCDEFG");
+    uint32_t tm = scratch_block(56);
+    call_import(c, "GDI32.dll", "GetTextMetricsA", {hdc, tm});
+    check(call_import(c, "GDI32.dll", "GetTextExtentPointA", {hdc, text, 7, sz}) == 1 &&
+              rd32(sz) == 7 * rd32(tm + 20) && rd32(sz + 4) == rd32(tm + 0),
+          "GetTextExtentPointA agrees with GetTextMetricsA (tmAveCharWidth, tmHeight)");
+    check(call_import(c, "GDI32.dll", "SetBkColor", {hdc, 0x00ff0000}) == 0x00ffffff,
+          "SetBkColor returns white first");
+    check(call_import(c, "GDI32.dll", "SetBkColor", {hdc, 0}) == 0x00ff0000,
+          "then the previous colour");
     uint32_t hbm = call_import(c, "GDI32.dll", "CreateDIBSection", {hdc, bmi, 0, bits, 0, 0});
     check(hbm != 0 && rd32(bits) != 0 && heap_owns(rd32(bits)),
           "CreateDIBSection -> %08x with bits at %08x on the guest heap", hbm, rd32(bits));
@@ -1611,6 +1653,53 @@ static void test_windows(X86 *c) {
         call_import(c, "USER32.dll", "CreateWindowExA",
                     {0, clsname, title, 0x80000000u, 0, 0, 640, 480, 0, 0, RECOMP_IMAGE_BASE, 0});
     check(hwnd != 0, "CreateWindowExA -> %08x", hwnd);
+
+    // Windows sends a new window its position and size; a game sizes its blit
+    // rectangle from them and never asks again.
+    uint32_t msgbuf = scratch_block(28);
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1 /* PM_REMOVE */}) ==
+                  1 &&
+              rd32(msgbuf) == hwnd && rd32(msgbuf + 4) == 0x0003 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == 0u,
+          "WM_MOVE follows CreateWindowExA (lParam %08x)", rd32(msgbuf + 12));
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf) == hwnd && rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((480u << 16) | 640u),
+          "WM_SIZE follows it with the client size (lParam %08x)", rd32(msgbuf + 12));
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 10, 20, 800, 600, 0});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf + 4) == 0x0003 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((20u << 16) | 10u),
+          "SetWindowPos posts WM_MOVE");
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((600u << 16) | 800u),
+          "and WM_SIZE");
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 0, 0, 0, 0, 0x0003 /* NOSIZE|NOMOVE */});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "a SetWindowPos that neither moves nor sizes posts nothing");
+
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "ShowWindow hiding a new window posts no WM_SIZE");
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 1 &&
+              rd32(msgbuf + 4) == 0x0005 && rd32(msgbuf + 8) == 0 &&
+              rd32(msgbuf + 12) == ((600u << 16) | 800u),
+          "ShowWindow posts WM_SIZE on the first show");
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "ShowWindow on a visible window posts no second WM_SIZE");
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 1});
+    check(call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0, 0, 1}) == 0,
+          "ShowWindow after hiding posts no second WM_SIZE");
+
+    // Restore the geometry and visibility used by the existing window checks.
+    call_import(c, "USER32.dll", "ShowWindow", {hwnd, 0});
+    call_import(c, "USER32.dll", "SetWindowPos", {hwnd, 0, 0, 0, 640, 480, 0});
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msgbuf, hwnd, 0x0003, 0x0005, 1})) {
+    }
     check(host_main_window() == hwnd, "host_main_window sees it");
     check(host_window_proc(hwnd) == wndproc, "the class WNDPROC was recorded");
 
@@ -1630,6 +1719,29 @@ static void test_windows(X86 *c) {
           "GetActiveWindow is the main window");
     check(call_import(c, "USER32.dll", "SetFocus", {hwnd}) == hwnd,
           "SetFocus returns the window that had focus");
+    check(call_import(c, "USER32.dll", "GetMenu", {hwnd}) == 0, "GetMenu: no menu");
+    check(call_import(c, "USER32.dll", "IsIconic", {hwnd}) == 0, "IsIconic: never minimised");
+    check(call_import(c, "USER32.dll", "SetForegroundWindow", {hwnd}) == 1, "SetForegroundWindow");
+    check(call_import(c, "USER32.dll", "SetActiveWindow", {hwnd}) == hwnd,
+          "SetActiveWindow returns the previous");
+    check(call_import(c, "USER32.dll", "OpenIcon", {hwnd}) == 1, "OpenIcon");
+    check(call_import(c, "USER32.dll", "FindWindowA", {0, 0}) == 0,
+          "FindWindowA finds no other instance");
+    check(call_import(c, "USER32.dll", "WaitMessage", {}) == 1, "WaitMessage returns");
+    uint32_t work = scratch_block(16);
+    check(call_import(c, "USER32.dll", "SystemParametersInfoA", {48, 0, work, 0}) == 1 &&
+              rd32(work + 8) == 640 && rd32(work + 12) == 480,
+          "SPI_GETWORKAREA is the window's client area");
+    check(call_import(c, "USER32.dll", "SystemParametersInfoA", {0x2000, 0, 0, 0}) == 0,
+          "unknown SPI actions fail");
+    // The input gate is not linked here; use the same user32 cursor bridge
+    // that host input delivery uses before posting WM_MOUSEMOVE.
+    host_set_cursor_pos(200, 100);
+    check(call_import(c, "USER32.dll", "GetMessagePos", {}) == ((100u << 16) | 200u),
+          "GetMessagePos packs y:x");
+    check(call_import(c, "USER32.dll", "GetMessageTime", {}) <=
+              call_import(c, "KERNEL32.dll", "GetTickCount", {}),
+          "GetMessageTime is on the tick clock");
 
     check(call_import(c, "USER32.dll", "SetWindowLongA", {hwnd, 0, 0x1111}) == 0,
           "SetWindowLongA on the first extra dword");
@@ -2466,6 +2578,9 @@ static void test_callbacks(X86 *c) {
 
     g_callback_hits = 0;
     uint32_t msg = scratch_block(28);
+    // Creation geometry is queued separately from these synchronous callbacks.
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, hwnd, 0x0003, 0x0005, 1})) {
+    }
     wr32(msg + 0, hwnd);
     wr32(msg + 4, 0x0113); // WM_TIMER
     wr32(msg + 8, 7);
@@ -2596,6 +2711,8 @@ static void test_callbacks(X86 *c) {
     g_callback_hits = 0;
     check(call_import(c, "USER32.dll", "UpdateWindow", {pwnd}) == 1 && g_callback_hits == 1,
           "a WNDPROC that ignores WM_PAINT leaves the region dirty and is asked again");
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, pwnd, 0x0003, 0x0005, 1})) {
+    }
     call_import(c, "USER32.dll", "DestroyWindow", {pwnd});
 
     // A procedure that does call BeginPaint validates it, so the next
@@ -2621,6 +2738,8 @@ static void test_callbacks(X86 *c) {
     call_import(c, "USER32.dll", "InvalidateRect", {vwnd, 0, 0});
     check(call_import(c, "USER32.dll", "UpdateWindow", {vwnd}) == 1 && g_painted == 2,
           "InvalidateRect makes the next UpdateWindow paint again");
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, vwnd, 0x0003, 0x0005, 1})) {
+    }
     call_import(c, "USER32.dll", "DestroyWindow", {vwnd});
     pwnd = vwnd;
 
@@ -2646,6 +2765,8 @@ static void test_callbacks(X86 *c) {
     check(dhwnd != 0, "CreateWindowExA succeeds when WM_NCCREATE goes to DefWindowProc");
     check(call_import(c, "USER32.dll", "DefWindowProcA", {dhwnd, 0x0081, 0, 0}) == 1,
           "DefWindowProcA answers WM_NCCREATE with TRUE");
+    while (call_import(c, "USER32.dll", "PeekMessageA", {msg, dhwnd, 0x0003, 0x0005, 1})) {
+    }
     call_import(c, "USER32.dll", "DestroyWindow", {dhwnd});
 
     // WM_QUIT reaches the guest whatever the filter says.
@@ -3625,6 +3746,10 @@ static void test_kernel32_wide() {
                   1 &&
               rd32(fd) && rd32(fd + 4) && rd32(fd + 8) <= rd32(fd + 12),
           "GetDiskFreeSpaceW geometry");
+    check(call_import(&c, "KERNEL32.dll", "GetDiskFreeSpaceA",
+                      {0, fd + 16, fd + 20, fd + 24, fd + 28}) == 1 &&
+              memcmp(g_mem + fd, g_mem + fd + 16, 16) == 0,
+          "GetDiskFreeSpaceA and W report the same virtual disk geometry");
     gm_put_wstr(s, "C:", 8);
     check(call_import(&c, "KERNEL32.dll", "QueryDosDeviceW", {s, fd, 128}) > 0 &&
               !gm_wstr(fd).empty(),

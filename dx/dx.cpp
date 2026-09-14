@@ -576,6 +576,8 @@ void dx_register_shims() {
     dsound_register();
     dshow_register();
     qmixer_register();
+    mss32_register();
+    bink_register();
     weanetr_register();
     // The audio shims need a tick on the main guest thread: the game drives
     // neither QMixer's stream refills nor DirectSound's notification
@@ -587,6 +589,7 @@ void dx_register_shims() {
     // the audio pump's guest callbacks, the order the direct call used to have.
     host_set_frame_pump(ddraw_frame_pump);
     host_set_frame_pump(qmixer_frame_pump);
+    host_set_frame_pump(mss32_frame_pump);
     host_set_frame_pump(dshow_frame_pump);
 }
 
@@ -600,6 +603,7 @@ void dx_reset() {
     dsound_reset();
     dshow_reset();
     dinput_reset();
+    bink_reset();
     audio_channels().clear();
     com_reset();
 }

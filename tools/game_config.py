@@ -13,6 +13,16 @@ except ModuleNotFoundError:  # Python < 3.11
 REQUIRED_GAME_KEYS = ("id", "name", "app_name", "bundle_id", "executable", "sha256",
                       "image_base", "entry_point", "guest_root", "developer_exe")
 
+HEAP_BASE_DEFAULT = 0x01000000
+HEAP_END = 0x0e000000        # runtime/x86.h GUEST_HEAP_END; the mods' heap starts there
+
+
+def validate_heap_base(value):
+    """The heap arena start: page aligned, above the image base, below the arena end."""
+    if value % 0x1000 or not (0x00400000 < value < HEAP_END):
+        raise ValueError("[game] heap_base %#x must be page aligned and between 0x00400000 and %#x" % (value, HEAP_END))
+    return value
+
 
 def load(game_dir):
     """Return the parsed config with `globals` merged in and `dir`/`source` recorded."""
@@ -24,6 +34,7 @@ def load(game_dir):
     missing = [key for key in REQUIRED_GAME_KEYS if key not in game]
     if missing:
         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
+    game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
     translate = cfg.setdefault("translate", {})
     cfg.setdefault("hooks", {})
     cfg.setdefault("bundle", {}).setdefault("exclude", [])

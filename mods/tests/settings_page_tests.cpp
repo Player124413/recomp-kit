@@ -221,7 +221,9 @@ MOD_TEST_SUITE(page_toggles_on_its_reserved_key) {
     MOD_CHECK(mods_input_key(0x44, 0x79, true)); // F10, consumed
     mods_input_key(0x44, 0x79, false);
     MOD_CHECK(mods_page_visible());
-    MOD_CHECK_EQ(mods_page_line_count(), 15u); // display and keypad rows plus every mod's settings
+    // Three mod settings, three keypad rows and either all nine display
+    // rows or only the three host controls when no symbols are available.
+    MOD_CHECK_EQ(mods_page_line_count(), mods_symbols_count() ? 15u : 9u);
     MOD_CHECK(mods_input_key(0x44, 0x79, true));
     mods_input_key(0x44, 0x79, false);
     MOD_CHECK(!mods_page_visible());

@@ -12,6 +12,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_OBJCXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(ANDROID)
+  # All static and object libraries feed the shared SDL application.
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 # Optimization is a per-target decision (cmake/Warnings.cmake). The
 # configuration only decides whether -O0 is forced.
@@ -29,7 +33,11 @@ set_property(CACHE POP_TRANSLATE PROPERTY STRINGS AUTO ON OFF STUB)
 set(POP_BUILD_ROOT ${POP_ROOT}/build CACHE PATH "Root of build outputs (build/recomp, build/ios, ...)")
 # A stub build (no game code) keeps its outputs apart from a real build so it
 # can never overwrite the archive or the bundle a player runs.
-if(IOS AND POP_TRANSLATE STREQUAL "STUB")
+if(ANDROID AND POP_TRANSLATE STREQUAL "STUB")
+  set(POP_BUILD_DIR ${POP_BUILD_ROOT}/android-stub)
+elseif(ANDROID)
+  set(POP_BUILD_DIR ${POP_BUILD_ROOT}/android)
+elseif(IOS AND POP_TRANSLATE STREQUAL "STUB")
   set(POP_BUILD_DIR ${POP_BUILD_ROOT}/ios-stub)
 elseif(POP_TRANSLATE STREQUAL "STUB")
   set(POP_BUILD_DIR ${POP_BUILD_ROOT}/stub)
@@ -76,6 +84,7 @@ if(NOT RECOMP_APP_NAME MATCHES "^[A-Za-z0-9_-]+$")
 endif()
 include_directories(${CMAKE_BINARY_DIR}/generated)
 add_compile_definitions(GUEST_IMAGE_BASE=${RECOMP_IMAGE_BASE})
+add_compile_definitions(GUEST_HEAP_BASE=${RECOMP_HEAP_BASE})
 
 if(IOS)
   set(RECOMP_IOS_TEAM "$ENV{RECOMP_IOS_TEAM}" CACHE STRING "Apple development team for automatic signing")
@@ -100,7 +109,7 @@ endif()
 configure_file(${POP_ROOT}/host/version.h.in ${CMAKE_BINARY_DIR}/generated/version.h @ONLY)
 
 
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
   enable_testing()
 endif()
 add_custom_target(check_binaries)
@@ -116,7 +125,7 @@ add_subdirectory(runtime)
 add_subdirectory(dx)
 add_subdirectory(mods)
 # The game's own mods (core plugins, examples, smoke probe), when it has any.
-if(NOT IOS AND EXISTS ${RECOMP_GAME_DIR}/mods/CMakeLists.txt)
+if(NOT IOS AND NOT ANDROID AND EXISTS ${RECOMP_GAME_DIR}/mods/CMakeLists.txt)
   add_subdirectory(${RECOMP_GAME_DIR}/mods ${CMAKE_BINARY_DIR}/game-mods)
 endif()
 add_subdirectory(host)

@@ -97,13 +97,9 @@ void k_GetLogicalDriveStringsW(X86 *c) {
     logical_drive_strings(c, true);
 }
 void k_GetDiskFreeSpaceW(X86 *c) {
-    // Stable virtual-disk geometry; the arena does not expose host disk details.
-    const uint32_t values[] = {8, 512, 262144, 524288};
-    for (int i = 0; i < 4; ++i)
-        if (uint32_t p = arg(c, i + 1))
-            wr32(p, values[i]);
-    set_eax(c, 1);
+    disk_free_space(c);
 }
+
 void k_QueryDosDeviceW(X86 *c) {
     uint32_t name = arg(c, 0), out = arg(c, 1), cap = arg(c, 2);
     std::string dev = gm_wstr(name);

@@ -29,6 +29,26 @@ jobs:
       - name: Check repository boundaries and documentation links
         run: .venv/bin/python tools/check_repo.py
 
+  android-stub:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install CMake and Ninja
+        run: |
+          python3 -m venv .ci
+          .ci/bin/python -m pip install cmake==4.1.2 ninja==1.13.0
+          echo "$PWD/.ci/bin" >> "$GITHUB_PATH"
+      - name: Install the pinned Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Configure the arm64 Android stub (API 29)
+        run: cmake --preset android-stub
+      - name: Link the shared SDL app against the stub translation
+        run: cmake --build --preset android-stub --target recomp_app
+      - name: Check the SDLActivity library name
+        run: test -s build/cmake/android-stub/host/libmain.so
+
   native-compile:
     # Game files and generated code are never available in CI. The *-stub
     # presets link every host against tools/gen_stub_translation.py's link-only
@@ -61,6 +81,7 @@ jobs:
           sudo apt-get update -qq
           # SDL3's documented Linux build dependencies (README-linux), so the
           # X11 and Wayland backends configure without a per-extension hunt.
+          # FFmpeg builds from source with build-essential; no FFmpeg packages.
           sudo apt-get install -y -qq clang lld build-essential pkg-config libasound2-dev \
             libpulse-dev libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev \
             libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
@@ -90,7 +111,11 @@ jobs:
             echo "$PWD/$BIN" >> "$GITHUB_PATH"
           fi
       - name: Configure
+        if: runner.os != 'Windows'
         run: cmake --preset ${{ matrix.preset }}
+      - name: Configure without video (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --preset ${{ matrix.preset }} -DRECOMP_VIDEO=OFF
       - name: Build every test binary this platform has
         if: matrix.preset != 'ios-stub'
         run: cmake --build --preset ${{ matrix.preset }} --target check_binaries

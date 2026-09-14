@@ -22,6 +22,7 @@ void mods_display_init();
 void mods_display_live_defaults();
 void mods_display_default_overlay(int mode);
 void mods_display_reset();
+bool mods_display_row_applies(DisplayRow row);
 int mods_display_value(DisplayRow row);
 PopModStatus mods_display_set(DisplayRow row, int value);
 PopModStatus mods_display_nudge(DisplayRow row, int delta);

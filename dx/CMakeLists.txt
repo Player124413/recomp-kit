@@ -1,9 +1,10 @@
 set(POP_DX_SOURCES
   com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp
-  dsound.cpp dshow.cpp dinput.cpp qmixer.cpp weanetr.cpp)
+  dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp qmixer.cpp mss32.cpp riff.cpp bink.cpp video_frame.cpp weanetr.cpp)
 
 add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
 target_link_libraries(recomp_dx PUBLIC recomp_runtime)
+pop_link_video(recomp_dx)
 target_compile_options(recomp_dx PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx 2)
 
@@ -12,11 +13,12 @@ pop_optimize(recomp_dx 2)
 # tests use it.
 add_library(recomp_dx_null OBJECT ${POP_DX_SOURCES})
 target_link_libraries(recomp_dx_null PUBLIC recomp_runtime)
+pop_link_video(recomp_dx_null)
 target_compile_definitions(recomp_dx_null PUBLIC RECOMP_NULL_HOST)
 target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)
 
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
 # host_api.h is a C header too. The C11 consumer is an object the DX tests
 # link; the header is also parsed as C++17 on its own.
 add_library(host_api_header_test OBJECT tests/host_api_header_test.c)

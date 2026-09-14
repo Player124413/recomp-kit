@@ -15,6 +15,8 @@
 #include "../com.h"
 #include "../dx.h"
 #include "../host_api.h"
+#include "../riff.h"
+#include "../video_frame.h"
 #include "../ddraw.h"
 #include "../../runtime/memory.h"
 #include "../../runtime/win32.h"
@@ -227,6 +229,10 @@ void host_d3d_texture_destroyed(uint32_t) {}
 // The play cursor a test wants the mixer to believe in, so a streaming refill
 // can be driven deterministically instead of by waiting.
 static uint32_t g_test_audio_pos = 0;
+static bool g_test_close_requested = false;
+int host_close_requested(void) {
+    return g_test_close_requested;
+}
 // The stream contract, modelled the way the real host implements it:
 // host_audio_stream converts a looping channel at its cursor and reports the
 // offset it resumed from, and host_audio_played_bytes counts on from there and
@@ -259,8 +265,13 @@ static uint64_t g_queued_accepted = 0;
 // plays a sound on a named channel and refills behind it rather than
 // appending into a ring.
 static uint32_t g_voice_remaining = 0;
+// Existing tests assume a playing host; sample tests explicitly finish a voice.
+static std::map<int32_t, bool> g_sample_playing;
+static bool g_sample_tracking = false;
 
 void host_audio_play(const HostAudioPlay *p) {
+    if (g_sample_tracking)
+        g_sample_playing[p->channel] = true;
     PlayRecord r;
     r.channel = p->channel;
     r.rate = p->sample_rate;
@@ -334,6 +345,8 @@ uint32_t host_audio_voice_remaining_bytes(int32_t) {
 }
 
 void host_audio_stop(int32_t ch) {
+    if (g_sample_tracking)
+        g_sample_playing[ch] = false;
     g_stops.push_back(ch);
     g_queued_bytes = 0;
     g_voice_remaining = 0;
@@ -344,7 +357,9 @@ void host_audio_set_frequency(int32_t, uint32_t) {}
 uint32_t host_audio_position(int32_t) {
     return g_test_audio_pos;
 }
-int32_t host_audio_is_playing(int32_t) {
+int32_t host_audio_is_playing(int32_t ch) {
+    if (auto it = g_sample_playing.find(ch); g_sample_tracking && it != g_sample_playing.end())
+        return it->second ? 1 : 0;
     return 1;
 }
 
@@ -1106,6 +1121,111 @@ static void test_blt_and_colorkey() {
         const Present &q = g_presents.back();
         CHECK_EQ(q.pixels[(size_t)60 * q.pitch + 520], 1); // destination was not 9: kept
     }
+}
+
+// A game can keep the pointer Lock handed it and draw through it between
+// frames. The next blit and present must notice those writes without Unlock.
+static void test_retained_pointer_writes() {
+    g_presents.clear();
+    cpu_reset();
+    CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, sc(0), 0}), DD_OK);
+    uint32_t dd = rd32(sc(0));
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 16}), DD_OK);
+    // Fullscreen geometry follows the accepted mode, including the caption deduction.
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 640u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {1}), 480u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {16}), 640u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {17}), 480u - 19u);
+
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_PRIMARYSURFACE);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(4), 0}), DD_OK);
+    uint32_t prim = rd32(sc(4));
+
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY);
+    wr32(desc + DDSD_OFF_dwWidth, 640);
+    wr32(desc + DDSD_OFF_dwHeight, 480);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(8), 0}), DD_OK);
+    uint32_t back = rd32(sc(8));
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(12), 0}), DD_OK);
+    uint32_t untouched = rd32(sc(12));
+
+    desc = sc(0x200);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    CHECK_EQ(call_method(back, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t pixels = rd32(desc + DDSD_OFF_lpSurface);
+    CHECK(pixels != 0);
+    CHECK_EQ(rd32(desc + DDSD_OFF_lPitch), 1280u);
+    CHECK_EQ(call_method(back, S_Unlock, {pixels}), DD_OK);
+    uint32_t back_id = com_this(back)->id;
+    uint32_t rev_before = ddraw_surface_revision(back_id);
+    for (uint32_t y = 0; y < 480; ++y)
+        for (uint32_t x = 0; x < 640; ++x)
+            wr16(pixels + y * 1280 + x * 2, 0xe482);
+    uint32_t rect = sc(0x300);
+    wr32(rect, 0);
+    wr32(rect + 4, 0);
+    wr32(rect + 8, 640);
+    wr32(rect + 12, 480);
+    HostFrameHandle frame = host_frame_current();
+    uint32_t records_before = host_frame_record_count(frame);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, back, rect, 0}), DD_OK);
+    CHECK(ddraw_surface_revision(back_id) != rev_before);
+    CHECK_EQ(host_frame_record_count(frame), records_before + 2);
+    const HostBlitRecord *write = host_frame_record(frame, records_before);
+    CHECK(write != nullptr && write->src.surface == HOST_SRC_CPU);
+    if (write && write->src.surface == HOST_SRC_CPU) {
+        CHECK_EQ(write->dst, back_id);
+        CHECK_EQ(write->cpu_bpp, 16u);
+        CHECK_EQ(write->cpu_pitch, 1280);
+        CHECK_EQ(((const uint16_t *)write->cpu_pixels)[200 * 640 + 300], 0xe482u);
+        CHECK_EQ(write->coverage[200 * 640 + 300], 1u);
+    }
+    uint32_t pdesc = sc(0x400);
+    gm_zero(pdesc, DDSD_SIZE);
+    wr32(pdesc, DDSD_SIZE);
+    CHECK_EQ(call_method(prim, S_Lock, {0, pdesc, DDLOCK_READONLY | DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t ppix = rd32(pdesc + DDSD_OFF_lpSurface);
+    CHECK_EQ(rd16(ppix + 200 * 1280 + 300 * 2), 0xe482u);
+    CHECK_EQ(call_method(prim, S_Unlock, {ppix}), DD_OK);
+    uint32_t rev_after = ddraw_surface_revision(back_id);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, back, rect, 0}), DD_OK);
+    CHECK_EQ(ddraw_surface_revision(back_id), rev_after);
+
+    // Regular Blt must see even a single changed pixel at the last row's end.
+    wr16(pixels + 479 * 1280 + 639 * 2, 0x07e0);
+    CHECK_EQ(call_method(prim, S_Blt, {0, back, rect, DDBLT_WAIT, 0}), DD_OK);
+    CHECK(ddraw_surface_revision(back_id) != rev_after);
+    CHECK_EQ(rd16(ppix + 479 * 1280 + 639 * 2), 0x07e0u);
+
+    // A surface never locked writable is untouched, even if its bytes change.
+    CHECK_EQ(call_method(untouched, S_Lock, {0, desc, DDLOCK_READONLY | DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t upix = rd32(desc + DDSD_OFF_lpSurface);
+    CHECK_EQ(call_method(untouched, S_Unlock, {upix}), DD_OK);
+    uint32_t untouched_id = com_this(untouched)->id;
+    uint32_t untouched_rev = ddraw_surface_revision(untouched_id);
+    wr16(upix, 0x001f);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, untouched, rect, 0}), DD_OK);
+    CHECK_EQ(ddraw_surface_revision(untouched_id), untouched_rev);
+
+    // Direct writes through the primary's retained pointer reach present too.
+    CHECK_EQ(call_method(prim, S_Lock, {0, pdesc, DDLOCK_WAIT, 0}), DD_OK);
+    ppix = rd32(pdesc + DDSD_OFF_lpSurface);
+    CHECK_EQ(call_method(prim, S_Unlock, {ppix}), DD_OK);
+    uint32_t primary_rev = ddraw_surface_revision(com_this(prim)->id);
+    wr16(ppix + 200 * 1280 + 300 * 2, 0xf800);
+    ddraw_present(com_this(prim));
+    CHECK(ddraw_surface_revision(com_this(prim)->id) != primary_rev);
+    const Present &p = g_presents.back();
+    CHECK_EQ(((const uint16_t *)(p.pixels.data() + 200 * p.pitch))[300], 0xf800u);
+    primary_rev = ddraw_surface_revision(com_this(prim)->id);
+    ddraw_present(com_this(prim));
+    CHECK_EQ(ddraw_surface_revision(com_this(prim)->id), primary_rev);
 }
 
 // The same keyed blit at 16 bpp: a key is compared against whatever the
@@ -4687,6 +4807,30 @@ static uint32_t g_enum_modes[16][3];
 
 static void test_enum_display_modes() {
     cpu_reset();
+    reset_ddraw_for_test();
+    uint32_t mw = 640, mh = 480, mbpp = 8;
+    CHECK(!ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 640);
+    CHECK_EQ(mh, 480);
+    CHECK_EQ(mbpp, 8);
+    uint32_t caps = tramp("GDI32.dll", "GetDeviceCaps");
+    // Without a display mode, screen metrics retain the desktop fallback.
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 1024u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {1}), 768u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {16}), 1024u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {17}), 768u - 19u);
+    uint32_t hdc = call_shim(tramp("USER32.dll", "GetDC"), {0});
+    auto check_caps = [&](uint32_t w, uint32_t h, uint32_t bpp) {
+        CHECK_EQ(call_shim(caps, {hdc, 8}), w);
+        CHECK_EQ(call_shim(caps, {hdc, 10}), h);
+        CHECK_EQ(call_shim(caps, {hdc, 12}), bpp);
+        CHECK_EQ(call_shim(caps, {hdc, 14}), 1);
+        CHECK_EQ(call_shim(caps, {hdc, 38}), bpp == 8 ? 0x100u : 0u);
+        CHECK_EQ(call_shim(caps, {hdc, 104}), bpp == 8 ? 256u : 0u);
+        CHECK_EQ(call_shim(caps, {hdc, 24}), bpp == 8 ? 256u : 0xffffffffu);
+        CHECK_EQ(call_shim(caps, {hdc, 0x2000}), 0);
+    };
+    check_caps(640, 480, 8);
     uint32_t create = tramp("DDRAW.dll", "DirectDrawCreate");
     call_shim(create, {0, sc(0), 0});
     uint32_t dd = rd32(sc(0));
@@ -4721,7 +4865,18 @@ static void test_enum_display_modes() {
     CHECK_EQ(g_enum_modes[9][0], 3840);
     CHECK_EQ(g_enum_modes[9][1], 2160);
     CHECK_EQ(g_enum_modes[9][2], 16);
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {800, 600, 8}), DD_OK);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 800);
+    CHECK_EQ(mh, 600);
+    CHECK_EQ(mbpp, 8);
+    check_caps(800, 600, 8);
     CHECK_EQ(call_method(dd, DD_SetDisplayMode, {3840, 2160, 16}), DD_OK);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 3840);
+    CHECK_EQ(mh, 2160);
+    CHECK_EQ(mbpp, 16);
+    check_caps(3840, 2160, 16);
 
     // A restricted enumeration returns only the matching modes.
     uint32_t match = sc(0x100);
@@ -4737,6 +4892,12 @@ static void test_enum_display_modes() {
     // An unoffered mode is refused rather than silently accepted.
     hr = call_method(dd, DD_SetDisplayMode, {1600, 1200, 32});
     CHECK_EQ(hr, DDERR_INVALIDPARAMS);
+    CHECK(ddraw_display_mode(&mw, &mh, &mbpp));
+    CHECK_EQ(mw, 3840);
+    CHECK_EQ(mh, 2160);
+    CHECK_EQ(mbpp, 16);
+    check_caps(3840, 2160, 16);
+    call_shim(tramp("USER32.dll", "ReleaseDC"), {0, hdc});
 }
 
 // RECOMP_DDRAW_MODES replaces the offered set, and the SAME table decides what
@@ -5422,6 +5583,499 @@ static void test_dinput() {
     hr = call_method(di, DI_CreateDevice, {guid, sc(12), 0});
     CHECK_EQ(hr, DIERR_DEVICENOTREG);
     CHECK_EQ(rd32(sc(12)), 0);
+}
+
+// Miles Sound System: every import has the arity its decorated name states,
+// so a call through it leaves ESP where the caller expects.
+static void test_mss32_arities() {
+    cpu_reset();
+    struct {
+        const char *name;
+        uint32_t argc;
+    } expected[] = {
+        {"_AIL_startup@0", 0},
+        {"_AIL_shutdown@0", 0},
+        {"_AIL_set_preference@8", 2},
+        {"_AIL_waveOutOpen@16", 4},
+        {"_AIL_mem_free_lock@4", 1},
+        {"_AIL_file_read@8", 2},
+        {"_AIL_allocate_sample_handle@4", 1},
+        {"_AIL_release_sample_handle@4", 1},
+        {"_AIL_init_sample@4", 1},
+        {"_AIL_set_sample_file@12", 3},
+        {"_AIL_start_sample@4", 1},
+        {"_AIL_end_sample@4", 1},
+        {"_AIL_sample_status@4", 1},
+        {"_AIL_set_sample_volume@8", 2},
+        {"_AIL_set_sample_pan@8", 2},
+        {"_AIL_set_sample_loop_count@8", 2},
+        {"_AIL_sample_loop_count@4", 1},
+        {"_AIL_set_sample_reverb@16", 4},
+        {"_AIL_open_stream@12", 3},
+        {"_AIL_start_stream@4", 1},
+        {"_AIL_close_stream@4", 1},
+        {"_AIL_stream_status@4", 1},
+        {"_AIL_set_stream_volume@8", 2},
+        {"_AIL_stream_volume@4", 1},
+        {"_AIL_set_stream_loop_count@8", 2},
+        {"_AIL_enumerate_3D_providers@12", 3},
+        {"_AIL_open_3D_provider@4", 1},
+        {"_AIL_close_3D_provider@4", 1},
+        {"_AIL_set_3D_provider_preference@12", 3},
+        {"_AIL_3D_provider_attribute@12", 3},
+        {"_AIL_allocate_3D_sample_handle@4", 1},
+        {"_AIL_release_3D_sample_handle@4", 1},
+        {"_AIL_set_3D_sample_file@8", 2},
+        {"_AIL_start_3D_sample@4", 1},
+        {"_AIL_end_3D_sample@4", 1},
+        {"_AIL_3D_sample_status@4", 1},
+        {"_AIL_set_3D_sample_volume@8", 2},
+        {"_AIL_set_3D_sample_loop_count@8", 2},
+        {"_AIL_set_3D_position@16", 4},
+        {"_AIL_set_3D_orientation@28", 7},
+        {"_AIL_3D_update_position@8", 2},
+    };
+    for (auto &e : expected) {
+        uint32_t t = tramp("mss32.dll", e.name);
+        CHECK(t != 0);
+        CHECK_EQ(imports_argc(t), e.argc);
+    }
+    CHECK_EQ(imports_argc(0), 0u);
+    CHECK_EQ(imports_argc(TRAMP_BASE + 1), 0u);
+    CHECK_EQ(imports_argc(TRAMP_BASE + imports_count() * TRAMP_STRIDE), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_startup@0"), {}), 1u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_enumerate_3D_providers@12"), {0, 0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_3D_provider@4"), {0}), 1u);
+    uint32_t sample = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {0});
+    CHECK(sample != 0);
+    call_shim(tramp("mss32.dll", "_AIL_release_sample_handle@4"), {sample});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_3D_sample_handle@4"), {0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {0, 0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {0}), 1u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {0}), 2u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_3D_sample_status@4"), {0}), 2u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_3D_orientation@28"), {0, 0, 0, 0, 0, 0, 0}),
+             0u);
+}
+
+// A canonical 44-byte header and eight bytes of mono, 8-bit PCM at 22050 Hz.
+static uint32_t build_test_wave() {
+    uint32_t wav = sc(0x100);
+    static const uint8_t header[44] = {
+        'R', 'I', 'F', 'F', 44 + 8 - 8, 0, 0,   0,   'W', 'A',  'V',  'E', 'f', 'm',  't',
+        ' ', 16,  0,   0,   0,          1, 0,   1,   0,   0x22, 0x56, 0,   0,   0x22, 0x56,
+        0,   0,   1,   0,   8,          0, 'd', 'a', 't', 'a',  8,    0,   0,   0};
+    for (uint32_t i = 0; i < 44; ++i)
+        wr8(wav + i, header[i]);
+    for (uint32_t i = 0; i < 8; ++i)
+        wr8(wav + 44 + i, (uint8_t)(0x80 + i));
+    return wav;
+}
+
+static void test_riff_parse() {
+    cpu_reset();
+    uint32_t wav = build_test_wave();
+    RiffWave w{};
+    CHECK(riff_parse_wave(wav, 52, &w));
+    CHECK_EQ(w.pcm, wav + 44);
+    CHECK_EQ(w.pcm_bytes, 8u);
+    CHECK_EQ(w.rate, 22050u);
+    CHECK_EQ(w.channels, 1u);
+    CHECK_EQ(w.bits, 8u);
+    wr8(wav + 20, 2); // format tag 2 (ADPCM) is refused
+    CHECK(!riff_parse_wave(wav, 52, &w));
+    build_test_wave();
+    CHECK(!riff_parse_wave(wav, 11, &w));
+    CHECK(!riff_parse_wave(wav, 25, &w)); // truncated fmt
+    CHECK(!riff_parse_wave(0xfffffff0u, 52, &w));
+    CHECK(!riff_parse_wave(wav, 52, nullptr));
+    wr32(wav + 16, 0xffffffffu); // chunk arithmetic must not wrap
+    CHECK(!riff_parse_wave(wav, 52, &w));
+    build_test_wave();
+    CHECK(riff_parse_wave(wav, 48, &w)); // data is bounded by the supplied image
+    CHECK_EQ(w.pcm_bytes, 4u);
+    // An odd-sized unknown chunk has one pad byte before the data chunk.
+    build_test_wave();
+    memmove(g_mem + wav + 46, g_mem + wav + 36, 16);
+    memcpy(g_mem + wav + 36, "JUNK", 4);
+    wr32(wav + 40, 1);
+    wr16(wav + 44, 0);
+    wr32(wav + 4, 54);
+    CHECK(riff_parse_wave(wav, 62, &w));
+    CHECK_EQ(w.pcm, wav + 54);
+    CHECK_EQ(w.pcm_bytes, 8u);
+}
+
+static void test_mss32_sample() {
+    cpu_reset();
+    g_sample_tracking = true;
+    g_plays.clear();
+    uint32_t wav = build_test_wave();
+    uint32_t h = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {1});
+    CHECK(h != 0);
+    call_shim(tramp("mss32.dll", "_AIL_init_sample@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_sample_file@12"), {h, wav, 0}), 1u);
+    call_shim(tramp("mss32.dll", "_AIL_set_sample_volume@8"), {h, 127});
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    CHECK_EQ(g_plays.size(), 1u);
+    if (g_plays.size() != 1)
+        return;
+    CHECK_EQ(g_plays[0].rate, 22050u);
+    CHECK_EQ(g_plays[0].bytes, 8u);
+    CHECK_EQ(g_plays[0].channels, 1);
+    CHECK_EQ(g_plays[0].bits, 8);
+    CHECK_EQ(g_plays[0].volume, 0);
+    CHECK_EQ(g_plays[0].pan, 0);
+    CHECK_EQ(g_plays[0].loop, 0);
+    CHECK_EQ(g_plays[0].pcm[7], 0x87u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 4u);
+    call_shim(tramp("mss32.dll", "_AIL_end_sample@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 2u);
+
+    // Assert the Miles conversions through the actual host play record.
+    struct {
+        uint32_t volume, pan;
+        int32_t volume_mb, pan_mb;
+    } levels[] = {{127, 64, 0, 0}, {64, 0, -595, -10000}, {0, 127, -10000, 10000}};
+    for (auto level : levels) {
+        call_shim(tramp("mss32.dll", "_AIL_set_sample_volume@8"), {h, level.volume});
+        call_shim(tramp("mss32.dll", "_AIL_set_sample_pan@8"), {h, level.pan});
+        call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+        CHECK_EQ(g_plays.back().volume, level.volume_mb);
+        CHECK_EQ(g_plays.back().pan, level.pan_mb);
+    }
+    int32_t channel = g_plays.back().channel;
+    g_sample_playing[channel] = false;
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 2u);
+    call_shim(tramp("mss32.dll", "_AIL_set_sample_loop_count@8"), {h, 0});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_loop_count@4"), {h}), 0u);
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    CHECK_EQ(g_plays.back().loop, 1);
+    call_shim(tramp("mss32.dll", "_AIL_end_sample@4"), {h});
+
+    call_shim(tramp("mss32.dll", "_AIL_set_sample_loop_count@8"), {h, 3});
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    size_t first = g_plays.size();
+    for (unsigned i = 0; i < 3; ++i) {
+        g_sample_playing[channel] = false;
+        host_pump_timers(&g_cpu); // finite repeats progress without a Miles status poll
+        CHECK_EQ(g_plays.size(), first + (i < 2 ? i + 1 : 2));
+    }
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 2u);
+    CHECK_EQ(g_plays.back().loop, 0);
+
+    call_shim(tramp("mss32.dll", "_AIL_init_sample@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_loop_count@4"), {h}), 1u);
+    first = g_plays.size();
+    call_shim(tramp("mss32.dll", "_AIL_start_sample@4"), {h});
+    CHECK_EQ(g_plays.size(), first); // init discarded the image
+    wr8(wav + 20, 2);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_set_sample_file@12"), {h, wav, 0}), 0u);
+    call_shim(tramp("mss32.dll", "_AIL_release_sample_handle@4"), {h});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {h}), 1u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_sample_status@4"), {65}), 1u);
+    int32_t reused = dx_alloc_audio_channel();
+    CHECK_EQ(reused, channel);
+    dx_free_audio_channel(reused);
+    std::set<uint32_t> handles;
+    for (unsigned i = 0; i < 64; ++i) {
+        uint32_t slot = call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {1});
+        CHECK(slot >= 1 && slot <= 64);
+        CHECK(handles.insert(slot).second);
+    }
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_allocate_sample_handle@4"), {1}), 0u);
+    for (uint32_t slot : handles)
+        call_shim(tramp("mss32.dll", "_AIL_release_sample_handle@4"), {slot});
+
+    // File reads use guest path case/drive normalization and guest-owned memory.
+    wav = build_test_wave();
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-mss32-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string file = std::string(dir) + "/Tone.wav";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    CHECK_EQ(fwrite(g_mem + wav, 1, 52, f), 52u);
+    CHECK_EQ(fclose(f), 0);
+    win32_init(dir);
+    uint32_t name = sc(0x300);
+    gm_put_str(name, "C:\\tone.WAV", 0x100);
+    uint32_t read = tramp("mss32.dll", "_AIL_file_read@8");
+    for (uint32_t dest : {0u, 0xffffffffu, sc(0x500)}) {
+        uint32_t loaded = call_shim(read, {name, dest});
+        CHECK(loaded != 0);
+        if (!loaded)
+            continue;
+        CHECK_EQ(memcmp(g_mem + loaded, g_mem + wav, 52), 0);
+        if (dest == sc(0x500)) {
+            CHECK_EQ(loaded, dest);
+        } else {
+            CHECK_EQ(heap_size(loaded), 52u);
+            call_shim(tramp("mss32.dll", "_AIL_mem_free_lock@4"), {loaded});
+            CHECK(!heap_owns(loaded));
+        }
+    }
+    CHECK_EQ(call_shim(read, {name, GUEST_SIZE - 1}), 0u);
+    gm_put_str(name, "absent.wav", 0x100);
+    CHECK_EQ(call_shim(read, {name, 0}), 0u);
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+    g_sample_playing.clear();
+    g_sample_tracking = false;
+}
+
+// The same synthetic MP3 and guest-root mapping as DirectShow, with mixed
+// case and a guest backslash. Playback and queue consumption are deterministic.
+static void test_mss32_stream() {
+    cpu_reset();
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-mss32-stream-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    std::string music = std::string(dir) + "/Music";
+    CHECK(os_mkdir(music.c_str()) == 0);
+    std::string file = music + "/Test.mp3";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    CHECK_EQ(fwrite(kToneMp3, 1, sizeof kToneMp3, f), sizeof kToneMp3);
+    CHECK_EQ(fclose(f), 0);
+    win32_init(dir);
+    g_plays.clear();
+    g_queues.clear();
+    g_queue_enabled = true;
+    g_queued_bytes = 0;
+    g_test_audio_pos = 0;
+    g_ch_streaming = false;
+    uint32_t name = sc(0x100);
+    gm_put_str(name, "music\\test.mp3", 0x100);
+    uint32_t s = call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {1, name, 0});
+    CHECK(s != 0);
+    CHECK_EQ(g_plays.size(), 0u); // opening alone must not sound
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_volume@4"), {s}), 127u);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+    call_shim(tramp("mss32.dll", "_AIL_start_stream@4"), {s});
+    mss32_frame_pump(nullptr);
+    CHECK_EQ(g_queues.size(), 0u);
+    g_queue_retired = true; // a refused frame is retained for the next tick
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), 0u);
+    g_queue_retired = false;
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_plays.size(), 1u);
+    CHECK(g_ch_streaming);
+    if (!g_plays.empty()) {
+        CHECK(host_audio_queued_bytes(g_plays[0].channel) > 0);
+        CHECK_EQ(g_plays[0].rate, 44100);
+        CHECK_EQ(g_plays[0].channels, 2);
+        CHECK_EQ(g_plays[0].bits, 16);
+        CHECK_EQ(g_plays[0].bytes + g_queued_bytes, 27648u);
+    }
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 4u);
+    // Decoder EOF is already reached, but queued samples still have to sound.
+    g_stream_played = 27648;
+    g_queued_bytes = 0;
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_volume@8"), {s, 64});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_volume@4"), {s}), 64u);
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_loop_count@8"), {s, 2});
+    call_shim(tramp("mss32.dll", "_AIL_start_stream@4"), {s});
+    mss32_frame_pump(&g_cpu);
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays.back().volume, -595);
+        CHECK_EQ(g_plays.back().bytes + g_queued_bytes, 2u * 27648u);
+        CHECK(g_plays.front().pcm == g_plays.back().pcm); // restart rewinds
+    }
+    g_stream_played = 2 * 27648;
+    g_queued_bytes = 0;
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_volume@8"), {s, 999});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_volume@4"), {s}), 127u);
+    call_shim(tramp("mss32.dll", "_AIL_set_stream_loop_count@8"), {s, 0});
+    call_shim(tramp("mss32.dll", "_AIL_start_stream@4"), {s});
+    mss32_frame_pump(&g_cpu);
+    const uint32_t ahead = 44100 * 2 * 2;
+    CHECK(g_queued_bytes >= ahead && g_queued_bytes < ahead + 4608);
+    size_t before = g_queues.size();
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), before); // a full queue needs no more decoding
+    g_stream_played += g_queued_bytes;
+    g_queued_bytes = 0;
+    mss32_frame_pump(&g_cpu);
+    CHECK(g_queues.size() > before);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 4u);
+    call_shim(tramp("mss32.dll", "_AIL_close_stream@4"), {s});
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_stream_status@4"), {s}), 2u);
+    before = g_queues.size();
+    mss32_frame_pump(&g_cpu);
+    CHECK_EQ(g_queues.size(), before);
+    CHECK_EQ(g_queued_bytes, 0u);
+    gm_put_str(name, "music\\absent.mp3", 0x100);
+    CHECK_EQ(call_shim(tramp("mss32.dll", "_AIL_open_stream@12"), {1, name, 0}), 0u);
+    g_queue_enabled = false;
+    CHECK_EQ(remove(file.c_str()), 0);
+    CHECK_EQ(os_rmdir(music.c_str()), 0);
+    CHECK_EQ(os_rmdir(dir), 0);
+}
+
+static void test_bink_smack_stubs() {
+    cpu_reset();
+    uint32_t name = sc(0x100);
+    gm_put_str(name, "intro.bik", 0x100);
+    uint32_t bink = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {name, 0});
+#ifdef RECOMP_HAVE_FFMPEG
+    CHECK_EQ(bink, 0u); // a missing file must fail with a readable error
+    if (bink)
+        call_shim(tramp("binkw32.dll", "_BinkClose@4"), {bink});
+#else
+    CHECK(bink != 0);
+    CHECK_EQ(rd32(bink + 0x00), 640u);
+    CHECK_EQ(rd32(bink + 0x04), 480u);
+    CHECK_EQ(rd32(bink + 0x10), 0u); // frame count: a finished video
+    CHECK_EQ(rd32(bink + 0x14), 0u); // current frame
+    CHECK_EQ(rd32(bink + 0x08), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkWait@4"), {bink}), 0u);
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {bink}), 0u);
+    call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {bink});
+    CHECK_EQ(rd32(bink + 0x14), 0u); // still finished
+    call_shim(tramp("binkw32.dll", "_BinkClose@4"), {bink});
+    CHECK(!heap_owns(bink));
+#endif
+    uint32_t err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+    CHECK(err != 0);
+#ifdef RECOMP_HAVE_FFMPEG
+    CHECK(!gm_str(err).empty());
+#else
+    CHECK(gm_str(err).empty());
+#endif
+    CHECK_EQ(call_shim(tramp("smackw32.dll", "_SmackOpen@12"), {0, 0, 0}), 0u);
+    CHECK_EQ(imports_argc(tramp("binkw32.dll", "_BinkCopyToBuffer@28")), 7u);
+    CHECK_EQ(imports_argc(tramp("smackw32.dll", "_SmackToBuffer@28")), 7u);
+}
+
+static void test_video_frame_convert() {
+    // A 4x2 YUV420P image: black/white on the left, saturated red on the
+    // right. Chroma is shared across the two rows; row padding stays intact.
+    const uint8_t y[2][4] = {{16, 235, 81, 81}, {235, 16, 81, 81}};
+    const uint8_t u[] = {128, 90}, v[] = {128, 240};
+    const uint16_t rgb565[2][4] = {{0, 0xffff, 0xf800, 0xf800}, {0xffff, 0, 0xf800, 0xf800}};
+    for (uint32_t row = 0; row < 2; ++row) {
+        uint8_t dest[20];
+        memset(dest, 0xa5, sizeof dest);
+        video_frame_convert_row(dest, y[row], u, v, 4, VIDEO_RGB565);
+        for (uint32_t x = 0; x < 4; ++x)
+            CHECK_EQ((uint32_t)(dest[x * 2] | dest[x * 2 + 1] << 8), rgb565[row][x]);
+        CHECK_EQ(dest[8], 0xa5u);
+        video_frame_convert_row(dest, y[row], u, v, 4, VIDEO_RGB555);
+        CHECK_EQ((uint32_t)(dest[4] | dest[5] << 8), 0x7c00u);
+        video_frame_convert_row(dest, y[row], u, v, 4, VIDEO_XRGB8888);
+        CHECK_EQ(dest[8], 0u);
+        CHECK_EQ(dest[9], 0u);
+        CHECK_EQ(dest[10], 255u);
+        CHECK_EQ(dest[11], 0u);
+        CHECK_EQ(dest[16], 0xa5u);
+    }
+}
+
+static void test_bink_play() {
+#ifdef RECOMP_HAVE_FFMPEG
+    const std::string path =
+        std::string(RECOMP_DEVELOPER_GAME_DIR) + "/BINKS/High/pre_dynastic_big.bik";
+    FILE *file = fopen(path.c_str(), "rb");
+    if (!file) {
+        printf("note: Bink play skipped; developer video is absent\n");
+        return;
+    }
+    fclose(file);
+    cpu_reset();
+    win32_init(RECOMP_DEVELOPER_GAME_DIR);
+    g_plays.clear();
+    g_queues.clear();
+    g_stops.clear();
+    g_queue_enabled = true;
+    g_queued_bytes = 0;
+    g_test_audio_pos = 0;
+    g_ch_streaming = false;
+    uint32_t name = sc(0x100);
+    gm_put_str(name, "binks\\high\\pre_dynastic_big.bik", 0x100);
+    uint32_t rec = call_shim(tramp("binkw32.dll", "_BinkOpen@8"), {name, 0});
+    CHECK(rec != 0);
+    if (!rec) {
+        g_queue_enabled = false;
+        return;
+    }
+    CHECK_EQ(heap_size(rec), 0x100u);
+    CHECK_EQ(rd32(rec), 560u);
+    CHECK_EQ(rd32(rec + 4), 333u);
+    CHECK(rd32(rec + 0x10) > 0);
+    CHECK_EQ(rd32(rec + 0x14), 1u);
+    CHECK_EQ(rd32(rec + 8), rd32(rec + 0x10));
+    CHECK_EQ(rd32(rec + 12), 1u);
+    CHECK(g_plays.empty()); // open does not decode or play
+    uint32_t err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+    CHECK(err && gm_str(err).empty());
+    const uint32_t pitch = 1280, height = 333;
+    uint32_t dest = heap_alloc(pitch * height, true, 16);
+    CHECK(dest != 0);
+    for (uint32_t frame = 1; frame <= 2 && dest; ++frame) {
+        call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+        call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+        CHECK_EQ(rd32(rec + 0x14), frame + 1);
+        CHECK_EQ(rd32(rec + 12), frame + 1);
+        memset(g_mem + dest, 0xa5, pitch * height);
+        CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkCopyToBuffer@28"),
+                           {rec, dest, pitch, height, 0, 0, VIDEO_RGB565}),
+                 0u);
+        bool nonuniform = false;
+        for (uint32_t yrow = 0; yrow < height; ++yrow)
+            for (uint32_t x = 0; x < 560; ++x)
+                nonuniform |= rd16(dest + yrow * pitch + x * 2) != rd16(dest);
+        printf("note: Bink frame %u is %s (first pixel %04x)\n", frame,
+               nonuniform ? "non-uniform" : "uniform", rd16(dest));
+        if (frame == 2)
+            CHECK(nonuniform);
+        CHECK_EQ(rd8(dest + 1120), 0xa5u); // the pitch is wider than the video
+        call_shim(tramp("binkw32.dll", "_BinkService@4"), {rec});
+        err = call_shim(tramp("binkw32.dll", "_BinkGetError@0"), {});
+        CHECK(err && gm_str(err).empty());
+    }
+    CHECK_EQ(g_plays.size(), 1u);
+    CHECK(g_ch_streaming);
+    CHECK(g_queued_bytes > 0);
+    if (!g_plays.empty()) {
+        CHECK_EQ(g_plays[0].bits, 16);
+        CHECK(g_plays[0].bytes > 0);
+    }
+    // A close must break both the timed wait and the guest's frame loop,
+    // including the NextFrame call that follows a cancelled DoFrame.
+    g_test_close_requested = true;
+    CHECK_EQ(call_shim(tramp("binkw32.dll", "_BinkWait@4"), {rec}), 0u);
+    call_shim(tramp("binkw32.dll", "_BinkDoFrame@4"), {rec});
+    CHECK_EQ(rd32(rec + 0x14), rd32(rec + 0x10));
+    CHECK_EQ(rd32(rec + 0x0c), rd32(rec + 0x08));
+    call_shim(tramp("binkw32.dll", "_BinkNextFrame@4"), {rec});
+    CHECK_EQ(rd32(rec + 0x14), rd32(rec + 0x10));
+    CHECK_EQ(rd32(rec + 0x0c), rd32(rec + 0x08));
+    g_test_close_requested = false;
+    call_shim(tramp("binkw32.dll", "_BinkClose@4"), {rec});
+    CHECK(!heap_owns(rec));
+    if (!g_plays.empty()) {
+        CHECK(!g_stops.empty() && g_stops.back() == g_plays[0].channel);
+        int32_t channel = dx_alloc_audio_channel();
+        CHECK_EQ(channel, g_plays[0].channel);
+        dx_free_audio_channel(channel);
+    }
+    if (dest)
+        heap_free(dest);
+    g_queue_enabled = false;
+#else
+    printf("note: Bink play skipped; video decoding is disabled\n");
+#endif
 }
 
 // QMixer: a session, a channel, and a wave supplied the way the game supplies
@@ -9094,6 +9748,7 @@ int main() {
         {"resolution depth lifetime", test_resolution_depth_lifetime},
         {"gradient, flip, present", test_gradient_flip},
         {"blt and colour key", test_blt_and_colorkey},
+        {"retained pointer writes", test_retained_pointer_writes},
         {"display ABI", test_display_abi},
         {"record and coverage", test_record_basic_and_coverage},
         {"keyed blit coverage", test_keyed_blit_coverage_and_key_values},
@@ -9152,6 +9807,13 @@ int main() {
         {"DirectSound", test_dsound},
         {"DirectInput", test_dinput},
         {"QMixer", test_qmixer},
+        {"Miles arities", test_mss32_arities},
+        {"RIFF WAVE", test_riff_parse},
+        {"Miles samples", test_mss32_sample},
+        {"Miles streams", test_mss32_stream},
+        {"Bink/Smacker stubs", test_bink_smack_stubs},
+        {"video frame conversion", test_video_frame_convert},
+        {"Bink play", test_bink_play},
         {"weanetr", test_weanetr},
         {"reference counts", test_refcounts},
         {"SDK record sizes", test_sdk_abi},

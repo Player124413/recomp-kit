@@ -15,12 +15,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/recomp"))
 sys.path.insert(0, str(ROOT / "tools"))
 import game_config  # noqa: E402
 import buildlock  # noqa: E402
+import package_desktop  # noqa: E402
+import stage_game_files  # noqa: E402
 
 # What each --target builds. `plugins` is every mod plugin the game ships.
 TARGETS = {
@@ -31,9 +34,10 @@ TARGETS = {
     "gen": ["recomp_gen"],
     "plugins": ["plugins"],
     "ios": ["recomp_app"],
+    "android": ["recomp_app"],
 }
-MACOS_ONLY = {"app", "smoke", "headless", "ios"}
-NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios"}
+MACOS_ONLY = {"ios"}
+NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios", "android"}
 
 
 def default_preset(system=None):
@@ -42,9 +46,9 @@ def default_preset(system=None):
 
 
 def preset_name(preset, config, stub=False, target=None):
-    """Debug, stub and iOS builds live in their own binary directories, so they are their own presets."""
-    if target == "ios":
-        return "ios-stub" if stub else "ios"
+    """Debug, stub and mobile builds use separate presets and binary directories."""
+    if target in {"ios", "android"}:
+        return target + "-stub" if stub else target
     if stub:
         return preset + "-stub"
     return preset if config == "Release" else preset + "-debug"
@@ -144,6 +148,130 @@ def install_and_launch(app, bundle_id, device, console):
     subprocess.run(launch, check=True)
 
 
+def android_project(build_root, cfg, *, gen_dir):
+    """Render the Gradle project without building it; gen_dir is the CMake binary directory.
+
+    SDL's Java sources stay in that build's FetchContent checkout. Gradle
+    only packages the native library built by CMake, never invokes CMake.
+    """
+    template = ROOT / "platform/android"
+    out = Path(build_root) / "android"
+    shutil.copytree(template, out, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(".gradle", "build", ".gitignore", "local.properties"))
+    values = {key: cfg["game"][key] for key in ("app_name", "bundle_id", "id")}
+    values["sdl_java_dir"] = (Path(gen_dir).resolve() / "_deps/sdl3-src/android-project/app/src/main/java").as_posix()
+    for original in template.rglob("*.in"):
+        source = out / original.relative_to(template)
+        text = source.read_text()
+        for key, value in values.items():
+            if source.name.endswith(".xml.in"):
+                value = escape(value, {'"': "&quot;", "'": "&apos;"})
+            else:
+                value = json.dumps(value, ensure_ascii=False)[1:-1].replace("$", r"\$")
+            text = text.replace("@%s@" % key, value)
+        source.with_suffix("").write_text(text)
+        source.unlink()
+    return out
+
+
+def android_apk(build_root, cfg, *, gen_dir):
+    """Stage the native libraries beside the SDL activity and assemble a debug APK."""
+    library = Path(gen_dir) / "host/libmain.so"
+    sdl_activity = Path(gen_dir) / "_deps/sdl3-src/android-project/app/src/main/java/org/libsdl/app/SDLActivity.java"
+    for path in (library, sdl_activity):
+        if not path.is_file():
+            raise FileNotFoundError("Android CMake build input is missing: %s" % path)
+    out = android_project(build_root, cfg, gen_dir=gen_dir)
+    jni = out / "app/src/main/jniLibs/arm64-v8a"
+    jni.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(library, jni / "libmain.so")
+    # Read the configured option, not leftover installed libraries: switching
+    # video off must remove the previous build's copies from the APK too.
+    cache = (Path(gen_dir) / "CMakeCache.txt").read_text().splitlines()
+    video = any(line.startswith("RECOMP_VIDEO:BOOL=") and
+                line.partition("=")[2].upper() in {"1", "ON", "YES", "TRUE", "Y"}
+                for line in cache)
+    for component in ("avformat", "avcodec", "avutil"):
+        name = "lib%s.so" % component
+        if video:
+            shutil.copy2(Path(gen_dir) / "ffmpeg/lib" / name, jni / name)
+        else:
+            (jni / name).unlink(missing_ok=True)
+    notice = out / "app/src/main/assets/ffmpeg-NOTICE.md"
+    if video:
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "third_party/ffmpeg/NOTICE.md", notice)
+    else:
+        notice.unlink(missing_ok=True)
+    wrapper = "gradlew.bat" if platform.system() == "Windows" else "./gradlew"
+    subprocess.run([wrapper, "assembleDebug"], cwd=out, check=True)
+    apk = out / "app/build/outputs/apk/debug/app-debug.apk"
+    if not apk.is_file():
+        raise FileNotFoundError("No APK after assembleDebug: %s" % apk)
+    print("Packaged %s (%d bytes)" % (apk, apk.stat().st_size), flush=True)
+    return apk
+
+
+def android_push_game(command, cfg, build_root):
+    """Stage the configured install, then push game/ without deleting device saves.
+
+    Recreate only our generated staging directory so exclusions also apply to
+    files staged by an earlier build. The shared stager uses excluded() and
+    writes the executable hash to .stamp, just as it does for an iOS bundle.
+    """
+    source = cfg["developer_exe_path"].parent
+    executable = cfg["game"]["executable"]
+    if not (source / executable).is_file():
+        raise FileNotFoundError("Prepare your own game installation with tools/setup.py before --push-game")
+    staged = Path(build_root) / "android/game"
+    if staged.exists():
+        shutil.rmtree(staged)
+    count = stage_game_files.stage(source, staged, executable, cfg["bundle"]["exclude"])
+    destination = "/sdcard/Android/data/%s/files" % cfg["game"]["bundle_id"]
+    print("Staged %d game files in %s; pushing to %s/game" % (count, staged, destination), flush=True)
+    subprocess.run(command + ["shell", "mkdir", "-p", destination], check=True)
+    # Push game/ into its parent on every run: never create game/game/.
+    subprocess.run(command + ["push", str(staged), destination + "/"], check=True)
+
+
+def android_install_and_launch(apk, bundle_id, device=None, console=False, *, game_cfg=None, build_root=None):
+    """Install, optionally push game data, then launch on one ready adb device.
+
+    An explicit data push requires a device; a build alone may skip device
+    actions. The APK is installed first so Android owns the external files path.
+    """
+    adb = shutil.which("adb")
+    if not adb and os.environ.get("ANDROID_HOME"):
+        name = "adb.exe" if platform.system() == "Windows" else "adb"
+        candidate = Path(os.environ["ANDROID_HOME"]) / "platform-tools" / name
+        if candidate.is_file():
+            adb = str(candidate)
+    if not adb:
+        if game_cfg is not None:
+            raise ValueError("adb unavailable; --push-game requires Android platform-tools and a ready device")
+        print("adb unavailable; skipped Android install, launch and logcat.")
+        return
+    result = subprocess.run([adb, "devices"], check=True, capture_output=True, text=True)
+    devices = [fields[0] for line in result.stdout.splitlines()
+               if len(fields := line.split()) == 2 and fields[1] == "device"]
+    if not devices:
+        if game_cfg is not None:
+            raise ValueError("No Android device attached; --push-game requires a ready device in adb devices")
+        print("No Android device attached; skipped install, launch and logcat.")
+        return
+    if device is not None and device not in devices:
+        raise ValueError("Android device %s is not ready in adb devices" % device)
+    if device is None and len(devices) != 1:
+        raise ValueError("Pass --device <adb serial>; ready Android devices: %s" % ", ".join(devices))
+    command = [adb, "-s", device or devices[0]]
+    subprocess.run(command + ["install", "-r", str(apk)], check=True)
+    if game_cfg is not None:
+        android_push_game(command, game_cfg, build_root)
+    subprocess.run(command + ["shell", "am", "start", "-n", bundle_id + "/dev.recompkit.RecompActivity"], check=True)
+    if console:
+        subprocess.run(command + ["logcat"], check=True)
+
+
 def publish_generated(build_root, translate):
     """Stage a translation, then publish gen/ and symbols.json by rename.
 
@@ -175,10 +303,13 @@ def publish_generated(build_root, translate):
     shutil.rmtree(old, ignore_errors=True)
 
 
-def run_translator(stage, game_dir, build_root):
-    subprocess.run([sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
-                    "--game", str(game_dir),
-                    "--report", str(Path(build_root) / "recomp/translate-report.json")], cwd=ROOT, check=True)
+def run_translator(stage, game_dir, build_root, allow_table_gaps=None):
+    command = [sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
+               "--game", str(game_dir),
+               "--report", str(Path(build_root) / "recomp/translate-report.json")]
+    if allow_table_gaps:
+        command += ["--allow-table-gaps", allow_table_gaps]
+    subprocess.run(command, cwd=ROOT, check=True)
 
 
 def texture_pack(game_dir, build_root):
@@ -199,6 +330,8 @@ def texture_pack(game_dir, build_root):
 def parse_args(argv, system=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--regenerate", action="store_true", help="Regenerate and compile translated C")
+    parser.add_argument("--allow-table-gaps", metavar="REASON", default=None,
+                        help="Accept jump-table sites the translator cannot decode (passed to translate.py)")
     parser.add_argument("--target", choices=sorted(TARGETS), default="app")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
@@ -207,12 +340,16 @@ def parse_args(argv, system=None):
                         help="Absolute directory holding the game.toml this build is for (default: the kit's stub game)")
     parser.add_argument("--stub", action="store_true",
                         help="Link the hosts against a stub translation (no game code; CI's build)")
-    parser.add_argument("--device", default=None, help="devicectl identifier of the iPad (ios target)")
+    parser.add_argument("--device", default=None, help="devicectl identifier (iOS) or adb serial (Android)")
     parser.add_argument("--team", default=os.environ.get("RECOMP_IOS_TEAM", ""),
                         help="Apple team id for automatic signing (ios target; default $RECOMP_IOS_TEAM)")
-    parser.add_argument("--no-install", action="store_true", help="Build the iOS app without installing it")
+    parser.add_argument("--no-install", action="store_true", help="Build the mobile app without installing it")
+    parser.add_argument("--push-game", action="store_true",
+                        help="Android: push the configured game install minus [bundle].exclude before launch")
     parser.add_argument("--console", action="store_true", help="After launching on the device, stream its console")
     args = parser.parse_args(argv)
+    if args.push_game and (args.target != "android" or args.no_install):
+        parser.error("--push-game requires --target android without --no-install")
     if args.target == "ios" and not args.stub and not args.team:
         parser.error("--target ios needs --team or RECOMP_IOS_TEAM")
     if args.stub and (args.config == "Debug" or args.regenerate):
@@ -223,9 +360,8 @@ def parse_args(argv, system=None):
         parser.error("No game config at %s/game.toml" % args.game_dir)
     if args.target == "plugins" and not (args.game_dir / "mods/CMakeLists.txt").is_file():
         parser.error("%s has no mods/CMakeLists.txt; nothing to build for --target plugins" % args.game_dir)
-    if args.target in MACOS_ONLY and not args.stub and (system or platform.system()) != "Darwin":
-        parser.error("The %s host currently builds on macOS; use --target fixture, gen or plugins elsewhere"
-                     % args.target)
+    if args.target in MACOS_ONLY and (system or platform.system()) != "Darwin":
+        parser.error("The iOS packager runs on macOS")
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
     args.build_root = build_root_for(args.game_dir)
@@ -248,7 +384,9 @@ def main():
             if args.target in NEEDS_GEN and args.regenerate:
                 if not (cfg["listings_path"] / "functions.tsv").is_file():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
-                publish_generated(args.build_root, lambda stage: run_translator(stage, args.game_dir, args.build_root))
+                publish_generated(args.build_root,
+                                  lambda stage: run_translator(stage, args.game_dir, args.build_root,
+                                                               args.allow_table_gaps))
             if args.target == "ios":
                 if not args.stub and not (args.build_root / "recomp/gen/table.c").is_file():
                     parser.error("No translation in %s/recomp/gen; run tools/build.py --regenerate on macOS first"
@@ -266,9 +404,27 @@ def main():
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
                 build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
+                if args.target == "android":
+                    apk = android_apk(args.build_root, cfg, gen_dir=build_dir)
+                    if not args.no_install:
+                        android_install_and_launch(apk, cfg["game"]["bundle_id"], args.device, args.console,
+                                                   game_cfg=cfg if args.push_game else None,
+                                                   build_root=args.build_root)
+                system = platform.system()
+                if args.target == "app" and not args.stub and system in {"Linux", "Windows"}:
+                    # The desktop Ninja presets write OUTPUT_NAME into POP_OUT.
+                    suffix = ".exe" if system == "Windows" else ""
+                    binary = args.build_root / "recomp" / (cfg["game"]["app_name"] + suffix)
+                    if not binary.is_file():
+                        parser.exit(1, "No desktop app binary at %s after the build\n" % binary)
+                    packaged = package_desktop.stage(binary, cfg, args.build_root / "package",
+                                                     system=system, build_dir=build_dir)
+                    print("Packaged %s" % packaged)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
     except TimeoutError as error:
+        parser.exit(1, "%s\n" % error)
+    except (OSError, ValueError) as error:
         parser.exit(1, "%s\n" % error)
 
 

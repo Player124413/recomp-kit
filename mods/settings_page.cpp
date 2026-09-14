@@ -46,6 +46,8 @@ void rebuild() {
     g_rows.clear();
     if (g_filter.empty()) {
         for (int i = 0; i < DISPLAY_ROW_COUNT; ++i) {
+            if (!mods_display_row_applies(DisplayRow(i)))
+                continue;
             g_lines.push_back(mods_display_line(DisplayRow(i)));
             g_rows.push_back({false, uint32_t(i), true});
         }

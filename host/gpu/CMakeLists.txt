@@ -4,7 +4,7 @@ target_include_directories(gpu_fake PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DI
 target_compile_options(gpu_fake PRIVATE ${POP_WARN_STRICT})
 pop_optimize(gpu_fake 1)
 
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
 add_executable(gpu_fake_tests fake/tests/gpu_fake_tests.cpp)
 target_link_libraries(gpu_fake_tests PRIVATE gpu_fake)
 target_compile_options(gpu_fake_tests PRIVATE ${POP_WARN_STRICT})
@@ -29,6 +29,9 @@ pop_link_sdl(gpu_vulkan)
 if(NOT WIN32 AND NOT APPLE)
   target_link_libraries(gpu_vulkan PUBLIC dl)
 endif()
+if(ANDROID)
+  target_link_libraries(gpu_vulkan PUBLIC vulkan)
+endif()
 pop_optimize(gpu_vulkan 2)
 
 # gpu_backend: every backend this platform has plus the factory, as one
@@ -52,6 +55,10 @@ pop_link_sdl(gpu_backend)
 if(NOT WIN32 AND NOT APPLE)
   target_link_libraries(gpu_backend PUBLIC dl)
 endif()
+if(ANDROID)
+  # Object inclusion above does not carry gpu_vulkan's link dependencies.
+  target_link_libraries(gpu_backend PUBLIC vulkan)
+endif()
 if(APPLE)
   target_link_libraries(gpu_backend PUBLIC "-framework Metal" "-framework QuartzCore" "-framework CoreVideo"
                                            "-framework CoreGraphics" "-framework Foundation")
@@ -60,7 +67,7 @@ pop_optimize(gpu_backend 1)
 
 # The contract suite, once per backend. `gpu` is the platform's default
 # backend; `moltenvk` is Vulkan on Apple, which needs MoltenVK installed.
-if(NOT IOS)
+if(NOT IOS AND NOT ANDROID)
 function(pop_gpu_contract_test target backend label)
   add_executable(${target} tests/gpu_contract_tests.cpp)
   target_link_libraries(${target} PRIVATE gpu_backend)

@@ -41,8 +41,19 @@ bool game_path_save(const std::string &path) {
     return fclose(f) == 0;
 }
 
-GamePath game_path_resolve(const char *flag) {
+GamePath game_path_resolve(const char *flag, const char *data_root) {
     GamePath g;
+    // A mobile host owns its data location. Missing files must not fall back
+    // to a developer path baked into a build made on another machine.
+    if (data_root) {
+        const std::string candidate = std::string(data_root) + "/game/" RECOMP_EXECUTABLE;
+        OsStat st;
+        if (*data_root && os_stat(candidate.c_str(), &st) == 0 && st.is_regular) {
+            g.exe = candidate;
+            g.source = GamePathSource::DataRoot;
+        }
+        return g;
+    }
     if (flag && *flag) {
         g.exe = flag;
         g.source = GamePathSource::Flag;

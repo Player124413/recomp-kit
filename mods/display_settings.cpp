@@ -80,6 +80,25 @@ void mods_display_init() {
     filtering = desired[DISPLAY_FILTERING];
     host_display_request_window(desired[3]);
 }
+// Host controls work without game metadata. Renderer and native Options rows
+// need a nonempty symbol map that passed the loader's validation.
+bool mods_display_row_applies(DisplayRow row) {
+    switch (row) {
+    case DISPLAY_WINDOW:
+    case DISPLAY_FPS:
+    case DISPLAY_OVERLAY:
+        return true;
+    case DISPLAY_RENDERING:
+    case DISPLAY_UI_SCALE:
+    case DISPLAY_WIDE:
+    case DISPLAY_CLASSIC_MODE:
+    case DISPLAY_TEXTURES:
+    case DISPLAY_FILTERING:
+        return mods_symbols_count() != 0;
+    default:
+        return false;
+    }
+}
 int mods_display_value(DisplayRow row) {
     if (row == DISPLAY_CLASSIC_MODE && mods_options_resolution_count())
         return mods_options_resolution_value();

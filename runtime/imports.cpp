@@ -207,6 +207,13 @@ const char *imports_describe(uint32_t target) {
     return tramps()[idx].desc.c_str();
 }
 
+uint8_t imports_argc(uint32_t trampoline) {
+    if (!imports_is_trampoline(trampoline))
+        return 0;
+    uint32_t idx = (trampoline - TRAMP_BASE) / TRAMP_STRIDE;
+    return idx < tramps().size() ? tramps()[idx].argc : 0;
+}
+
 uint32_t imports_count() {
     return (uint32_t)tramps().size();
 }

@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <string.h>
 
+// Defined in kernel32.cpp with the scheduler.
+void sched_checkpoint();
+
 namespace {
 
 struct WndClass {
@@ -39,6 +42,7 @@ struct Window {
     uint32_t hinstance = 0;
     std::vector<uint32_t> extra;
     bool visible = false;
+    bool shown = false;
     // Windows tracks an update region per window; the runtime only needs to
     // know whether it is empty, which is what UpdateWindow and BeginPaint act
     // on. Showing a window invalidates it, painting it validates it.
@@ -96,6 +100,18 @@ std::string class_key(uint32_t p) {
 Window *find_window(uint32_t hwnd) {
     auto it = windows().find(hwnd);
     return it == windows().end() ? nullptr : &it->second;
+}
+
+// Windows tells a window where it is and how big it is as soon as it exists,
+// and again whenever that changes; a game sizes its blit rectangle from those
+// two messages and never asks again. No non-client area is modelled here.
+static void post_geometry(uint32_t hwnd, const Window *w, bool moved, bool sized) {
+    if (moved)
+        host_post_message(hwnd, 0x0003 /* WM_MOVE */, 0,
+                          ((uint32_t)(uint16_t)w->y << 16) | (uint16_t)w->x);
+    if (sized)
+        host_post_message(hwnd, 0x0005 /* WM_SIZE */, 0 /* SIZE_RESTORED */,
+                          ((uint32_t)(uint16_t)w->h << 16) | (uint16_t)w->w);
 }
 
 void store_msg(uint32_t p, const Msg &m) {
@@ -325,8 +341,10 @@ void u_CreateWindowExA(X86 *c) {
     // it invalidates the window and tells the host, and a host does not have
     // to know that CreateWindowExA can be a show as well.
     if (Window *nw = find_window(hwnd)) {
+        post_geometry(hwnd, nw, true, true);
         if ((nw->style & WS_VISIBLE) && !nw->visible) {
             nw->visible = true;
+            nw->shown = true;
             nw->update_pending = true;
             if (g_window_shown)
                 g_window_shown(hwnd);
@@ -363,6 +381,10 @@ void u_ShowWindow(X86 *c) {
     set_eax(c, was ? 1 : 0);
     if (!was && w->visible) {
         w->update_pending = true;
+        if (!w->shown) {
+            w->shown = true;
+            post_geometry(w->hwnd, w, false, true);
+        }
         if (g_window_shown)
             g_window_shown(w->hwnd);
     }
@@ -400,6 +422,7 @@ void u_SetWindowPos(X86 *c) {
             w->w = (int32_t)arg(c, 4);
             w->h = (int32_t)arg(c, 5);
         } // SWP_NOSIZE
+        post_geometry(w->hwnd, w, !(flags & 0x0002), !(flags & 0x0001));
     }
     set_eax(c, 1);
 }
@@ -432,6 +455,23 @@ void u_GetClientRect(X86 *c) {
     set_eax(c, 1);
 }
 
+void u_SystemParametersInfoA(X86 *c) {
+    const uint32_t SPI_GETWORKAREA = 48;
+    uint32_t action = arg(c, 0), param = arg(c, 2);
+    if (action == SPI_GETWORKAREA && param) {
+        Window *w = find_window(host_main_window());
+        wr32(param + 0, 0);
+        wr32(param + 4, 0);
+        wr32(param + 8, (uint32_t)(w ? w->w : 640));
+        wr32(param + 12, (uint32_t)(w ? w->h : 480));
+        set_eax(c, 1);
+        return;
+    }
+    log_once(("spi:" + std::to_string(action)).c_str(), "SystemParametersInfoA(%u) unsupported",
+             action);
+    set_eax(c, 0);
+}
+
 void u_AdjustWindowRectEx(X86 *c) {
     // The host window has no non-client area, so the client rect is the window
     // rect. Leaving the rectangle untouched keeps the guest's requested client
@@ -459,6 +499,31 @@ void u_GetActiveWindow(X86 *c) {
 }
 void u_SetFocus(X86 *c) {
     set_eax(c, find_window(arg(c, 0)) ? g_main_hwnd : 0);
+}
+void u_GetMenu(X86 *c) {
+    set_eax(c, 0);
+}
+void u_IsIconic(X86 *c) {
+    set_eax(c, 0);
+}
+void u_OpenIcon(X86 *c) {
+    set_eax(c, 1);
+}
+void u_SetForegroundWindow(X86 *c) {
+    set_eax(c, 1);
+}
+void u_FindWindowA(X86 *c) {
+    set_eax(c, 0);
+}
+void u_SetActiveWindow(X86 *c) {
+    // Single-window runtime: the main window is always the active one.
+    set_eax(c, host_main_window());
+}
+void u_WaitMessage(X86 *c) {
+    // A blocking wait in the original; here a scheduling checkpoint so the
+    // service threads run, then return as if a message arrived.
+    sched_checkpoint();
+    set_eax(c, 1);
 }
 void u_ClientToScreen(X86 *c) {
     Window *w = find_window(arg(c, 0));
@@ -787,20 +852,25 @@ void u_EndPaint(X86 *c) {
     set_eax(c, 1);
 }
 
-// The desktop a game measures before it makes its window.  DirectDraw sets
-// the real mode afterwards; these only size and place a windowed frame.
+// Use the desktop fallback until DirectDraw selects a mode, then report that
+// mode so a window procedure can size its fullscreen blit rectangle correctly.
 void u_GetSystemMetrics(X86 *c) {
+    uint32_t width = 0, height = 0, bpp = 0;
+    if (!ddraw_display_mode(&width, &height, &bpp)) {
+        width = 1024;
+        height = 768;
+    }
     uint32_t v = 0;
     switch (arg(c, 0)) {
     case 0:  // SM_CXSCREEN
     case 16: // SM_CXFULLSCREEN
-        v = 1024;
+        v = width;
         break;
     case 1: // SM_CYSCREEN
-        v = 768;
+        v = height;
         break;
     case 17: // SM_CYFULLSCREEN
-        v = 768 - 19;
+        v = height - 19;
         break;
     case 4: // SM_CYCAPTION
         v = 19;
@@ -873,6 +943,12 @@ void u_GetCursorPos(X86 *c) {
         wr32(p + 4, (uint32_t)g_cursor_y);
     }
     set_eax(c, 1);
+}
+void u_GetMessagePos(X86 *c) {
+    set_eax(c, ((uint32_t)(uint16_t)g_cursor_y << 16) | (uint16_t)g_cursor_x);
+}
+void u_GetMessageTime(X86 *c) {
+    set_eax(c, host_millis());
 }
 void u_GetAsyncKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
@@ -1094,6 +1170,7 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "SetWindowPos", 7, u_SetWindowPos},
     {"USER32.dll", "GetWindowRect", 2, u_GetWindowRect},
     {"USER32.dll", "GetClientRect", 2, u_GetClientRect},
+    {"USER32.dll", "SystemParametersInfoA", 4, u_SystemParametersInfoA},
     {"USER32.dll", "AdjustWindowRectEx", 4, u_AdjustWindowRectEx},
     {"USER32.dll", "ClientToScreen", 2, u_ClientToScreen},
     {"USER32.dll", "SetRect", 5, u_SetRect},
@@ -1106,6 +1183,9 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "CreateDialogParamA", 5, u_CreateDialogParamA},
     {"USER32.dll", "PeekMessageA", 5, u_PeekMessageA},
     {"USER32.dll", "GetMessageA", 4, u_GetMessageA},
+    {"USER32.dll", "WaitMessage", 0, u_WaitMessage},
+    {"USER32.dll", "GetMessagePos", 0, u_GetMessagePos},
+    {"USER32.dll", "GetMessageTime", 0, u_GetMessageTime},
     {"USER32.dll", "TranslateMessage", 1, u_TranslateMessage},
     {"USER32.dll", "DispatchMessageA", 1, u_DispatchMessageA},
     {"USER32.dll", "PostMessageA", 4, u_PostMessageA},
@@ -1120,6 +1200,12 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
     {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},
     {"USER32.dll", "SetFocus", 1, u_SetFocus},
+    {"USER32.dll", "GetMenu", 1, u_GetMenu},
+    {"USER32.dll", "IsIconic", 1, u_IsIconic},
+    {"USER32.dll", "OpenIcon", 1, u_OpenIcon},
+    {"USER32.dll", "SetForegroundWindow", 1, u_SetForegroundWindow},
+    {"USER32.dll", "FindWindowA", 2, u_FindWindowA},
+    {"USER32.dll", "SetActiveWindow", 1, u_SetActiveWindow},
     {"USER32.dll", "DestroyIcon", 1, u_DestroyIcon},
     {"USER32.dll", "GetSystemMetrics", 1, u_GetSystemMetrics},
     {"USER32.dll", "IsWindowUnicode", 1, u_IsWindowUnicode},

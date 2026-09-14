@@ -31,6 +31,8 @@ void dsound_register();
 void dshow_register();
 void dinput_register();
 void qmixer_register();
+void mss32_register();
+void bink_register();
 void weanetr_register();
 
 // Per-module state resets. Each drops the cached guest addresses and handle
@@ -41,6 +43,7 @@ void d3d_reset();
 void dsound_reset();
 void dshow_reset();
 void dinput_reset();
+void bink_reset();
 
 // The host calls this after feeding new input through host_input_state. It
 // signals the notification event of every DirectInput device that registered
@@ -78,6 +81,8 @@ void dsound_pump();
 // stops. DirectSound's streaming worker is parked in WaitForMultipleObjects on
 // events nothing else would signal.
 void qmixer_frame_pump(X86 *c);
+// Refills Miles streams on the guest frame seam.
+void mss32_frame_pump(X86 *c);
 // Keeps a DirectShow graph's audio channel fed and posts its completion.
 void dshow_frame_pump(X86 *c);
 // The display's frame boundary in the same shape, registered beside it: the

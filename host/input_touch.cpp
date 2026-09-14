@@ -61,12 +61,12 @@ void TouchMapper::set_edge_insets(double left, double top, double right, double 
     inset_b_ = bottom;
 }
 
-// A placed motion: the point, snapped onto a window edge when the finger is
+// A placed motion: optionally snapped onto a window edge when the finger is
 // within kTouchEdgeMargin of one, plus whatever strip the system keeps along
-// that edge. Remembers whether it landed on an edge.
-void TouchMapper::place(std::vector<TouchAction> *out, double x, double y) {
+// that edge. Clicks keep the finger's position; holds and drags remember a snap.
+void TouchMapper::place(std::vector<TouchAction> *out, double x, double y, bool snap) {
     bool at_edge = false;
-    if (bounds_w_ > 0 && bounds_h_ > 0) {
+    if (snap && bounds_w_ > 0 && bounds_h_ > 0) {
         if (x < kTouchEdgeMargin + inset_l_) {
             x = 0;
             at_edge = true;
@@ -90,7 +90,7 @@ void TouchMapper::place(std::vector<TouchAction> *out, double x, double y) {
 
 // Press now; the release follows from tick() once the hold time has passed.
 void TouchMapper::click(std::vector<TouchAction> *out, int b, double x, double y, uint64_t now) {
-    place(out, x, y);
+    place(out, x, y, false);
     // Copied out before the next push: a reference into the vector would not
     // survive the reallocation, and the release would carry whatever was left.
     const double px = out->back().x, py = out->back().y;

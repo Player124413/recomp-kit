@@ -215,6 +215,8 @@ bool host_gate_window_motion(int32_t x, int32_t y, double dx, double dy, HitResu
 void host_gate_publish_drawable_size(int w, int h);
 // Capture requires an inside click, and Escape must remain a release while held.
 bool host_pointer_can_capture(bool key, bool inside, bool click, bool escape, bool page);
+// Capture confines the OS pointer in every window mode, including a plain window.
+bool host_pointer_confinement_wanted(bool captured, int window_mode);
 bool host_pointer_at_resize_edge(double x, double y, double w, double h, double margin);
 void host_pointer_drawable_position(double *x, double *y);
 

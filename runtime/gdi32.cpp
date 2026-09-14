@@ -15,6 +15,12 @@
 #include <string.h>
 #include <vector>
 
+// Like the runtime's other weak host hooks, this keeps runtime-only binaries
+// independent of DX. A linked DirectDraw shim supplies the accepted mode.
+extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *, uint32_t *) {
+    return false;
+}
+
 namespace {
 
 struct Dib {
@@ -36,7 +42,8 @@ struct Dc {
     uint32_t bitmap = 0;
     uint32_t palette = 0;
     uint32_t text_color = 0;
-    uint32_t bk_mode = 2; // OPAQUE
+    uint32_t bk_color = 0x00ffffff; // white, the default opaque text background
+    uint32_t bk_mode = 2;           // OPAQUE
 };
 
 // Pseudo handles: bitmaps, palettes and memory DCs each in their own run,
@@ -46,6 +53,8 @@ constexpr uint32_t PALETTE_HANDLE_BASE = 0x00058000u;
 constexpr uint32_t DC_HANDLE_BASE = 0x00060000u;
 constexpr uint32_t DEFAULT_BITMAP = 0x0004f001u;  // what SelectObject reports as "previous"
 constexpr uint32_t DEFAULT_PALETTE = 0x0004f002u; // the system palette handle
+constexpr uint32_t TEXT_HEIGHT = 16;
+constexpr uint32_t TEXT_AVERAGE_CHAR_WIDTH = 7;
 
 uint32_t g_next_bitmap = BITMAP_HANDLE_BASE;
 uint32_t g_next_palette = PALETTE_HANDLE_BASE;
@@ -435,7 +444,39 @@ void g_GetDIBits(X86 *c) {
     set_eax(c, n);
 }
 
-// Text: accepted, measured plausibly, not drawn.
+// Report the accepted DirectDraw mode, or the palettized desktop fallback
+// before a mode is set (also used by builds without the DirectDraw module).
+void g_GetDeviceCaps(X86 *c) {
+    uint32_t w = 640, h = 480, bpp = 8;
+    ddraw_display_mode(&w, &h, &bpp);
+    uint32_t value = 0;
+    switch (arg(c, 1)) {
+    case 8: // HORZRES
+        value = w;
+        break;
+    case 10: // VERTRES
+        value = h;
+        break;
+    case 12: // BITSPIXEL
+        value = bpp;
+        break;
+    case 14: // PLANES
+        value = 1;
+        break;
+    case 38: // RASTERCAPS: RC_PALETTE
+        value = bpp == 8 ? 0x100u : 0u;
+        break;
+    case 104: // SIZEPALETTE
+        value = bpp == 8 ? 256u : 0u;
+        break;
+    case 24: // NUMCOLORS
+        value = bpp == 8 ? 256u : 0xffffffffu;
+        break;
+    }
+    set_eax(c, value);
+}
+
+// Text: accepted and measured with fixed metrics, not drawn.
 void g_TextOutA(X86 *c) {
     log_once("gdi.textout", "gdi: TextOutA is accepted and not drawn in this runtime");
     set_eax(c, 1);
@@ -447,25 +488,41 @@ void g_GetTextMetricsA(X86 *c) {
         return;
     }
     memset(g_mem + tm, 0, 56);
-    wr32(tm + 0, 16);      // tmHeight
-    wr32(tm + 4, 13);      // tmAscent
-    wr32(tm + 8, 3);       // tmDescent
-    wr32(tm + 12, 3);      // tmInternalLeading
-    wr32(tm + 16, 1);      // tmExternalLeading
-    wr32(tm + 20, 7);      // tmAveCharWidth
-    wr32(tm + 24, 14);     // tmMaxCharWidth
-    wr32(tm + 28, 400);    // tmWeight
-    g_mem[tm + 44] = 0x20; // tmFirstChar
-    g_mem[tm + 45] = 0xff; // tmLastChar
-    g_mem[tm + 46] = 0x3f; // tmDefaultChar
-    g_mem[tm + 47] = 0x20; // tmBreakChar
-    g_mem[tm + 52] = 0x02; // tmPitchAndFamily: variable pitch
+    wr32(tm + 0, TEXT_HEIGHT);              // tmHeight
+    wr32(tm + 4, 13);                       // tmAscent
+    wr32(tm + 8, 3);                        // tmDescent
+    wr32(tm + 12, 3);                       // tmInternalLeading
+    wr32(tm + 16, 1);                       // tmExternalLeading
+    wr32(tm + 20, TEXT_AVERAGE_CHAR_WIDTH); // tmAveCharWidth
+    wr32(tm + 24, 14);                      // tmMaxCharWidth
+    wr32(tm + 28, 400);                     // tmWeight
+    g_mem[tm + 44] = 0x20;                  // tmFirstChar
+    g_mem[tm + 45] = 0xff;                  // tmLastChar
+    g_mem[tm + 46] = 0x3f;                  // tmDefaultChar
+    g_mem[tm + 47] = 0x20;                  // tmBreakChar
+    g_mem[tm + 52] = 0x02;                  // tmPitchAndFamily: variable pitch
+    set_eax(c, 1);
+}
+void g_GetTextExtentPointA(X86 *c) {
+    uint32_t size = arg(c, 3);
+    if (!size || !gm_valid(size, 8)) {
+        set_eax(c, 0);
+        return;
+    }
+    wr32(size, arg(c, 2) * TEXT_AVERAGE_CHAR_WIDTH);
+    wr32(size + 4, TEXT_HEIGHT);
     set_eax(c, 1);
 }
 void g_SetTextColor(X86 *c) {
     Dc &dc = dcs()[arg(c, 0)];
     uint32_t prev = dc.text_color;
     dc.text_color = arg(c, 1);
+    set_eax(c, prev);
+}
+void g_SetBkColor(X86 *c) {
+    Dc &dc = dcs()[arg(c, 0)];
+    uint32_t prev = dc.bk_color;
+    dc.bk_color = arg(c, 1);
     set_eax(c, prev);
 }
 void g_SetBkMode(X86 *c) {
@@ -493,9 +550,12 @@ const ImportShim g_gdi32_shims[] = {
     {"GDI32.dll", "BitBlt", 9, g_BitBlt},
     {"GDI32.dll", "PatBlt", 6, g_PatBlt},
     {"GDI32.dll", "GetDIBits", 7, g_GetDIBits},
+    {"GDI32.dll", "GetDeviceCaps", 2, g_GetDeviceCaps},
     {"GDI32.dll", "TextOutA", 5, g_TextOutA},
     {"GDI32.dll", "GetTextMetricsA", 2, g_GetTextMetricsA},
+    {"GDI32.dll", "GetTextExtentPointA", 4, g_GetTextExtentPointA},
     {"GDI32.dll", "SetTextColor", 2, g_SetTextColor},
+    {"GDI32.dll", "SetBkColor", 2, g_SetBkColor},
     {"GDI32.dll", "SetBkMode", 2, g_SetBkMode},
 };
 const size_t g_gdi32_shim_count = sizeof(g_gdi32_shims) / sizeof(g_gdi32_shims[0]);

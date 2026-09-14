@@ -21,6 +21,7 @@ listings = "analysis/STUB.EXE"
 globals = "globals.toml"
 animation_counter = 0x00500000
 volatile_reads = []
+entry_points = []
 
 [hooks]
 frame_clock_begin = 0x00401100

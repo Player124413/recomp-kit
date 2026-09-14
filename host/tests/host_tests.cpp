@@ -7399,6 +7399,15 @@ static void test_page_draws_on_a_copy() {
 // deltas, clamped to the frame, so there is only one answer.
 // ---------------------------------------------------------------------------
 static void test_fullscreen_edge_presentation() {
+    // A captured pointer is confined in every window mode: a plain window
+    // that let the mouse leave parked the guest cursor on the frame's edge,
+    // which an edge-scrolling game read as a hand holding it there.
+    CHECK(host_pointer_confinement_wanted(true, 0));
+    CHECK(host_pointer_confinement_wanted(true, 1));
+    CHECK(host_pointer_confinement_wanted(true, 2));
+    CHECK(!host_pointer_confinement_wanted(false, 0));
+    CHECK(!host_pointer_confinement_wanted(false, 2));
+
     // A clipped OS pointer must still reach every game edge, at Retina and
     // 4K sizes. Test the last complete point (max - 1), overrun, monotonic
     // motion and the flipped vertical axis; without remapping, the final

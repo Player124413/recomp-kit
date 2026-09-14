@@ -11,6 +11,7 @@
 #include "../runtime/win32.h"
 #include "../runtime/mods_seam.h"
 #include "../dx/dx.h"
+#include "../dx/host_api.h"
 #include "../platform/os.h"
 
 #include <setjmp.h>
@@ -603,6 +604,9 @@ bool boot_abnormal_exit() {
 }
 bool boot_close_requested() {
     return g_close_posted;
+}
+extern "C" int host_close_requested(void) {
+    return boot_close_requested();
 }
 bool boot_forced_stop() {
     return g_forced_stop;

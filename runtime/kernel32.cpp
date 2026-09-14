@@ -1360,6 +1360,22 @@ void k_GetVolumeInformationA(X86 *c) {
     volume_information_named(c, gm_str(arg(c, 0)), false);
 }
 
+void k_GetDiskFreeSpaceA(X86 *c) {
+    disk_free_space(c);
+}
+
+void k_GetSystemDirectoryA(X86 *c) {
+    static const char dir[] = "C:\\WINDOWS\\SYSTEM";
+    uint32_t buf = arg(c, 0), size = arg(c, 1);
+    uint32_t len = sizeof dir - 1;
+    if (size <= len) {
+        set_eax(c, len + 1);
+        return;
+    }
+    memcpy(g_mem + buf, dir, len + 1);
+    set_eax(c, len);
+}
+
 void k_GetLogicalDriveStringsA(X86 *c) {
     logical_drive_strings(c, false);
 }
@@ -4132,6 +4148,21 @@ void volume_information_named(X86 *c, const std::string &root, bool wide) {
     set_eax(c, 1);
 }
 
+// The one drive the runtime presents: 4 GB free of 8 GB, in 512-byte sectors,
+// 8 per cluster. A game checks this before writing a save.
+void disk_free_space(X86 *c) {
+    uint32_t spc = arg(c, 1), bps = arg(c, 2), fr = arg(c, 3), tot = arg(c, 4);
+    if (spc)
+        wr32(spc, 8);
+    if (bps)
+        wr32(bps, 512);
+    if (fr)
+        wr32(fr, 0x00100000);
+    if (tot)
+        wr32(tot, 0x00200000);
+    set_eax(c, 1);
+}
+
 void drive_type_named(X86 *c, const std::string &root) {
     (void)root;
     set_eax(c, 3); // DRIVE_FIXED
@@ -4310,6 +4341,8 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "GetCurrentDirectoryA", 2, k_GetCurrentDirectoryA},
     {"KERNEL32.dll", "SetCurrentDirectoryA", 1, k_SetCurrentDirectoryA},
     {"KERNEL32.dll", "GetVolumeInformationA", 8, k_GetVolumeInformationA},
+    {"KERNEL32.dll", "GetDiskFreeSpaceA", 5, k_GetDiskFreeSpaceA},
+    {"KERNEL32.dll", "GetSystemDirectoryA", 2, k_GetSystemDirectoryA},
     {"KERNEL32.dll", "GetLogicalDriveStringsA", 2, k_GetLogicalDriveStringsA},
     {"KERNEL32.dll", "GetDriveTypeA", 1, k_GetDriveTypeA},
     // modules and process state

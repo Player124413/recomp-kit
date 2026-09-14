@@ -16,6 +16,28 @@ function(pop_ios_bundle target)
     XCODE_ATTRIBUTE_ENABLE_BITCODE NO
     "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations~ipad"
       "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight")
+  if(RECOMP_VIDEO)
+    # Let Xcode copy and sign the imported dylibs with the app's selected
+    # identity/team. Plain post-build copies are not signed automatically.
+    # These properties are supported since CMake 3.20 (the kit needs 3.24).
+    set_target_properties(${target} PROPERTIES
+      BUILD_WITH_INSTALL_RPATH ON
+      INSTALL_RPATH "@executable_path/Frameworks"
+      XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/Frameworks"
+      # Paths, not the imported target names: the Xcode generator resolves
+      # embedded items by file, and the dylibs exist once the ffmpeg project
+      # has built (the app depends on it through pop_link_video).
+      XCODE_EMBED_FRAMEWORKS "${RECOMP_FFMPEG_LIBRARIES}"
+      XCODE_EMBED_FRAMEWORKS_CODE_SIGN_ON_COPY YES)
+    add_dependencies(${target} ffmpeg)
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
+      ${POP_ROOT}/third_party/ffmpeg/NOTICE.md)
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/third_party/ffmpeg/NOTICE.md
+              $<TARGET_BUNDLE_CONTENT_DIR:${target}>/ffmpeg-NOTICE.md
+      COMMENT "Copying the FFmpeg notice into ${RECOMP_APP_NAME}.app"
+      VERBATIM)
+  endif()
   # The game itself, filtered by games/<id>/game.toml [bundle].exclude. A stub
   # build has no game to bundle.
   if(NOT POP_TRANSLATE STREQUAL "STUB")

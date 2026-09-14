@@ -117,21 +117,23 @@ static void test_edge_hold_scrolls_then_moves_the_cursor_inside() {
     CHECK(out.size() == 1); // and no click
 }
 
-static void test_tap_on_an_edge_clicks_there_then_moves_inside() {
+static void test_tap_near_an_edge_clicks_at_the_finger() {
     TouchMapper m;
-    m.set_bounds(1000, 800);
+    m.set_bounds(800, 600);
     std::vector<TouchAction> out;
-    m.finger_down({1, 995, 790}, 0, &out);
-    m.finger_up({1, 996, 791}, 50 * MS, &out);
-    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion && out[0].x == 999 &&
-          out[0].y == 799);
+    m.finger_down({1, 5, 400}, 0, &out);
+    m.finger_up({1, 5, 400}, 50 * MS, &out);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion && out[0].x == 5 &&
+          out[0].y == 400);
     CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down &&
-          out[1].x == 999);
+          out[1].x == 5 && out[1].y == 400);
     out.clear();
     m.tick(50 * MS + kTouchClickHoldNs, &out);
-    CHECK(out.size() == 2 && out[0].kind == TouchAction::Button && !out[0].down);
-    CHECK(out[1].kind == TouchAction::Motion && out[1].x == 999 - kTouchEdgeRelease &&
-          out[1].y == 799 - kTouchEdgeRelease);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].button == 0 &&
+          !out[0].down && out[0].x == 5 && out[0].y == 400); // release, no nudge
+    out.clear();
+    m.tick(1000 * MS, &out);
+    CHECK(out.empty()); // no later nudge
 }
 
 static void test_no_bounds_means_no_snapping() {
@@ -351,7 +353,7 @@ int main() {
     test_long_press_is_right_click();
     test_long_press_then_drag_is_a_wheel_button_drag();
     test_edge_hold_scrolls_then_moves_the_cursor_inside();
-    test_tap_on_an_edge_clicks_there_then_moves_inside();
+    test_tap_near_an_edge_clicks_at_the_finger();
     test_no_bounds_means_no_snapping();
     test_drag_is_left_drag();
     test_two_finger_drag_pans_with_arrows();
