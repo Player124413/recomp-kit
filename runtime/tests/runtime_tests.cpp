@@ -1420,21 +1420,20 @@ static void test_gdi_and_com(X86 *c) {
     wr32(bits, 0);
     uint32_t hdc = call_import(c, "USER32.dll", "GetDC", {0});
     // Read the same mode hook as GDI. Runtime-only builds use its weak default.
-    uint32_t mw = 640, mh = 480, mbpp = 8;
+    uint32_t mw = 1024, mh = 768, mbpp = 32;
     ddraw_display_mode(&mw, &mh, &mbpp);
     check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 8}) == mw &&
               call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 10}) == mh,
           "GetDeviceCaps HORZRES/VERTRES are the mode");
-    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 12}) == mbpp,
-          "BITSPIXEL is the mode's depth");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 12}) == 32,
+          "BITSPIXEL is the canvas depth");
     check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 14}) == 1, "PLANES");
-    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 38}) == (mbpp == 8 ? 0x100u : 0u),
-          "RASTERCAPS has RC_PALETTE only at 8 bpp");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 38}) == 0x2a01u,
+          "RASTERCAPS supports bitmap and DIB blits");
     check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 104}) == (mbpp == 8 ? 256u : 0u),
           "SIZEPALETTE is 256 only at 8 bpp");
-    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 24}) ==
-              (mbpp == 8 ? 256u : 0xffffffffu),
-          "NUMCOLORS is 256 at 8 bpp, otherwise -1");
+    check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 24}) == 0xffffffffu,
+          "NUMCOLORS is -1 for a true-color canvas");
     check(call_import(c, "GDI32.dll", "GetDeviceCaps", {hdc, 0x2000}) == 0,
           "an unknown index is 0");
     uint32_t sz = scratch_block(8), text = put_str("ABCDEFG");

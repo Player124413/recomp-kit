@@ -2,6 +2,7 @@
 // callbacks may erase windows, so never retain a Window pointer across one.
 #pragma once
 #include "imports.h"
+#include "gdi32_internal.h"
 #include "win32.h"
 #include <deque>
 #include <map>
@@ -24,6 +25,7 @@ struct WndClass {
 };
 
 struct Window {
+    gdi::Surface surface;
     uint32_t hwnd = 0;
     uint32_t wndproc = 0;
     uint32_t style = 0, exstyle = 0;

@@ -308,3 +308,6 @@ using HostFrameCapture = std::function<void(const HostCompletedComposite &)>;
 using HostCaptureFactory = HostFrameCapture (*)(HostScreenClass);
 void host_present_set_capture_factory(HostCaptureFactory factory);
 #endif
+
+// Complete a standalone GDI window frame, with no DirectDraw frame dependency.
+extern "C" void host_present_seal_window(void);

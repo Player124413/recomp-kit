@@ -230,3 +230,26 @@ extern "C" int host_display_offer_mode(int w, int h, int bpp) {
     // Selecting Classic must also leave the higher modes in the menu.
     return ddraw_add_mode(640, 480, 8) && ddraw_add_mode(640, 480, 16) && ddraw_add_mode(w, h, bpp);
 }
+
+// VCL-only frames have no DirectDraw recorder to seal them. Stage an owned
+// RGBA copy and publish it through the same immutable presenter mailbox.
+extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
+    if (!argb || w <= 0 || h <= 0)
+        return;
+    if (g_mode_w != w || g_mode_h != h || g_mode_bpp != 32)
+        host_set_display_mode(w, h, 32);
+    host_present_first_write();
+    std::vector<uint8_t> rgba(size_t(w) * h * 4);
+    for (size_t i = 0; i < size_t(w) * h; ++i) {
+        rgba[4 * i] = uint8_t(argb[i] >> 16);
+        rgba[4 * i + 1] = uint8_t(argb[i] >> 8);
+        rgba[4 * i + 2] = uint8_t(argb[i]);
+        rgba[4 * i + 3] = 255;
+    }
+    {
+        ReportLock held;
+        ++g_present_count;
+    }
+    host_present_stage_rgba(rgba.data(), w, h);
+    host_present_seal_window();
+}

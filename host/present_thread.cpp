@@ -1606,3 +1606,12 @@ KeypadView host_present_keypad(void) {
 bool host_present_suspended(void) {
     return g_present_suspended.load();
 }
+
+extern "C" void host_present_seal_window() {
+    auto s = active.load();
+    if (!s)
+        return;
+    // A separate sequence avoids collisions with DirectDraw's frame leases.
+    static uint64_t next = uint64_t(1) << 63;
+    s->seal(next++, HOST_SCREEN_MENU, false);
+}

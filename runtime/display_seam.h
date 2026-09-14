@@ -24,3 +24,13 @@ int mods_display_filtering(void); /* 0 original, 1 trilinear, 2 4x, 3 8x, 4 16x 
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+// Synchronous owned-pixel snapshot: the host copies ARGB before returning.
+void host_display_present_window(const uint32_t *argb, int w, int h);
+bool ddraw_gdi_primary_active(void);
+#ifdef __cplusplus
+}
+#endif

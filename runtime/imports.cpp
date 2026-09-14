@@ -460,4 +460,6 @@ void imports_init() {
     user32_vcl_register();
     imports_register(g_misc_shims, g_misc_shim_count);
     imports_register(g_gdi32_shims, g_gdi32_shim_count);
+    extern void gdi_model_register();
+    gdi_model_register();
 }

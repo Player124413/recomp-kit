@@ -863,15 +863,15 @@ void u_PostQuitMessage(X86 *c) {
 // Paint / DC / cursor / input
 // ---------------------------------------------------------------------------
 void u_GetDC(X86 *c) {
-    set_eax(c, g_next_gdi += 4);
+    set_eax(c, gdi_window_dc(arg(c, 0)));
 }
 void u_ReleaseDC(X86 *c) {
-    set_eax(c, 1);
+    set_eax(c, gdi_release_window_dc(arg(c, 0), arg(c, 1)));
 }
 
 void u_BeginPaint(X86 *c) {
     uint32_t hwnd = arg(c, 0), ps = arg(c, 1);
-    uint32_t hdc = (g_next_gdi += 4);
+    uint32_t hdc = gdi_window_dc(hwnd);
     Window *w = find_window(hwnd);
     if (w)
         w->update_pending = false; // BeginPaint validates the region
@@ -887,7 +887,8 @@ void u_BeginPaint(X86 *c) {
     set_eax(c, hdc);
 }
 void u_EndPaint(X86 *c) {
-    set_eax(c, 1);
+    uint32_t ps = arg(c, 1);
+    set_eax(c, ps && gm_valid(ps, 64) && gdi_release_window_dc(arg(c, 0), rd32(ps)));
 }
 
 // Use the desktop fallback until DirectDraw selects a mode, then report that

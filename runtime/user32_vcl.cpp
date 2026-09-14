@@ -58,6 +58,7 @@ bool destroy_window(X86 *c, uint32_t hwnd) {
         destroy_window(c, child);
     host_dispatch_to_wndproc(c, hwnd, 0x82, 0, 0);
     forget_window_services(hwnd);
+    gdi_destroy_window(hwnd);
     windows().erase(hwnd);
     win32_forget_scrollbars(hwnd);
     for (auto i = timers.begin(); i != timers.end();)
@@ -983,6 +984,8 @@ void sys_brush(X86 *c) {
     set_eax(c, i < 30 ? system_brush_base + i : 0);
 }
 bool brush_color(uint32_t brush, uint32_t *pixel) {
+    if (gdi::brush_color(brush, pixel))
+        return true;
     uint32_t i = brush >= system_brush_base ? brush - system_brush_base : brush - 1;
     if (i >= 30)
         return false;
