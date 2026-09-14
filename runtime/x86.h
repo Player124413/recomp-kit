@@ -183,7 +183,11 @@ struct X86 {
     /* Every EFLAGS bit other than CF PF AF ZF SF DF OF, so PUSHFD/POPFD
      * round-trip (the CPUID probe toggles the ID bit).  Initialise to 0x202. */
     uint32_t eflags_misc;
-    double st[8];     /* x87 stack, physical slots */
+    double st[8]; /* x87 stack, physical slots */
+    /* FILD integers retain all 64 mantissa bits until arithmetic replaces
+     * them. The double alone cannot preserve qword copies above 2^53. */
+    uint64_t st_bits[8];
+    uint8_t st_exact[8];
     uint32_t fpu_top; /* ST(i) == st[(fpu_top + i) & 7] */
     uint16_t fpu_cw, fpu_sw;
     /* x87 tag word, 2 bits per PHYSICAL register st[i]: 3 = empty, else in
@@ -852,15 +856,36 @@ static inline unsigned fempty(const X86 *c, unsigned i) {
 static inline void fpush(X86 *c, double v) {
     c->fpu_top = (c->fpu_top - 1u) & 7u;
     c->st[c->fpu_top] = v;
+    c->st_bits[c->fpu_top] = 0;
+    c->st_exact[c->fpu_top] = 0;
     ftag_put(c, c->fpu_top, ftag_classify(v));
+}
+static inline void fpush_int(X86 *c, int64_t v) {
+    fpush(c, (double)v);
+    c->st_bits[c->fpu_top] = (uint64_t)v;
+    c->st_exact[c->fpu_top] = 1;
+}
+/* FLD ST(i) captures the source before pushing, including the wraparound
+ * case where the destination is the same physical slot. */
+static inline void fpush_st(X86 *c, unsigned i) {
+    unsigned src = (c->fpu_top + i) & 7u;
+    uint64_t bits = c->st_bits[src];
+    uint8_t exact = c->st_exact[src];
+    unsigned tag = ftag_of(c, src);
+    fpush(c, c->st[src]);
+    c->st_bits[c->fpu_top] = bits;
+    c->st_exact[c->fpu_top] = exact;
+    ftag_put(c, c->fpu_top, tag);
 }
 static inline double fpop(X86 *c) {
     double v = c->st[c->fpu_top];
+    c->st_exact[c->fpu_top] = 0;
     ftag_put(c, c->fpu_top, FTAG_EMPTY);
     c->fpu_top = (c->fpu_top + 1u) & 7u;
     return v;
 }
 static inline void fdrop(X86 *c) {
+    c->st_exact[c->fpu_top] = 0;
     ftag_put(c, c->fpu_top, FTAG_EMPTY);
     c->fpu_top = (c->fpu_top + 1u) & 7u;
 }
@@ -872,17 +897,34 @@ static inline void fdrop(X86 *c) {
 static inline void fset(X86 *c, unsigned i, double v) {
     unsigned phys = (c->fpu_top + i) & 7u;
     c->st[phys] = v;
+    c->st_bits[phys] = 0;
+    c->st_exact[phys] = 0;
     ftag_put(c, phys, ftag_classify(v));
 }
 
-/* FXCH: the tags travel with the values. */
+/* Register moves preserve the integer representation as well as the tag. */
+static inline void fcopy(X86 *c, unsigned dst, unsigned src) {
+    unsigned a = (c->fpu_top + dst) & 7u, b = (c->fpu_top + src) & 7u;
+    c->st[a] = c->st[b];
+    c->st_bits[a] = c->st_bits[b];
+    c->st_exact[a] = c->st_exact[b];
+    ftag_put(c, a, ftag_of(c, b));
+}
+
+/* FXCH: the tags and exact integers travel with the values. */
 static inline void fxch(X86 *c, unsigned i) {
     unsigned a = c->fpu_top & 7u, b = (c->fpu_top + i) & 7u;
     double v = c->st[a];
     unsigned t = ftag_of(c, a);
+    uint64_t bits = c->st_bits[a];
+    uint8_t exact = c->st_exact[a];
     c->st[a] = c->st[b];
+    c->st_bits[a] = c->st_bits[b];
+    c->st_exact[a] = c->st_exact[b];
     ftag_put(c, a, ftag_of(c, b));
     c->st[b] = v;
+    c->st_bits[b] = bits;
+    c->st_exact[b] = exact;
     ftag_put(c, b, t);
 }
 
@@ -1071,6 +1113,7 @@ static inline void x87_finit(X86 *c) {
     c->fpu_sw = 0;
     c->fpu_top = 0;
     c->fpu_tag = 0xffffu;
+    memset(c->st_exact, 0, sizeof c->st_exact);
 }
 
 /* FNSAVE m108: the 32-bit protected-mode layout.  Control, status and tag
@@ -1101,9 +1144,9 @@ static inline void x87_frstor(X86 *c, uint32_t a) {
     x87_set_cw(c, rd16(a));
     c->fpu_top = (sw >> 11) & 7u;
     c->fpu_sw = (uint16_t)(sw & (uint16_t)~0x3800u);
-    c->fpu_tag = rd16(a + 8);
     for (i = 0; i < 8; i++)
-        c->st[(c->fpu_top + i) & 7u] = rdf80(a + 28 + 10 * i);
+        fset(c, i, rdf80(a + 28 + 10 * i));
+    c->fpu_tag = rd16(a + 8);
 }
 
 /* FST/FSTP to a float, rounded per RC.  The host conversion rounds to
@@ -1147,6 +1190,26 @@ static inline int64_t fto_i64(X86 *c, double v) {
         return (int64_t)r;
     c->fpu_sw |= 0x0001u;
     return INT64_MIN;
+}
+
+/* Integer stores use FILD's exact signed value until an arithmetic write.
+ * Narrowing falls back to the ordinary conversion for masked overflow. */
+static inline int16_t fist_i16(X86 *c) {
+    int64_t v = (int64_t)c->st_bits[c->fpu_top];
+    if (c->st_exact[c->fpu_top] && v >= INT16_MIN && v <= INT16_MAX)
+        return (int16_t)v;
+    return fto_i16(c, ST(c, 0));
+}
+static inline int32_t fist_i32(X86 *c) {
+    int64_t v = (int64_t)c->st_bits[c->fpu_top];
+    if (c->st_exact[c->fpu_top] && v >= INT32_MIN && v <= INT32_MAX)
+        return (int32_t)v;
+    return fto_i32(c, ST(c, 0));
+}
+static inline int64_t fist_i64(X86 *c) {
+    if (c->st_exact[c->fpu_top])
+        return (int64_t)c->st_bits[c->fpu_top];
+    return fto_i64(c, ST(c, 0));
 }
 
 /* FPREM / FPREM1.

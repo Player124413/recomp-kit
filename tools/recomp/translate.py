@@ -2509,12 +2509,11 @@ class Translator(object):
         raise TranslateError("bad x87 memory size %r" % op.size)
 
     def x87_int_value(self, op):
-        if op.size == 16:
-            return "(double)(int16_t)rd16(%s)" % addr_expr(op)
-        if op.size == 32:
-            return "(double)(int32_t)rd32(%s)" % addr_expr(op)
-        if op.size == 64:
-            return "(double)(int64_t)rd64(%s)" % addr_expr(op)
+        return "(double)" + self.x87_signed_value(op)
+
+    def x87_signed_value(self, op):
+        if op.size in (16, 32, 64):
+            return "(int%d_t)rd%d(%s)" % (op.size, op.size, addr_expr(op))
         raise TranslateError("bad x87 integer size %r" % op.size)
 
     def emit_x87(self, fn, ins, m, ops):
@@ -2525,8 +2524,7 @@ class Translator(object):
 
         if m == "FLD":
             if ops[0].kind == "st":
-                L.append("double v_ = %s;" % st(ops[0].sti))
-                L.append("fpush(c, v_);")
+                L.append("fpush_st(c, %d);" % ops[0].sti)
             else:
                 L.append("fpush(c, %s);" % self.x87_mem_value(ops[0]))
             return L
@@ -2543,12 +2541,12 @@ class Translator(object):
         if m == "FBSTP":
             return ["wrbcd80(%s, fpop(c));" % addr_expr(ops[0])]
         if m == "FILD":
-            return ["fpush(c, %s);" % self.x87_int_value(ops[0])]
+            return ["fpush_int(c, %s);" % self.x87_signed_value(ops[0])]
 
         if m in ("FST", "FSTP"):
             if ops and ops[0].kind == "st":
                 if ops[0].sti != 0:
-                    L.append(setst(ops[0].sti, st(0)))
+                    L.append("fcopy(c, %d, 0);" % ops[0].sti)
             elif ops:
                 op = ops[0]
                 if op.size == 32:
@@ -2566,11 +2564,11 @@ class Translator(object):
         if m in ("FIST", "FISTP"):
             op = ops[0]
             if op.size == 16:
-                L.append("wr16(%s, (uint16_t)fto_i16(c, %s));" % (addr_expr(op), st(0)))
+                L.append("wr16(%s, (uint16_t)fist_i16(c));" % addr_expr(op))
             elif op.size == 32:
-                L.append("wr32(%s, (uint32_t)fto_i32(c, %s));" % (addr_expr(op), st(0)))
+                L.append("wr32(%s, (uint32_t)fist_i32(c));" % addr_expr(op))
             elif op.size == 64:
-                L.append("wr64(%s, (uint64_t)fto_i64(c, %s));" % (addr_expr(op), st(0)))
+                L.append("wr64(%s, (uint64_t)fist_i64(c));" % addr_expr(op))
             else:
                 raise TranslateError("bad %s size" % m)
             if m == "FISTP":

@@ -248,8 +248,12 @@ void x86_from_cpu(X86 *c, const pop_cpu_v1 *in, uint32_t bound) {
     if (FIT(df))
         c->eflags_df = in->df;
     if (FIT(st))
-        for (int i = 0; i < 8; ++i)
-            c->st[i] = in->st[i];
+        for (int i = 0; i < 8; ++i) {
+            // The v1 mod ABI exposes doubles. A no-op hook preserves the
+            // runtime's exact integer; an edited value invalidates it.
+            if (memcmp(&c->st[i], &in->st[i], sizeof c->st[i]))
+                fset(c, (i - c->fpu_top) & 7u, in->st[i]);
+        }
     if (FIT(fpu_top))
         c->fpu_top = in->fpu_top;
     if (FIT(fpu_cw))

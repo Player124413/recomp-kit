@@ -65,7 +65,8 @@ class X86(C.Structure):
         ("eflags_sf", C.c_uint32), ("eflags_of", C.c_uint32),
         ("eflags_pf", C.c_uint32), ("eflags_af", C.c_uint32),
         ("eflags_df", C.c_uint32), ("eflags_misc", C.c_uint32),
-        ("st", C.c_double * 8), ("fpu_top", C.c_uint32),
+        ("st", C.c_double * 8), ("st_bits", C.c_uint64 * 8),
+        ("st_exact", C.c_uint8 * 8), ("fpu_top", C.c_uint32),
         ("fpu_cw", C.c_uint16), ("fpu_sw", C.c_uint16),
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),
@@ -369,6 +370,83 @@ CASES = [
     Case("EMMS changes no integer registers or flags", 0x0D028000,
          [(0x0, "CMP ESI,EBP"), (0x2, "EMMS"), (0x4, "RET")],
          "39 EE  0F 77  C3", lambda rng: {"regs": rand_regs(rng)}),
+]
+
+
+def integer_copy_setup(rng, value=None):
+    return {"regs": rand_regs(rng, EAX=SCRATCH, EDX=SCRATCH + 64),
+            "mem": [(SCRATCH, struct.pack("<Q", rng.getrandbits(64) if value is None else value))]}
+
+
+# x87 has enough mantissa bits to copy any signed qword without rounding.
+# Include fixed pointer/string-like patterns and a fresh random value each run.
+CASES += [
+    Case("FILD FISTP qword exact copy %s" % name, 0x0D02A000 + i * 0x100,
+         [(0, "FILD qword ptr [EAX]"), (2, "FISTP qword ptr [EDX]"), (4, "RET")],
+         "df28 df3a c3", lambda rng, value=value: integer_copy_setup(rng, value))
+    for i, (name, value) in enumerate([
+        ("pattern", 0x0102030405060708), ("minus one", 0xffffffffffffffff),
+        ("near minimum", 0x8000000000000001), ("random", None),
+        ("UTF16", int.from_bytes("Out ".encode("utf-16le"), "little"))])
+]
+CASES += [
+    Case("FILD FISTP copies an overlapping 26-byte resource string", 0x0D02B000,
+         [(0, "FILD qword ptr [EAX + 0x12]"), (3, "FILD qword ptr [EAX]"),
+          (5, "FILD qword ptr [EAX + 0x8]"), (8, "FILD qword ptr [EAX + 0x10]"),
+          (11, "FISTP qword ptr [EDX + 0x10]"), (14, "FISTP qword ptr [EDX + 0x8]"),
+          (17, "FISTP qword ptr [EDX]"), (19, "FISTP qword ptr [EDX + 0x12]"), (22, "RET")],
+         "df68 12 df28 df68 08 df68 10 df7a 10 df7a 08 df3a df7a 12 c3",
+         lambda rng: {"regs": rand_regs(rng, EAX=SCRATCH, EDX=SCRATCH + 64),
+                      "mem": [(SCRATCH, "Out of memory".encode("utf-16le"))]}),
+    Case("FILD FXCH preserves both exact integers", 0x0D02B100,
+         [(0, "FILD qword ptr [EAX]"), (2, "FILD qword ptr [EAX + 0x8]"),
+          (5, "FXCH ST1"), (7, "FISTP qword ptr [EDX]"),
+          (9, "FISTP qword ptr [EDX + 0x8]"), (12, "RET")],
+         "df28 df6808 d9c9 df3a df7a08 c3",
+         lambda rng: {"regs": rand_regs(rng, EAX=SCRATCH, EDX=SCRATCH + 64),
+                      "mem": [(SCRATCH, struct.pack("<QQ", rng.getrandbits(64), rng.getrandbits(64)))]}),
+    Case("FILD FLD ST duplicates exact integer metadata", 0x0D02B200,
+         [(0, "FILD qword ptr [EAX]"), (2, "FLD ST0"),
+          (4, "FISTP qword ptr [EDX]"), (6, "FISTP qword ptr [EDX + 0x8]"), (9, "RET")],
+         "df28 d9c0 df3a df7a08 c3", integer_copy_setup),
+    Case("FILD FST ST copies exact integer metadata", 0x0D02B300,
+         [(0, "FLDZ"), (2, "FILD qword ptr [EAX]"), (4, "FST ST1"),
+          (6, "FISTP qword ptr [EDX]"), (8, "FISTP qword ptr [EDX + 0x8]"), (11, "RET")],
+         "d9ee df28 ddd1 df3a df7a08 c3", integer_copy_setup),
+    Case("FILD FSTP ST copies exact integer metadata", 0x0D02B400,
+         [(0, "FLDZ"), (2, "FILD qword ptr [EAX]"), (4, "FSTP ST1"),
+          (6, "FISTP qword ptr [EDX]"), (8, "RET")],
+         "d9ee df28 ddd9 df3a c3", integer_copy_setup),
+    Case("FILD arithmetic clears exact integer metadata", 0x0D02B500,
+         [(0, "FILD qword ptr [EAX]"), (2, "FADD ST0,ST0"),
+          (4, "FISTP qword ptr [EDX]"), (6, "RET")],
+         "df28 d8c0 df3a c3", lambda rng: integer_copy_setup(rng, 1234567)),
+    Case("FILD floating register copy clears stale integer metadata", 0x0D02B600,
+         [(0, "FILD qword ptr [EAX]"), (2, "FLD1"), (4, "FSTP ST1"),
+          (6, "FISTP qword ptr [EDX]"), (8, "RET")],
+         "df28 d9e8 ddd9 df3a c3", integer_copy_setup),
+    Case("FILD reused stack slot clears exact integer metadata", 0x0D02B700,
+         [(0, "FILD qword ptr [EAX]"), (2, "FISTP qword ptr [EDX]"),
+          (4, "FLD1"), (6, "FISTP qword ptr [EDX + 0x8]"), (9, "RET")],
+         "df28 df3a d9e8 df7a08 c3", integer_copy_setup),
+]
+CASES += [
+    Case("FILD %s sign extends into qword" % size, 0x0D02C000 + i * 0x100,
+         [(0, "FILD %s ptr [EAX]" % size), (2, "FISTP qword ptr [EDX]"), (4, "RET")],
+         opcode + " df3a c3", integer_copy_setup)
+    for i, (size, opcode) in enumerate([("word", "df00"), ("dword", "db00")])
+]
+CASES += [
+    Case("FILD qword narrows to %s %s" % (size, name), 0x0D02C200 + i * 0x100,
+         [(0, "FILD qword ptr [EAX]"), (2, "FIST %s ptr [EDX]" % size),
+          (4, "FISTP %s ptr [EDX + 0x8]" % size), (7, "RET")],
+         "df28 " + store + " " + pop + "08 c3",
+         lambda rng, value=value: integer_copy_setup(rng, value & 0xffffffffffffffff))
+    for i, (size, store, pop, name, value) in enumerate([
+        ("dword", "db12", "db5a", "in range", -123456789),
+        ("dword", "db12", "db5a", "overflow", 0x80000000),
+        ("word", "df12", "df5a", "in range", -12345),
+        ("word", "df12", "df5a", "overflow", 0x8000)])
 ]
 
 
