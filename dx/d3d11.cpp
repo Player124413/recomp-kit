@@ -87,6 +87,7 @@
 // address, window title or renderer-selection policy belongs in this module.
 #include "d3d11.h"
 #include "host_api.h"
+#include "../runtime/display_seam.h"
 #include "../runtime/memory.h"
 #include <algorithm>
 #include <cmath>
@@ -108,6 +109,8 @@ void destroy(ComObj *obj) {
         return;
     Object o = std::move(it->second);
     objects().erase(it);
+    if (o.iface == IF_DXGI_SWAP)
+        gdi_forget_surface(obj->id);
     if (o.data)
         heap_free(o.data);
     for (uint32_t id : {o.resource, o.rtv, o.srv, o.vb, o.ib, o.cb, o.sampler, o.blend, o.raster,
@@ -215,9 +218,9 @@ void put_pixel(Object &o, uint32_t x, uint32_t y, const std::array<float, 4> &c)
     }
     o.dirty = true;
 }
-// host_present copies the ARGB snapshot synchronously; resource memory is
-// never lent to a presenter thread. Frame sealing is integrated separately.
-void present(Object &o) {
+// The display seam copies the ARGB snapshot synchronously and seals an owned
+// host frame. GDI refreshes retain it; no presenter reads guest memory.
+void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
     std::vector<uint32_t> argb(size_t(o.texture.Width) * o.texture.Height);
     for (uint32_t y = 0; y < o.texture.Height; ++y)
         for (uint32_t x = 0; x < o.texture.Width; ++x) {
@@ -226,7 +229,7 @@ void present(Object &o) {
                 0xff000000u | uint32_t(std::lround(c[0] * 255)) << 16 |
                 uint32_t(std::lround(c[1] * 255)) << 8 | uint32_t(std::lround(c[2] * 255));
         }
-    host_present(argb.data(), o.texture.Width, o.texture.Height, 32, nullptr, o.texture.Width * 4);
+    gdi_present_surface(owner, hwnd, argb.data(), o.texture.Width, o.texture.Height, fullscreen);
 }
 void get_device(X86 *c) {
     auto *o = get(com_this_arg(c));
@@ -247,6 +250,7 @@ void get_device(X86 *c) {
 }
 } // namespace dx11
 void d3d11_reset() {
+    gdi_forget_surface(0);
     dx11::objects().clear();
 }
 

@@ -30,7 +30,7 @@ uint32_t texture(ComObj *device, const D3D11_TEXTURE2D_DESC &desc);
 uint32_t swapchain(ComObj *device, const DXGI_SWAP_CHAIN_DESC &desc);
 void put_pixel(Object &o, uint32_t x, uint32_t y, const std::array<float, 4> &colour);
 std::array<float, 4> pixel(const Object &o, uint32_t x, uint32_t y);
-void present(Object &back);
+void present(Object &back, uint32_t owner, uint32_t hwnd, bool fullscreen);
 void define(ComIface iface, ComKind kind, const char *dll, const char *name,
             const ComMethod *methods, size_t count, const char *iid);
 void get_device(X86 *c);

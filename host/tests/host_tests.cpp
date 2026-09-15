@@ -44,6 +44,7 @@
 #include "../../runtime/memory.h"
 #include "../../runtime/imports.h"
 #include "../../dx/dx.h"
+#include "../../dx/d3d11.h"
 #include "../../dx/com.h"
 #include "../../runtime/loader.h"
 #include "../../runtime/win32.h"
@@ -6084,8 +6085,10 @@ static void test_gdi_window_presentation() {
     host_present_stop();
 }
 
+static void test_d3d11_sealed_presentation();
 static void test_presentation_service() {
     test_gdi_window_presentation();
+    test_d3d11_sealed_presentation();
     test_windowed_first_blit_presents_without_prior_completion();
     test_windowed_drawable_handler_and_completion_fallback();
     test_windowed_duration_pacing_selector();
@@ -6526,6 +6529,55 @@ static uint32_t gate_call_method(X86 *c, uint32_t iface, uint32_t slot,
 static uint32_t gate_scratch(uint32_t off) {
     return STACK_LIMIT + 0x4000u + off;
 }
+// A real DXGI COM Present must publish a complete owned frame to the host
+// mailbox, not merely increment the legacy host_present call counter.
+static void test_d3d11_sealed_presentation() {
+    mem_init();
+    imports_init();
+    d3d11_reset();
+    com_reset();
+    d3d11_register();
+    dxgi_register();
+    d3dcompiler_register();
+    d3dx10_register();
+    host_present_test_begin();
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = gate_scratch(0x2000);
+    gm_zero(s, 1024);
+    wr32(s, 2);
+    wr32(s + 4, 2);
+    wr32(s + 16, 28);
+    wr32(s + 28, 1);
+    wr32(s + 36, 0x20);
+    wr32(s + 40, 1);
+    CHECK_EQ(gate_call_import(&c, "d3d11.dll", "D3D11CreateDeviceAndSwapChain",
+                              {0, 1, 0, 0, 0, 0, 7, s, s + 64, s + 68, s + 72, s + 76}),
+             S_OK);
+    uint32_t swap = rd32(s + 64), dev = rd32(s + 68), ctx = rd32(s + 76);
+    const uint8_t iid[] = {0xf2, 0xaa, 0x15, 0x6f, 0x08, 0xd2, 0x89, 0x4e,
+                           0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c};
+    memcpy(gm_ptr(s + 128), iid, 16);
+    gate_call_method(&c, swap, 9, {0, s + 128, s + 80});
+    uint32_t back = rd32(s + 80);
+    gate_call_method(&c, dev, 9, {back, 0, s + 84});
+    uint32_t view = rd32(s + 84);
+    float colour[] = {1, 0, 0, 1};
+    memcpy(gm_ptr(s + 160), colour, 16);
+    gate_call_method(&c, ctx, 50, {view, s + 160});
+    gate_call_method(&c, swap, 8, {0, 0});
+    colour[0] = 0;
+    colour[1] = 1;
+    memcpy(gm_ptr(s + 160), colour, 16);
+    gate_call_method(&c, ctx, 50, {view, s + 160});
+    host_present_tick_for_test(0);
+    CHECK_EQ(host_present_unique_completed(), 1u);
+    CHECK_EQ(host_present_test_last_pixel(), 255u);
+    for (uint32_t object : {view, back, ctx, dev, swap})
+        gate_call_method(&c, object, 2);
+    host_present_stop();
+}
+
 static uint32_t gate_put_str(const char *text) {
     static uint32_t cursor = 0;
     uint32_t a = gate_scratch(0x800 + cursor);

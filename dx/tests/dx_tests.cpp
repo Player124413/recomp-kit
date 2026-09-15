@@ -129,6 +129,10 @@ void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *pal
     g_presents.push_back(std::move(p));
 }
 
+void host_display_present_window(const uint32_t *argb, int w, int h) {
+    host_present(argb, w, h, 32, nullptr, w * 4);
+}
+
 void host_set_display_mode(int w, int h, int bpp) {
     g_display_w = w;
     g_display_h = h;

@@ -14,6 +14,24 @@
 #include <string.h>
 #include <vector>
 
+namespace {
+struct PresentedSurface {
+    uint32_t owner = 0, hwnd = 0;
+    int w = 0, h = 0;
+    bool fullscreen = false;
+    uint64_t last_present_ns = 0;
+    std::vector<uint32_t> pixels;
+};
+PresentedSurface &presented_surface() {
+    static PresentedSurface value;
+    return value;
+}
+bool surface_owns_screen() {
+    auto &s = presented_surface();
+    return s.owner && (s.fullscreen || !s.hwnd);
+}
+} // namespace
+
 // Like the runtime's other weak host hooks, this keeps runtime-only binaries
 // independent of DX. A linked DirectDraw shim supplies the accepted mode.
 extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *, uint32_t *) {
@@ -22,6 +40,13 @@ extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *,
 // One virtual screen is shared by USER32 metrics, GDI captures and host input.
 // A selected DirectDraw mode takes precedence over the smoke desktop size.
 void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
+    if (surface_owns_screen()) {
+        auto &s = presented_surface();
+        *w = s.w;
+        *h = s.h;
+        *bpp = 32;
+        return;
+    }
     if (ddraw_display_mode(w, h, bpp))
         return;
     *w = 1024;
@@ -1103,17 +1128,24 @@ void gdi_composite_windows(uint32_t *argb, int w, int h) {
 // the base, then composite into a private ARGB snapshot.
 void gdi_present_windows(bool refresh) {
     auto surfaces = visible_surfaces();
-    if (surfaces.empty() || (!refresh && std::none_of(surfaces.begin(), surfaces.end(),
-                                                      [](auto *w) { return w->surface.dirty; })))
+    auto &presented = presented_surface();
+    if ((!presented.owner && surfaces.empty()) ||
+        (!refresh &&
+         std::none_of(surfaces.begin(), surfaces.end(), [](auto *w) { return w->surface.dirty; })))
         return;
-    uint32_t primary = ddraw_gdi_begin_primary();
+    // A recent external Present owns this refresh interval. Explicit dirty
+    // window writes still compose immediately using the owned snapshot.
+    if (refresh && presented.owner && presented.last_present_ns &&
+        os_monotonic_ns() - presented.last_present_ns < 16666667u)
+        return;
+    uint32_t primary = surface_owns_screen() ? 0 : ddraw_gdi_begin_primary();
     int w = 1024, h = 768;
     if (primary) {
         if (!gdi::dc_size(primary, &w, &h)) {
             ddraw_gdi_end_primary(primary);
             return;
         }
-    } else if (ddraw_gdi_primary_active()) {
+    } else if (!surface_owns_screen() && ddraw_gdi_primary_active()) {
         return; // A primary DC is already in use; retry on the next pump.
     } else {
         uint32_t width = w, height = h, bpp = 32;
@@ -1133,12 +1165,61 @@ void gdi_present_windows(bool refresh) {
         ddraw_gdi_end_primary(primary);
     }
     gdi_composite_windows(pixels.data(), w, h);
+    if (presented.owner) {
+        int32_t x = 0, y = 0;
+        int width = w, height = h;
+        bool visible = true;
+        if (!presented.fullscreen && presented.hwnd) {
+            auto *window = user32::find_window(presented.hwnd);
+            visible = window && window->visible;
+            if (window) {
+                user32::client_origin(window->hwnd, &x, &y);
+                width = window->w;
+                height = window->h;
+            }
+        }
+        if (visible && width > 0 && height > 0) {
+            for (int64_t dy = std::max<int64_t>(0, y);
+                 dy < std::min<int64_t>(h, int64_t(y) + height); ++dy)
+                for (int64_t dx = std::max<int64_t>(0, x);
+                     dx < std::min<int64_t>(w, int64_t(x) + width); ++dx) {
+                    size_t sx = size_t((dx - x) * presented.w / width),
+                           sy = size_t((dy - y) * presented.h / height);
+                    pixels[size_t(dy) * w + size_t(dx)] = presented.pixels[sy * presented.w + sx];
+                }
+        }
+    }
     for (auto *window : surfaces)
         window->surface.dirty = false;
     host_display_present_window(pixels.data(), w, h);
 }
 
+// The copy is made under the guest baton before the host can seal a frame.
+// GDI refreshes use this snapshot, never the mutable mapped back buffer.
+extern "C" void gdi_present_surface(uint32_t owner, uint32_t hwnd, const uint32_t *argb, int w,
+                                    int h, bool fullscreen) {
+    if (!owner || !argb || w <= 0 || h <= 0 || uint64_t(w) * h > GUEST_SIZE / 4)
+        return;
+    auto &s = presented_surface();
+    s.owner = owner;
+    s.hwnd = hwnd;
+    s.w = w;
+    s.h = h;
+    s.fullscreen = fullscreen;
+    s.pixels.assign(argb, argb + size_t(w) * h);
+    s.last_present_ns = 0;
+    gdi_present_windows(true);
+    s.last_present_ns = os_monotonic_ns();
+}
+extern "C" void gdi_forget_surface(uint32_t owner) {
+    auto &s = presented_surface();
+    if (!owner || s.owner == owner)
+        s = PresentedSurface{};
+}
+
 void gdi_destroy_window(uint32_t window) {
+    if (presented_surface().hwnd == window)
+        gdi_forget_surface(presented_surface().owner);
     for (auto it = dcs().begin(); it != dcs().end();)
         if (it->second.window == window || it->second.surface == window)
             it = dcs().erase(it);

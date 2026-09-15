@@ -45,3 +45,16 @@ void ddraw_gdi_end_primary(uint32_t dc);
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+// An external software presenter owns one display layer above the window
+// canvases. The runtime copies pixels synchronously and keeps the last frame
+// across GDI refreshes; owner identifies which presenter may retire it.
+void gdi_present_surface(uint32_t owner, uint32_t hwnd, const uint32_t *argb, int w, int h,
+                         bool fullscreen);
+void gdi_forget_surface(uint32_t owner);
+#ifdef __cplusplus
+}
+#endif
