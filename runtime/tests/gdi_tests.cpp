@@ -4,6 +4,7 @@
 #include "../memory.h"
 #include "../win32.h"
 #include "../gdi32_internal.h"
+#include "test_font_ttf.h"
 #include "../../platform/os.h"
 #include <cstdio>
 #include <cstdarg>
@@ -1034,6 +1035,57 @@ static void test_blit_into_moved_child_origin() {
     call_import(&c, "USER32.dll", "DestroyWindow", {child});
     call_import(&c, "USER32.dll", "DestroyWindow", {parent});
 }
+// A font a program registers with AddFontMemResourceEx is the one its DC uses:
+// measured by the font's own advances and drawn from its outlines, not the
+// fixed 8x16 cells. The test font's 'A' is a box 400 units wide at x 100 with a
+// 600 advance, 700 units tall on the baseline; 'B' has a 1000 advance.
+static void test_memory_truetype_font() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00338000, data = s + 0x1000;
+    memcpy(g_mem + data, kTestFontTtf, sizeof kTestFontTtf);
+    wr32(s + 0x10, 0);
+    check(call_import(&c, "GDI32.dll", "AddFontMemResourceEx",
+                      {data, uint32_t(sizeof kTestFontTtf), 0, s + 0x10}) != 0 &&
+              rd32(s + 0x10) == 1,
+          "AddFontMemResourceEx registers the one font in the data");
+    memset(g_mem + s + 0x100, 0, 92);
+    wr32(s + 0x100, uint32_t(-100)); // a 100-pixel em: 0.1 pixel per font unit
+    gm_put_wstr(s + 0x100 + 28, "RecompTest", 32);
+    uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s + 0x100});
+    uint32_t hwnd = make_test_window(&c, s, 256, 128);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+    gm_put_wstr(s + 0x200, "AB", 8);
+    call_import(&c, "GDI32.dll", "GetTextExtentPoint32W", {dc, s + 0x200, 2, s + 0x220});
+    check(rd32(s + 0x220) == 160 && rd32(s + 0x224) == 100,
+          "the extent is the font's advances and height (%u x %u)", rd32(s + 0x220), rd32(s + 0x224));
+    memset(g_mem + s + 0x240, 0, 60);
+    call_import(&c, "GDI32.dll", "GetTextMetricsW", {dc, s + 0x240});
+    check(rd32(s + 0x240) == 100 && rd32(s + 0x244) == 80 && rd32(s + 0x248) == 20,
+          "TEXTMETRIC height, ascent and descent come from the font (%u, %u, %u)", rd32(s + 0x240),
+          rd32(s + 0x244), rd32(s + 0x248));
+    call_import(&c, "GDI32.dll", "SetBkMode", {dc, 1});
+    call_import(&c, "GDI32.dll", "SetTextColor", {dc, 0x0000ffu});
+    // Drawn at (0,0) its baseline is at y 80, so the box covers x 10..50, y 10..80.
+    call_import(&c, "GDI32.dll", "ExtTextOutW", {dc, 0, 0, 0, 0, s + 0x200, 1, 0});
+    auto at = [&](uint32_t x, uint32_t y) {
+        return call_import(&c, "GDI32.dll", "GetPixel", {dc, x, y});
+    };
+    check(at(30, 45) == 0x0000ffu && at(5, 45) == 0 && at(55, 45) == 0 && at(30, 5) == 0,
+          "ExtTextOutW draws the glyph's outline (%08x %08x %08x %08x)", at(30, 45), at(5, 45),
+          at(55, 45), at(30, 5));
+    // Centred by its real 60-pixel width in 256: the box starts at x 108.
+    wr32(s + 0x260, 0);
+    wr32(s + 0x264, 40);
+    wr32(s + 0x268, 256);
+    wr32(s + 0x26c, 140);
+    call_import(&c, "USER32.dll", "DrawTextW", {dc, s + 0x200, 1, s + 0x260, 0x21}); // DT_CENTER | DT_SINGLELINE
+    check(at(128, 85) == 0x0000ffu && at(104, 85) == 0,
+          "DrawTextW centres by the font's advance (%08x %08x)", at(128, 85), at(104, 85));
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
@@ -1053,6 +1105,7 @@ int main(int argc, char **argv) {
         test_draw_theme_parent_background();
         test_draw_theme_text_ex();
         test_blit_into_moved_child_origin();
+        test_memory_truetype_font();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
     }
     printf("%d checks, %d failures\n", g_checks, g_failures);

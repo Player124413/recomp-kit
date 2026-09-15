@@ -19,7 +19,7 @@ this kit in as a submodule.
 | `mods/` | the mod foundation (Lua 5.4) and its native capture instruments |
 | `games/stub/` | a game that does not exist: the values game-free builds and CI configure with |
 | `tools/` | translator, oracle, build and test scripts |
-| `third_party/` | vendored Lua, TinySoundFont, volk, Vulkan headers |
+| `third_party/` | vendored Lua, TinySoundFont, minimp3, stb_truetype, volk, Vulkan headers |
 
 ## Games live in their own repositories
 
@@ -73,7 +73,7 @@ build.
 ## Dependencies
 
 SDL3 is fetched at its pinned release and linked statically; Lua,
-TinySoundFont, minimp3, volk and Vulkan headers are vendored with their
+TinySoundFont, minimp3, stb_truetype, volk and Vulkan headers are vendored with their
 upstream notices. See [NOTICE](NOTICE) for licenses.
 
 On macOS, iOS, Android and Linux, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the

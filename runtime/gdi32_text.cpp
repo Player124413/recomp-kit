@@ -1,7 +1,9 @@
-// Fixed bitmap-font text for guest canvases. No host font services or guest
+// Text for guest canvases: a TrueType face the program registered when its font
+// names one, else fixed 8x16 bitmap cells. No host font services or guest
 // pointers escape this file; callbacks receive temporary guest-heap records.
 #include "gdi32_internal.h"
 #include "gdi32_font8x16.h"
+#include "gdi32_truetype.h"
 #include "memory.h"
 #include "win32.h"
 #include <algorithm>
@@ -50,32 +52,6 @@ void metrics(uint32_t out, int32_t scale, uint32_t weight) {
     wr8(out + 55, 0x30);
     wr8(out + 56, 0);
 }
-void get_metrics(X86 *c) {
-    auto *dc = dc_of(arg(c, 0));
-    uint32_t out = arg(c, 1);
-    if (!dc || !out || !gm_valid(out, 60)) {
-        set_eax(c, 0);
-        return;
-    }
-    auto font = objects().find(dc->font);
-    uint32_t weight = font == objects().end() ? 400 : font_word(font->second, 16);
-    if (!weight)
-        weight = 400;
-    metrics(out, font_scale(arg(c, 0)), weight);
-    set_eax(c, 1);
-}
-void extent(X86 *c) {
-    uint32_t dc = arg(c, 0), n = arg(c, 2), out = arg(c, 3);
-    uint64_t scale = font_scale(dc), width = 8 * scale * n;
-    if (!dc_of(dc) || !out || !gm_valid(out, 8) || width > INT_MAX || n > GUEST_SIZE / 2 ||
-        (n && (!arg(c, 1) || !gm_valid(arg(c, 1), n * 2)))) {
-        set_eax(c, 0);
-        return;
-    }
-    wr32(out, uint32_t(width));
-    wr32(out + 4, uint32_t(16 * scale));
-    set_eax(c, 1);
-}
 // All wide text entry points share these bitmap glyphs and DC colour/clip rules.
 void glyph(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline = false) {
     auto *dc = dc_of(hdc);
@@ -94,6 +70,108 @@ void glyph(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline = fal
             else if (dc->bk_mode == 2)
                 write_pixel(hdc, xx, yy, bg);
         }
+}
+// How one DC's text is measured and drawn: from the registered TrueType face
+// its font names, or from the bitmap cells.
+struct Pen {
+    const TrueTypeFace *face = nullptr;
+    double scale = 0;
+    int64_t cells = 1;
+    TrueTypeMetrics metrics;
+    int64_t advance(uint32_t ch) const {
+        return face ? truetype_advance(face, scale, ch) : 8 * cells;
+    }
+    int64_t height() const {
+        return face ? metrics.height : 16 * cells;
+    }
+    void draw(uint32_t hdc, int64_t x, int64_t y, uint32_t ch, bool underline) const {
+        if (!face) {
+            glyph(hdc, x, y, ch, underline);
+            return;
+        }
+        auto *dc = dc_of(hdc);
+        if (!dc)
+            return;
+        const uint32_t fg = argb(dc->text_color) & 0xffffffu;
+        const int64_t width = advance(ch);
+        if (dc->bk_mode == 2)
+            fill(hdc, {int32_t(x), int32_t(y), int32_t(x + width), int32_t(y + metrics.height)},
+                 argb(dc->bk_color));
+        const TrueTypeGlyph &g = truetype_glyph(face, scale, ch);
+        const int64_t baseline = y + metrics.ascent;
+        for (int32_t j = 0; j < g.h; ++j)
+            for (int32_t i = 0; i < g.w; ++i)
+                if (uint8_t cover = g.coverage[size_t(j) * size_t(g.w) + size_t(i)])
+                    write_pixel(hdc, x + g.x + i, baseline + g.y + j, (uint32_t(cover) << 24) | fg,
+                                true);
+        if (underline)
+            for (int64_t yy = baseline + 1; yy <= baseline + std::max<int64_t>(1, metrics.height / 16);
+                 ++yy)
+                for (int64_t xx = x; xx < x + width; ++xx)
+                    write_pixel(hdc, xx, yy, 0xff000000u | fg);
+    }
+};
+Pen pen_of(uint32_t hdc) {
+    Pen pen;
+    pen.cells = font_scale(hdc);
+    auto *dc = dc_of(hdc);
+    auto it = objects().find(dc ? dc->font : 0);
+    if (it == objects().end() || it->second.kind != Object::Font)
+        return pen;
+    std::string family;
+    for (size_t i = 0; i < 32; ++i) {
+        uint16_t unit = uint16_t(it->second.logfont[28 + 2 * i] | (it->second.logfont[29 + 2 * i] << 8));
+        if (!unit)
+            break;
+        family.push_back(unit < 128 ? char(unit) : '?');
+    }
+    if (family.empty() || !(pen.face = truetype_find(family)))
+        return pen;
+    pen.scale = truetype_scale(pen.face, int32_t(font_word(it->second, 0)));
+    pen.metrics = truetype_metrics(pen.face, pen.scale);
+    return pen;
+}
+void get_metrics(X86 *c) {
+    auto *dc = dc_of(arg(c, 0));
+    uint32_t out = arg(c, 1);
+    if (!dc || !out || !gm_valid(out, 60)) {
+        set_eax(c, 0);
+        return;
+    }
+    auto font = objects().find(dc->font);
+    uint32_t weight = font == objects().end() ? 400 : font_word(font->second, 16);
+    if (!weight)
+        weight = 400;
+    metrics(out, font_scale(arg(c, 0)), weight);
+    const Pen pen = pen_of(arg(c, 0));
+    if (pen.face) {
+        wr32(out, uint32_t(pen.metrics.height));
+        wr32(out + 4, uint32_t(pen.metrics.ascent));
+        wr32(out + 8, uint32_t(pen.metrics.descent));
+        wr32(out + 12, uint32_t(pen.metrics.internal));
+        wr32(out + 20, uint32_t(pen.metrics.average));
+        wr32(out + 24, uint32_t(pen.metrics.maximum));
+    }
+    set_eax(c, 1);
+}
+void extent(X86 *c) {
+    uint32_t dc = arg(c, 0), text = arg(c, 1), n = arg(c, 2), out = arg(c, 3);
+    if (!dc_of(dc) || !out || !gm_valid(out, 8) || n > GUEST_SIZE / 2 ||
+        (n && (!text || !gm_valid(text, n * 2)))) {
+        set_eax(c, 0);
+        return;
+    }
+    const Pen pen = pen_of(dc);
+    uint64_t width = 0;
+    for (uint32_t i = 0; i < n; ++i)
+        width += uint64_t(pen.advance(rd16(text + 2 * i)));
+    if (width > INT_MAX) {
+        set_eax(c, 0);
+        return;
+    }
+    wr32(out, uint32_t(width));
+    wr32(out + 4, uint32_t(pen.height()));
+    set_eax(c, 1);
 }
 void text_out(X86 *c) {
     uint32_t hdc = arg(c, 0), flags = arg(c, 3), rp = arg(c, 4), text = arg(c, 5), n = arg(c, 6),
@@ -127,26 +205,31 @@ void text_out(X86 *c) {
     uint32_t bg = argb(dc->bk_color);
     if (flags & 2)
         fill(hdc, rect, bg);
-    int64_t width = 8 * font_scale(hdc), x = int32_t(arg(c, 1)), y = int32_t(arg(c, 2));
+    const Pen pen = pen_of(hdc);
+    int64_t x = int32_t(arg(c, 1)), y = int32_t(arg(c, 2));
     for (uint32_t i = 0; i < n; ++i) {
-        glyph(hdc, x, y, rd16(text + 2 * i));
-        x += dx ? int32_t(rd32(dx + 4 * i)) : width;
+        uint32_t unit = rd16(text + 2 * i);
+        pen.draw(hdc, x, y, unit, false);
+        x += dx ? int32_t(rd32(dx + 4 * i)) : pen.advance(unit);
     }
     dc->clip = std::move(old_clip);
     dc->clipped = old_clipped;
     set_eax(c, 1);
 }
+// The fonts are kept, so a DC whose font names one of them draws with it. Data
+// the rasterizer cannot read still gets a handle, as it always has here.
 void memory_font(X86 *c) {
-    uint32_t count = arg(c, 3);
+    uint32_t data = arg(c, 0), size = arg(c, 1), count = arg(c, 3);
     if (count && !gm_valid(count, 4)) {
         set_eax(c, 0);
         return;
     }
+    uint32_t fonts = data && size && gm_valid(data, size) ? truetype_add_memory(g_mem + data, size) : 0;
     Object font;
     font.kind = Object::Font;
     uint32_t handle = make_object(font);
     if (count)
-        wr32(count, 1);
+        wr32(count, std::max<uint32_t>(fonts, 1));
     set_eax(c, handle);
 }
 void enumerate(X86 *c) {
@@ -191,12 +274,19 @@ uint32_t draw_text(uint32_t hdc, uint32_t text, uint32_t count, uint32_t rp, uin
         return 0;
     Rect rect{int32_t(rd32(rp)), int32_t(rd32(rp + 4)), int32_t(rd32(rp + 8)),
               int32_t(rd32(rp + 12))};
-    int64_t cw = 8 * int64_t(font_scale(hdc)), ch = 16 * int64_t(font_scale(hdc));
+    const Pen pen = pen_of(hdc);
+    const int64_t ch = pen.height();
     struct Cell {
         uint16_t ch;
         bool underline;
     };
     std::vector<std::vector<Cell>> lines(1);
+    auto width_of = [&](const std::vector<Cell> &line) {
+        int64_t width = 0;
+        for (Cell cell : line)
+            width += pen.advance(cell.ch);
+        return width;
+    };
     bool prefix = false;
     for (uint32_t i = 0; i < count; ++i) {
         uint16_t unit = rd16(text + 2 * i);
@@ -226,10 +316,16 @@ uint32_t draw_text(uint32_t hdc, uint32_t text, uint32_t count, uint32_t rp, uin
         prefix = false;
     }
     if ((flags & 0x10) && !(flags & 0x20) && rect.r > rect.l) { // DT_WORDBREAK
-        size_t cols = size_t((int64_t(rect.r) - rect.l) / cw);
+        const int64_t limit = int64_t(rect.r) - rect.l;
         for (size_t i = 0; i < lines.size(); ++i) {
             auto &line = lines[i];
-            if (!cols || line.size() <= cols)
+            size_t cols = 0; // how many characters fit the width
+            for (int64_t used = 0; cols < line.size(); ++cols) {
+                used += pen.advance(line[cols].ch);
+                if (used > limit)
+                    break;
+            }
+            if (!cols || cols >= line.size())
                 continue;
             size_t split = std::min(cols, line.size() - 1);
             while (split && line[split].ch != ' ')
@@ -248,7 +344,7 @@ uint32_t draw_text(uint32_t hdc, uint32_t text, uint32_t count, uint32_t rp, uin
     }
     int64_t height = ch * lines.size(), maxwidth = 0;
     for (const auto &line : lines)
-        maxwidth = std::max(maxwidth, int64_t(line.size()) * cw);
+        maxwidth = std::max(maxwidth, width_of(line));
     if (height > INT_MAX || maxwidth > INT_MAX)
         return 0;
     if (flags & 0x400) {
@@ -281,14 +377,14 @@ uint32_t draw_text(uint32_t hdc, uint32_t text, uint32_t count, uint32_t rp, uin
             y = int64_t(rect.b) - height;
     }
     for (const auto &line : lines) {
-        int64_t x = rect.l, width = int64_t(line.size()) * cw;
+        int64_t x = rect.l, width = width_of(line);
         if (flags & 1)
             x += (int64_t(rect.r) - rect.l - width) / 2;
         else if (flags & 2)
             x = int64_t(rect.r) - width;
         for (Cell cell : line) {
-            glyph(hdc, x, y, cell.ch, cell.underline);
-            x += cw;
+            pen.draw(hdc, x, y, cell.ch, cell.underline);
+            x += pen.advance(cell.ch);
         }
         y += ch;
     }

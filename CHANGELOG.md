@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Fonts a program registers with `AddFontMemResourceEx` are drawn with.
+  The data used to be discarded and every string drawn in the fixed 8x16
+  cells; now the fonts are kept and rasterized with stb_truetype (vendored,
+  MIT or public domain), and a DC whose font names one measures by its
+  advances and metrics - `GetTextExtentPoint32W`, `GetTextMetricsW`,
+  `DrawTextW` wrapping and alignment - and draws anti-aliased outlines in
+  `ExtTextOutW`, `DrawTextW` and the themed text calls. A face the program
+  did not register keeps the bitmap cells; the kit ships no fonts. The tests
+  use a generated two-glyph font (`runtime/tests/make_test_font.py`).
+
 - The system `STATIC` control class. Windows draws a static control's text
   in the class's own window procedure, and a program that subclasses it -
   the VCL's `TStaticText` does, through `GetClassInfoW` - hands it every
