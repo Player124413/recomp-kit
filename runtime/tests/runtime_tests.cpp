@@ -341,10 +341,10 @@ static void test_media_foundation_unavailable() {
     gm_put_str(name + 128, "MFStartup", 64);
     uint32_t startup = call_import(&c, "KERNEL32.dll", "GetProcAddress", {platform, name + 128});
     check(startup != 0, "GetProcAddress resolves MFStartup");
-    check(call_import(&c, "mfplat.dll", "MFStartup", {0x20070, 0}) == 0xc00d36e3u,
-          "MFStartup reports MF_E_BAD_STARTUP_VERSION without a delay-load exception");
+    check(call_import(&c, "mfplat.dll", "MFStartup", {0x20070, 0}) == 0,
+          "MFStartup initializes the platform before factories report unsupported playback");
     check(call_import(&c, "mfplat.dll", "MFShutdown", {}) == 0,
-          "MFShutdown is harmless after an unsupported startup");
+          "MFShutdown succeeds after platform startup");
 
     gm_put_wstr(name, "mf.dll", 64);
     uint32_t media = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {name});

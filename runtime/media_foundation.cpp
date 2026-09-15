@@ -1,10 +1,11 @@
 // Resolve optional Media Foundation imports without claiming playback support.
-// Guests can handle a failed startup through their own unsupported-video path.
+// Platform startup succeeds; object creation reports unsupported playback.
+// This lets callers distinguish unavailable media from a platform-version error.
 #include "imports.h"
 
 namespace {
 void startup(X86 *c) {
-    set_eax(c, 0xc00d36e3u); // MF_E_BAD_STARTUP_VERSION
+    set_eax(c, 0); // S_OK; factories remain unavailable.
 }
 void shutdown(X86 *c) {
     set_eax(c, 0); // S_OK; no Media Foundation state was allocated.
