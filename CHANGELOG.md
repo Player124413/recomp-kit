@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- GDI: blits convert between colour and monochrome instead of matching the
+  nearest palette entry. Into a 1-bit bitmap the source's background colour
+  becomes white and everything else black; out of one, white takes the
+  destination's background colour and black its text colour. That conversion
+  builds and uses every transparency mask, so without it a mask came out as a
+  luminance map and a transparent draw kept the wrong half of the image.
+
 - user32: SetLayeredWindowAttributes and GetLayeredWindowAttributes. The
   window compositor drops the colour key and applies the constant alpha, so a
   shaped form is drawn as its artwork rather than as a rectangle of the key

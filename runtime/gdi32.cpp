@@ -996,6 +996,10 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     return true;
 }
 } // namespace
+bool dc_is_monochrome(uint32_t dc) {
+    auto *d = dib_in_dc(dc);
+    return d && d->bpp == 1;
+}
 bool dc_has_alpha(uint32_t dc) {
     auto *d = dib_in_dc(dc);
     return d && d->bpp == 32 && d->compression == 0;

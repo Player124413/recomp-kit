@@ -542,6 +542,80 @@ static void test_draw_text() {
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
 // Exercise msimg32 through real stdcall trampolines and top-down guest DIBs.
+// Colour and monochrome conversion, which is what builds and uses a
+// transparency mask: into a 1-bit bitmap the source's background colour
+// becomes white and everything else black; out of one, white becomes the
+// destination's background colour and black its text colour.
+static void test_mono_conversion() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00300000;
+    uint32_t hwnd = make_test_window(&c, s, 8, 4);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+
+    // A colour source: two pixels of one colour, two of another.
+    uint32_t colour_dc = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {dc});
+    uint32_t bmi = s + 0x200;
+    memset(g_mem + bmi, 0, 40);
+    wr32(bmi, 40);
+    wr32(bmi + 4, 4);
+    wr32(bmi + 8, -1); // top-down, one row
+    wr16(bmi + 12, 1);
+    wr16(bmi + 14, 32);
+    uint32_t colour =
+        call_import(&c, "GDI32.dll", "CreateDIBSection", {colour_dc, bmi, 0, s + 0x280, 0, 0});
+    uint32_t cbits = rd32(s + 0x280);
+    call_import(&c, "GDI32.dll", "SelectObject", {colour_dc, colour});
+    wr32(cbits, 0xff00ff00u);     // green
+    wr32(cbits + 4, 0xff00ff00u); // green
+    wr32(cbits + 8, 0xff0000ffu); // blue
+    wr32(cbits + 12, 0xff0000ffu);
+
+    // A monochrome destination.
+    uint32_t mono_dc = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {dc});
+    uint32_t mbi = s + 0x300;
+    memset(g_mem + mbi, 0, 40);
+    wr32(mbi, 40);
+    wr32(mbi + 4, 4);
+    wr32(mbi + 8, -1);
+    wr16(mbi + 12, 1);
+    wr16(mbi + 14, 1);
+    wr32(mbi + 40, 0x00000000);
+    wr32(mbi + 44, 0x00ffffff);
+    uint32_t mono =
+        call_import(&c, "GDI32.dll", "CreateDIBSection", {mono_dc, mbi, 0, s + 0x380, 0, 0});
+    uint32_t mbits = rd32(s + 0x380);
+    call_import(&c, "GDI32.dll", "SelectObject", {mono_dc, mono});
+
+    // Green is the source's background colour, so green becomes white (1).
+    call_import(&c, "GDI32.dll", "SetBkColor", {colour_dc, 0x0000ff00u});
+    check(call_import(&c, "GDI32.dll", "BitBlt",
+                      {mono_dc, 0, 0, 4, 1, colour_dc, 0, 0, 0x00cc0020u}) == 1,
+          "a colour to monochrome blit");
+    check((rd8(mbits) >> 4) == 0xcu,
+          "the source's background colour became white and the rest black (%02x)", rd8(mbits));
+
+    // Back out: white takes the destination's background colour, black its text
+    // colour, whatever the monochrome palette says.
+    // COLORREF is 0x00bbggrr, so these are blue and red; in ARGB, ff0000ff and
+    // ffff0000.
+    call_import(&c, "GDI32.dll", "SetBkColor", {colour_dc, 0x00ff0000u});   // blue
+    call_import(&c, "GDI32.dll", "SetTextColor", {colour_dc, 0x000000ffu}); // red
+    check(call_import(&c, "GDI32.dll", "BitBlt",
+                      {colour_dc, 0, 0, 4, 1, mono_dc, 0, 0, 0x00cc0020u}) == 1,
+          "a monochrome to colour blit");
+    check(rd32(cbits) == 0xff0000ffu && rd32(cbits + 8) == 0xffff0000u,
+          "white took the background colour and black the text colour (%08x %08x)", rd32(cbits),
+          rd32(cbits + 8));
+
+    call_import(&c, "GDI32.dll", "DeleteDC", {colour_dc});
+    call_import(&c, "GDI32.dll", "DeleteDC", {mono_dc});
+    call_import(&c, "GDI32.dll", "DeleteObject", {colour});
+    call_import(&c, "GDI32.dll", "DeleteObject", {mono});
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
+
 // A layered window: the key colour is dropped when the window surfaces are
 // composited, and the rest is blended at the constant alpha. This is how a
 // shaped form reaches the screen; without it the key colour covers it.
@@ -731,6 +805,7 @@ int main(int argc, char **argv) {
     }
     if (argc < 2 || strcmp(argv[1], "model") != 0) {
         test_drawing();
+        test_mono_conversion();
         test_layered_window();
         test_msimg32();
         test_dib_rows_and_regions();

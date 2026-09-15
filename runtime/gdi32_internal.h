@@ -48,6 +48,9 @@ bool brush_color(uint32_t brush, uint32_t *pixel);
 bool dc_size(uint32_t dc, int *w, int *h);
 // Preserve alpha only for 32-bit BI_RGB DIB storage; normal GDI reads are opaque.
 bool dc_has_alpha(uint32_t dc);
+// A 1-bit DIB is selected into this DC, so blits to or from it convert between
+// colour and monochrome rather than matching the nearest palette entry.
+bool dc_is_monochrome(uint32_t dc);
 bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *pixel, bool preserve_alpha = false);
 // MaskBlt's mask: true with *set written when `bitmap` is a 1-bit bitmap and
 // (x, y) is inside it. A set bit selects the foreground raster operation.

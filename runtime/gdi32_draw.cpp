@@ -87,6 +87,29 @@ bool blit(uint32_t dst, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t src
             auto &sample = copy[size_t((yy - top) * (right - left) + xx - left)];
             sample.valid = read_pixel(src, px, py, &sample.p);
         }
+    // Colour and monochrome are converted, not colour-matched: blitting into a
+    // 1-bit bitmap turns every pixel of the source's background colour white
+    // and the rest black, and blitting out of one turns white into the
+    // destination's background colour and black into its text colour. That
+    // conversion is how a transparency mask is built and used, so without it a
+    // mask comes out as a luminance map and a transparent draw keeps the wrong
+    // half of the image.
+    const bool to_mono = dc_is_monochrome(dst) && !dc_is_monochrome(src);
+    const bool from_mono = dc_is_monochrome(src) && !dc_is_monochrome(dst);
+    auto *src_dc = dc_of(src);
+    auto *dst_dc = dc_of(dst);
+    const uint32_t src_bk = src_dc ? gdi::argb(src_dc->bk_color) & 0xffffffu : 0xffffffu;
+    const uint32_t dst_bk = dst_dc ? gdi::argb(dst_dc->bk_color) & 0xffffffu : 0xffffffu;
+    const uint32_t dst_text = dst_dc ? gdi::argb(dst_dc->text_color) & 0xffffffu : 0u;
+    if (to_mono || from_mono)
+        for (auto &sample : copy) {
+            if (!sample.valid)
+                continue;
+            if (to_mono)
+                sample.p = (sample.p & 0xffffffu) == src_bk ? 0xffffffffu : 0xff000000u;
+            else
+                sample.p = 0xff000000u | ((sample.p & 0xffffffu) ? dst_bk : dst_text);
+        }
     uint32_t pattern = brush(dst);
     for (int64_t yy = top; yy < bottom; ++yy)
         for (int64_t xx = left; xx < right; ++xx) {
