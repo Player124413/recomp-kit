@@ -183,13 +183,13 @@ def test_computed_returns_use_sorted_call_continuations(tmp_path, monkeypatch):
         entry + 7, entry + 12, entry + 18]
     jump = text.split("void recomp_jump(", 1)[1].split("void recomp_unknown_jump(", 1)[0]
     assert jump.index("if (i >= 0)") < jump.index("recomp_is_call_return(target)")
-    assert "if (recomp_is_call_return(target)) { c->eip = target; return; }" in jump
+    assert "if (recomp_is_call_return(target) || recomp_module_is_call_return(target)) { c->eip = target; return; }" in jump
     assert jump.index("recomp_is_call_return(target)") < jump.index("recomp_unknown_jump(c, target)")
     call = text.split("void recomp_call(", 1)[1].split("void recomp_jump(", 1)[0]
     assert "recomp_is_call_return" not in call
     assert '#include "thunks.h"' in text
     assert "int recomp_thunk_target_kind(uint32_t target)" in text
-    assert "return recomp_is_call_return(target) ? 2 : 0;" in text
+    assert "return (recomp_is_call_return(target) || recomp_module_is_call_return(target)) ? 2 : 0;" in text
     unknown = text.split("void recomp_unknown_jump(", 1)[1]
     assert "if (recomp_run_thunk(c, target)) return;" in unknown
 
@@ -1267,3 +1267,48 @@ def test_span_fragment_keeps_its_pushed_interior_alias(tmp_path, monkeypatch):
     body = text.split("static void body_%08x(" % entry, 1)[1].split("void fn_%08x(" % entry, 1)[0]
     assert "case %s: goto L_%08x;" % (T.hexlit(epilogue), epilogue) in body
     assert "L_%08x:" % epilogue in body
+
+def test_auxiliary_module_emits_prefixed_tables_that_self_register(tmp_path, monkeypatch):
+    """A module translation (`--module`) keeps the main image's dispatch entry
+    points and registers its own tables with the runtime instead."""
+    import re
+    import struct
+    entry, callee = 0x10001000, 0x10001080
+    code = (b"\xb8" + struct.pack("<I", callee) + b"\xff\xd0\xc3")
+    img = synthetic_image({entry: code, callee: b"\xc3"}, base=0x10000000)
+    img.code_pointers = lambda *args, **kwargs: (set(), set())
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    (listings / ("%08x.asm" % entry)).write_text(
+        "10001000  MOV EAX,0x10001080\n10001005  CALL EAX\n10001007  RET\n")
+    (listings / ("%08x.asm" % callee)).write_text("10001080  RET\n")
+    table = tmp_path / "functions.tsv"
+    table.write_text("address\tname\tsize\n10001000\tStartupLibrary\t8\n10001080\tcallee\t1\n")
+    binary, curated = tmp_path / "image", tmp_path / "globals.toml"
+    binary.write_bytes(img.data)
+    curated.write_text("")
+    out = tmp_path / "gen"
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                        ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(T, "SYMBOL_PREFIX", "recomp_blit_")
+    monkeypatch.setattr(T, "AUX_MODULE", {"key": "blit", "name": "Blit_p6.dll", "base": 0x10000000, "size": 0x1000})
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
+                                     "--out", str(out), "--quiet"])
+    assert T.main() == 0
+    text = (out / "table.c").read_text()
+    header = (out / "funcs.h").read_text()
+    assert "const uint32_t recomp_blit_func_addrs[] = {" in text
+    assert "recomp_blit_hooked[" in text and "recomp_blit_hook_ptrs[]" in text
+    assert "recomp_blit_call_returns[] = {" in text
+    assert "recomp_module_register(&recomp_blit_module)" in text
+    assert '"Blit_p6.dll", 0x10000000u, 0x10001000u' in text
+    for main_only in ("void recomp_call(", "void recomp_jump(", "int recomp_is_call_return(",
+                      "int recomp_thunk_target_kind(", "recomp_override_hash", "const char *recomp_profile_name("):
+        assert main_only not in text
+    assert "recomp_blit_func_addrs[i_]" in header and "recomp_blit_hooked[i_]" in header
+    assert re.search(r"recomp_func_addrs\b", header) is None

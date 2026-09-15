@@ -279,6 +279,38 @@ uint64_t recomp_override_hash(void);
 int32_t recomp_index_of(uint32_t addr);
 int recomp_is_call_return(uint32_t target);
 
+/* ------------------------------------------------ auxiliary modules -- */
+
+/* A second guest image (a DLL the game loads by name) translated by
+ * `translate.py --module <key>` into its own tables. Its table.c registers
+ * the module from a constructor; the main image's recomp_call/recomp_jump
+ * fall back to the registry after their own table misses. The runtime
+ * loader maps the module's sections at [base, end), and LoadLibrary /
+ * GetProcAddress answer from the module's export directory. */
+typedef struct RecompModule {
+    const char *name;
+    uint32_t base, end;
+    const uint32_t *func_addrs;
+    uint32_t func_count;
+    void (*const *base_ptrs)(X86 *c);
+    RecompHookFn *hook_ptrs;
+    uint8_t *hooked;
+    const uint32_t *call_returns;
+    uint32_t call_return_count;
+    const char *const *profile_names;
+} RecompModule;
+
+void recomp_module_register(const RecompModule *m);
+uint32_t recomp_module_count(void);
+const RecompModule *recomp_module_at(uint32_t i);
+const RecompModule *recomp_module_named(const char *name);
+const RecompModule *recomp_module_containing(uint32_t addr);
+/* Index into the owning module's tables, or -1 when no module has addr as an entry. */
+int32_t recomp_module_lookup(uint32_t target);
+int recomp_module_is_call_return(uint32_t target);
+/* Dispatches target through the owning module's tables; 0 when no module owns it. */
+int recomp_module_call(X86 *c, uint32_t target);
+
 /* RET has already popped EIP and applied any immediate stack adjustment.
  * A CALL continuation belongs to the pending host caller, even when it is
  * also an alternate entry. Other entries are tail calls, as in interface
@@ -290,9 +322,10 @@ static inline void recomp_return(X86 *c) {
         recomp_callback_return(c);
         return;
     }
-    if (recomp_is_call_return(c->eip))
+    if (recomp_is_call_return(c->eip) || recomp_module_is_call_return(c->eip))
         return;
-    if ((c->eip >= GUEST_SHIM_BASE && c->eip < GUEST_SHIM_END) || recomp_index_of(c->eip) >= 0)
+    if ((c->eip >= GUEST_SHIM_BASE && c->eip < GUEST_SHIM_END) || recomp_index_of(c->eip) >= 0 ||
+        recomp_module_lookup(c->eip) >= 0)
         recomp_call(c, c->eip);
 }
 

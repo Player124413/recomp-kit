@@ -20,6 +20,10 @@ static uint64_t fake_tsc;
 
 void recomp_shim_call(X86 *c, uint32_t target)   { (void)c; last_shim = target; }
 void recomp_unknown_call(X86 *c, uint32_t target){ (void)c; last_unknown = target; }
+/* No auxiliary modules in the synthetic image. */
+int32_t recomp_module_lookup(uint32_t target)        { (void)target; return -1; }
+int recomp_module_is_call_return(uint32_t target)    { (void)target; return 0; }
+int recomp_module_call(X86 *c, uint32_t target)      { (void)c; (void)target; return 0; }
 /* Instruction fixtures have no runtime guest_call callback checkpoints. */
 void recomp_callback_return(X86 *c){ (void)c; }
 void recomp_div_error(X86 *c, uint32_t addr)     { (void)c; last_div_error = addr;

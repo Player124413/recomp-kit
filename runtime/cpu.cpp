@@ -8,6 +8,7 @@
 #include "win32.h"
 #include "thunks.h"
 #include "seh.h"
+#include "../platform/os.h"
 
 #include <setjmp.h>
 #include <stdio.h>
@@ -57,7 +58,88 @@ const std::vector<UnknownCall> &recomp_unknown_calls() {
     return unknown_calls();
 }
 
+// ---------------------------------------------------------------------------
+// Auxiliary module registry. Modules register from static constructors, so
+// the vector is function-local to survive any construction order.
+// ---------------------------------------------------------------------------
+namespace {
+std::vector<const RecompModule *> &modules() {
+    static std::vector<const RecompModule *> v;
+    return v;
+}
+int32_t module_index(const RecompModule *m, uint32_t target) {
+    uint32_t lo = 0, hi = m->func_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (m->func_addrs[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return (lo < m->func_count && m->func_addrs[lo] == target) ? (int32_t)lo : -1;
+}
+} // namespace
+
 extern "C" {
+
+void recomp_module_register(const RecompModule *m) {
+    modules().push_back(m);
+}
+uint32_t recomp_module_count(void) {
+    return (uint32_t)modules().size();
+}
+const RecompModule *recomp_module_at(uint32_t i) {
+    return i < modules().size() ? modules()[i] : nullptr;
+}
+const RecompModule *recomp_module_named(const char *name) {
+    if (!name)
+        return nullptr;
+    for (const RecompModule *m : modules())
+        if (os_strcasecmp(m->name, name) == 0)
+            return m;
+    return nullptr;
+}
+const RecompModule *recomp_module_containing(uint32_t addr) {
+    for (const RecompModule *m : modules())
+        if (addr >= m->base && addr < m->end)
+            return m;
+    return nullptr;
+}
+int32_t recomp_module_lookup(uint32_t target) {
+    const RecompModule *m = recomp_module_containing(target);
+    return m ? module_index(m, target) : -1;
+}
+int recomp_module_is_call_return(uint32_t target) {
+    const RecompModule *m = recomp_module_containing(target);
+    if (!m)
+        return 0;
+    uint32_t lo = 0, hi = m->call_return_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (m->call_returns[mid] < target)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < m->call_return_count && m->call_returns[lo] == target;
+}
+int recomp_module_call(X86 *c, uint32_t target) {
+    const RecompModule *m = recomp_module_containing(target);
+    if (!m)
+        return 0;
+    int32_t i = module_index(m, target);
+    if (i < 0)
+        return 0;
+#ifdef RECOMP_NO_HOOKS
+    m->base_ptrs[i](c);
+#else
+    if (__atomic_load_n(&m->hooked[i], __ATOMIC_ACQUIRE))
+        m->hook_ptrs[i](c, (uint32_t)i);
+    else
+        m->base_ptrs[i](c);
+#endif
+    return 1;
+}
 
 // Consumes the return address the caller pushed and continues after the call,
 // which is what the callee's RET would have done. Without this a call that the
