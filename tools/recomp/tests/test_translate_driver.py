@@ -1419,3 +1419,6 @@ def test_a_truncated_listing_grows_into_its_pushed_continuation(tmp_path, monkey
     assert "L_00401020:" in text, "the continuation was not decoded into the body"
     assert ("case 0x401020u: goto L_00401020;" in text
             or "case 0x00401020u: goto L_00401020;" in text)
+    # And it is a block entry, so a second body that shares this code and
+    # executes the same JMP reaches it through recomp_jump.
+    assert "void fn_00401020(X86 *c) { body_00401000(c, %s); }" % T.hexlit(cont) in text

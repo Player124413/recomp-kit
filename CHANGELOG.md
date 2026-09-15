@@ -13,14 +13,16 @@
   necessary chunk" on a perfect file - but every unit after the one building
   the tables was missing.
 
-- A body grows into its pushed continuation. Delphi leaves a finally block
-  with `PUSH continuation; ...; POP EAX; JMP EAX`; the jump dispatches on a
-  variable, so when a listing stops short of the continuation nothing names
-  it - not the dangling-target check, not recursive descent, which cannot
-  follow a push. A body that consumes a pushed address with `POP reg; JMP
-  reg` now grows into any in-window code address it pushes and does not
-  contain, the way it grows into a dangling literal. A push followed by
-  `PUSH FS:[..]` is a try frame's handler and is left to that recovery.
+- A pushed continuation is decoded and dispatchable. Delphi leaves a
+  finally block with `PUSH continuation; ...; POP reg; JMP reg`; the jump
+  dispatches on a variable, so nothing names the continuation - not the
+  dangling-target check, not recursive descent, which cannot follow a push.
+  A body that consumes a pushed address that way now grows into it when its
+  listing stopped short, and the address becomes a block entry as a
+  jump-table target does, so `recomp_jump` reaches it from any body that
+  shares the code - a recovered block can overlap a listed function's grown
+  tail and execute the same jump without holding the label. A push followed
+  by `PUSH FS:[..]` is a try frame's handler and is left to that recovery.
 
 - `DirectInputCreateW` and `DirectInputCreateEx`. A Unicode program asks for
   the W entry and, refused, runs with no DirectInput at all and reads its

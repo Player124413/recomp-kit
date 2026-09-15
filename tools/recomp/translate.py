@@ -4218,6 +4218,36 @@ def main():
                 extra[t] = owner[t]
                 all_addrs.add(t)
 
+    # A pushed continuation is a block entry too. Delphi leaves a finally
+    # block with PUSH continuation; ...; POP reg; JMP reg, and that jump
+    # dispatches on a variable - not necessarily from the body that decoded
+    # the continuation. A recovered block can share the same code: in Siege
+    # of Avalon 1.19 body_0080da23 runs over FUN_0080d58c's grown tail, holds
+    # the JMP at 0x0080e3a0, and has no label for 0x0080e3a9, so its switch
+    # missed and recomp_jump found no entry. Registered here, the address is
+    # reachable from every body that can execute that jump.
+    for fn in parsed:
+        insns = fn.insns
+        if not any(insns[k].mnem == "POP" and insns[k + 1].mnem == "JMP"
+                   and insns[k].ops and insns[k + 1].ops
+                   and insns[k].ops[0] == insns[k + 1].ops[0]
+                   for k in range(len(insns) - 1)):
+            continue
+        for k, ins in enumerate(insns):
+            if ins.mnem != "PUSH" or not ins.ops:
+                continue
+            nxt = insns[k + 1] if k + 1 < len(insns) else None
+            if nxt is not None and nxt.mnem == "PUSH" and nxt.ops and "FS:" in nxt.ops[0]:
+                continue  # a try frame's handler, recovered as a landing
+            try:
+                op = parse_operand(ins.ops[0])
+            except TranslateError:
+                continue
+            t = op.imm if op.kind == "imm" else None
+            if t is not None and t not in all_addrs and t in owner:
+                extra[t] = owner[t]
+                all_addrs.add(t)
+
     entries_by_fn = defaultdict(set)
     for t, fn in extra.items():
         entries_by_fn[fn.addr].add(t)
