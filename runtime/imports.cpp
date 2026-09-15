@@ -380,6 +380,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
 
     uint32_t ret_addr = rd32(c->r[R_ESP]);
     LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);
+    recomp_seh_validate_chain(c, "import enter", desc);
 
     // The arguments as they are NOW, before the shim runs: a stdcall shim pops
     // them, so after the call they are gone and this is the only point they
@@ -428,6 +429,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     }
     c->r[R_ESP] += pop;
     c->eip = ret_addr;
+    recomp_seh_validate_chain(c, "import leave", desc);
     return true;
 }
 

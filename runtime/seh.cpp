@@ -5,6 +5,8 @@
 #include "mods_seam.h"
 #include "profile.h"
 #include <cstdlib>
+#include <cstdio>
+#include <map>
 #include <vector>
 
 namespace {
@@ -50,6 +52,12 @@ struct SehState {
     uint32_t g_seh_pending_target = 0;
     X86 *pending_cpu = nullptr;
     SehFrame *landing = nullptr;
+    struct Diagnostic {
+        bool failed = false;
+        uint32_t eip = 0, esp = 0, head = 0;
+        char phase[32] = {}, detail[512] = {};
+    };
+    std::map<X86 *, Diagnostic> diagnostics;
     ~SehState() {
         for (SehFrame *f : frames)
             delete f;
@@ -172,7 +180,55 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
 
 extern "C" {
 
+// Inspection only: do not repair or dereference an invalid link. Retain the
+// last valid boundary so one message bounds the first corrupting guest code.
+void recomp_seh_validate_chain(X86 *c, const char *phase, const char *detail) {
+    if (log_level() < 2 || !c)
+        return;
+    auto &last = state.diagnostics[c];
+    if (last.failed)
+        return;
+    uint32_t head = 0, reg = 0, previous = 0, lo = 0, hi = 0;
+    const char *why = nullptr;
+    if (!c->fs_base || !gm_valid(c->fs_base, 12)) {
+        why = "invalid TEB";
+    } else {
+        head = reg = rd32(c->fs_base);
+        lo = rd32(c->fs_base + 8);
+        hi = rd32(c->fs_base + 4);
+        if (lo >= hi || !gm_valid(lo, hi - lo) || hi - lo < 8)
+            why = "invalid stack bounds";
+        for (uint32_t count = 0; !why && reg != END_CHAIN; ++count) {
+            if (count == 64)
+                why = "more than 64 links";
+            else if (reg < lo || reg > hi - 8 || (reg & 3))
+                why = "link outside guest stack";
+            else if (previous && reg <= previous)
+                why = "link does not ascend";
+            if (!why) {
+                previous = reg;
+                reg = rd32(reg);
+            }
+        }
+    }
+    if (why) {
+        last.failed = true;
+        LOGV("SEH chain violation: %s at %s %s EIP=%08x ESP=%08x head=%08x "
+             "previous=%08x link=%08x stack=%08x..%08x; last valid: %s %s "
+             "EIP=%08x ESP=%08x head=%08x",
+             why, phase, detail, c->eip, c->r[R_ESP], head, previous, reg, lo, hi, last.phase,
+             last.detail, last.eip, last.esp, last.head);
+        return;
+    }
+    last.eip = c->eip;
+    last.esp = c->r[R_ESP];
+    last.head = head;
+    snprintf(last.phase, sizeof last.phase, "%s", phase);
+    snprintf(last.detail, sizeof last.detail, "%s", detail);
+}
+
 jmp_buf *recomp_seh_frame_enter(X86 *c) {
+    recomp_seh_validate_chain(c, "enter", "");
     validate_registration(c, c->r[R_ESP], 0);
     SehFrame *f = new SehFrame{};
     f->cpu = c;
@@ -188,6 +244,7 @@ jmp_buf *recomp_seh_frame_enter(X86 *c) {
 }
 
 void recomp_seh_frame_leave(X86 *c) {
+    recomp_seh_validate_chain(c, "leave", "");
     bool removed = false;
     for (size_t i = state.frames.size(); i-- > 0;) {
         SehFrame *f = state.frames[i];
@@ -215,6 +272,7 @@ uint32_t recomp_seh_pending_target(void) {
 // Called only for computed jumps, before even an existing dispatch-table hit.
 // The dispatcher keeps its own ESP; the pending registration identifies env.
 void recomp_seh_intercept(X86 *c, uint32_t target) {
+    recomp_seh_validate_chain(c, "intercept", "");
     trace_frames(c, "intercept");
     uint32_t reg = state.g_seh_pending_target;
     SehFrame *landing = nullptr;
@@ -295,6 +353,10 @@ void recomp_seh_callback_leave(X86 *c, uint32_t depth) {
 }
 
 void recomp_seh_reset(X86 *c) {
+    if (c)
+        state.diagnostics.erase(c);
+    else
+        state.diagnostics.clear();
     recomp_callback_reset(c);
     for (size_t i = state.frames.size(); i-- > 0;)
         if (!c || state.frames[i]->cpu == c) {
@@ -315,6 +377,7 @@ void recomp_seh_reset(X86 *c) {
 }
 
 int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args) {
+    recomp_seh_validate_chain(c, "raise", "");
     X86 saved = *c;
     if (nargs > 15)
         nargs = 15;
@@ -354,6 +417,7 @@ int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint
 // the dispatcher and lands on the saved host checkpoint.
 void recomp_seh_unwind(X86 *c, uint32_t target, uint32_t target_ip, uint32_t record,
                        uint32_t retval) {
+    recomp_seh_validate_chain(c, "unwind", "");
     trace_frames(c, "unwind begin");
     SehDispatch *d = new_dispatch(c, record);
     if (!record) {

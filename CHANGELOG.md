@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- SEH: at verbose logging level, validate the guest chain at import and SEH
+  boundaries and report its first invalid link together with the last valid
+  observation. The diagnostic is bounded and does not alter guest memory.
+
 - DirectDraw: expose DirectDrawCreateEx with an explicit unsupported result
   for IDirectDraw7, allowing callers to fall back to the legacy factory and
   its supported interfaces without receiving an incompatible vtable.

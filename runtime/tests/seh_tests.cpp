@@ -451,7 +451,86 @@ static void delay_load_return() {
     CHECK(delay_target_calls == 1); // the original continuation returns once
 }
 
+// Capture the first invalid chain at the boundary that observes it, before a
+// later RaiseException diagnoses only an unusable registration. Child runs
+// isolate the cached logging switch and the deliberately damaged chains.
+static int diagnostic_case(const char *which, const char *path) {
+    CHECK(freopen(path, "w", stderr) != nullptr);
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t reg = c.r[R_ESP] - 1024;
+    registration(&c, reg, 0xffffffff, handler_search);
+    c.r[R_ESP] = reg - 32;
+    c.eip = CALLER_RETURN;
+    invoke(&c, "GetTickCount", {}); // last known good observation
+    uint32_t next = reg;
+    if (!strcmp(which, "diag-outside"))
+        next = LANDING;
+    if (!strcmp(which, "diag-backwards"))
+        next = reg - 12;
+    if (!strcmp(which, "diag-depth")) {
+        for (uint32_t i = 0; i < 65; ++i) {
+            wr32(reg + i * 12, i == 64 ? 0xffffffff : reg + (i + 1) * 12);
+            wr32(reg + i * 12 + 4, handler_search);
+        }
+    } else {
+        wr32(reg, next);
+    }
+    c.eip = CALLER_RETURN;
+    if (!strcmp(which, "diag-enter")) {
+        c.r[R_ESP] = reg;
+        recomp_seh_frame_enter(&c);
+    } else if (!strcmp(which, "diag-leave")) {
+        recomp_seh_frame_leave(&c);
+    } else if (!strcmp(which, "diag-raise")) {
+        recomp_seh_raise(&c, 0x12345678, 0, 0, 0);
+    } else {
+        invoke(&c, "GetTickCount", {});
+    }
+    // Repeated observations must not bury the first corruption in log spam.
+    invoke(&c, "GetTickCount", {});
+    CHECK(rd32(c.fs_base) == reg);
+    recomp_seh_reset(&c);
+    return failures ? 1 : 0;
+}
+
+static void chain_diagnostics(const char *exe) {
+    for (const char *which : {"diag-import", "diag-enter", "diag-leave", "diag-raise", "diag-depth",
+                              "diag-outside", "diag-backwards"}) {
+        char path[4096];
+        snprintf(path, sizeof path, "%s/recomp-seh-XXXXXX", os_temp_dir());
+        int fd = os_mkstemp(path);
+        CHECK(fd >= 0);
+        if (fd < 0)
+            continue;
+        os_fd_close(fd);
+        const char *args[] = {exe, which, path, nullptr};
+        int64_t pid = 0;
+        int code = -1;
+        CHECK(os_spawn(args, &pid) == 0 && os_wait(pid, &code) == 0);
+        CHECK(code == (!strcmp(which, "diag-raise") ? 134 : 0));
+        FILE *f = fopen(path, "rb");
+        CHECK(f != nullptr);
+        char log[16384] = {};
+        if (f) {
+            fread(log, 1, sizeof log - 1, f);
+            fclose(f);
+        }
+        const char *first = strstr(log, "SEH chain violation");
+        CHECK(first != nullptr);
+        if (first) {
+            CHECK(strstr(first + 1, "SEH chain violation") == nullptr);
+            CHECK(strstr(first, "GetTickCount") != nullptr);
+            CHECK(strstr(first, "last valid") != nullptr);
+        }
+        os_unlink(path);
+    }
+}
+
 int main(int argc, char **argv) {
+    const bool diagnostic = argc > 2 && !strncmp(argv[1], "diag-", 5);
+    if (diagnostic)
+        os_setenv("RECOMP_LOG", "2");
     mem_init();
     imports_init();
     handler_search = imports_alloc_trampoline("SEH.dll", "search", search, ARGC_CDECL);
@@ -460,6 +539,8 @@ int main(int argc, char **argv) {
         imports_alloc_trampoline("SEH.dll", "continue", continue_execution, ARGC_CDECL);
     cleanup_handler = imports_alloc_trampoline("SEH.dll", "cleanup", cleanup_accept, ARGC_CDECL);
     outer_handler = imports_alloc_trampoline("SEH.dll", "outer", outer_accept, ARGC_CDECL);
+    if (diagnostic)
+        return diagnostic_case(argv[1], argv[2]);
     if (argc > 1) {
         fatal_case(argv[1]);
         return 1;
@@ -474,6 +555,7 @@ int main(int argc, char **argv) {
     teardown();
     char exe[4096];
     CHECK(os_exe_path(exe, sizeof exe) == 0);
+    chain_diagnostics(exe);
     for (const char *which :
          {"cycle", "invalid", "continue", "missing-target", "missing-checkpoint", "unhandled"}) {
         const char *args[] = {exe, which, nullptr};
