@@ -1497,7 +1497,10 @@ class Translator(object):
         for ins in fn.insns:
             if ins.mnem != "PUSH" or not ins.ops:
                 continue
-            op = parse_operand(ins.ops[0])
+            try:
+                op = parse_operand(ins.ops[0])
+            except TranslateError:
+                continue  # not a PUSH imm32; it cannot name a continuation
             if op.kind == "imm" and operand_size([op], hint=32) == 32:
                 target = op.imm & 0xffffffff
                 if target in fn.addrs:
@@ -1513,7 +1516,10 @@ class Translator(object):
         ins = fn.insns[i]
         if (ins.mnem == "PUSH" and i + 1 < len(fn.insns) and fn.contiguous[i]
                 and fn.insns[i + 1].mnem == "RET" and not fn.insns[i + 1].ops):
-            op = parse_operand(ins.ops[0])
+            try:
+                op = parse_operand(ins.ops[0])
+            except TranslateError:
+                return None  # not a PUSH imm32, so not this pattern
             if op.kind == "imm" and operand_size([op], hint=32) == 32:
                 return op.imm & 0xffffffff
         return None
@@ -1549,7 +1555,17 @@ class Translator(object):
         def transfer(ins, state):
             delta, frame, saved = state
             m = ins.mnem
-            ops = [parse_operand(o) for o in ins.ops] if m not in self.STRING_MNEM else []
+            try:
+                ops = [parse_operand(o) for o in ins.ops] if m not in self.STRING_MNEM else []
+            except TranslateError:
+                # An operand this translator cannot even spell is the strongest
+                # unmodelled form there is, and the rule above already covers
+                # it: the proof does not survive one. The instruction itself
+                # becomes a trap wherever it is emitted, so the only thing
+                # raising here would change is which pass reports it - and in
+                # an entry stub whose listing runs off into padding, that is
+                # the difference between a translated image and no image.
+                return unknown
             writes = set()
             # Read-only instructions and calls do not explicitly redefine a
             # saved return register. All unmodelled forms invalidate the proof.
