@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- DirectDraw: expose DirectDrawCreateEx with an explicit unsupported result
+  for IDirectDraw7, allowing callers to fall back to the legacy factory and
+  its supported interfaces without receiving an incompatible vtable.
+
 - Runtime: theme and desktop-composition probes report disabled visual
   styles and composition, allowing callers to use their classic window path.
 

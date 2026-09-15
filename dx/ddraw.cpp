@@ -58,6 +58,8 @@ static const uint8_t IID_IDirectDraw2_[16] =
     IID_BYTES(0xB3A6F3E0, 0x2B43, 0x11CF, 0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56);
 static const uint8_t IID_IDirectDraw4_[16] =
     IID_BYTES(0x9C59509A, 0x39BD, 0x11D1, 0x8C, 0x4A, 0x00, 0xC0, 0x4F, 0xD9, 0x30, 0xC5);
+static const uint8_t IID_IDirectDraw7_[16] =
+    IID_BYTES(0x15E65EC0, 0x3B9C, 0x11D2, 0xB9, 0x2F, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B);
 static const uint8_t IID_IDirectDrawSurface_[16] =
     IID_BYTES(0x6C14DB81, 0xA733, 0x11CE, 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60);
 static const uint8_t IID_IDirectDrawSurface2_[16] =
@@ -4255,6 +4257,27 @@ void DirectDrawCreate(X86 *c) {
     com_ret(c, DD_OK);
 }
 
+// The version 7 factory is discoverable so callers can take their legacy
+// DirectDrawCreate/QueryInterface fallback. Do not return an older vtable for
+// IID_IDirectDraw7: its callers would invoke incompatible method signatures.
+void DirectDrawCreateEx(X86 *c) {
+    const uint32_t out = arg(c, 1), iid = arg(c, 2), outer = arg(c, 3);
+    if (!out || !gm_valid(out, 4)) {
+        com_ret(c, DDERR_INVALIDPARAMS);
+        return;
+    }
+    wr32(out, 0);
+    if (!iid || !gm_valid(iid, 16) || memcmp(gm_ptr(iid), IID_IDirectDraw7_, 16)) {
+        com_ret(c, DDERR_INVALIDPARAMS);
+        return;
+    }
+    if (outer) {
+        com_ret(c, CLASS_E_NOAGGREGATION);
+        return;
+    }
+    com_ret(c, DDERR_UNSUPPORTED);
+}
+
 void DirectDrawEnumerateA(X86 *c) {
     uint32_t cb = arg(c, 0);
     uint32_t ctx = arg(c, 1);
@@ -4296,6 +4319,7 @@ void DirectDrawCreateClipper(X86 *c) {
 
 const ImportShim g_ddraw_exports[] = {
     {"DDRAW.dll", "DirectDrawCreate", 3, DirectDrawCreate},
+    {"DDRAW.dll", "DirectDrawCreateEx", 4, DirectDrawCreateEx},
     {"DDRAW.dll", "DirectDrawEnumerateA", 2, DirectDrawEnumerateA},
     {"DDRAW.dll", "DirectDrawCreateClipper", 3, DirectDrawCreateClipper},
 };

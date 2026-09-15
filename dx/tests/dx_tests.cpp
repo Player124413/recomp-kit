@@ -4811,6 +4811,46 @@ static void test_mouse_motion_survives_keyboard_poll() {
     dinput_reset();
 }
 
+// A caller can resolve the DirectX 7 factory, observe that version 7 is
+// unsupported, then create a legacy object and query its version 4 interface.
+static void test_directdraw_create_ex_fallback() {
+    cpu_reset();
+    const uint32_t create_ex = tramp("DDRAW.dll", "DirectDrawCreateEx");
+    CHECK(create_ex != 0);
+    if (!create_ex)
+        return;
+    const uint8_t dd7[16] = {0xC0, 0x5E, 0xE6, 0x15, 0x9C, 0x3B, 0xD2, 0x11,
+                             0xB9, 0x2F, 0x00, 0x60, 0x97, 0x97, 0xEA, 0x5B};
+    const uint8_t dd4[16] = {0x9A, 0x50, 0x59, 0x9C, 0xBD, 0x39, 0xD1, 0x11,
+                             0x8C, 0x4A, 0x00, 0xC0, 0x4F, 0xD9, 0x30, 0xC5};
+    const uint32_t iid = sc(0x40), out = sc(0x60);
+    memcpy(gm_ptr(iid), dd7, sizeof(dd7));
+    wr32(out, 0xdeadbeef);
+    wr32(out + 4, 0xcafebabe);
+    const uint32_t live = com_live_count();
+    CHECK_EQ(call_shim(create_ex, {0, out, iid, 0}), DDERR_UNSUPPORTED);
+    CHECK_EQ(rd32(out), 0);
+    CHECK_EQ(rd32(out + 4), 0xcafebabe);
+    CHECK_EQ(com_live_count(), live);
+    CHECK_EQ(call_shim(create_ex, {0, 0, iid, 0}), DDERR_INVALIDPARAMS);
+    CHECK_EQ(call_shim(create_ex, {0, out, 0, 0}), DDERR_INVALIDPARAMS);
+    CHECK_EQ(call_shim(create_ex, {0, out, iid, 1}), CLASS_E_NOAGGREGATION);
+    memcpy(gm_ptr(iid), dd4, sizeof(dd4));
+    // DirectDrawCreateEx only accepts IID_IDirectDraw7; older interfaces use
+    // DirectDrawCreate followed by QueryInterface.
+    CHECK_EQ(call_shim(create_ex, {0, out, iid, 0}), DDERR_INVALIDPARAMS);
+    CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, out, 0}), DD_OK);
+    const uint32_t dd = rd32(out);
+    CHECK(dd != 0);
+    CHECK_EQ(call_method(dd, DD_QueryInterface, {iid, out}), S_OK);
+    const uint32_t view4 = rd32(out);
+    CHECK(view4 != 0);
+    CHECK_EQ(call_method(view4, DD_SetCooperativeLevel, {0, 8}), DD_OK);
+    CHECK_EQ(call_method(view4, DD_Release, {}), 1);
+    CHECK_EQ(call_method(dd, DD_Release, {}), 0);
+    CHECK_EQ(com_live_count(), live);
+}
+
 // QueryInterface: the DirectDraw object hands out IDirectDraw2 and 4, refuses
 // an interface it does not implement, and reaches Direct3D2.
 static void test_query_interface() {
@@ -10208,6 +10248,7 @@ int main() {
         {"unchanged state buffered", test_unchanged_state_produces_no_buffered_event},
         {"re-attach a palette", test_setpalette_self},
         {"colour key at 16 bpp", test_colorkey_16bpp},
+        {"DirectDrawCreateEx fallback", test_directdraw_create_ex_fallback},
         {"QueryInterface", test_query_interface},
         {"display modes", test_enum_display_modes},
         {"configurable modes", test_configurable_display_modes},
