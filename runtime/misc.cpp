@@ -1463,7 +1463,8 @@ void m_mixerNoDriver(X86 *c) {
 
 // VERSION.dll: the executable's own version resource, read out of the mapped
 // image. A game that shows its version asks for its own module's
-// VS_VERSIONINFO; any other file has none here. GetFileVersionInfoA hands the
+// VS_VERSIONINFO, and comctl32.dll the version the manifest binds; any
+// other file has none here. GetFileVersionInfoA hands the
 // block over as it is in the image (UTF-16 strings). VerQueryValue walks
 // the root, translation table and string paths. ANSI queries use scratch
 // space after the tree so a later wide query still sees the original data.
@@ -1517,6 +1518,70 @@ bool names_own_executable(const std::string &name) {
     if (exe.empty())
         exe = RECOMP_EXECUTABLE;
     return os_strcasecmp(leaf.c_str(), exe.c_str()) == 0;
+}
+
+// comctl32.dll's version is the one the executable's manifest binds: 6.10 when
+// it depends on Microsoft.Windows.Common-Controls 6.0, else the 5.82 Windows
+// loads for everything else. The VCL turns its themed painting on by this
+// number, so the answer follows the manifest, not the host.
+bool manifest_binds_common_controls_6() {
+    std::vector<ResourceName> names;
+    if (!resource_names(24, &names)) // RT_MANIFEST
+        return false;
+    const std::string assembly = "Microsoft.Windows.Common-Controls";
+    for (const auto &name : names) {
+        if (name.is_string)
+            continue;
+        uint32_t size = 0, entry = resource_find(24, name.id);
+        uint32_t at = entry ? resource_data(entry, &size) : 0;
+        if (!at || !size || !gm_valid(at, size))
+            continue;
+        const std::string text(reinterpret_cast<const char *>(g_mem + at), size);
+        for (size_t hit = text.find(assembly); hit != std::string::npos;
+             hit = text.find(assembly, hit + 1)) {
+            size_t open = text.rfind('<', hit), close = text.find('>', hit);
+            if (open != std::string::npos && close != std::string::npos &&
+                text.substr(open, close - open).find("version=\"6.") != std::string::npos)
+                return true;
+        }
+    }
+    return false;
+}
+
+// A VS_VERSIONINFO holding only its VS_FIXEDFILEINFO, which is what a version
+// check reads, in one block kept for the life of the process.
+VersionResource comctl32_version_resource() {
+    static uint32_t block = 0;
+    if (!block)
+        block = heap_alloc(92, true);
+    if (!block)
+        return VersionResource();
+    const uint32_t file_ms = manifest_binds_common_controls_6() ? 0x0006000au : 0x00050052u;
+    wr16(block, 92);     // wLength
+    wr16(block + 2, 52); // wValueLength: sizeof(VS_FIXEDFILEINFO)
+    wr16(block + 4, 0);  // wType: binary
+    gm_put_wstr(block + 6, "VS_VERSION_INFO", 16);
+    wr16(block + 38, 0); // padding to the value
+    const uint32_t fixed[13] = {0xfeef04bdu, 0x00010000u, file_ms, 0x4a610456u, file_ms,
+                                0x4a610456u, 0x3fu,       0,       0x00040004u, 2, // VFT_DLL
+                                0,           0,           0};
+    for (uint32_t i = 0; i < 13; ++i)
+        wr32(block + 40 + 4 * i, fixed[i]);
+    VersionResource r;
+    r.addr = block;
+    r.size = 92;
+    return r;
+}
+
+// The version resource GetFileVersionInfo reads for `name`.
+VersionResource version_resource_named(const std::string &name) {
+    if (names_own_executable(name))
+        return find_version_resource();
+    size_t cut = name.find_last_of("\\/");
+    const std::string leaf = cut == std::string::npos ? name : name.substr(cut + 1);
+    if (os_strcasecmp(leaf.c_str(), "comctl32.dll") == 0)
+        return comctl32_version_resource();
+    return VersionResource();
 }
 
 // One block of a VS_VERSIONINFO tree, as it lies in guest memory.
@@ -1579,7 +1644,7 @@ void version_size(X86 *c, const std::string &name) {
     uint32_t handle_out = arg(c, 1);
     if (handle_out && gm_valid(handle_out, 4))
         wr32(handle_out, 0);
-    VersionResource r = names_own_executable(name) ? find_version_resource() : VersionResource();
+    VersionResource r = version_resource_named(name);
     if (!r.size) {
         set_last_error(1813); // ERROR_RESOURCE_TYPE_NOT_FOUND
         set_eax(c, 0);
@@ -1592,7 +1657,7 @@ void version_size(X86 *c, const std::string &name) {
 // GetFileVersionInfoA(name, handle, len, data)
 void version_info(X86 *c, const std::string &name) {
     uint32_t len = arg(c, 2), data = arg(c, 3);
-    VersionResource r = names_own_executable(name) ? find_version_resource() : VersionResource();
+    VersionResource r = version_resource_named(name);
     if (!r.size) {
         set_last_error(1813);
         set_eax(c, 0);

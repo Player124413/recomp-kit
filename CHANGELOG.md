@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- The system `STATIC` control class. Windows draws a static control's text
+  in the class's own window procedure, and a program that subclasses it -
+  the VCL's `TStaticText` does, through `GetClassInfoW` - hands it every
+  message it does not handle. With no such class the lookup failed, the
+  subclass fell back to `DefWindowProc`, and every caption stayed blank. The
+  procedure keeps `WM_SETFONT`, redraws on `WM_SETTEXT`, asks the parent for
+  colours with `WM_CTLCOLORSTATIC`, and paints into the DC `WM_PAINT` or
+  `WM_PRINTCLIENT` carries when there is one: a double-buffering program
+  paints its control into a memory DC and copies that over the window, so
+  painting the window directly was covered by the copy.
+
+- `SetWindowPos` shows and hides. `SWP_SHOWWINDOW` and `SWP_HIDEWINDOW` are
+  the transitions `ShowWindow` makes, and the VCL shows every child control
+  with the first and never calls `ShowWindow` for one, so each stayed hidden
+  and was never asked to paint.
+
+- `WS_CLIPCHILDREN`. A child window's DC writes into its top-level window's
+  surface, so a parent repainting painted over its visible children; a DC of
+  a window with the style now leaves their areas alone, as Windows does.
+
+- Visual styles are on, with no theme data. `IsThemeActive` and
+  `IsAppThemed` answer yes, as every Windows since Vista does; `OpenThemeData`
+  finds nothing, so controls draw the classic way. Every uxtheme export a
+  VCL program binds is present, since it calls through whatever pointer it
+  got and a delay-loaded one that is missing raises instead.
+  `DrawThemeParentBackground` does the real work - the parent paints its
+  background into the child's DC through `WM_ERASEBKGND` and
+  `WM_PRINTCLIENT`, which is how a transparent control shows the window
+  behind it - and `DrawThemeText`/`DrawThemeTextEx` draw their text in the
+  DC's font rather than failing, or a program with styles on loses its
+  captions. Buffered painting and animation report no buffer.
+
+- `comctl32.dll` has a version resource: 6.10 when the executable's manifest
+  binds `Microsoft.Windows.Common-Controls` 6.0, else 5.82. The VCL decides
+  whether to paint with visual styles by that number.
+
 - `CharUpperBuffA`, `CharLowerBuffA`, `GetStringTypeExA`, `GetStringTypeExW`
   and `FlushInstructionCache`. A Delphi runtime built this decade builds its
   ANSI case tables from inside a unit's initialization by running every

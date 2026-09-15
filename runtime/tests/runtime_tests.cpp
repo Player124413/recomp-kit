@@ -388,9 +388,48 @@ static void test_buffered_paint_unavailable() {
     for (const char *api : {"IsThemeActive", "IsAppThemed"}) {
         gm_put_str(text + 128, api, 64);
         check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0 &&
-                  call_import(&c, "UXTHEME.dll", api, {}) == 0,
-              "%s reports disabled visual styles through its registered export", api);
+                  call_import(&c, "UXTHEME.dll", api, {}) == 1,
+              "%s reports visual styles on, as every Windows since Vista does", api);
     }
+    // A VCL program binds every one of these at start and calls through the
+    // pointer it got, so a missing export is a call to address zero later.
+    for (const char *api :
+         {"OpenThemeData", "CloseThemeData", "DrawThemeBackground", "DrawThemeText",
+          "GetThemeBackgroundContentRect", "GetThemeBackgroundExtent", "GetThemePartSize",
+          "GetThemeTextExtent", "GetThemeTextMetrics", "GetThemeBackgroundRegion",
+          "HitTestThemeBackground", "DrawThemeEdge", "DrawThemeIcon", "IsThemePartDefined",
+          "IsThemeBackgroundPartiallyTransparent", "GetThemeColor", "GetThemeMetric",
+          "GetThemeString", "GetThemeBool", "GetThemeInt", "GetThemeEnumValue", "GetThemePosition",
+          "GetThemeFont", "GetThemeRect", "GetThemeMargins", "GetThemeIntList",
+          "GetThemePropertyOrigin", "SetWindowTheme", "GetThemeFilename", "GetThemeSysColor",
+          "GetThemeSysColorBrush", "GetThemeSysBool", "GetThemeSysSize", "GetThemeSysFont",
+          "GetThemeSysString", "GetThemeSysInt", "GetWindowTheme", "EnableThemeDialogTexture",
+          "IsThemeDialogTextureEnabled", "GetThemeAppProperties", "SetThemeAppProperties",
+          "GetCurrentThemeName", "GetThemeDocumentationProperty", "DrawThemeParentBackground",
+          "EnableTheming", "DrawThemeTextEx", "OpenThemeDataForDpi", "BeginBufferedPaint",
+          "EndBufferedPaint", "BufferedPaintSetAlpha", "BeginBufferedAnimation",
+          "EndBufferedAnimation", "BufferedPaintRenderAnimation",
+          "BufferedPaintStopAllAnimations"}) {
+        gm_put_str(text + 128, api, 64);
+        check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0,
+              "%s resolves through GetProcAddress", api);
+    }
+    gm_put_wstr(text + 128, "BUTTON", 16);
+    check(call_import(&c, "UXTHEME.dll", "OpenThemeData", {0, text + 128}) == 0,
+          "OpenThemeData finds no theme data, so controls are drawn the classic way");
+    // comctl32.dll's version is what a VCL program turns themed painting on by.
+    gm_put_wstr(text, "comctl32.dll", 64);
+    gm_put_wstr(text + 256, "\\", 4);
+    const uint32_t block = 0x00309000;
+    uint32_t size = call_import(&c, "VERSION.dll", "GetFileVersionInfoSizeW", {text, 0});
+    uint32_t fixed = 0;
+    if (size && size <= 0x1000 &&
+        call_import(&c, "VERSION.dll", "GetFileVersionInfoW", {text, 0, size, block}) &&
+        call_import(&c, "VERSION.dll", "VerQueryValueW", {block, text + 256, text + 512, text + 516}))
+        fixed = rd32(text + 512);
+    uint32_t major = fixed && gm_valid(fixed, 52) ? rd32(fixed + 8) >> 16 : 0;
+    check(fixed && rd32(fixed) == 0xfeef04bdu && (major == 5 || major == 6) && rd32(fixed + 36) == 2,
+          "comctl32.dll has a DLL version resource, 5.82 or 6.10 (major %u)", major);
     gm_put_wstr(text, "dwmapi.dll", 64);
     module = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {text});
     check(module != 0, "the desktop composition module is present");

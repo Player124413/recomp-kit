@@ -123,6 +123,7 @@ void unregister_w(X86 *c) {
     set_eax(c, 1);
 }
 void class_info(X86 *c) {
+    ensure_system_classes();
     auto it = classes().find(class_key(arg(c, 1), true));
     uint32_t p = arg(c, 2);
     if (it == classes().end() || !p || !gm_valid(p, 40)) {

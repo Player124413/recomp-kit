@@ -29,6 +29,9 @@ struct DcState {
 struct DeviceContext : DcState {
     bool memory = true;
     uint32_t window = 0; // The acquiring window, possibly a child of surface.
+    // WS_CLIPCHILDREN: the visible children's areas, in surface coordinates,
+    // taken when the DC is made. Writes there are dropped.
+    std::vector<Rect> excluded;
     std::vector<DcState> saved;
 };
 struct Object {

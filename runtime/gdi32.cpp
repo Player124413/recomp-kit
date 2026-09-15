@@ -919,6 +919,10 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     if (x < 0 || y < 0 || x >= w || y >= h ||
         (!d && !contains(client_bounds(*dc, int(w), int(h)), x, y)))
         return false;
+    if (write && !d &&
+        std::any_of(dc->excluded.begin(), dc->excluded.end(),
+                    [&](Rect r) { return contains(r, x, y); }))
+        return false;
     uint32_t at = 0, value = 0;
     if (d) {
         at = d->bits + uint32_t(d->height > 0 ? h - 1 - y : y) * d->stride +
@@ -1085,6 +1089,28 @@ uint32_t gdi_new_dc() {
     dcs()[dc] = DeviceContext();
     return dc;
 }
+namespace {
+// The visible child windows of a WS_CLIPCHILDREN window, in the coordinates of
+// the top-level surface its DC writes to. Children write into that same
+// surface, so without this a parent repainting paints over its controls.
+std::vector<Rect> clipped_children(uint32_t hwnd, uint32_t surface) {
+    std::vector<Rect> out;
+    auto *self = user32::find_window(hwnd);
+    if (!self || !(self->style & 0x02000000u))
+        return out;
+    int32_t root_x = 0, root_y = 0;
+    user32::client_origin(surface, &root_x, &root_y);
+    for (uint32_t child : user32::window_z_order(hwnd)) {
+        auto *w = user32::find_window(child);
+        if (!w || !w->visible || !(w->style & 0x40000000u) || w->w <= 0 || w->h <= 0)
+            continue;
+        int32_t x = 0, y = 0;
+        user32::client_origin(child, &x, &y);
+        out.push_back({x - root_x, y - root_y, x - root_x + w->w, y - root_y + w->h});
+    }
+    return out;
+}
+} // namespace
 uint32_t gdi_window_dc(uint32_t hwnd) {
     DeviceContext dc;
     dc.memory = false;
@@ -1101,6 +1127,7 @@ uint32_t gdi_window_dc(uint32_t hwnd) {
             w = parent;
         }
         dc.surface = w->hwnd;
+        dc.excluded = clipped_children(hwnd, dc.surface);
     }
     uint32_t handle = g_next_dc++;
     dcs()[handle] = dc;

@@ -795,6 +795,245 @@ static void test_msimg32() {
     call_import(&c, "GDI32.dll", "DeleteDC", {empty});
 }
 
+// The system STATIC class. The VCL's TStaticText finds it with GetClassInfoW
+// and passes it every message it leaves unhandled - WM_SETFONT and, above
+// all, WM_PAINT, which is the only thing that draws the caption.
+static void test_static_control() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00310000;
+    uint32_t parent = make_test_window(&c, s, 64, 32);
+    gm_put_wstr(s + 0x900, "STATIC", 16);
+    memset(g_mem + s + 0xa00, 0, 40);
+    check(call_import(&c, "USER32.dll", "GetClassInfoW", {0, s + 0x900, s + 0xa00}) != 0 &&
+              rd32(s + 0xa04) != 0,
+          "GetClassInfoW finds the system STATIC class and its procedure");
+    gm_put_wstr(s + 0x940, "Hi", 8);
+    // WS_CHILD | SS_CENTER, 48x16 at (8,8), created hidden as the VCL creates it.
+    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s + 0x900, s + 0x940, 0x40000001u, 8, 8, 48, 16, parent, 0,
+                                  IMAGE_BASE, 0});
+    check(child != 0, "CreateWindowExW(STATIC)");
+    memset(g_mem + s + 0xb00, 0, 92);
+    wr32(s + 0xb00, uint32_t(-16));
+    uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s + 0xb00});
+    call_import(&c, "USER32.dll", "SendMessageW", {child, 0x30, font, 0});
+    check(font != 0 && call_import(&c, "USER32.dll", "SendMessageW", {child, 0x31, 0, 0}) == font,
+          "WM_GETFONT returns the font WM_SETFONT gave the control");
+    // WM_PAINT with a DC in wParam paints into that DC, not the window: the VCL
+    // double-buffers a control this way and then copies the DC over it.
+    uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    memset(g_mem + s + 0xc00, 0, 40);
+    wr32(s + 0xc00, 40);
+    wr32(s + 0xc04, 48);
+    wr32(s + 0xc08, uint32_t(-16));
+    wr16(s + 0xc0c, 1);
+    wr16(s + 0xc0e, 32);
+    uint32_t dib = call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, s + 0xc00, 0, s + 0xc40, 0, 0});
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, dib});
+    call_import(&c, "USER32.dll", "SendMessageW", {child, 0x0f, mem, 0});
+    int in_memory = 0, on_window = 0;
+    for (uint32_t y = 0; y < 16; ++y)
+        for (uint32_t x = 0; x < 48; ++x)
+            in_memory += call_import(&c, "GDI32.dll", "GetPixel", {mem, x, y}) != 0;
+    uint32_t window_dc = call_import(&c, "USER32.dll", "GetDC", {parent});
+    for (uint32_t y = 8; y < 24; ++y)
+        for (uint32_t x = 8; x < 56; ++x)
+            on_window += call_import(&c, "GDI32.dll", "GetPixel", {window_dc, x, y}) != 0;
+    call_import(&c, "USER32.dll", "ReleaseDC", {parent, window_dc});
+    check(in_memory > 0 && on_window == 0,
+          "WM_PAINT with a DC in wParam paints into it, not the window (%d, %d)", in_memory, on_window);
+    call_import(&c, "GDI32.dll", "DeleteDC", {mem});
+    call_import(&c, "GDI32.dll", "DeleteObject", {dib});
+    // The VCL shows a control with SetWindowPos and SWP_SHOWWINDOW, never with
+    // ShowWindow, and that show is what invalidates it so UpdateWindow paints.
+    auto visible = [&] {
+        return (call_import(&c, "USER32.dll", "GetWindowLongW", {child, uint32_t(-16)}) &
+                0x10000000u) != 0;
+    };
+    // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE, with SWP_SHOWWINDOW.
+    call_import(&c, "USER32.dll", "SetWindowPos", {child, 0, 0, 0, 0, 0, 0x57});
+    check(visible(), "SetWindowPos with SWP_SHOWWINDOW makes the control visible");
+    call_import(&c, "USER32.dll", "UpdateWindow", {child});
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {parent});
+    auto painted = [&](uint32_t x0, uint32_t x1) {
+        int n = 0;
+        for (uint32_t y = 8; y < 24; ++y)
+            for (uint32_t x = x0; x < x1; ++x)
+                n += call_import(&c, "GDI32.dll", "GetPixel", {dc, x, y}) != 0;
+        return n;
+    };
+    // "Hi" is 16 pixels wide, so centred in 48 it covers x 24..40.
+    int inside = painted(24, 40), left = painted(8, 24), right = painted(40, 56);
+    check(inside > 0 && left == 0 && right == 0,
+          "WM_PAINT draws the caption centred in the control (%d, %d, %d)", inside, left, right);
+    call_import(&c, "USER32.dll", "SetWindowPos", {child, 0, 0, 0, 0, 0, 0x97});
+    check(!visible(), "SetWindowPos with SWP_HIDEWINDOW hides it again");
+    call_import(&c, "USER32.dll", "ReleaseDC", {parent, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {child});
+    call_import(&c, "USER32.dll", "DestroyWindow", {parent});
+}
+// WS_CLIPCHILDREN: a parent's DC leaves its visible children's areas alone,
+// so a form that repaints does not paint over its controls; a hidden child
+// is not excluded.
+static void test_clip_children() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00318000;
+    make_test_window(&c, s, 16, 16); // registers the class
+    uint32_t parent = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                  {0, s + 0x800, 0, 0x02000000u, 0, 0, 16, 16, 0, 0, IMAGE_BASE, 0});
+    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s + 0x800, 0, 0x50000000u, 4, 4, 4, 4, parent, 0, IMAGE_BASE, 0});
+    uint32_t brush = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0xff});
+    wr32(s + 0x100, 0);
+    wr32(s + 0x104, 0);
+    wr32(s + 0x108, 16);
+    wr32(s + 0x10c, 16);
+    auto fill_parent = [&] {
+        uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {parent});
+        call_import(&c, "USER32.dll", "FillRect", {dc, s + 0x100, brush});
+        call_import(&c, "USER32.dll", "ReleaseDC", {parent, dc});
+    };
+    auto pixel = [&](uint32_t hwnd, uint32_t x, uint32_t y) {
+        uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+        uint32_t p = call_import(&c, "GDI32.dll", "GetPixel", {dc, x, y});
+        call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+        return p;
+    };
+    fill_parent();
+    check(pixel(parent, 0, 0) == 0xff && pixel(child, 1, 1) == 0,
+          "a WS_CLIPCHILDREN parent paints around its visible child, not over it");
+    call_import(&c, "USER32.dll", "ShowWindow", {child, 0});
+    fill_parent();
+    check(pixel(child, 1, 1) == 0xff, "a hidden child is painted over");
+    call_import(&c, "USER32.dll", "DestroyWindow", {child});
+    call_import(&c, "USER32.dll", "DestroyWindow", {parent});
+}
+// DrawThemeParentBackground: the parent paints into the child's DC, shifted so
+// its own coordinates land on the child, with WM_ERASEBKGND then
+// WM_PRINTCLIENT. It is how a transparent VCL control shows the form behind it.
+static std::vector<uint32_t> g_parent_messages;
+static void print_parent_proc(X86 *c) {
+    uint32_t msg = arg(c, 1);
+    if (msg == 0x14 || msg == 0x318) {
+        g_parent_messages.push_back(msg);
+        if (msg == 0x318)
+            gdi::write_pixel(arg(c, 2), 5, 5, 0xffff0000u);
+    }
+    set_eax(c, 1);
+}
+static void test_draw_theme_parent_background() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00320000;
+    memset(g_mem + s, 0, 40);
+    wr32(s + 4, imports_alloc_trampoline("test", "print_parent_proc", print_parent_proc, 4));
+    gm_put_wstr(s + 0x800, "PrintParent", 32);
+    wr32(s + 36, s + 0x800);
+    check(call_import(&c, "USER32.dll", "RegisterClassW", {s}) != 0, "RegisterClassW(PrintParent)");
+    uint32_t parent = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                  {0, s + 0x800, 0, 0, 0, 0, 16, 16, 0, 0, IMAGE_BASE, 0});
+    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s + 0x800, 0, 0x50000000u, 4, 4, 4, 4, parent, 0, IMAGE_BASE, 0});
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {child});
+    g_parent_messages.clear();
+    check(call_import(&c, "UXTHEME.dll", "DrawThemeParentBackground", {child, dc, 0}) == 0,
+          "DrawThemeParentBackground returns S_OK");
+    check(g_parent_messages == std::vector<uint32_t>{0x14, 0x318},
+          "the parent is asked to erase, then to print its client area");
+    check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 1, 1}) == 0x000000ffu,
+          "the parent's (5,5) lands on the child's (1,1)");
+    call_import(&c, "GDI32.dll", "SetPixel", {dc, 0, 0, 0x0000ff00u});
+    uint32_t fresh = call_import(&c, "USER32.dll", "GetDC", {child});
+    check(call_import(&c, "GDI32.dll", "GetPixel", {fresh, 0, 0}) == 0x0000ff00u,
+          "the child's DC is back at its own origin afterwards");
+    call_import(&c, "USER32.dll", "ReleaseDC", {child, fresh});
+    call_import(&c, "USER32.dll", "ReleaseDC", {child, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {child});
+    call_import(&c, "USER32.dll", "DestroyWindow", {parent});
+}
+// DrawThemeTextEx with no theme data draws the text the classic way: in the
+// colour DTTOPTS names, without painting a background behind it. The VCL draws
+// its captions through it once visual styles are on.
+static void test_draw_theme_text_ex() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00328000;
+    uint32_t hwnd = make_test_window(&c, s, 32, 16);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    gm_put_wstr(s + 0x100, "Hi", 8);
+    wr32(s + 0x140, 0);
+    wr32(s + 0x144, 0);
+    wr32(s + 0x148, 32);
+    wr32(s + 0x14c, 16);
+    memset(g_mem + s + 0x180, 0, 64);
+    wr32(s + 0x180, 64);        // DTTOPTS.dwSize
+    wr32(s + 0x184, 1);         // DTT_TEXTCOLOR
+    wr32(s + 0x188, 0x0000ffu); // crText: red
+    check(call_import(&c, "UXTHEME.dll", "DrawThemeTextEx",
+                      {0, dc, 0, 0, s + 0x100, uint32_t(-1), 0, s + 0x140, s + 0x180}) == 0,
+          "DrawThemeTextEx returns S_OK without theme data");
+    int red = 0, other = 0;
+    for (uint32_t y = 0; y < 16; ++y)
+        for (uint32_t x = 0; x < 32; ++x) {
+            uint32_t p = call_import(&c, "GDI32.dll", "GetPixel", {dc, x, y});
+            red += p == 0x0000ffu;
+            other += p != 0x0000ffu && p != 0;
+        }
+    check(red > 0 && other == 0,
+          "the text is drawn in DTTOPTS's colour over an untouched background (%d red, %d other)",
+          red, other);
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
+// Blits into a child window's DC whose window origin has been moved land where
+// the logical coordinates say. DrawThemeParentBackground moves it so a parent
+// paints in its own coordinates, and the VCL draws a transparent TImage there
+// with MaskBlt from a memory DC.
+static void test_blit_into_moved_child_origin() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00330000;
+    uint32_t parent = make_test_window(&c, s, 16, 16);
+    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
+                                 {0, s + 0x800, 0, 0x50000000u, 4, 4, 8, 8, parent, 0, IMAGE_BASE, 0});
+    uint32_t bmi = s + 0x200;
+    memset(g_mem + bmi, 0, 40);
+    wr32(bmi, 40);
+    wr32(bmi + 4, 16);
+    wr32(bmi + 8, uint32_t(-16)); // top-down
+    wr16(bmi + 12, 1);
+    wr16(bmi + 14, 32);
+    uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    uint32_t dib = call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, bmi, 0, s + 0x280, 0, 0});
+    call_import(&c, "GDI32.dll", "SelectObject", {mem, dib});
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 6, 6, 0x0000ffu});  // red
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 7, 6, 0x00ff00u});  // green
+    uint32_t mask = call_import(&c, "GDI32.dll", "CreateBitmap", {16, 16, 1, 1, 0}); // all clear
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {child});
+    // Logical (4,4) is the child's (0,0), which is the parent's (4,4).
+    call_import(&c, "GDI32.dll", "SetWindowOrgEx", {dc, 4, 4, 0});
+    check(call_import(&c, "GDI32.dll", "BitBlt", {dc, 0, 0, 16, 16, mem, 0, 0, 0x00cc0020u}) != 0,
+          "BitBlt into the moved child DC");
+    uint32_t parent_dc = call_import(&c, "USER32.dll", "GetDC", {parent});
+    uint32_t red = call_import(&c, "GDI32.dll", "GetPixel", {parent_dc, 6, 6});
+    check(red == 0x0000ffu, "BitBlt: the source's (6,6) lands on the parent's (6,6) (got %08x)", red);
+    // Clear bits select the background operation, SRCCOPY: the VCL's transparent draw.
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 7, 6, 0xff0000u}); // now blue
+    check(call_import(&c, "GDI32.dll", "MaskBlt",
+                      {dc, 0, 0, 16, 16, mem, 0, 0, mask, 0, 0, 0xccaa0029u}) != 0,
+          "MaskBlt into the moved child DC");
+    uint32_t blue = call_import(&c, "GDI32.dll", "GetPixel", {parent_dc, 7, 6});
+    check(blue == 0xff0000u, "MaskBlt: the source's (7,6) lands on the parent's (7,6) (got %08x)", blue);
+    call_import(&c, "USER32.dll", "ReleaseDC", {parent, parent_dc});
+    call_import(&c, "USER32.dll", "ReleaseDC", {child, dc});
+    call_import(&c, "GDI32.dll", "DeleteDC", {mem});
+    call_import(&c, "GDI32.dll", "DeleteObject", {dib});
+    call_import(&c, "GDI32.dll", "DeleteObject", {mask});
+    call_import(&c, "USER32.dll", "DestroyWindow", {child});
+    call_import(&c, "USER32.dll", "DestroyWindow", {parent});
+}
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
@@ -809,6 +1048,11 @@ int main(int argc, char **argv) {
         test_layered_window();
         test_msimg32();
         test_dib_rows_and_regions();
+        test_static_control();
+        test_clip_children();
+        test_draw_theme_parent_background();
+        test_draw_theme_text_ex();
+        test_blit_into_moved_child_origin();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
     }
     printf("%d checks, %d failures\n", g_checks, g_failures);

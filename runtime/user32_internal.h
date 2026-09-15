@@ -40,6 +40,7 @@ struct Window {
     uint32_t region = 0;
     uint32_t show_cmd = 0;
     uint32_t userdata = 0;
+    uint32_t font = 0; // WM_SETFONT, kept for the system control classes
     uint32_t hinstance = 0;
     std::vector<uint32_t> extra;
     bool visible = false;
@@ -89,6 +90,8 @@ bool destroy_window(X86 *c, uint32_t hwnd);
 void client_origin(uint32_t hwnd, int32_t *x, int32_t *y);
 void display_rect(uint32_t out);
 void alias_ansi(X86 *c, const char *name);
+// Registers the system control classes (STATIC) on first use.
+void ensure_system_classes();
 } // namespace user32
 void user32_wide_register();
 

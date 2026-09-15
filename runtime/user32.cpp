@@ -249,6 +249,7 @@ void create_window_named(X86 *c, bool wide) {
     int32_t w = (int32_t)arg(c, 6), h = (int32_t)arg(c, 7);
     uint32_t hinst = arg(c, 10), param = arg(c, 11);
 
+    ensure_system_classes();
     auto ci = classes().find(cls);
     if (ci == classes().end()) {
         LOGW("CreateWindowExA: class \"%s\" was never registered", cls.c_str());
@@ -356,6 +357,21 @@ void u_DestroyWindow(X86 *c) {
     set_eax(c, destroy_window(c, arg(c, 0)));
 }
 
+// A hidden window becoming visible: it goes to the top unless the show keeps
+// the stacking, its whole client area needs painting, and the host is told it
+// has appeared. ShowWindow and SetWindowPos's SWP_SHOWWINDOW both make it.
+static void became_visible(Window *w, bool to_top) {
+    if (to_top)
+        reorder_window(w->hwnd, 0);
+    w->update_pending = true;
+    if (!w->shown) {
+        w->shown = true;
+        post_geometry(w->hwnd, w, false, true);
+    }
+    if (g_window_shown)
+        g_window_shown(w->hwnd);
+}
+
 // SW_HIDE is the only command that hides; every other one shows the window in
 // some form. Showing a window that was hidden invalidates its whole client
 // area, which is what makes the following UpdateWindow paint something, and it
@@ -383,17 +399,8 @@ void u_ShowWindow(X86 *c) {
     } else if (cmd == 1 || cmd == 9)
         w->style &= ~0x21000000u;
     set_eax(c, was ? 1 : 0);
-    if (!was && w->visible) {
-        if (cmd != 4 && cmd != 7 && cmd != 8) // SW_*NOACTIVATE preserves stacking.
-            reorder_window(w->hwnd, 0);
-        w->update_pending = true;
-        if (!w->shown) {
-            w->shown = true;
-            post_geometry(w->hwnd, w, false, true);
-        }
-        if (g_window_shown)
-            g_window_shown(w->hwnd);
-    }
+    if (!was && w->visible)
+        became_visible(w, cmd != 4 && cmd != 7 && cmd != 8); // SW_*NOACTIVATE keeps stacking
 }
 
 // UpdateWindow sends WM_PAINT directly to the window procedure, synchronously,
@@ -440,6 +447,17 @@ void u_SetWindowPos(X86 *c) {
         } // SWP_NOSIZE
         LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h,
              w->x, w->y, flags, moved, sized);
+        // SWP_SHOWWINDOW and SWP_HIDEWINDOW are ShowWindow's transitions, made
+        // before WM_WINDOWPOSCHANGED as Windows makes them. The VCL shows every
+        // child control this way, so ignoring them left each one hidden.
+        if ((flags & 0x0040) && !w->visible) {
+            w->visible = true;
+            w->style |= WS_VISIBLE;
+            became_visible(w, false); // stacking is SWP_NOZORDER's business
+        } else if ((flags & 0x0080) && w->visible) {
+            w->visible = false;
+            w->style &= ~WS_VISIBLE;
+        }
         if (moved || sized) {
             // SetWindowPos sends this before returning. VCL updates its cached
             // bounds here before setting another dimension. DefWindowProc is
