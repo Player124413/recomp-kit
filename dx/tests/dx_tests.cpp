@@ -10232,6 +10232,136 @@ static void test_blit_into_texture_uploads() {
     }
 }
 
+// D3D11 ABI tests use SDK slot numbers and byte offsets independently of
+// the implementation. Calls use the same 32-bit stack as translated clients.
+static void test_d3d11_scaffold() {
+    cpu_reset();
+    uint32_t create = tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain");
+    CHECK(create != 0);
+    CHECK(imports_has_dll("dxgi.dll"));
+    CHECK(tramp("d3dcompiler_47.dll", "D3DCompile") != 0);
+    CHECK(tramp("d3dx10_41.dll", "D3DXMatrixMultiply") != 0);
+    if (!create)
+        return;
+    gm_zero(sc(0), 1024);
+    uint32_t desc = sc(0x100);
+    wr32(desc, 4);
+    wr32(desc + 4, 4);
+    wr32(desc + 16, 28);
+    wr32(desc + 28, 1);
+    wr32(desc + 36, 0x20);
+    wr32(desc + 40, 2);
+    wr32(desc + 48, 1);
+    wr32(desc + 52, 1);
+    CHECK_EQ(call_shim(create, {0, 1, 0, 0, 0, 0, 7, desc, sc(0), sc(4), sc(8), sc(12)}), S_OK);
+    uint32_t swap = rd32(sc(0)), dev = rd32(sc(4)), ctx = rd32(sc(12));
+    CHECK(swap && dev && ctx);
+    if (!swap || !dev || !ctx)
+        return;
+    CHECK_EQ(rd32(sc(8)), 0xa000);
+    // ID3D11Texture2D: 6f15aaf2-d208-4e89-9ab4-489535d34f9c.
+    const uint8_t iid[] = {0xf2, 0xaa, 0x15, 0x6f, 0x08, 0xd2, 0x89, 0x4e,
+                           0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c};
+    memcpy(gm_ptr(sc(0x80)), iid, 16);
+    CHECK_EQ(call_method(swap, 9, {0, sc(0x80), sc(16)}), S_OK);
+    uint32_t back = rd32(sc(16));
+    CHECK(back);
+    if (!back)
+        return;
+    CHECK_EQ(call_method(dev, 9, {back, 0, sc(20)}), S_OK);
+    uint32_t view = rd32(sc(20));
+    CHECK(view);
+    if (!view)
+        return;
+    float colour[] = {1, 0.5f, 0, 1};
+    memcpy(gm_ptr(sc(0x200)), colour, 16);
+    call_method(ctx, 50, {view, sc(0x200)});
+    size_t before = g_presents.size();
+    CHECK_EQ(call_method(swap, 8, {0, 0}), S_OK);
+    CHECK_EQ(g_presents.size(), before + 1);
+    if (g_presents.size() > before) {
+        const auto &p = g_presents.back();
+        CHECK_EQ(p.w, 4);
+        CHECK_EQ(p.h, 4);
+        CHECK_EQ(p.bpp, 32);
+        uint32_t pixel = 0;
+        memcpy(&pixel, p.pixels.data(), 4);
+        CHECK_EQ(pixel, 0xffff8000u); // host ARGB, resource RGBA
+    }
+    // Optional IDXGIDevice query is explicitly tolerated by clients.
+    gm_zero(sc(0x80), 16);
+    wr32(sc(0x80), 0x54ec77fa);
+    CHECK_EQ(call_method(dev, 0, {sc(0x80), sc(24)}), E_NOINTERFACE);
+    CHECK_EQ(rd32(sc(24)), 0);
+    CHECK_EQ(call_method(dev, 38, {}), E_NOTIMPL);           // GetCreationFlags: complete vtable
+    CHECK_EQ(call_method(ctx, 114, {0, sc(24)}), E_NOTIMPL); // FinishCommandList
+    call_method(view, 2);
+    call_method(back, 2);
+    call_method(ctx, 2);
+    call_method(dev, 2);
+    call_method(swap, 2);
+}
+
+static uint32_t matrix_call(const char *name, std::initializer_list<uint32_t> args) {
+    uint32_t target = tramp("d3dx10_41.dll", name);
+    CHECK(target != 0);
+    if (!target)
+        return 0;
+    uint32_t sp = g_cpu.r[R_ESP];
+    std::vector<uint32_t> v(args);
+    for (auto it = v.rbegin(); it != v.rend(); ++it) {
+        g_cpu.r[R_ESP] -= 4;
+        wr32(g_cpu.r[R_ESP], *it);
+    }
+    g_cpu.r[R_ESP] -= 4;
+    wr32(g_cpu.r[R_ESP], 0x00401000);
+    CHECK(imports_dispatch(&g_cpu, target));
+    CHECK_EQ(g_cpu.r[R_ESP], sp - 4 * v.size()); // cdecl: caller cleanup
+    g_cpu.r[R_ESP] = sp;
+    return g_cpu.r[R_EAX];
+}
+static uint32_t float_word(float v) {
+    uint32_t w;
+    memcpy(&w, &v, 4);
+    return w;
+}
+static void test_d3dx_math_and_blob() {
+    cpu_reset();
+    if (!tramp("d3dx10_41.dll", "D3DXMatrixTranslation")) {
+        CHECK(false);
+        return;
+    }
+    CHECK_EQ(
+        matrix_call("D3DXMatrixTranslation", {sc(0), float_word(3), float_word(4), float_word(5)}),
+        sc(0));
+    CHECK_EQ(
+        matrix_call("D3DXMatrixScaling", {sc(64), float_word(2), float_word(3), float_word(4)}),
+        sc(64));
+    CHECK_EQ(matrix_call("D3DXMatrixMultiply", {sc(128), sc(0), sc(64)}), sc(128));
+    const float expected[16] = {2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 6, 12, 20, 1};
+    CHECK(memcmp(gm_ptr(sc(128)), expected, 64) == 0);
+    matrix_call("D3DXMatrixMultiplyTranspose", {sc(0), sc(0), sc(64)}); // aliased out
+    for (unsigned r = 0; r < 4; ++r)
+        for (unsigned col = 0; col < 4; ++col)
+            CHECK_EQ(rd32(sc(0) + (r * 4 + col) * 4), float_word(expected[col * 4 + r]));
+    gm_put_str(sc(256), "unknown source", 64);
+    gm_put_str(sc(320), "VSEntry", 32);
+    gm_put_str(sc(352), "vs_4_0", 32);
+    CHECK_EQ(call_shim(tramp("d3dcompiler_47.dll", "D3DCompile"),
+                       {sc(256), 14, 0, 0, 0, sc(320), sc(352), 0, 0, sc(384), sc(388)}),
+             S_OK);
+    uint32_t blob = rd32(sc(384));
+    CHECK(blob);
+    CHECK_EQ(rd32(sc(388)), 0);
+    if (blob) {
+        uint32_t data = call_method(blob, 3), size = call_method(blob, 4);
+        CHECK(data != 0);
+        CHECK(size >= 32);
+        CHECK_EQ(rd32(data), 0x31425352u);
+        call_method(blob, 2);
+    }
+}
+
 int main() {
     // Unbuffered, not line buffered: Windows treats _IOLBF as full buffering
     // and a fail-fast abort drops everything queued, including the name of
@@ -10252,6 +10382,8 @@ int main() {
         const char *name;
         void (*fn)();
     } tests[] = {
+        {"D3D11 scaffold", test_d3d11_scaffold},
+        {"D3DX math and blob", test_d3dx_math_and_blob},
         {"vtable integrity", test_vtable_integrity},
         {"resolution depth lifetime", test_resolution_depth_lifetime},
         {"gradient, flip, present", test_gradient_flip},

@@ -703,3 +703,77 @@ enum {
 // Bit 0x10 of the QSWaveMixOpenWaveEx flags means the wave is streamed through
 // the callback in the record rather than supplied whole.
 static const uint32_t QSWAVEMIX_STREAMED = 0x10u;
+
+// Direct3D 11 / DXGI SDK records, explicitly the x86 ABI. Guest pointers and
+// BOOLs occupy four bytes even on a 64-bit host. No host pointer crosses here.
+struct DXGI_RATIONAL {
+    uint32_t Numerator, Denominator;
+};
+struct DXGI_MODE_DESC {
+    uint32_t Width, Height;
+    DXGI_RATIONAL RefreshRate;
+    uint32_t Format, ScanlineOrdering, Scaling;
+};
+struct DXGI_SAMPLE_DESC {
+    uint32_t Count, Quality;
+};
+struct DXGI_SWAP_CHAIN_DESC {
+    DXGI_MODE_DESC BufferDesc;
+    DXGI_SAMPLE_DESC SampleDesc;
+    uint32_t BufferUsage, BufferCount, OutputWindow, Windowed, SwapEffect, Flags;
+};
+struct D3D11_TEXTURE2D_DESC {
+    uint32_t Width, Height, MipLevels, ArraySize, Format;
+    DXGI_SAMPLE_DESC SampleDesc;
+    uint32_t Usage, BindFlags, CPUAccessFlags, MiscFlags;
+};
+struct D3D11_BUFFER_DESC {
+    uint32_t ByteWidth, Usage, BindFlags, CPUAccessFlags, MiscFlags, StructureByteStride;
+};
+struct D3D11_MAPPED_SUBRESOURCE {
+    uint32_t pData, RowPitch, DepthPitch;
+};
+struct D3D11_SUBRESOURCE_DATA {
+    uint32_t pSysMem, SysMemPitch, SysMemSlicePitch;
+};
+struct D3D11_VIEWPORT {
+    float TopLeftX, TopLeftY, Width, Height, MinDepth, MaxDepth;
+};
+struct D3D11_RENDER_TARGET_BLEND_DESC {
+    uint32_t BlendEnable, SrcBlend, DestBlend, BlendOp, SrcBlendAlpha, DestBlendAlpha, BlendOpAlpha;
+    uint8_t RenderTargetWriteMask, padding[3];
+};
+struct D3D11_BLEND_DESC {
+    uint32_t AlphaToCoverageEnable, IndependentBlendEnable;
+    D3D11_RENDER_TARGET_BLEND_DESC RenderTarget[8];
+};
+struct D3D11_SAMPLER_DESC {
+    uint32_t Filter, AddressU, AddressV, AddressW;
+    float MipLODBias;
+    uint32_t MaxAnisotropy, ComparisonFunc;
+    float BorderColor[4], MinLOD, MaxLOD;
+};
+struct D3D11_RASTERIZER_DESC {
+    uint32_t FillMode, CullMode, FrontCounterClockwise;
+    int32_t DepthBias;
+    float DepthBiasClamp, SlopeScaledDepthBias;
+    uint32_t DepthClipEnable, ScissorEnable, MultisampleEnable, AntialiasedLineEnable;
+};
+struct D3D11_INPUT_ELEMENT_DESC {
+    uint32_t SemanticName, SemanticIndex, Format, InputSlot, AlignedByteOffset, InputSlotClass,
+        InstanceDataStepRate;
+};
+struct D3D11_BOX {
+    uint32_t left, top, front, right, bottom, back;
+};
+#include <stddef.h>
+static_assert(sizeof(DXGI_SWAP_CHAIN_DESC) == 60 &&
+              offsetof(DXGI_SWAP_CHAIN_DESC, OutputWindow) == 44);
+static_assert(sizeof(D3D11_TEXTURE2D_DESC) == 44 &&
+              offsetof(D3D11_TEXTURE2D_DESC, BindFlags) == 32);
+static_assert(sizeof(D3D11_BUFFER_DESC) == 24 && sizeof(D3D11_SUBRESOURCE_DATA) == 12);
+static_assert(sizeof(D3D11_MAPPED_SUBRESOURCE) == 12 && sizeof(D3D11_VIEWPORT) == 24);
+static_assert(sizeof(D3D11_BLEND_DESC) == 264 &&
+              offsetof(D3D11_RENDER_TARGET_BLEND_DESC, RenderTargetWriteMask) == 28);
+static_assert(sizeof(D3D11_SAMPLER_DESC) == 52 && offsetof(D3D11_SAMPLER_DESC, BorderColor) == 28);
+static_assert(sizeof(D3D11_INPUT_ELEMENT_DESC) == 28 && sizeof(D3D11_RASTERIZER_DESC) == 40);

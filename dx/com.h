@@ -81,6 +81,21 @@ enum ComIface : uint16_t {
     IF_BASICAUDIO,       // IBasicAudio
     IF_MEDIAPOSITION,    // IMediaPosition
     IF_ENUMFILTERS,      // IEnumFilters over the graph's (empty) filter list
+    IF_D3D11_DEVICE,
+    IF_D3D11_CONTEXT,
+    IF_D3D11_TEXTURE,
+    IF_D3D11_BUFFER,
+    IF_D3D11_SRV,
+    IF_D3D11_RTV,
+    IF_D3D11_SAMPLER,
+    IF_D3D11_BLEND,
+    IF_D3D11_RASTER,
+    IF_D3D11_VS,
+    IF_D3D11_PS,
+    IF_D3D11_LAYOUT,
+    IF_DXGI_SWAP,
+    IF_DXGI_OUTPUT,
+    IF_D3D_BLOB,
     IF_COUNT
 };
 
@@ -108,6 +123,21 @@ enum ComKind : uint16_t {
     K_STREAMSAMPLE, // one sample: fills an audio data object from a stream
     K_GRAPH,        // the filter graph a multimedia stream plays through
     K_ENUMFILTERS,  // an enumerator over that graph's filters
+    K_D3D11_DEVICE,
+    K_D3D11_CONTEXT,
+    K_D3D11_TEXTURE,
+    K_D3D11_BUFFER,
+    K_D3D11_SRV,
+    K_D3D11_RTV,
+    K_D3D11_SAMPLER,
+    K_D3D11_BLEND,
+    K_D3D11_RASTER,
+    K_D3D11_VS,
+    K_D3D11_PS,
+    K_D3D11_LAYOUT,
+    K_DXGI_SWAP,
+    K_DXGI_OUTPUT,
+    K_D3D_BLOB,
 };
 
 // ---------------------------------------------------------------------------

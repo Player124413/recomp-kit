@@ -1,6 +1,7 @@
 // dx.cpp - registration for the whole graphics, audio and input layer, plus
 // the shared audio channel allocator.
 #include "dx.h"
+#include "d3d11.h"
 #include "../runtime/win32.h"
 #include "com.h"
 #include "host_api.h"
@@ -581,6 +582,10 @@ void dx_register_shims() {
     com_register_ole32();
     ddraw_register();
     d3d_register();
+    d3d11_register();
+    dxgi_register();
+    d3dcompiler_register();
+    d3dx10_register();
     dinput_register();
     dsound_register();
     dshow_register();
@@ -613,6 +618,7 @@ void dx_reset() {
     soundlib_reset();
     ddraw_reset();
     d3d_reset();
+    d3d11_reset();
     dsound_reset();
     dshow_reset();
     dinput_reset();

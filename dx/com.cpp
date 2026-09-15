@@ -16,7 +16,7 @@ std::deque<ComObj> &objects() {
 }
 
 uint32_t g_vtable[IF_COUNT] = {0};
-uint32_t g_kind_mask[IF_COUNT] = {0}; // bit per ComKind
+uint64_t g_kind_mask[IF_COUNT] = {0}; // bit per ComKind
 void (*g_dtor[64])(ComObj *) = {nullptr};
 ComQiHook g_qi_hook[64] = {nullptr};
 const char *g_iface_name[IF_COUNT] = {nullptr};
@@ -237,7 +237,7 @@ void com_register_ole32() {
 }
 
 bool com_iface_binds(ComIface iface, ComKind kind) {
-    return (size_t)iface < IF_COUNT && (g_kind_mask[iface] & (1u << (unsigned)kind)) != 0;
+    return (size_t)iface < IF_COUNT && (g_kind_mask[iface] & (uint64_t(1) << (unsigned)kind)) != 0;
 }
 
 void com_set_destructor(ComKind kind, void (*fn)(ComObj *)) {
@@ -309,8 +309,8 @@ uint32_t com_vtable_of(ComIface iface) {
 }
 
 void com_bind(ComIface iface, ComKind kind) {
-    if (iface < IF_COUNT && (uint32_t)kind < 32)
-        g_kind_mask[iface] |= 1u << (uint32_t)kind;
+    if (iface < IF_COUNT && (uint32_t)kind < 64)
+        g_kind_mask[iface] |= uint64_t(1) << (uint32_t)kind;
 }
 
 const char *com_iface_name(ComIface iface) {
@@ -722,7 +722,8 @@ void com_QueryInterface(X86 *c) {
         if (alt)
             target = alt;
     }
-    if ((uint32_t)target->kind < 32 && !(g_kind_mask[want] & (1u << (uint32_t)target->kind))) {
+    if ((uint32_t)target->kind < 64 &&
+        !(g_kind_mask[want] & (uint64_t(1) << (uint32_t)target->kind))) {
         char key[64];
         snprintf(key, sizeof key, "qi.kind.%u.%u", (unsigned)target->kind, (unsigned)want);
         log_once(key, "dx: %s is not an interface on this %s object: E_NOINTERFACE",
