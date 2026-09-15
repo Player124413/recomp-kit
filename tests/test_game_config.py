@@ -119,6 +119,46 @@ class LoadTests(unittest.TestCase):
             self.assertIn('#define RECOMP_GAME_DIR "%s"' % game.resolve().as_posix(), header)
             self.assertIn('#define RECOMP_KIT_DIR "%s"' % ROOT.resolve().as_posix(), header)
 
+    def test_auxiliary_modules_and_guest_size(self):
+        """[modules.aux.<key>] names a DLL the guest loads at run time that the kit
+        translates as a second image at its preferred base; [game] guest_size
+        grows the arena to hold it. Defaults: no modules, 0x10000000."""
+        base = game_config.load(ROOT / "games/stub")
+        self.assertEqual(base["aux_modules"], [])
+        self.assertEqual(base["game"]["guest_size"], 0x10000000)
+        self.assertIn("#define RECOMP_GUEST_SIZE 0x10000000u", gen_game_config.render_header(base))
+        self.assertIn("#define RECOMP_AUX_MODULE_COUNT 0", gen_game_config.render_header(base))
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp) / "g"
+            game.mkdir()
+            text = (ROOT / "games/stub/game.toml").read_text()
+            text = text.replace('guest_root = ', 'guest_size = 0x10100000\nguest_root = ', 1)
+            text += ('\n[modules.aux.blit]\nname = "Blit_p6.dll"\npath = "original/Blit_p6.dll"\n'
+                     'sha256 = "%s"\nbase = 0x10000000\nsize = 0x28000\nlistings = "analysis/Blit_p6.dll"\nfunction_alignment = 1\n' % ("ab" * 32))
+            (game / "game.toml").write_text(text)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            cfg = game_config.load(game)
+            self.assertEqual(cfg["game"]["guest_size"], 0x10100000)
+            mod = cfg["aux_modules"][0]
+            self.assertEqual(mod["key"], "blit")
+            self.assertEqual(mod["name"], "Blit_p6.dll")
+            self.assertEqual(mod["path"], (game / "original/Blit_p6.dll").resolve())
+            self.assertEqual(mod["listings_path"], (game / "analysis/Blit_p6.dll").resolve())
+            self.assertEqual(mod["function_alignment"], 1)
+            self.assertEqual((mod["base"], mod["size"]), (0x10000000, 0x28000))
+            header = gen_game_config.render_header(cfg)
+            self.assertIn("#define RECOMP_GUEST_SIZE 0x10100000u", header)
+            self.assertIn("#define RECOMP_AUX_MODULE_COUNT 1", header)
+            self.assertIn('{"Blit_p6.dll", "%s", "%s", 0x10000000u, 0x00028000u}' % ((game / "original/Blit_p6.dll").resolve().as_posix(), "ab" * 32),
+                          header)
+            cmake = gen_game_config.render_cmake(cfg)
+            self.assertIn("set(RECOMP_GUEST_SIZE 0x10100000u)", cmake)
+            self.assertIn("set(RECOMP_AUX_MODULES blit)", cmake)
+            bad = text.replace('guest_size = 0x10100000', 'guest_size = 0x10000000')
+            (game / "game.toml").write_text(bad)
+            with self.assertRaises(ValueError):
+                game_config.load(game)   # a module needs an arena that reaches it: checked at load
+
     def test_touch_keypad_knob(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

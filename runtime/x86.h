@@ -29,7 +29,9 @@ extern "C" {
 
 /* ---------------------------------------------------------------- memory */
 
-#define GUEST_SIZE 0x10000000u /* 256 MB arena */
+#ifndef GUEST_SIZE
+#define GUEST_SIZE 0x10000000u /* 256 MB arena; RECOMP_GUEST_SIZE grows it for auxiliary modules */
+#endif
 
 extern uint8_t *g_mem;
 

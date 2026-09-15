@@ -46,6 +46,13 @@ def render_header(cfg):
     lines.append("#define RECOMP_KIT_DIR %s" % c_string(Path(__file__).resolve().parents[1].as_posix()))
     # The on-screen keypad's starting visibility: "auto" shows it when no hardware keyboard is attached.
     lines.append("#define RECOMP_TOUCH_KEYPAD_HIDDEN %d" % (1 if cfg["touch"]["keypad"] == "hidden" else 0))
+    lines.append("#define RECOMP_GUEST_SIZE %s" % c_hex(game["guest_size"]))
+    # Auxiliary modules the loader maps beside the image: {name, developer path, sha256, base, size}.
+    lines.append("#define RECOMP_AUX_MODULE_COUNT %d" % len(cfg["aux_modules"]))
+    lines.append("#define RECOMP_AUX_MODULES {%s}" % ", ".join(
+        '{%s, %s, %s, %s, 0x%08xu}' % (c_string(m["name"]), c_string(m["path"].as_posix()), c_string(m["sha256"]),
+                                        c_hex(m["base"]), m["size"])
+        for m in cfg["aux_modules"]) if cfg["aux_modules"] else "#define RECOMP_AUX_MODULES {{0, 0, 0, 0u, 0u}}")
     for key, value in sorted(cfg.get("hooks", {}).items()):
         macro = "RECOMP_HOOK_" + key.upper()
         if isinstance(value, list):
@@ -69,6 +76,8 @@ def render_cmake(cfg):
         lines.append('set(%s "%s")' % (macro, game[key]))
     lines.append("set(RECOMP_IMAGE_BASE %s)" % c_hex(game["image_base"]))
     lines.append("set(RECOMP_HEAP_BASE %s)" % c_hex(game["heap_base"]))
+    lines.append("set(RECOMP_GUEST_SIZE %s)" % c_hex(game["guest_size"]))
+    lines.append("set(RECOMP_AUX_MODULES %s)" % ";".join(m["key"] for m in cfg["aux_modules"]))
     lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_exe_path"].parent.as_posix())
     lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % cfg["developer_exe_path"].as_posix())
     return "\n".join(lines) + "\n"

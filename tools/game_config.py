@@ -16,6 +16,8 @@ REQUIRED_GAME_KEYS = ("id", "name", "app_name", "bundle_id", "executable", "sha2
 
 HEAP_BASE_DEFAULT = 0x01000000
 HEAP_END = 0x0e000000        # runtime/x86.h GUEST_HEAP_END; the mods' heap starts there
+GUEST_SIZE_DEFAULT = 0x10000000   # runtime/x86.h GUEST_SIZE: the arena, 256 MB unless a module needs more
+AUX_REQUIRED_KEYS = ("name", "path", "sha256", "base", "size")
 
 
 def windows_version(value):
@@ -68,4 +70,41 @@ def load(game_dir):
     # ignored original/ and analysis/ directories.
     cfg["developer_exe_path"] = (game_dir / game["developer_exe"]).resolve()
     cfg["listings_path"] = (game_dir / translate.get("listings", "analysis")).resolve()
+    cfg["aux_modules"] = load_aux_modules(cfg, game_dir, source)
     return cfg
+
+
+def load_aux_modules(cfg, game_dir, source):
+    """[modules.aux.<key>]: a DLL the guest loads at run time (LoadLibrary) that
+    the kit translates as a second image and maps at its preferred base, so
+    its code runs as translated code and its exports answer GetProcAddress.
+    Keys: name (the file name the guest asks for), path (developer copy,
+    relative to game.toml), sha256, base and size (the PE's preferred base
+    and SizeOfImage), listings (Ghidra export directory, relative), and
+    function_alignment (default 4). [game] guest_size must reach past every
+    module; the default arena is 0x10000000."""
+    game = cfg["game"]
+    guest_size = int(game.setdefault("guest_size", GUEST_SIZE_DEFAULT))
+    if guest_size % 0x1000 or guest_size < GUEST_SIZE_DEFAULT:
+        raise ValueError("%s: [game] guest_size %#x must be page aligned and at least %#x"
+                         % (source, guest_size, GUEST_SIZE_DEFAULT))
+    game["guest_size"] = guest_size
+    modules = []
+    for key, entry in sorted(cfg.get("modules", {}).get("aux", {}).items()):
+        missing = [k for k in AUX_REQUIRED_KEYS if k not in entry]
+        if missing:
+            raise ValueError("%s: [modules.aux.%s] missing keys: %s" % (source, key, ", ".join(missing)))
+        base, size = int(entry["base"]), int(entry["size"])
+        if base % 0x1000 or size <= 0 or base + size > guest_size:
+            raise ValueError("%s: [modules.aux.%s] base %#x size %#x must fit below guest_size %#x"
+                             % (source, key, base, size, guest_size))
+        alignment = entry.get("function_alignment", 4)
+        if type(alignment) is not int or alignment <= 0:
+            raise ValueError("%s: [modules.aux.%s] function_alignment must be a positive integer" % (source, key))
+        modules.append({
+            "key": key, "name": entry["name"], "sha256": entry["sha256"], "base": base, "size": size,
+            "path": (game_dir / entry["path"]).resolve(),
+            "listings_path": (game_dir / entry.get("listings", "analysis/" + entry["name"])).resolve(),
+            "function_alignment": alignment,
+        })
+    return modules
