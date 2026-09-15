@@ -260,6 +260,26 @@ CASES = [
                                    EDI=SCRATCH + 0x100, ECX=0xa5b6c7d8),
                       "mem": [(SCRATCH + 0x200, bytes(range(0x40, 0x50))),
                               (SCRATCH + 0x100, b"\x00" * 0x30)]}),
+    # The RTL's Move and FillChar address their vectors through a base and an
+    # index, and copy register to register between loads, so those forms carry
+    # the same weight as the simple ones.
+    Case("SSE2 through indexed addressing and between registers", 0x0D02F000,
+         [(0, "MOVUPS XMM1,xmmword ptr [ESI]"),
+          (3, "MOVUPS xmmword ptr [ECX + EDX*0x1],XMM1"),
+          (7, "MOVAPS XMM0,XMM1"),
+          (10, "MOVD XMM0,EDX"),
+          (14, "PSHUFD XMM2,XMM0,0x55"),
+          (19, "MOVAPS xmmword ptr [EDI + EDX*0x1 + 0x10],XMM2"),
+          (24, "MOVQ XMM1,qword ptr [ESI + 0x8]"),
+          (29, "MOVQ qword ptr [EDI + EDX*0x1 + 0x20],XMM0"),
+          (35, "RET")],
+         "0f 10 0e 0f 11 0c 11 0f 28 c1 66 0f 6e c2 66 0f 70 d0 55 0f 29 54 17 10 "
+         "f3 0f 7e 4e 08 66 0f d6 44 17 20 c3",
+         lambda rng: {"regs": dict(rand_regs(rng), ESI=SCRATCH + 0x300,
+                                   ECX=SCRATCH + 0x100, EDI=SCRATCH + 0x200,
+                                   EDX=0x10),
+                      "mem": [(SCRATCH + 0x300, bytes(range(0x10, 0x20))),
+                              (SCRATCH + 0x100, b"\x00" * 0x180)]}),
     Case("Port string forms store the port read and advance", 0x0D02D000,
          [(0, "INSD ES:EDI,DX"), (1, "INSD.REP ES:EDI,DX"), (3, "OUTSD ESI,DX"),
           (4, "RET")],
