@@ -32,11 +32,12 @@
   too large. The Ex entry names the interface by IID; the W IIDs are the A
   ones plus one, and an unknown IID is E_NOINTERFACE.
 
-- The guest's main stack is 8 MB, not 1 MB. Windows commits a reserve
-  lazily, so a program is free to lean on it at one moment - a display-mode
-  switch that re-enters its window procedure, say - and a fixed megabyte was
-  exactly the depth Siege of Avalon's 1.19 launcher exhausted on Play. The
-  region below the stack was unused; worker stacks come from the heap.
+- The guest's main stack is 8 MB, not 1 MB. Siege of Avalon's 1.19 launcher
+  exhausted a megabyte on Play even though the executable reserves only a
+  megabyte on Windows: the same code runs deeper under the kit than
+  natively, for a reason not yet established, so the guest gets headroom
+  rather than the program's own reserve. The region below the stack was
+  unused; worker stacks come from the heap.
 
 - Every import the Siege of Avalon 1.19 image names now has an argument
   count: `SafeArrayAccessData`, `SafeArrayUnaccessData`, `ValidateRect` and
