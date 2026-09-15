@@ -4801,6 +4801,60 @@ static void test_delphi_automation() {
     wr32(s + 8, 1);
     check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetElement", {a, s + 8, s + 16}) == 0x8002000bu,
           "SafeArray bounds failure");
+    // A two-dimensional array of variants, the shape the map loader asks for:
+    // [0..3, 1..3], twelve elements, the first dimension the outermost. The
+    // two extents differ so a transposed layout cannot pass.
+    uint32_t bounds = s + 0x40, idx = s + 0x60, out = s + 0x80;
+    wr32(bounds, 4);
+    wr32(bounds + 4, 0);
+    wr32(bounds + 8, 3);
+    wr32(bounds + 12, 1);
+    uint32_t m = call_import(&c, "OLEAUT32.dll", "SafeArrayCreate", {12, 2, bounds});
+    check(m && rd16(m) == 2 && rd32(m + 4) == 16 && heap_size(rd32(m + 12)) >= 12 * 16,
+          "SafeArrayCreate allocates two dimensions worth of variants");
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetLBound", {m, 1, out}) == 0 &&
+              rd32(out) == 0 &&
+              call_import(&c, "OLEAUT32.dll", "SafeArrayGetUBound", {m, 1, out}) == 0 &&
+              rd32(out) == 3,
+          "dimension one is the bound the caller gave first");
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetLBound", {m, 2, out}) == 0 &&
+              rd32(out) == 1 &&
+              call_import(&c, "OLEAUT32.dll", "SafeArrayGetUBound", {m, 2, out}) == 0 &&
+              rd32(out) == 3,
+          "dimension two is the bound it gave second");
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayGetLBound", {m, 3, out}) == 0x8002000bu,
+          "a dimension the array does not have is rejected");
+    wr32(idx, 2);
+    wr32(idx + 4, 3);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPtrOfIndex", {m, idx, out}) == 0 &&
+              rd32(out) == rd32(m + 12) + (2 * 3 + 2) * 16,
+          "element address folds both indices, the last varying fastest");
+    wr32(idx, 0);
+    wr32(idx + 4, 1);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPtrOfIndex", {m, idx, out}) == 0 &&
+              rd32(out) == rd32(m + 12),
+          "the lower corner is the first element");
+    wr32(idx, 4);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPtrOfIndex", {m, idx, out}) == 0x8002000bu,
+          "an index past the first dimension is rejected");
+    wr32(idx, 0);
+    wr32(idx + 4, 4);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPtrOfIndex", {m, idx, out}) == 0x8002000bu,
+          "an index past the second dimension is rejected");
+    wr32(idx, 2);
+    wr32(idx + 4, 3);
+    wr16(v, 3);
+    wr32(v + 8, 4242);
+    check(call_import(&c, "OLEAUT32.dll", "SafeArrayPutElement", {m, idx, v}) == 0 &&
+              call_import(&c, "OLEAUT32.dll", "SafeArrayGetElement", {m, idx, out}) == 0 &&
+              rd16(out) == 3 && rd32(out + 8) == 4242,
+          "variant element round trips through two indices");
+    call_import(&c, "OLEAUT32.dll", "VariantClear", {out});
+    wr16(v, 0x200c);
+    wr32(v + 8, m);
+    check(call_import(&c, "OLEAUT32.dll", "VariantClear", {v}) == 0 && (!m || !heap_owns(m)),
+          "VariantClear releases a multi-dimensional array");
+
     wr16(v, 0x2003);
     wr32(v + 8, a);
     check(call_import(&c, "OLEAUT32.dll", "VariantClear", {v}) == 0 && (!a || !heap_owns(a)),

@@ -72,15 +72,54 @@ uint32_t element_size(uint16_t vt) {
     }
 }
 
-// SAFEARRAY is 24 bytes on x86 INCLUDING rgsabound[0]: pvData is at 12,
-// cElements at 16 and signed lLbound at 20. FADF_* records owned element types.
+// SAFEARRAY on x86: cDims at 0, fFeatures at 2, cbElements at 4, cLocks at 8,
+// pvData at 12, then cDims bounds of {cElements, lLbound} from 16. A
+// one-dimensional array is therefore 24 bytes, which is the only shape this
+// once handled; a language that writes `array[x, y]` asks for two, and an
+// array the guest cannot create is a map that loads no tiles.
+//
+// rgsabound[i] describes the dimension an index list names i'th, and the
+// first dimension is the outermost: element [i, j] of a 5 by 13 array sits at
+// i * 13 + j. That is the order the guest itself uses - it creates its
+// [0..4, 0..12] resource table as bounds {5, 13} and then reads [i, 0] for
+// each of its five resources - so the index arithmetic and the one-based
+// dimension number of SafeArrayGetLBound both follow it.
+const uint32_t kArrayMaxDims = 16;  // more than any caller here, and bounds the header
+
+uint32_t array_dims(uint32_t a) {
+    return rd16(a);
+}
+// The bound record for a dimension, counted from the left and zero based.
+uint32_t array_bound_at(uint32_t a, uint32_t left_index) {
+    return a + 16 + 8 * left_index;
+}
+
 bool array_valid(uint32_t a) {
-    if (!valid(a, 24) || !heap_owns(a) || heap_size(a) < 24 || rd16(a) != 1)
+    if (!valid(a, 24) || !heap_owns(a))
         return false;
-    uint64_t bytes = uint64_t(rd32(a + 4)) * rd32(a + 16);
+    uint32_t dims = array_dims(a);
+    if (dims < 1 || dims > kArrayMaxDims)
+        return false;
+    uint32_t header = 16 + 8 * dims;
+    if (heap_size(a) < header || !valid(a, header) || !rd32(a + 4))
+        return false;
+    uint64_t count = 1;
+    for (uint32_t i = 0; i < dims; ++i) {
+        count *= rd32(a + 16 + 8 * i);
+        if (count > GUEST_SIZE)
+            return false;
+    }
+    uint64_t bytes = uint64_t(rd32(a + 4)) * count;
     uint32_t data = rd32(a + 12);
-    return rd32(a + 4) && bytes <= GUEST_SIZE &&
-           (!bytes || (heap_owns(data) && heap_size(data) >= bytes));
+    return bytes <= GUEST_SIZE && (!bytes || (heap_owns(data) && heap_size(data) >= bytes));
+}
+
+// Every element, across every dimension.
+uint32_t array_count(uint32_t a) {
+    uint64_t count = 1;
+    for (uint32_t i = 0, n = array_dims(a); i < n; ++i)
+        count *= rd32(a + 16 + 8 * i);
+    return (uint32_t)count;
 }
 uint32_t variant_clear(uint32_t v);
 uint32_t variant_copy(uint32_t dst, uint32_t src, bool indirect, unsigned depth = 0);
@@ -91,7 +130,7 @@ uint32_t array_destroy(uint32_t a) {
         return INVALID;
     if (rd32(a + 8))
         return 0x8002000du; // DISP_E_ARRAYISLOCKED
-    uint32_t data = rd32(a + 12), count = rd32(a + 16), step = rd32(a + 4);
+    uint32_t data = rd32(a + 12), count = array_count(a), step = rd32(a + 4);
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t p = data + i * step;
         if (rd16(a + 2) & 0x100)
@@ -107,38 +146,63 @@ uint32_t array_destroy(uint32_t a) {
     heap_free(a);
     return 0;
 }
-uint32_t array_create(uint16_t vt, uint32_t count, int32_t lower) {
+// `bounds` is the caller's rgsabound, already in OLE's rightmost-first order,
+// and is copied through unchanged.
+uint32_t array_create_dims(uint16_t vt, uint32_t dims, const uint32_t *counts,
+                           const int32_t *lowers) {
     uint32_t step = element_size(vt);
-    if (!step || uint64_t(step) * count > GUEST_SIZE || int64_t(lower) + count - 1 > INT32_MAX)
+    if (!step || dims < 1 || dims > kArrayMaxDims)
         return 0;
-    uint32_t a = heap_alloc(24, true);
+    uint64_t count = 1;
+    for (uint32_t i = 0; i < dims; ++i) {
+        if (int64_t(lowers[i]) + counts[i] - 1 > INT32_MAX)
+            return 0;
+        count *= counts[i];
+        if (count > GUEST_SIZE)
+            return 0;
+    }
+    if (uint64_t(step) * count > GUEST_SIZE)
+        return 0;
+    uint32_t header = 16 + 8 * dims;
+    uint32_t a = heap_alloc(header, true);
     if (!a)
         return 0;
-    uint32_t data = count ? heap_alloc(step * count, true) : 0;
+    uint32_t data = count ? heap_alloc(step * (uint32_t)count, true) : 0;
     if (count && !data) {
         heap_free(a);
         return 0;
     }
-    wr16(a, 1);
+    wr16(a, uint16_t(dims));
     wr16(a + 2, vt == 8 ? 0x100 : vt == 12 ? 0x800 : 0);
     wr32(a + 4, step);
     wr32(a + 12, data);
-    wr32(a + 16, count);
-    wr32(a + 20, uint32_t(lower));
+    for (uint32_t i = 0; i < dims; ++i) {
+        wr32(a + 16 + 8 * i, counts[i]);
+        wr32(a + 20 + 8 * i, uint32_t(lowers[i]));
+    }
     return a;
+}
+uint32_t array_create(uint16_t vt, uint32_t count, int32_t lower) {
+    return array_create_dims(vt, 1, &count, &lower);
 }
 uint32_t array_copy(uint32_t a) {
     if (!array_valid(a))
         return 0;
     uint16_t flags = rd16(a + 2);
-    uint32_t step = rd32(a + 4), count = rd32(a + 16);
+    uint32_t step = rd32(a + 4), count = array_count(a), dims = array_dims(a);
     uint16_t vt = flags & 0x100   ? 8
                   : flags & 0x800 ? 12
                   : step == 1     ? 17
                   : step == 2     ? 2
                   : step == 4     ? 3
                                   : 5;
-    uint32_t b = array_create(vt, count, int32_t(rd32(a + 20)));
+    uint32_t counts[kArrayMaxDims];
+    int32_t lowers[kArrayMaxDims];
+    for (uint32_t i = 0; i < dims; ++i) {
+        counts[i] = rd32(a + 16 + 8 * i);
+        lowers[i] = int32_t(rd32(a + 20 + 8 * i));
+    }
+    uint32_t b = array_create_dims(vt, dims, counts, lowers);
     if (!b)
         return 0;
     for (uint32_t i = 0; i < count; ++i) {
@@ -374,10 +438,18 @@ void o_VariantChangeType(X86 *c) {
     set_eax(c, hr);
 }
 void o_SafeArrayCreate(X86 *c) {
-    uint32_t bounds = arg(c, 2);
-    set_eax(c, arg(c, 1) == 1 && valid(bounds, 8)
-                   ? array_create(uint16_t(arg(c, 0)), rd32(bounds), int32_t(rd32(bounds + 4)))
-                   : 0);
+    uint32_t dims = arg(c, 1), bounds = arg(c, 2);
+    if (dims < 1 || dims > kArrayMaxDims || !valid(bounds, 8 * dims)) {
+        set_eax(c, 0);
+        return;
+    }
+    uint32_t counts[kArrayMaxDims];
+    int32_t lowers[kArrayMaxDims];
+    for (uint32_t i = 0; i < dims; ++i) {
+        counts[i] = rd32(bounds + 8 * i);
+        lowers[i] = int32_t(rd32(bounds + 8 * i + 4));
+    }
+    set_eax(c, array_create_dims(uint16_t(arg(c, 0)), dims, counts, lowers));
 }
 void array_bound(X86 *c, bool upper) {
     uint32_t a = arg(c, 0), out = arg(c, 2);
@@ -385,11 +457,14 @@ void array_bound(X86 *c, bool upper) {
         set_eax(c, INVALID);
         return;
     }
-    if (arg(c, 1) != 1) {
+    // nDim is one based and counts from the left, the way the guest wrote it.
+    uint32_t dim = arg(c, 1);
+    if (dim < 1 || dim > array_dims(a)) {
         set_eax(c, BADINDEX);
         return;
     }
-    wr32(out, rd32(a + 20) + (upper ? rd32(a + 16) - 1 : 0));
+    uint32_t b = array_bound_at(a, dim - 1);
+    wr32(out, rd32(b + 4) + (upper ? rd32(b) - 1 : 0));
     set_eax(c, 0);
 }
 void o_SafeArrayGetLBound(X86 *c) {
@@ -398,13 +473,21 @@ void o_SafeArrayGetLBound(X86 *c) {
 void o_SafeArrayGetUBound(X86 *c) {
     array_bound(c, true);
 }
+// rgIndices lists the leftmost dimension first; elements run with the
+// rightmost dimension varying fastest, so fold left to right.
 uint32_t array_index(uint32_t a, uint32_t indices, uint32_t *p) {
-    if (!array_valid(a) || !valid(indices, 4))
+    uint32_t dims = array_valid(a) ? array_dims(a) : 0;
+    if (!dims || !valid(indices, 4 * dims))
         return INVALID;
-    int64_t index = int64_t(int32_t(rd32(indices))) - int32_t(rd32(a + 20));
-    if (index < 0 || uint64_t(index) >= rd32(a + 16))
-        return BADINDEX;
-    *p = rd32(a + 12) + uint32_t(index) * rd32(a + 4);
+    uint64_t offset = 0;
+    for (uint32_t i = 0; i < dims; ++i) {
+        uint32_t b = array_bound_at(a, i);
+        int64_t index = int64_t(int32_t(rd32(indices + 4 * i))) - int32_t(rd32(b + 4));
+        if (index < 0 || uint64_t(index) >= rd32(b))
+            return BADINDEX;
+        offset = offset * rd32(b) + uint64_t(index);
+    }
+    *p = rd32(a + 12) + uint32_t(offset) * rd32(a + 4);
     return 0;
 }
 void array_element(X86 *c, bool put, bool pointer) {
