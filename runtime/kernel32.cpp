@@ -3367,6 +3367,22 @@ std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max) {
 namespace {
 
 void k_RaiseException(X86 *c) {
+    // A raise the guest goes on to handle is invisible in a run log otherwise,
+    // and the frames it climbed out of are exactly what a language exception
+    // hides: the log shows the dialog that reported it and nothing that led
+    // there. Verbose only - a Delphi program raises to signal, not to fail.
+    if (log_level() >= 2) {
+        std::vector<uint32_t> chain = win32_return_chain(c->r[R_EBP], 12);
+        std::string frames;
+        for (uint32_t r : chain) {
+            char b[16];
+            snprintf(b, sizeof b, " %08x", r);
+            frames += b;
+        }
+        LOGV("RaiseException(code=%08x nargs=%u arg0=%08x) from ret=%08x, frames:%s",
+             arg(c, 0), arg(c, 2), arg(c, 2) && gm_valid(arg(c, 3), 4) ? rd32(arg(c, 3)) : 0,
+             rd32(c->r[R_ESP]), frames.c_str());
+    }
     if (recomp_seh_raise(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)))
         return; // only the testing runtime can return from an unhandled raise
     LOGW("RaiseException(code=%08x flags=%08x nargs=%u args=%08x) at ESP=%08x: "
@@ -3514,6 +3530,13 @@ uint16_t ctype1(unsigned char ch) {
     return f;
 }
 
+// There is no instruction cache to flush: the guest's code is the translation,
+// and bytes it writes are never executed. Returning success is what lets a
+// runtime that patches its own thunks carry on.
+void k_FlushInstructionCache(X86 *c) {
+    set_eax(c, 1);
+}
+
 void k_GetStringTypeA(X86 *c) {
     uint32_t type = arg(c, 1), src = arg(c, 2);
     int32_t len = (int32_t)arg(c, 3);
@@ -3527,6 +3550,14 @@ void k_GetStringTypeA(X86 *c) {
     set_eax(c, 1);
 }
 
+void k_GetStringTypeW(X86 *c);
+// The Ex form carries a locale first; the rest is GetStringTypeW.
+void k_GetStringTypeExW(X86 *c) {
+    uint32_t saved = c->r[R_ESP];
+    c->r[R_ESP] += 4;
+    k_GetStringTypeW(c);
+    c->r[R_ESP] = saved;
+}
 void k_GetStringTypeW(X86 *c) {
     uint32_t type = arg(c, 0), src = arg(c, 1);
     int32_t len = (int32_t)arg(c, 2);
@@ -4521,8 +4552,27 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "GetCPInfo", 2, k_GetCPInfo},
     {"KERNEL32.dll", "MultiByteToWideChar", 6, k_MultiByteToWideChar},
     {"KERNEL32.dll", "WideCharToMultiByte", 8, k_WideCharToMultiByte},
+    {"KERNEL32.dll", "FlushInstructionCache", 3, k_FlushInstructionCache},
+    // Named for their argument counts. An import the kit does not know is
+    // called with its arguments left on the stack, which is corruption at a
+    // distance; a logging-only entry with the right count is what a guest
+    // survives, and the log says which of these it wanted.
+    {"KERNEL32.dll", "SetFileTime", 4, nullptr},
+    {"KERNEL32.dll", "SystemTimeToFileTime", 2, nullptr},
+    {"KERNEL32.dll", "SystemTimeToTzSpecificLocalTime", 3, nullptr},
+    {"KERNEL32.dll", "TzSpecificLocalTimeToSystemTime", 3, nullptr},
+    {"KERNEL32.dll", "MoveFileW", 2, nullptr},
+    {"KERNEL32.dll", "OpenProcess", 3, nullptr},
+    {"KERNEL32.dll", "ExpandEnvironmentStringsW", 3, nullptr},
+    {"KERNEL32.dll", "GetCurrentDirectoryW", 2, nullptr},
+    {"KERNEL32.dll", "GetEnvironmentVariableW", 4, nullptr},
+    {"KERNEL32.dll", "VerLanguageNameW", 3, nullptr},
+    {"KERNEL32.dll", "SearchPathW", 6, nullptr},
     {"KERNEL32.dll", "GetStringTypeA", 5, k_GetStringTypeA},
+    // The Ex form takes the same five arguments in the same order.
+    {"KERNEL32.dll", "GetStringTypeExA", 5, k_GetStringTypeA},
     {"KERNEL32.dll", "GetStringTypeW", 4, k_GetStringTypeW},
+    {"KERNEL32.dll", "GetStringTypeExW", 5, k_GetStringTypeExW},
     {"KERNEL32.dll", "LCMapStringA", 6, k_LCMapStringA},
     {"KERNEL32.dll", "LCMapStringW", 6, k_LCMapStringW},
     {"KERNEL32.dll", "CompareStringA", 6, k_CompareStringA},

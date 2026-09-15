@@ -1156,6 +1156,34 @@ void u_IsWindowUnicode(X86 *c) {
 // An icon or cursor assembled from bitmaps: a distinct handle, never drawn by
 // the host, which paints its own pointer.
 static uint32_t g_next_icon = 0x0002b000u;
+// A cursor loaded from a file is the same kind of handle: distinct, and never
+// drawn by the host. The file is not read - the host paints its own pointer -
+// but a readable path gets a handle so the guest's cursor bookkeeping works.
+// The update region is a flag here, so validating any rectangle validates
+// the window, and the update rectangle is the whole client while it is set.
+void u_ValidateRect(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    if (w)
+        w->update_pending = false;
+    set_eax(c, w != nullptr);
+}
+void u_GetUpdateRect(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    uint32_t rect = arg(c, 1);
+    bool pending = w && w->update_pending;
+    if (rect && gm_valid(rect, 16)) {
+        wr32(rect, 0);
+        wr32(rect + 4, 0);
+        wr32(rect + 8, pending ? (uint32_t)w->w : 0);
+        wr32(rect + 12, pending ? (uint32_t)w->h : 0);
+    }
+    if (pending && arg(c, 2))
+        w->update_pending = false; // bErase: the caller will paint it now
+    set_eax(c, pending);
+}
+void u_LoadCursorFromFileW(X86 *c) {
+    set_eax(c, arg(c, 0) && gm_valid(arg(c, 0), 2) ? g_next_icon++ : 0);
+}
 void u_CreateIconIndirect(X86 *c) {
     uint32_t info = arg(c, 0);
     GdiImage image, mask;
@@ -1437,6 +1465,11 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "EndPaint", 2, u_EndPaint},
     {"USER32.dll", "LoadIconA", 2, u_LoadIconA},
     {"USER32.dll", "LoadCursorA", 2, u_LoadCursorA},
+    {"USER32.dll", "ValidateRect", 2, u_ValidateRect},
+    {"USER32.dll", "GetUpdateRect", 3, u_GetUpdateRect},
+    {"USER32.dll", "GetScrollBarInfo", 3, nullptr},
+    {"USER32.dll", "LoadCursorFromFileA", 1, u_LoadCursorFromFileW},
+    {"USER32.dll", "LoadCursorFromFileW", 1, u_LoadCursorFromFileW},
     {"USER32.dll", "CreateIconIndirect", 1, u_CreateIconIndirect},
     {"USER32.dll", "ScreenToClient", 2, u_ScreenToClient},
     {"USER32.dll", "OpenIcon", 1, u_OpenIcon},

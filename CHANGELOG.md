@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- `CharUpperBuffA`, `CharLowerBuffA`, `GetStringTypeExA`, `GetStringTypeExW`
+  and `FlushInstructionCache`. A Delphi runtime built this decade builds its
+  ANSI case tables from inside a unit's initialization by running every
+  byte value through the first two, and an import the kit does not know is
+  called with its arguments left on the stack: two calls a byte, eight bytes
+  a call, and the unit-init loop popped its own counter back as garbage and
+  stopped with more than half the program's units never initialized. It was
+  the PNG reader's chunk registry that made it visible - "unknown but
+  necessary chunk" on a perfect file - but every unit after the one building
+  the tables was missing.
+
+- Every import the Siege of Avalon 1.19 image names now has an argument
+  count: `SafeArrayAccessData`, `SafeArrayUnaccessData`, `ValidateRect` and
+  `GetUpdateRect` do what they say, `LoadCursorFromFile{A,W}` hand out a
+  handle, and sixteen more are logging-only entries with the right stdcall
+  count, from `CombineRgn` to `URLDownloadToFileW`. The runtime's coverage
+  gate - every named import must have a count - is the check that would have
+  caught the case-table bug before it cost anything, and it is green again.
+
+- A raise the guest goes on to handle is logged at the verbose level with the
+  frames it climbed out of. A language exception hides exactly that, and the
+  run log used to show only the dialog that reported it.
+
 - Three more shapes of the listing defect `--allow-unmodelled` exists for.
   A direct call whose literal target is not in the image at all becomes a
   trap at its own address; the jump-table pass gets the same tolerance the

@@ -4864,6 +4864,40 @@ static void test_delphi_automation() {
           "GetErrorInfo clears output and returns S_FALSE");
 }
 
+// The byte forms of the case-mapping and string-type calls, which a Delphi
+// runtime built this decade uses to build its ANSI tables from inside a unit
+// initialization. An import the kit does not know is called with its
+// arguments left on the stack; two calls per byte value was enough to pop
+// the unit-init loop's counter back as garbage and stop the walk with more
+// than half the units - the PNG reader among them - never initialized.
+static void test_ansi_case_and_string_types() {
+    section("ANSI case mapping and string types");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00312000, out = s + 0x40;
+    memcpy(g_mem + s, "Hello, World! \xe9", 15);
+    uint32_t esp = c.r[R_ESP];
+    check(call_import(&c, "USER32.dll", "CharUpperBuffA", {s, 13}) == 13 &&
+              memcmp(g_mem + s, "HELLO, WORLD! \xe9", 15) == 0,
+          "CharUpperBuffA maps the counted bytes in place and returns the count");
+    check(call_import(&c, "USER32.dll", "CharLowerBuffA", {s, 5}) == 5 &&
+              memcmp(g_mem + s, "hello, WORLD!", 13) == 0,
+          "CharLowerBuffA maps only the counted prefix");
+    check(c.r[R_ESP] == esp, "both are stdcall with two arguments: the stack is level");
+    memcpy(g_mem + s, "a1 ", 3);
+    check(call_import(&c, "KERNEL32.dll", "GetStringTypeExA", {0x409, 1, s, 3, out}) == 1 &&
+              (rd16(out) & 0x2) && (rd16(out + 2) & 0x4) && (rd16(out + 4) & 0x8),
+          "GetStringTypeExA classifies through the locale-first layout");
+    wr16(s, 'A');
+    wr16(s + 2, '7');
+    check(call_import(&c, "KERNEL32.dll", "GetStringTypeExW", {0x409, 1, s, 2, out}) == 1 &&
+              (rd16(out) & 0x1) && (rd16(out + 2) & 0x4),
+          "GetStringTypeExW shifts past the locale and classifies the rest");
+    check(call_import(&c, "KERNEL32.dll", "FlushInstructionCache", {0xffffffff, 0, 0}) == 1 &&
+              c.r[R_ESP] == esp,
+          "FlushInstructionCache succeeds and clears its three arguments");
+}
+
 static void test_delphi_registry_version() {
     section("Delphi wide registry, version and COM");
     X86 c;
@@ -5917,6 +5951,7 @@ int main(int argc, char **argv) {
     test_kernel32_wide();
     test_delphi_dlls();
     test_delphi_automation();
+    test_ansi_case_and_string_types();
     test_delphi_registry_version();
     test_delphi_misc();
     test_delphi_controls();

@@ -738,6 +738,8 @@ void g_SetBkMode(X86 *c) {
 
 const ImportShim g_gdi32_shims[] = {
     {"GDI32.dll", "CreateCompatibleBitmap", 3, g_CreateCompatibleBitmap},
+    // Named for its argument count; the result is ERROR, which is honest.
+    {"GDI32.dll", "CombineRgn", 4, nullptr},
     {"GDI32.dll", "GetObjectA", 3, g_GetObjectA},
     {"GDI32.dll", "GetObjectW", 3, g_GetObjectA},
     {"GDI32.dll", "DeleteObject", 1, g_DeleteObject},

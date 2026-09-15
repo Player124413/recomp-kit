@@ -618,6 +618,7 @@ const ImportShim shims[] = {
     I(SetOverlayImage, 3),
 #undef I
     {"COMCTL32.dll", "ImageList_Read", 1, fail},
+    {"COMCTL32.dll", "ImageList_DrawIndirect", 1, fail},
     {"COMCTL32.dll", "ImageList_Write", 2, fail},
     {"COMCTL32.dll", "ImageList_DragLeave", 1, yes},
     {"COMCTL32.dll", "ImageList_DragShowNolock", 1, yes},

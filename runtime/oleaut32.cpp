@@ -467,6 +467,20 @@ void array_bound(X86 *c, bool upper) {
     wr32(out, rd32(b + 4) + (upper ? rd32(b) - 1 : 0));
     set_eax(c, 0);
 }
+// Access hands out the element storage and nothing else changes: the kit
+// keeps no lock count, so unaccess has nothing to undo.
+void o_SafeArrayAccessData(X86 *c) {
+    uint32_t a = arg(c, 0), out = arg(c, 1);
+    if (!array_valid(a) || !valid(out, 4)) {
+        set_eax(c, INVALID);
+        return;
+    }
+    wr32(out, rd32(a + 12));
+    set_eax(c, 0);
+}
+void o_SafeArrayUnaccessData(X86 *c) {
+    set_eax(c, array_valid(arg(c, 0)) ? 0 : INVALID);
+}
 void o_SafeArrayGetLBound(X86 *c) {
     array_bound(c, false);
 }
@@ -548,6 +562,7 @@ const ImportShim shims[] = {
     O(SafeArrayCreate, 3),     O(SafeArrayGetLBound, 3),
     O(SafeArrayGetUBound, 3),  O(SafeArrayGetElement, 3),
     O(SafeArrayPutElement, 3), O(SafeArrayPtrOfIndex, 3),
+    O(SafeArrayAccessData, 2), O(SafeArrayUnaccessData, 1),
     O(GetErrorInfo, 2)
 #undef O
 };

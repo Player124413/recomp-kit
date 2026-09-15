@@ -108,6 +108,9 @@ const ImportShim shims[] = {
     {"msvcrt.dll", "memset", ARGC_CDECL, crt_memset},
     {"SHFOLDER.dll", "SHGetFolderPathW", 5, folder_path},
     {"SHELL32.dll", "Shell_NotifyIconW", 2, yes},
+    {"SHELL32.dll", "SHAppBarMessage", 2, zero},
+    {"SHELL32.dll", "ShellExecuteW", 6, zero},
+    {"URLMON.dll", "URLDownloadToFileW", 5, nullptr},
 };
 } // namespace
 void misc_dlls_register() {

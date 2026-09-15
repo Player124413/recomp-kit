@@ -346,6 +346,25 @@ void upper_buff(X86 *c) {
 void lower_buff(X86 *c) {
     char_case(c, false, true);
 }
+// The byte forms. A Delphi runtime builds its ANSI case tables at startup by
+// running every byte value through these two, from inside a unit's
+// initialization section - and an import the kit does not know is called
+// with its arguments left on the stack, since nothing can say how many there
+// were. Two calls a byte, eight bytes a call, and the register the unit-init
+// loop keeps its count in is popped back as garbage: the walk stops there,
+// and every unit after it - the PNG reader included - never initializes.
+void case_bytes(X86 *c, bool upper) {
+    uint32_t p = arg(c, 0), n = arg(c, 1), i = 0;
+    for (; i < n && p && gm_valid(p + i, 1); ++i)
+        wr8(p + i, (uint8_t)case_unit(rd8(p + i), upper));
+    set_eax(c, i);
+}
+void upper_buff_a(X86 *c) {
+    case_bytes(c, true);
+}
+void lower_buff_a(X86 *c) {
+    case_bytes(c, false);
+}
 void next_char(X86 *c) {
     uint32_t p = arg(c, 0);
     set_eax(c, p && rd16(p) ? p + 2 : p);
@@ -511,6 +530,8 @@ const ImportShim shims[] = {
     W("CharLowerW", 1, lower),
     W("CharUpperBuffW", 2, upper_buff),
     W("CharLowerBuffW", 2, lower_buff),
+    W("CharUpperBuffA", 2, upper_buff_a),
+    W("CharLowerBuffA", 2, lower_buff_a),
     W("CharNextW", 1, next_char),
     W("MapVirtualKeyW", 2, map_key),
     W("GetKeyNameTextW", 3, key_name),
