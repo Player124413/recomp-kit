@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Desktop host: mouse messages are routed by position, as the smoke host and
+  Windows both do. They were posted to the main window carrying a screen
+  position, so every click reached whichever window the guest created first -
+  for a Delphi game, the invisible application window - and that window read
+  the screen position as its own client one. A full-screen game never noticed;
+  a windowed launcher could not be clicked at all.
+
 - Input: a button press and its release are never applied to the guest in the
   same turn. Queued input arrives in batches, so a real click landed as a
   press and a release between two of the guest's polls, and a guest that reads

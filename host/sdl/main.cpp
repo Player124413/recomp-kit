@@ -119,6 +119,16 @@ uint32_t mouse_wparam() {
     return host_mouse_wparam(g_buttons, host_guest_modifiers());
 }
 void post(uint32_t msg, uint32_t wparam, uint32_t lparam) {
+    // Mouse input is addressed to a point, not to a window: the runtime
+    // hit-tests it, activates what it lands on, and converts the position into
+    // that window's client coordinates - which is what Windows does and what
+    // any windowed UI reads. Posting it to the main window instead delivered
+    // every click to whichever window happened to be created first, carrying a
+    // screen position the recipient read as its own client one.
+    if (msg >= 0x200 && msg <= 0x209) {
+        host_post_mouse_message(msg, wparam, int16_t(lparam), int16_t(lparam >> 16));
+        return;
+    }
     uint32_t hwnd = host_main_window();
     if (hwnd)
         host_post_message(hwnd, msg, wparam, lparam);
