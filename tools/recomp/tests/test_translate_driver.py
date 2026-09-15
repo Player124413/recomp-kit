@@ -654,7 +654,7 @@ def test_ret_classifies_after_pop_without_an_interior_switch_for_plain_returns()
     # Shared classification also serves the default of pushed-continuation
     # switches. A continuation that is also an entry must return, not run twice.
     header = (Path(ROOT) / "runtime/x86.h").read_text()
-    helper = header.split("static inline void recomp_return(X86 *c)", 1)[1].split("}\n", 1)[0]
+    helper = header.split("static inline void recomp_return(X86 *c)", 1)[1].split("\n}\n", 1)[0]
     assert helper.index("recomp_is_call_return") < helper.index("recomp_index_of")
     assert "recomp_call(c, c->eip);" in helper
 
@@ -835,6 +835,50 @@ def test_bare_scan_hit_inside_relocated_instruction_is_not_a_boundary(tmp_path, 
                                    {a: blocks[a] for a in (entry, next_fn)})
     assert "void fn_%08x(" % method in text
     assert "void fn_%08x(" % guess not in text
+
+
+@pytest.mark.parametrize("through_helper", [False, True])
+def test_relocated_method_callee_is_not_split_by_a_bare_pointer(tmp_path, monkeypatch, through_helper):
+    """A real direct callee is named by code, even without its own relocation.
+
+    A bare dword points into the callee's MOV immediate. Treating it as a
+    function boundary rejects the callee and then withdraws its caller too.
+    """
+    import struct
+    entry, method, callee, guess, next_fn, slot = (
+        0x00601000, 0x00601020, 0x00601040, 0x00601044, 0x00601100, 0x00601800)
+    blocks = {entry: b"\xc3",
+              method: b"\xe8" + struct.pack("<i", callee - method - 5) + b"\xc3",
+              callee: b"\xb8\x90\x90\x90\x90\xc3", next_fn: b"\xc3",
+              slot: struct.pack("<II", method, guess)}
+    if through_helper:
+        helper = 0x00601030
+        blocks[method] = b"\xe8" + struct.pack("<i", helper - method - 5) + b"\xc3"
+        blocks[helper] = b"\xe8" + struct.pack("<i", callee - helper - 5) + b"\xc3"
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method in text
+    assert "void fn_%08x(" % callee in text
+    assert "void fn_%08x(" % guess not in text
+
+
+def test_pointer_callee_with_an_unresolved_call_remains_prunable(tmp_path, monkeypatch):
+    """Following CALL evidence must not promote guesses to structural code."""
+    import struct
+    entry, method, callee, next_fn, slot = (
+        0x00601000, 0x00601020, 0x00601040, 0x00601100, 0x00601800)
+    blocks = {entry: b"\xc3",
+              method: b"\xe8" + struct.pack("<i", callee - method - 5) + b"\xc3",
+              callee: b"\xe8" + struct.pack("<i", 0x00700000 - callee - 5) + b"\xc3",
+              next_fn: b"\xc3", slot: struct.pack("<I", method)}
+    img = synthetic_image(blocks, base=0x00600000)
+    img.relocated_pointers = lambda: {method: slot}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (entry, next_fn)})
+    assert "void fn_%08x(" % method not in text
+    assert "void fn_%08x(" % callee not in text
 
 
 def test_bare_pointer_to_relocated_routines_ret_is_an_alias(tmp_path, monkeypatch):

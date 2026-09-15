@@ -3141,12 +3141,13 @@ def main():
     protected_entries = set(listed_functions)
     # Entry evidence, strongest first: original listing (4), explicit seed
     # or structural table (3), direct edge from protected code (2), relocated
-    # pointer (1), bare scan guess or an edge from another guess (0).
+    # pointer or validated direct callee of one (1), bare scan guess (0).
     # Relocations establish pointers, not code: rank 1 remains speculative.
     entry_strength = {addr: 4 for addr in listed_functions}
     candidate_starts = sorted(listed_functions)
     candidate_entries = set(candidate_starts)
     scan_aliases = set()
+    pointer_callees = set()
 
     def remember_candidate(target):
         if target not in candidate_entries:
@@ -3348,7 +3349,8 @@ def main():
             return False
         strength = (3 if why in STRUCTURAL_PROVENANCE else
                     2 if why == "branch" and home is not None
-                    and home.addr in protected_entries else 1 if t in relocated else 0)
+                    and home.addr in protected_entries else
+                    1 if t in relocated or t in pointer_callees else 0)
         previous_strength = entry_strength.get(t, 0)
         strength = max(previous_strength, strength)
         # A relocated pointer can still name text. Reject its content before
@@ -3811,13 +3813,21 @@ def main():
             immediate_candidates = {t for t in immediates
                                     if not any(lo <= t < hi for lo, hi in tr.table_ranges)
                                     and (t in owner or image.plausible_immediate_target(t))}
-            # A raw unrelocated dword hit inside a relocated candidate's
-            # instruction is not an entry candidate. Establish that evidence
-            # before letting guesses become equal-status sweep boundaries.
+            # A raw dword hit inside a pointer-named routine's instruction
+            # is weaker evidence than that routine and its direct callees.
+            # Follow validated CALL edges before guesses become boundaries:
+            # a callee's address need not have a relocation of its own.
+            # These bodies stay speculative and can still be withdrawn.
             weaker_interiors = set()
             guesses = ((starts | interior | immediate_candidates)
                        - set(relocated) - protected_entries)
-            for t in sorted(reloc_candidates):
+            pending_probes = sorted(reloc_candidates, reverse=True)
+            probed = set()
+            while pending_probes:
+                t = pending_probes.pop()
+                if t in probed:
+                    continue
+                probed.add(t)
                 if (t in owner or image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                         or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
                     continue
@@ -3828,6 +3838,12 @@ def main():
                 fn.measure(image)
                 if not accepts(fn):
                     continue
+                if t not in reloc_candidates:
+                    pointer_callees.add(t)
+                for ins in probe:
+                    target = Translator.branch_target(ins) if ins.mnem == "CALL" else None
+                    if target is not None and image.is_exec(target) and target not in probed:
+                        pending_probes.append(target)
                 # A weaker hit at a real instruction boundary is callable,
                 # but is an alias of this stronger body, not a new function
                 # boundary. In particular, a bare pointer to its RET must not
@@ -3840,7 +3856,8 @@ def main():
             interior -= weaker_interiors
             immediate_candidates -= weaker_interiors
             image.interior_candidates.update(weaker_interiors)
-            for t in sorted((starts | interior | reloc_candidates | immediate_candidates) - scan_aliases):
+            for t in sorted((starts | interior | reloc_candidates | pointer_callees
+                             | immediate_candidates) - scan_aliases):
                 if (image.starts_with_utf16_run(t) or image.is_utf16_constant(t)
                         or image.data[t - image.base:t - image.base + 2] == b"\0\0"):
                     continue
@@ -3849,6 +3866,8 @@ def main():
             for t in sorted(reloc_candidates):
                 hook_evidence[t].add("reloc")
                 changed |= resolve(t, owner, why="data")
+            for t in sorted(pointer_callees):
+                changed |= resolve(t, owner)
             for t in sorted(immediate_candidates):
                 hook_evidence[t].add("immediate")
                 if resolve(t, owner, why="immediate"):
