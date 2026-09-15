@@ -6,9 +6,27 @@ import sys
 import pytest
 
 from test_translate_driver import synthetic_image
+from test_translate_driver import translate_entry_fixture
 from test_translate_insns import Case, T, translate_case
 
 BASE = 0x0D02A000
+
+
+@pytest.mark.parametrize("zeroed", [True, False])
+def test_pop_fs_register_restore_in_a_separate_helper(tmp_path, monkeypatch, zeroed):
+    # _AfterConstruction removes its own return, unlinks the caller's frame,
+    # removes handler/saved EBP, then jumps back without another stack pop.
+    restore = BASE + 0x100
+    raw = bytes.fromhex("31d259648f0283c408ffe1")
+    if not zeroed:
+        raw = raw.replace(bytes.fromhex("31d2"), bytes.fromhex("09d2"))
+    img = synthetic_image({restore: raw}, base=BASE, size=0x1000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, {restore: raw})
+    body = text.split("void fn_%08x(X86 *c) {" % restore, 1)[1].split("\n}", 1)[0]
+    assert ("recomp_seh_frame_leave(c)" in body) == zeroed
+    assert "c->eip = c->r[1]; return;" in body
+    assert "recomp_jump(c, t_)" not in body
 
 
 def seh_case(typed=False, absolute=False, default=False):

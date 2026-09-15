@@ -1244,6 +1244,47 @@ def seh_chain_operand(op, zero_base=0):
             and op.base in (None, zero_base) and op.index is None and op.disp == 0)
 
 
+def seh_zero_base(fn, i, reg):
+    """Prove a zero FS base through a short straight-line register-preserving span."""
+    if reg is None:
+        return True
+    if reg == R_ESP:
+        return False
+    targets = {Translator.branch_target(ins) for ins in fn.insns
+               if ins.mnem in JCC or ins.mnem == "JMP"}
+    for j in range(i - 1, max(-1, i - 16), -1):
+        if not fn.contiguous[j] or fn.insns[j + 1].addr in targets:
+            return False
+        ins = fn.insns[j]
+        if ins.mnem == "XOR" and len(ins.ops) == 2:
+            a, b = [parse_operand(o) for o in ins.ops]
+            if a.kind == b.kind == "reg" and a.reg == b.reg == reg and a.size == b.size == 32:
+                return True
+        if (ins.mnem not in ("MOV", "LEA", "POP", "PUSH", "ADD", "SUB", "AND", "OR",
+                              "XOR", "TEST", "CMP", "NOP")
+                or Translator.writes_reg32(ins, reg)):
+            return False
+    return False
+
+
+def seh_restore_sites(fn):
+    """Recognize unlink-only helpers as well as restores in establishing bodies."""
+    result = set()
+    for i, ins in enumerate(fn.insns):
+        if ins.mnem not in ("POP", "MOV") or not ins.ops:
+            continue
+        dst = parse_operand(ins.ops[0])
+        if not seh_chain_operand(dst, dst.base) or not seh_zero_base(fn, i, dst.base):
+            continue
+        if ins.mnem == "POP":
+            result.add(i)
+        elif len(ins.ops) == 2:
+            src = parse_operand(ins.ops[1])
+            if src.kind == "reg" and src.size == 32 and src.reg != R_ESP:
+                result.add(i)
+    return result
+
+
 def seh_frame_sites(fn, image=None):
     """Map establishing MOV/helper CALL indices to their handler addresses."""
     sites = {}
@@ -1994,6 +2035,7 @@ class Translator(object):
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
         fn.pushed_continuations = self.pushed_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn, self.image)
+        fn.seh_restores = seh_restore_sites(fn)
         self.strict = strict
         for i, ins in enumerate(fn.insns):
             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
@@ -2325,7 +2367,7 @@ class Translator(object):
                 raise TranslateError("non-32-bit POP")
             L.append("uint32_t v_ = rd32(c->r[4]); c->r[4] += 4;")
             L.append(write_op(ops[0], 32, "v_"))
-            if fn.seh_sites and seh_chain_operand(ops[0]) and ops[0].base is None:
+            if i in fn.seh_restores:
                 L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
             return L
 

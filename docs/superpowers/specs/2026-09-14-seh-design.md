@@ -37,6 +37,10 @@ After the three pushes, ESP addresses `{next, handler, saved_ebp}`. Normal
 exit pops the record and stores the former `next` into `FS:[0]`, usually
 through zeroed EAX. Recognition must support both `FS:[EAX]` and `FS:[0x0]`,
 without treating every write to another TEB field as a registration.
+Restoration also includes `POP dword ptr FS:[reg]` when the register is
+proven zero, even in a separate unlink helper with no establishing store.
+The POP advances ESP before retiring the checkpoint; a following jump
+through a popped return register must not consume another guest word.
 
 ### Measurement table
 

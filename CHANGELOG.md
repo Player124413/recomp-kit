@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Translator: recognize POP restores of FS:[0] through a proven zero
+  register, including unlink helpers that do not establish their own frame.
+
 - SEH: at verbose logging level, validate the guest chain at import and SEH
   boundaries and report its first invalid link together with the last valid
   observation. The diagnostic is bounded and does not alter guest memory.
