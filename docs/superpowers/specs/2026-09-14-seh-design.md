@@ -149,6 +149,39 @@ the block completes or returns to the dispatcher. A leave with nothing to
 remove logs at verbose level and returns, since other chain-head stores can
 occur in a function with frames.
 
+### Returning establishment helpers
+
+A helper can install a registration and return with it still linked. The
+translator follows normal-entry return paths and marks helpers with an
+establishment and no matching restore before RET or a proven jump through
+their popped return register. It also propagates this property through
+direct calls. A helper takes a host-only generation mark on entry, then
+marks its surviving newer records as orphaned immediately before returning.
+The helper's checkpoint remains usable while the helper is alive; an
+orphan's expired environment is never a landing destination.
+
+Every direct CALL of a marked helper takes this checkpoint after the call:
+
+```c
+{ jmp_buf *b_ = recomp_seh_frame_adopt(c);
+  if (b_ && setjmp(*b_)) { recomp_seh_land(c); return; } }
+```
+
+Adoption selects the newest orphan for that CPU and callback level whose
+registration is still the chain head and is at or above the caller's ESP.
+It replaces the saved profiling and dispatch depths with the caller's
+depths. It returns null when the helper took a path that installed nothing,
+or when there is no fresh orphan. The new setjmp overwrites the helper's
+expired environment in stable heap storage. Registration identity remains
+unchanged, so normal unlink helpers retire the adopted record as usual.
+
+The record is read from the published FS:[0] head, not assumed to equal ESP:
+some compiler helpers fill caller-reserved words above their saved registers.
+The earlier constructor-specific CALL checkpoint recognized an adjacent
+16-byte reservation; adoption also works when reservation and CALL are
+separated. POP-then-JMP helpers preserve the popped return value across
+intervening pushes and never consume a second guest return word.
+
 `RaiseException` walks the guest registration chain through `guest_call`.
 Disposition 1 searches the next registration. Disposition 0 logs
 `ExceptionContinueExecution requested; not supported` with the record and

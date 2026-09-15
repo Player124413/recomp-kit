@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- SEH: adopt registrations left installed by returning compiler helpers
+  into a checkpoint in their live caller, including POP/JMP return helpers
+  and helpers that fill caller-reserved stack records.
+
 - DirectDraw: expose ANSI and Unicode legacy/extended device enumeration,
   reporting the primary display through callbacks with the correct ABI.
 

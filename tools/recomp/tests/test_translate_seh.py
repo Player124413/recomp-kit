@@ -12,6 +12,43 @@ from test_translate_insns import Case, T, translate_case
 BASE = 0x0D02A000
 
 
+def emitted_body(text, address):
+    shared = "static void body_%08x(X86 *c, uint32_t entry_) {" % address
+    start = shared if shared in text else "void fn_%08x(X86 *c) {" % address
+    return text.split(start, 1)[1].split("\n}", 1)[0]
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_popped_return_helper_adopts_only_an_escaping_frame(tmp_path, monkeypatch, restore):
+    helper, stub, routine = BASE + 0x100, BASE + 0x180, BASE + 0x200
+    # POP EDX keeps the return register live across three pushes; JMP EDX
+    # returns with the registration still installed at the caller's ESP.
+    raw = bytes.fromhex("31c95a5568") + struct.pack("<I", stub)
+    raw += bytes.fromhex("64ff31648921")
+    if restore:
+        raw += bytes.fromhex("648f0183c408")
+    raw += bytes.fromhex("ffe2")
+    caller = b"\xe8" + struct.pack("<i", helper - BASE - 5)
+    if not restore:
+        caller += bytes.fromhex("31c0648f0083c408")
+    caller += b"\xc3"
+    handler = b"\xe9" + struct.pack("<i", routine - stub - 5) + b"\xc3"
+    blocks = {BASE: caller, helper: raw, stub: handler, routine: b"\xc3"}
+    img = synthetic_image(blocks, base=BASE, size=0x1000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: b for a, b in blocks.items() if a != stub})
+    body = emitted_body(text, BASE)
+    helper_body = emitted_body(text, helper)
+    assert "recomp_seh_frame_enter(c)" in helper_body
+    assert ("recomp_seh_frame_orphan(c, seh_mark_)" in helper_body) == (not restore)
+    assert ("recomp_seh_frame_adopt(c)" in body) == (not restore)
+    if not restore:
+        assert body.index("CALL_FN(%08x)" % helper) < body.index("recomp_seh_frame_adopt")
+        assert "if (b_ && setjmp(*b_)) { recomp_seh_land(c); return; }" in body
+    assert "c->eip = c->r[2]; return;" in helper_body
+
+
 @pytest.mark.parametrize("zeroed", [True, False])
 def test_pop_fs_register_restore_in_a_separate_helper(tmp_path, monkeypatch, zeroed):
     # _AfterConstruction removes its own return, unlinks the caller's frame,
@@ -179,7 +216,7 @@ def test_checkpoint_trace_identifies_the_establishing_and_restoring_instructions
 
 
 @pytest.mark.parametrize("base", [BASE, BASE + 0x1000])
-@pytest.mark.parametrize("variant", ["constructor", "short-reservation", "nonzero-fs-base"])
+@pytest.mark.parametrize("variant", ["constructor", "separated-reservation", "nonzero-fs-base"])
 def test_constructor_helper_checkpoint_belongs_to_its_caller(tmp_path, monkeypatch, base, variant):
     helper, stub, routine = base + 0x100, base + 0x180, base + 0x200
     # A Delphi constructor reserves 16 bytes, then a returning helper fills
@@ -189,8 +226,8 @@ def test_constructor_helper_checkpoint_belongs_to_its_caller(tmp_path, monkeypat
     helper_code = bytes.fromhex("52515384d27c03ff50f431d28d4c2410648b1a8919896908c74104")
     helper_code += struct.pack("<I", stub)
     helper_code += bytes.fromhex("89410c64890a5b595ac3")
-    if variant == "short-reservation":
-        caller = caller.replace(bytes.fromhex("83c4f0"), bytes.fromhex("83c4f4"))
+    if variant == "separated-reservation":
+        caller = bytes.fromhex("83c4f090e8") + struct.pack("<i", helper - base - 9) + caller[8:]
     if variant == "nonzero-fs-base":
         helper_code = helper_code.replace(bytes.fromhex("31d2"), bytes.fromhex("09d2"))
     handler = b"\xe9" + struct.pack("<i", routine - stub - 5) + bytes.fromhex("b82a000000c3")
@@ -220,13 +257,15 @@ def test_constructor_helper_checkpoint_belongs_to_its_caller(tmp_path, monkeypat
                                      "--out", str(out), "--quiet"])
     assert T.main() == 0
     text = "\n".join(p.read_text() for p in out.glob("*.c"))
-    body = text.split("void fn_%08x(X86 *c) {" % base, 1)[1].split("\n}", 1)[0]
-    helper_body = text.split("void fn_%08x(X86 *c) {" % helper, 1)[1].split("\n}", 1)[0]
-    assert "setjmp" not in helper_body
-    if variant != "constructor":
-        assert "recomp_seh_frame_enter" not in body
+    body = emitted_body(text, base)
+    helper_body = emitted_body(text, helper)
+    if variant == "nonzero-fs-base":
+        assert "recomp_seh_frame_adopt" not in body
+        assert "recomp_seh_frame_enter" not in helper_body
         return
-    assert body.count("recomp_seh_frame_enter(c)") == 1
+    assert "recomp_seh_frame_enter(c)" in helper_body
+    assert "recomp_seh_frame_orphan(c, seh_mark_)" in helper_body
+    assert body.count("recomp_seh_frame_adopt(c)") == 1
     assert body.index("CALL_FN(%08x)" % helper) < body.index("setjmp(*b_)")
     assert "recomp_seh_frame_leave(c)" in body  # POP FS:[0] retires the 16-byte record
     symbols = json.loads((out / "symbols.json").read_text())["functions"]

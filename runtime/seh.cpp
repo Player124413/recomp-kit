@@ -19,6 +19,8 @@ struct SehFrame {
     X86 *cpu;
     uint32_t registration;
     uint32_t establishing_eip;
+    uint64_t generation;
+    bool orphan;
     jmp_buf env;
     uint32_t profile_depth;
     size_t dispatch_depth;
@@ -47,6 +49,7 @@ void release_dispatch(SehDispatch *d) {
 }
 
 struct SehState {
+    uint64_t generation = 0;
     std::vector<SehFrame *> frames;
     std::vector<SehDispatch *> dispatches;
     uint32_t g_seh_pending_target = 0;
@@ -229,10 +232,14 @@ void recomp_seh_validate_chain(X86 *c, const char *phase, const char *detail) {
 
 jmp_buf *recomp_seh_frame_enter(X86 *c) {
     recomp_seh_validate_chain(c, "enter", "");
-    validate_registration(c, c->r[R_ESP], 0);
+    uint32_t reg = chain_head(c);
+    validate_registration(c, reg, 0);
     SehFrame *f = new SehFrame{};
     f->cpu = c;
-    f->registration = c->r[R_ESP];
+    // Some helpers fill caller-reserved words above their own saved registers.
+    // The published chain head identifies the record, independently of ESP.
+    f->registration = reg;
+    f->generation = ++state.generation;
     f->establishing_eip = c->eip;
     f->profile_depth = recomp_profile_depth();
     f->dispatch_depth = state.dispatches.size();
@@ -241,6 +248,37 @@ jmp_buf *recomp_seh_frame_enter(X86 *c) {
     LOGV("SEH enter: registration=%08x established=%08x ESP=%08x handler=%08x", f->registration,
          f->establishing_eip, c->r[R_ESP], rd32(f->registration + 4));
     return &f->env;
+}
+
+uint64_t recomp_seh_frame_mark(X86 *) {
+    return state.generation;
+}
+
+void recomp_seh_frame_orphan(X86 *c, uint64_t mark) {
+    for (SehFrame *f : state.frames)
+        if (f->cpu == c && f->generation > mark && !f->retired &&
+            f->callback_depth == recomp_callback_depth() && f->registration >= c->r[R_ESP]) {
+            f->orphan = true;
+            LOGV("SEH orphan: registration=%08x established=%08x EIP=%08x ESP=%08x",
+                 f->registration, f->establishing_eip, c->eip, c->r[R_ESP]);
+        }
+}
+
+jmp_buf *recomp_seh_frame_adopt(X86 *c) {
+    for (size_t i = state.frames.size(); i-- > 0;) {
+        SehFrame *f = state.frames[i];
+        if (f->cpu != c || !f->orphan || f->callback_depth != recomp_callback_depth())
+            continue;
+        if (f->registration < c->r[R_ESP] || chain_head(c) != f->registration)
+            return nullptr;
+        f->orphan = false;
+        f->profile_depth = recomp_profile_depth();
+        f->dispatch_depth = state.dispatches.size();
+        LOGV("SEH adopt: registration=%08x established=%08x EIP=%08x ESP=%08x", f->registration,
+             f->establishing_eip, c->eip, c->r[R_ESP]);
+        return &f->env;
+    }
+    return nullptr;
 }
 
 void recomp_seh_frame_leave(X86 *c) {
@@ -281,7 +319,7 @@ void recomp_seh_intercept(X86 *c, uint32_t target) {
             landing = state.frames[i];
             break;
         }
-    if (!landing || state.pending_cpu != c)
+    if (!landing || landing->orphan || state.pending_cpu != c)
         invalid_chain(c, reg, target, "unwind target has no live checkpoint");
     state.g_seh_pending_target = 0;
     state.pending_cpu = nullptr;

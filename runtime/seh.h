@@ -10,6 +10,11 @@ extern "C" {
 
 /* setjmp must be executed by the live generated function, never in enter(). */
 jmp_buf *recomp_seh_frame_enter(X86 *c);
+/* Helpers orphan their surviving records before returning. The caller adopts
+ * the newest one and executes setjmp in its own live host frame. */
+uint64_t recomp_seh_frame_mark(X86 *c);
+void recomp_seh_frame_orphan(X86 *c, uint64_t mark);
+jmp_buf *recomp_seh_frame_adopt(X86 *c);
 /* Drop records below ESP at this callback level; retain active landings. */
 void recomp_seh_frame_leave(X86 *c);
 void recomp_seh_land(X86 *c);

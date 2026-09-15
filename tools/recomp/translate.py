@@ -1290,6 +1290,17 @@ def seh_frame_sites(fn, image=None):
     sites = {}
     helper = getattr(image, "seh_constructor_helper", None)
     if helper is not None:
+        stub = helper(fn.addr)
+        if stub is not None:
+            # The verified allocator helper publishes caller-reserved words
+            # through ECX. Keep its checkpoint live until its return, then
+            # let the caller adopt it; never leave setjmp in a dead helper.
+            for i, ins in enumerate(fn.insns):
+                if ins.mnem == "MOV" and len(ins.ops) == 2:
+                    dst, src = [parse_operand(op) for op in ins.ops]
+                    if (seh_chain_operand(dst, 2) and dst.base == 2
+                            and src.kind == "reg" and src.reg == 1):
+                        sites[i] = stub
         for i, ins in enumerate(fn.insns):
             if not i or ins.mnem != "CALL" or not fn.contiguous[i - 1]:
                 continue
@@ -1313,14 +1324,7 @@ def seh_frame_sites(fn, image=None):
             # The same frame idiom can zero another register before its
             # three PUSHes. Prove that spelling locally; an arbitrary FS
             # register operand can address a different TEB field.
-            zero_base = 0
-            if i >= 4 and all(fn.contiguous[i - 4:i]):
-                init, saved = fn.insns[i - 4], fn.insns[i - 3]
-                if init.mnem == "XOR" and len(init.ops) == 2 and saved.mnem == "PUSH":
-                    a, b = [parse_operand(o) for o in init.ops]
-                    if (a.kind == b.kind == "reg" and a.size == b.size == 32
-                            and a.reg == b.reg == dst.base and a.reg != 4):  # PUSH changes ESP
-                        zero_base = a.reg
+            zero_base = dst.base if seh_zero_base(fn, i, dst.base) else 0
             if (not seh_chain_operand(dst, zero_base) or src.kind != "reg" or src.reg != 4
                     or src.size != 32 or not seh_chain_operand(parse_operand(push.ops[0]), zero_base)
                     or not fn.contiguous[i - 1]):
@@ -1368,6 +1372,50 @@ class Translator(object):
         #: A CALL to one ends its block: the emitter leaves a trap in place of
         #: the fall-through instead of a jump onto the padding that follows.
         self.noreturn_callees = set()
+        self.seh_helpers = set()
+
+    def seh_escaping_returns(self, fn):
+        """Return paths with an established chain record but no matching unlink.
+
+        Begin at the normal entry, not at exception landing aliases. A helper
+        can return by RET or a proven jump through its popped return register.
+        Calls to already marked helpers propagate ownership to their caller.
+        """
+        if not fn.seh_sites and not any(ins.mnem == "CALL" and
+                                       self.branch_target(ins) in self.seh_helpers
+                                       for ins in fn.insns):
+            return set()
+        returns = self.popped_return_jumps(fn, ())
+        work, seen, escapes = [(fn.index[fn.addr], False)], set(), set()
+        while work:
+            i, active = work.pop()
+            if (i, active) in seen:
+                continue
+            seen.add((i, active))
+            ins = fn.insns[i]
+            if i in fn.seh_sites or (ins.mnem == "CALL" and
+                                    self.branch_target(ins) in self.seh_helpers):
+                active = True
+            elif i in fn.seh_restores:
+                active = False
+            if i in returns or (ins.mnem == "RET" and self.push_ret_target(fn, i) is None):
+                if active:
+                    escapes.add(i)
+                if i in returns:
+                    continue
+            work.extend((j, active) for j in self.successors(fn, i))
+        return escapes
+
+    def discover_seh_helpers(self, functions):
+        """Propagate escaping helper calls after all normal bodies are indexed."""
+        self.seh_helpers.clear()
+        while True:
+            before = len(self.seh_helpers)
+            for fn in functions:
+                if self.seh_escaping_returns(fn):
+                    self.seh_helpers.add(fn.addr)
+            if len(self.seh_helpers) == before:
+                break
 
     def never_returns(self, ins):
         """Is `ins` a direct CALL to a callee the listings show never returning?"""
@@ -2042,6 +2090,10 @@ class Translator(object):
                 t = self.decode_jumptable(fn, i)
                 if t:
                     self.jumptables[(fn.addr, ins.addr)] = t
+        if self.seh_escaping_returns(fn):
+            self.seh_helpers.add(fn.addr)
+        else:
+            self.seh_helpers.discard(fn.addr)
 
     def translate(self, fn, entries=()):
         """Emit fn_ADDR, plus one thin wrapper per alternate entry point.
@@ -2065,6 +2117,7 @@ class Translator(object):
             self.stale_entries.update(dropped)
             entries = [e for e in entries if e in fn.index]
         fn.return_jumps = self.popped_return_jumps(fn, entries)
+        fn.seh_escapes = self.seh_escaping_returns(fn)
         if self.opts.eager_flags:
             live_out = [ALL_FLAGS] * len(fn.insns)
         else:
@@ -2117,6 +2170,8 @@ class Translator(object):
         prologue = 0                 # lines before the first instruction
         if entries:
             out.append("static void body_%08x(X86 *c, uint32_t entry_) {" % fn.addr)
+            if fn.seh_escapes:
+                out.append("    uint64_t seh_mark_ = recomp_seh_frame_mark(c);")
             out.append("    switch (entry_) {")
             for e in entries:
                 out.append("    case %s: goto L_%08x;" % (hexlit(e), e))
@@ -2125,6 +2180,8 @@ class Translator(object):
             out.append("    }")
         else:
             out.append("void fn_%08x(X86 *c) {" % fn.addr)
+            if fn.seh_escapes:
+                out.append("    uint64_t seh_mark_ = recomp_seh_frame_mark(c);")
             if head:
                 out.append("    goto L_%08x;" % fn.addr)
         prologue = len(out)          # everything emitted so far is dispatch
@@ -2265,7 +2322,7 @@ class Translator(object):
             if (fn.seh_sites and (seh_chain_operand(dst) or i in fn.seh_sites)
                     and src.kind == "reg" and src.size == 32):
                 L.append("c->eip = %s;" % hexlit(ins.addr))
-                if src.reg == 4:
+                if i in fn.seh_sites:
                     L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
                              "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
                 else:
@@ -2597,10 +2654,10 @@ class Translator(object):
                 else:
                     self.stats["_call_unknown"] += 1
                     L.append("recomp_call(c, %s);" % hexlit(t))
-                if i in fn.seh_sites:
+                if t in self.seh_helpers:
                     L.append("c->eip = %s;" % hexlit(ins.addr))
-                    L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
-                             "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
+                    L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
+                             "if (b_ && setjmp(*b_)) { recomp_seh_land(c); return; } }")
                 if t in self.noreturn_callees:
                     # The callee throws or exits; what follows is padding and
                     # tables, never code.  Reaching this line means it came
@@ -2616,6 +2673,7 @@ class Translator(object):
 
         if m == "RET":
             n = parse_imm(ins.ops[0]) if ins.ops else 0
+            orphan = "recomp_seh_frame_orphan(c, seh_mark_); " if i in fn.seh_escapes else ""
             if fn.pushed_continuations:
                 # Normal finally cleanup stays in the establishing C frame.
                 # An alternate entry called by the exception dispatcher has
@@ -2624,9 +2682,10 @@ class Translator(object):
                      "switch (r_) {"]
                 L.extend("case %s: goto L_%08x;" % (hexlit(t), t)
                          for t in sorted(fn.pushed_continuations))
-                L.extend(["default: c->eip = r_; recomp_return(c); return;", "}"])
+                L.extend(["default: c->eip = r_; " + orphan + "recomp_return(c); return;", "}"])
                 return L
-            return ["c->eip = rd32(c->r[4]); c->r[4] += %du; recomp_return(c); return;" % (4 + n)]
+            return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
+                    orphan + "recomp_return(c); return;"]
 
         # --------------------------------------------------------- system --
         if m == "RDTSC":
@@ -2682,7 +2741,8 @@ class Translator(object):
     def emit_indirect_jump(self, fn, i, ins, op):
         if i in fn.return_jumps:
             self.stats["_jmp_popped_return"] += 1
-            return ["c->eip = %s; return;" % read_op(op, 32)]
+            orphan = ["recomp_seh_frame_orphan(c, seh_mark_);"] if i in fn.seh_escapes else []
+            return orphan + ["c->eip = %s; return;" % read_op(op, 32)]
         targets = self.jumptables.get((fn.addr, ins.addr))
         L = ["uint32_t t_ = %s;" % read_op(op, 32)]
         if not targets:
@@ -3967,6 +4027,7 @@ def main():
             tr.prepare(fn, strict=True)
         except TranslateError as e:
             failures.append((fn.addr, "jump table: %s" % e))
+    tr.discover_seh_helpers(parsed)
 
     # Plan correction 9: every decoded jump-table target inside a function is a
     # block entry, so recomp_jump can reach it.
@@ -4221,6 +4282,10 @@ def main():
         if body and body[0].startswith("static void body_"):
             continue                      # multi-entry form, dispatched below
         lines = [l for l in body[1:] if l.strip()]
+        # Host-only ownership bookkeeping does not execute a guest instruction
+        # or modify its CPU. The first guest operation must still reach ADDR.
+        if lines and lines[0].strip() == "uint64_t seh_mark_ = recomp_seh_frame_mark(c);":
+            lines = lines[1:]
         if not lines:
             continue
         first = lines[0].strip()

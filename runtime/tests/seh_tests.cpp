@@ -271,9 +271,87 @@ static void landing() {
     CHECK(unwound_mod_esp == before - 12);
     CHECK(heap_stats().used_blocks == blocks);
     recomp_profile_pop();
+    registration(&c, c.r[R_ESP], 0xffffffff, handler_search);
     recomp_seh_frame_enter(&c);
     loader_init_context(&c); // reusing a context must not retain its old env
     CHECK(recomp_seh_test_frame_count(&c) == 0);
+}
+
+// Translated constructor helper: POP its return, install three words, JMP
+// through the saved return register without popping the registration again.
+static void installing_helper(X86 *c, bool install) {
+    uint64_t mark = recomp_seh_frame_mark(c);
+    uint32_t ret = rd32(c->r[R_ESP]);
+    c->r[R_ESP] += 4;
+    if (install) {
+        c->r[R_ESP] -= 12;
+        registration(c, c->r[R_ESP], rd32(c->fs_base), handler_accept);
+        // Also exercise helpers publishing caller-reserved words above their
+        // own saved registers: enter must use FS:[0], not current ESP.
+        c->r[R_ESP] -= 16;
+        jmp_buf *b_ = recomp_seh_frame_enter(c);
+        if (setjmp(*b_)) {
+            recomp_seh_land(c);
+            CHECK(false); // This helper has returned before any raise.
+            return;
+        }
+        c->r[R_ESP] += 16;
+    }
+    recomp_seh_frame_orphan(c, mark);
+    c->eip = ret;
+}
+
+static void adopting_caller(X86 *c, bool raise, bool install) {
+    c->r[R_ESP] -= 4;
+    wr32(c->r[R_ESP], CALLER_RETURN);
+    installing_helper(c, install);
+    {
+        jmp_buf *b_ = recomp_seh_frame_adopt(c);
+        CHECK((b_ != nullptr) == install);
+        if (b_ && setjmp(*b_)) {
+            recomp_seh_land(c);
+            return;
+        }
+    }
+    CHECK(recomp_seh_frame_adopt(c) == nullptr); // Cannot adopt twice.
+    if (raise) {
+        callee(c);
+        CHECK(false);
+    }
+    if (install) {
+        // Standalone unlink helper: POP return; POP FS:[zero]; ADD ESP,8;
+        // JMP saved return. The caller owns the checkpoint it retires.
+        c->r[R_ESP] -= 4;
+        wr32(c->r[R_ESP], CALLER_RETURN);
+        uint32_t ret = rd32(c->r[R_ESP]);
+        c->r[R_ESP] += 4;
+        wr32(c->fs_base, rd32(c->r[R_ESP]));
+        c->r[R_ESP] += 4;
+        recomp_seh_frame_leave(c);
+        c->r[R_ESP] += 8;
+        c->eip = ret;
+    }
+    c->eip = rd32(c->r[R_ESP]);
+    c->r[R_ESP] += 4;
+    recomp_return(c);
+}
+
+static void adopted_landing() {
+    for (unsigned mode = 0; mode < 3; ++mode) {
+        X86 c;
+        loader_init_context(&c);
+        clear_observations();
+        landing_runs = caller_runs = after_raise = 0;
+        uint32_t before = c.r[R_ESP];
+        adopting_caller(&c, mode == 0, mode != 2);
+        ++caller_runs;
+        CHECK(caller_runs == 1 && after_raise == 0);
+        CHECK(landing_runs == (mode == 0 ? 1u : 0u));
+        CHECK(c.r[R_ESP] == before + 4 && c.eip == GUEST_RETURN_SENTINEL);
+        CHECK(rd32(c.fs_base) == 0xffffffff);
+        CHECK(recomp_seh_test_frame_count(&c) == 0);
+        recomp_seh_reset(&c);
+    }
 }
 
 // A cleanup landing can return to the dispatcher from a deeper helper. Its
@@ -549,6 +627,7 @@ int main(int argc, char **argv) {
     chain_walk();
     unwind_and_leave();
     landing();
+    adopted_landing();
     cleanup_landing(false);
     cleanup_landing(false, true);
     cleanup_landing(true);
