@@ -94,6 +94,13 @@ extern "C" int recomp_run_thunk(X86 *c, uint32_t target) {
     char bytes[49] = {};
     for (unsigned i = 0; i < 16 && pc < GUEST_SIZE && i < GUEST_SIZE - pc; ++i)
         snprintf(bytes + i * 3, 4, "%02x ", rd8(pc + i));
-    LOGW("guest thunk %08x stopped at %08x (%s), bytes: %s", target, pc, reason, bytes);
+    // Reported once per SHAPE of code, not once per address. A guest that
+    // generates code writes the same routine to a new address every time, so a
+    // per-address report is one line per call - which on a blit path is
+    // thousands a second of formatting and I/O, and a diagnostic that scrolls
+    // away what it was meant to show.
+    char key[80];
+    snprintf(key, sizeof key, "thunk:%s:%.23s", reason, bytes);
+    log_once(key, "guest thunk %08x stopped at %08x (%s), bytes: %s", target, pc, reason, bytes);
     return 0;
 }

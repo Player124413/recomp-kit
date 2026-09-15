@@ -176,8 +176,12 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
     uint32_t ret = rd32(c->r[R_ESP]);
     char key[64];
     snprintf(key, sizeof key, "unknown-call:%08x", target);
+    // Bounded for the same reason log_once is: a guest that generates code
+    // presents a new target on every call, and a run report wants a sample of
+    // them, not all of them.
     if (log_once(key, "call to unknown target %08x (ESP=%08x, return=%08x): returning 0", target,
-                 c->r[R_ESP], ret))
+                 c->r[R_ESP], ret) &&
+        unknown_calls().size() < 256)
         unknown_calls().push_back(UnknownCall{target, ret});
     return_as_if_ret(c);
 }

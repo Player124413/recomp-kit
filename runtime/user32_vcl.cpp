@@ -1445,6 +1445,19 @@ void host_post_mouse_message(uint32_t msg, uint32_t mk, int32_t x, int32_t y) {
         mk |= 4;
     if (user32::g_key_state[0x11] & 0x80)
         mk |= 8;
-    if (msg >= 0x200 && msg <= 0x209)
-        user32::mouse_input.push_back({msg, mk, x, y, host_millis()});
+    if (msg < 0x200 || msg > 0x209)
+        return;
+    // A mouse move is a position, not an event. Windows does not queue one per
+    // motion the hardware reports: it keeps the latest and synthesises the
+    // message when the guest asks. The routing pump below delivers one message
+    // per call, so a host reporting motion faster than the guest pumps would
+    // build a backlog and the pointer would trail the hand by the length of
+    // it. Only a move already at the back is replaced, so a move between a
+    // press and a release - the shape of a drag - still reaches the guest.
+    if (msg == 0x200 && !user32::mouse_input.empty() &&
+        user32::mouse_input.back().message == 0x200) {
+        user32::mouse_input.back() = {msg, mk, x, y, host_millis()};
+        return;
+    }
+    user32::mouse_input.push_back({msg, mk, x, y, host_millis()});
 }

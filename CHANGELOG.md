@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Input: pending mouse moves are coalesced, as Windows does. The routing pump
+  delivers one message per call, so a host reporting motion faster than the
+  guest pumps built a backlog and the pointer trailed the hand by its length.
+  A move between a press and a release is kept, so a drag is unaffected.
+
+- Diagnostics are bounded. A guest that generates code writes a new routine at
+  a new address every time, so a report keyed by that address is a new key on
+  every call: the once-only log now caps its key set, the undeliverable-call
+  record caps its sample, and a guest thunk the decoder cannot run is reported
+  once per SHAPE of code rather than once per address. The last of those was
+  also thousands of formatted writes a second on a drawing path.
+
 - Desktop host: mouse messages are routed by position, as the smoke host and
   Windows both do. They were posted to the main window carrying a screen
   position, so every click reached whichever window the guest created first -

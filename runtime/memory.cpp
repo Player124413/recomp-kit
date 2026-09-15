@@ -38,8 +38,28 @@ void log_msg(int level, const char *fmt, ...) {
     va_end(ap);
 }
 
+// A guest that generates code writes a new routine at a new address every
+// time, and a diagnostic keyed by that address is a distinct key on every
+// call. The set is therefore bounded: past the cap nothing new is remembered
+// or reported, so a run that would have filled memory with keys for addresses
+// nobody will ever look at stays flat instead. The cap is far above what a
+// run that is behaving reports.
+static const size_t kLogOnceKeys = 4096;
+
 bool log_once(const char *key, const char *fmt, ...) {
     static std::set<std::string> seen;
+    static bool capped = false;
+    if (seen.size() >= kLogOnceKeys) {
+        if (!capped) {
+            capped = true;
+            if (log_level() >= 1)
+                fprintf(stderr,
+                        "[recomp] log_once: %zu distinct diagnostics reported; further "
+                        "first-occurrence messages are suppressed\n",
+                        seen.size());
+        }
+        return false;
+    }
     if (!seen.insert(key).second)
         return false;
     if (log_level() < 1)
