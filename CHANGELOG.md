@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime: theme and desktop-composition probes report disabled visual
+  styles and composition, allowing callers to use their classic window path.
+
 - Runtime: buffered-paint initialization reports E_NOTIMPL through the
   uxtheme export, with safe cleanup for callers using ordinary GDI painting.
 

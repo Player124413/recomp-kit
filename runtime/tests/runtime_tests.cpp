@@ -385,6 +385,28 @@ static void test_buffered_paint_unavailable() {
           "BufferedPaintInit reports E_NOTIMPL for unavailable buffered painting");
     check(call_import(&c, "UXTHEME.dll", "BufferedPaintUnInit", {}) == 0,
           "BufferedPaintUnInit safely completes without buffered-paint resources");
+    for (const char *api : {"IsThemeActive", "IsAppThemed"}) {
+        gm_put_str(text + 128, api, 64);
+        check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0 &&
+                  call_import(&c, "UXTHEME.dll", api, {}) == 0,
+              "%s reports disabled visual styles through its registered export", api);
+    }
+    gm_put_wstr(text, "dwmapi.dll", 64);
+    module = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {text});
+    check(module != 0, "the desktop composition module is present");
+    gm_put_str(text + 128, "DwmIsCompositionEnabled", 64);
+    check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0,
+          "DwmIsCompositionEnabled resolves through GetProcAddress");
+    wr32(text, 0xa5a5a5a5);
+    wr32(text + 4, 0xa5a5a5a5);
+    check(call_import(&c, "DWMAPI.dll", "DwmIsCompositionEnabled", {text}) == 0 &&
+              rd32(text) == 0 && rd32(text + 4) == 0xa5a5a5a5,
+          "DwmIsCompositionEnabled writes a false BOOL and preserves its guard");
+    check(call_import(&c, "DWMAPI.dll", "DwmIsCompositionEnabled", {0}) == 0x80070057u,
+          "DwmIsCompositionEnabled rejects a null output pointer");
+    check(call_import(&c, "DWMAPI.dll", "DwmExtendFrameIntoClientArea", {0x20004, text}) ==
+              0x80004001u,
+          "DwmExtendFrameIntoClientArea reports unavailable desktop composition");
 }
 
 static void test_preferred_ui_languages() {

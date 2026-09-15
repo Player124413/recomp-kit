@@ -23,6 +23,15 @@ void session_service_unavailable(X86 *c) {
 void buffered_paint_unavailable(X86 *c) {
     set_eax(c, 0x80004001u); // E_NOTIMPL: use the caller's ordinary GDI path.
 }
+void composition_enabled(X86 *c) {
+    uint32_t out = arg(c, 0);
+    if (!out || !gm_valid(out, 4)) {
+        set_eax(c, 0x80070057u); // E_INVALIDARG
+        return;
+    }
+    wr32(out, 0); // No desktop composition or glass frame in the guest model.
+    set_eax(c, 0);
+}
 void enum_printers(X86 *c) {
     zero_out(arg(c, 5));
     zero_out(arg(c, 6));
@@ -80,6 +89,10 @@ void folder_path(X86 *c) {
     set_eax(c, 0);
 }
 const ImportShim shims[] = {
+    {"DWMAPI.dll", "DwmIsCompositionEnabled", 1, composition_enabled},
+    {"DWMAPI.dll", "DwmExtendFrameIntoClientArea", 2, buffered_paint_unavailable},
+    {"UXTHEME.dll", "IsThemeActive", 0, zero},
+    {"UXTHEME.dll", "IsAppThemed", 0, zero},
     {"UXTHEME.dll", "BufferedPaintInit", 0, buffered_paint_unavailable},
     {"UXTHEME.dll", "BufferedPaintUnInit", 0, zero},
     {"WTSAPI32.dll", "WTSRegisterSessionNotification", 2, session_service_unavailable},
