@@ -1430,6 +1430,14 @@ static void test_misc_shims(X86 *c) {
               rd32(osvi + 16) == RECOMP_WINDOWS_PLATFORM,
           "GetVersionExA reports the configured Windows version");
     check(call_import(c, "KERNEL32.dll", "GetProcessHeap", {}) != 0, "GetProcessHeap");
+    uint32_t sysinfo = scratch_block(80);
+    memset(g_mem + sysinfo, 0xa5, 80);
+    call_import(c, "KERNEL32.dll", "GetSystemInfo", {sysinfo});
+    call_import(c, "KERNEL32.dll", "GetNativeSystemInfo", {sysinfo + 40});
+    check(memcmp(g_mem + sysinfo, g_mem + sysinfo + 40, 36) == 0 &&
+              rd32(sysinfo + 36) == 0xa5a5a5a5 && rd32(sysinfo + 76) == 0xa5a5a5a5 &&
+              rd16(sysinfo + 40) == 0 && rd32(sysinfo + 44) == 4096,
+          "GetNativeSystemInfo shares the 32-bit guest SYSTEM_INFO layout and preserves guards");
     check(call_import(c, "KERNEL32.dll", "IsBadCodePtr", {loader_entry_point()}) == 0 &&
               call_import(c, "KERNEL32.dll", "IsBadCodePtr", {loader_image_limit()}) == 1,
           "IsBadCodePtr uses the image bounds from the PE headers");

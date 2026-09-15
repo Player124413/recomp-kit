@@ -4357,6 +4357,8 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "SetEnvironmentVariableA", 2, k_SetEnvironmentVariableA},
     {"KERNEL32.dll", "GetStartupInfoA", 1, k_GetStartupInfoA},
     {"KERNEL32.dll", "GetSystemInfo", 1, k_GetSystemInfo},
+    // The guest OS is 32-bit x86, so native and process system info agree.
+    {"KERNEL32.dll", "GetNativeSystemInfo", 1, k_GetSystemInfo},
     {"KERNEL32.dll", "GetVersion", 0, k_GetVersion},
     // Not imported by D3DPopTB.exe; registered because the CRT prerequisites in
     // the plan name them and GetProcAddress must be able to find them.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Kernel32: GetNativeSystemInfo reports the same 32-bit guest system
+  information as GetSystemInfo for delay-loaded platform probes.
+
 - Kernel32: expose en-US thread, user and system preferred UI languages,
   with UTF-16 multi-string size queries and bounded writes for MUI callers.
 
