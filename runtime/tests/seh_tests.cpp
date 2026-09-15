@@ -27,6 +27,13 @@ static uint32_t handler_search, handler_accept, handler_continue;
 static uint32_t landing_runs, after_raise, final_esp, unwound_mod_esp;
 static X86 expected_cpu;
 static constexpr uint32_t LANDING = 0x0d02a080;
+static constexpr uint32_t CLEANUP = LANDING + 16, SURGERY = LANDING + 32;
+static constexpr uint32_t CALLER_RETURN = LANDING + 48;
+static uint32_t cleanup_handler, outer_handler, cleanup_runs, outer_runs, caller_runs;
+static uint32_t callback_sp, cleanup_reg, outer_reg;
+static bool raise_in_cleanup, unknown_sentinel;
+static void cleanup_block(X86 *c);
+static void surgery(X86 *c);
 
 static uint32_t invoke(X86 *c, const char *name, std::initializer_list<uint32_t> args) {
     return guest_call(c, imports_resolve("KERNEL32.dll", name), args.begin(), (int)args.size());
@@ -87,7 +94,7 @@ static void block(X86 *c) {
     CHECK(rd32(first_record) == 0x12345678);
     CHECK(c->r[R_EAX] == 0xabcdef);
     CHECK(recomp_seh_pending_target() == 0);
-    CHECK(recomp_seh_test_frame_count(c) == 1); // abandoned callee frame was dropped
+    CHECK(recomp_seh_test_frame_count(c) == 2); // dispatcher and its callees remain live
     CHECK(c->r[R_ESP] < c->r[R_EBP]);           // still on the dispatcher's guest stack
     uint32_t reg = c->r[R_EBP];
     wr32(c->fs_base, rd32(reg));
@@ -102,7 +109,7 @@ static void block(X86 *c) {
 // These are the test's tiny dispatch tables. Calls never intercept an unwind;
 // jumps intercept before lookup, including an already-known landing entry.
 extern "C" int recomp_is_call_return(uint32_t target) {
-    return target == GUEST_RETURN_SENTINEL;
+    return target == GUEST_RETURN_SENTINEL || target == CALLER_RETURN;
 }
 extern "C" int32_t recomp_index_of(uint32_t target) {
     // A call-return can also be an entry. The landing's RET must prefer
@@ -110,6 +117,14 @@ extern "C" int32_t recomp_index_of(uint32_t target) {
     return target == LANDING || target == GUEST_RETURN_SENTINEL ? 0 : -1;
 }
 extern "C" void recomp_call(X86 *c, uint32_t target) {
+    if (target == CLEANUP) {
+        cleanup_block(c);
+        return;
+    }
+    if (target == SURGERY) {
+        surgery(c);
+        return;
+    }
     if (target == LANDING) {
         block(c);
         return;
@@ -246,7 +261,9 @@ static void landing() {
     recomp_profile_push(7);
     uint32_t depth = recomp_profile_depth();
     establishing(&c);
+    ++caller_runs;
     CHECK(landing_runs == 1 && after_raise == 0);
+    CHECK(caller_runs == 1);
     CHECK(final_esp == before + 4 && c.r[R_ESP] == final_esp);
     CHECK(c.eip == GUEST_RETURN_SENTINEL);
     CHECK(recomp_seh_test_frame_count(&c) == 0);
@@ -257,6 +274,113 @@ static void landing() {
     recomp_seh_frame_enter(&c);
     loader_init_context(&c); // reusing a context must not retain its old env
     CHECK(recomp_seh_test_frame_count(&c) == 0);
+}
+
+// A cleanup landing can return to the dispatcher from a deeper helper. Its
+// sentinel belongs to that handler invocation, not the establishing function.
+static void surgery(X86 *c) {
+    c->r[R_ESP] = callback_sp;
+    c->eip = rd32(c->r[R_ESP]);
+    c->r[R_ESP] += 4;
+    c->r[R_EAX] = 1;
+    CHECK(c->eip == GUEST_RETURN_SENTINEL);
+    if (unknown_sentinel)
+        recomp_unknown_call(c, c->eip);
+    else
+        recomp_return(c);
+    CHECK(false); // must escape the helper, landing, and accepting handler
+}
+
+static void cleanup_block(X86 *c) {
+    ++cleanup_runs;
+    CHECK(recomp_seh_test_frame_count(c) == 2);
+    CHECK(heap_owns(first_record));
+    wr32(c->fs_base, outer_reg); // nested raises search outside this cleanup
+    if (raise_in_cleanup) {
+        invoke(c, "RaiseException", {0x87654321, 0, 0, 0});
+        CHECK(false);
+    } else {
+        recomp_call(c, SURGERY);
+        CHECK(false);
+    }
+}
+
+static void cleanup_accept(X86 *c) {
+    if (rd32(arg(c, 0) + 4) & 2) {
+        c->r[R_EAX] = 1;
+        return;
+    }
+    callback_sp = c->r[R_ESP];
+    first_record = arg(c, 0);
+    invoke(c, "RtlUnwind", {arg(c, 1), 0, first_record, 0xabcdef});
+    recomp_jump(c, CLEANUP);
+    CHECK(false);
+}
+
+static void outer_accept(X86 *c) {
+    ++outer_runs;
+    CHECK(cleanup_runs == 1);
+    CHECK(arg(c, 1) == outer_reg);
+    CHECK(rd32(arg(c, 0)) == (raise_in_cleanup ? 0x87654321u : 0x12345678u));
+    // Reuse the completion landing's assertions with the still-live original
+    // record. The nested record is owned by the nested dispatcher as well.
+    accept(c);
+}
+
+static void cleanup_establishing(X86 *c) {
+    c->r[R_ESP] -= 12;
+    cleanup_reg = c->r[R_ESP];
+    registration(c, cleanup_reg, outer_reg, cleanup_handler);
+    {
+        jmp_buf *b_ = recomp_seh_frame_enter(c);
+        if (setjmp(*b_)) {
+            recomp_seh_land(c);
+            return;
+        }
+    }
+    invoke(c, "RaiseException", {0x12345678, 0, 0, 0});
+    ++after_raise;
+}
+
+static void outer_establishing(X86 *c) {
+    c->r[R_ESP] -= 12;
+    outer_reg = c->r[R_ESP];
+    registration(c, outer_reg, 0xffffffff, outer_handler);
+    {
+        jmp_buf *b_ = recomp_seh_frame_enter(c);
+        if (setjmp(*b_)) {
+            recomp_seh_land(c);
+            return;
+        }
+    }
+    cleanup_establishing(c);
+    ++after_raise;
+}
+
+static void cleanup_landing(bool nested, bool unknown = false) {
+    X86 c;
+    loader_init_context(&c);
+    clear_observations();
+    landing_runs = cleanup_runs = outer_runs = caller_runs = after_raise = 0;
+    raise_in_cleanup = nested;
+    unknown_sentinel = unknown;
+    uint32_t before = c.r[R_ESP], blocks = heap_stats().used_blocks;
+    wr32(before, CALLER_RETURN);
+    recomp_profile_push(7);
+    uint32_t depth = recomp_profile_depth();
+    outer_establishing(&c);
+    ++caller_runs;
+    CHECK(cleanup_runs == 1 && outer_runs == 1 && landing_runs == 1);
+    CHECK(caller_runs == 1 && after_raise == 0);
+    CHECK(c.eip == CALLER_RETURN && c.r[R_ESP] == before + 4);
+    CHECK(rd32(c.fs_base) == 0xffffffff);
+    CHECK(recomp_seh_test_frame_count(&c) == 0);
+    CHECK(recomp_profile_depth() == depth);
+    CHECK(heap_stats().used_blocks == blocks);
+    recomp_profile_pop();
+    // Completion abandoned nested guest_call invocations. A fresh callback
+    // must still work, with no stale environment left on its thread's stack.
+    CHECK(invoke(&c, "GetCurrentProcessId", {}) != 0);
 }
 
 static void fatal_case(const char *which) {
@@ -334,6 +458,8 @@ int main(int argc, char **argv) {
     handler_accept = imports_alloc_trampoline("SEH.dll", "accept", accept, ARGC_CDECL);
     handler_continue =
         imports_alloc_trampoline("SEH.dll", "continue", continue_execution, ARGC_CDECL);
+    cleanup_handler = imports_alloc_trampoline("SEH.dll", "cleanup", cleanup_accept, ARGC_CDECL);
+    outer_handler = imports_alloc_trampoline("SEH.dll", "outer", outer_accept, ARGC_CDECL);
     if (argc > 1) {
         fatal_case(argv[1]);
         return 1;
@@ -342,6 +468,9 @@ int main(int argc, char **argv) {
     chain_walk();
     unwind_and_leave();
     landing();
+    cleanup_landing(false);
+    cleanup_landing(false, true);
+    cleanup_landing(true);
     teardown();
     char exe[4096];
     CHECK(os_exe_path(exe, sizeof exe) == 0);

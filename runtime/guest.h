@@ -86,7 +86,6 @@ bool log_once(const char *key, const char *fmt, ...) __attribute__((format(print
 // runs the guest function through recomp_call and returns EAX. ESP is restored
 // afterwards regardless of the callee's own stack discipline.
 // ---------------------------------------------------------------------------
-static const uint32_t GUEST_RETURN_SENTINEL = 0x0fdfff00u;
 
 uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs);
 static inline uint32_t guest_call(X86 *c, uint32_t fn) {

@@ -57,6 +57,7 @@ extern uint8_t *g_mem;
 #define GUEST_SHIM_BASE 0x0ff00000u
 #define GUEST_SHIM_END 0x10000000u
 #define GUEST_SHIM_STRIDE 16u
+#define GUEST_RETURN_SENTINEL 0x0fdfff00u
 
 /* Little-endian host (ARM64) matches the guest, so memcpy is a plain load. */
 static inline uint8_t rd8(uint32_t a) {
@@ -224,6 +225,12 @@ void recomp_unknown_jump(X86 *c, uint32_t target);
 void recomp_shim_call(X86 *c, uint32_t target);
 /* target is neither a translated function nor a shim.  Logs; may abort. */
 void recomp_unknown_call(X86 *c, uint32_t target);
+/* A popped callback sentinel can bypass translated callers. The innermost
+ * guest_call owns the live host return checkpoint and its guest stack range. */
+void recomp_callback_return(X86 *c);
+uint32_t recomp_callback_depth(void);
+void recomp_callback_truncate(uint32_t depth);
+void recomp_callback_reset(X86 *c);
 /* DIV/IDIV with a zero divisor or a quotient that does not fit. */
 void recomp_div_error(X86 *c, uint32_t addr);
 
@@ -277,6 +284,10 @@ int recomp_is_call_return(uint32_t target);
  * Delay-load adapters also RET into resolved import shims. Unknown returns
  * retain the existing EIP/host-return behaviour. */
 static inline void recomp_return(X86 *c) {
+    if (c->eip == GUEST_RETURN_SENTINEL) {
+        recomp_callback_return(c);
+        return;
+    }
     if (recomp_is_call_return(c->eip))
         return;
     if ((c->eip >= GUEST_SHIM_BASE && c->eip < GUEST_SHIM_END) || recomp_index_of(c->eip) >= 0)

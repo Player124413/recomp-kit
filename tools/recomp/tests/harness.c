@@ -20,6 +20,8 @@ static uint64_t fake_tsc;
 
 void recomp_shim_call(X86 *c, uint32_t target)   { (void)c; last_shim = target; }
 void recomp_unknown_call(X86 *c, uint32_t target){ (void)c; last_unknown = target; }
+/* Instruction fixtures have no runtime guest_call callback checkpoints. */
+void recomp_callback_return(X86 *c){ (void)c; }
 void recomp_div_error(X86 *c, uint32_t addr)     { (void)c; last_div_error = addr;
                                                   last_div_error_count++; }
 

@@ -20,6 +20,11 @@ struct SehFrame {
     jmp_buf env;
     uint32_t profile_depth;
     size_t dispatch_depth;
+    uint32_t callback_depth;
+    uint32_t landing_depth;
+    bool active_landing;
+    bool retired;
+    bool finished;
 };
 
 // Heap records outlive guest callbacks, including those abandoned by longjmp.
@@ -30,6 +35,7 @@ struct SehDispatch {
     uint32_t storage;
     uint32_t record;
     uint32_t context;
+    uint32_t callback_depth;
 };
 
 void release_dispatch(SehDispatch *d) {
@@ -128,7 +134,7 @@ SehDispatch *new_dispatch(X86 *c, uint32_t supplied_record = 0) {
     if (!storage)
         invalid_chain(c, 0, 0, "cannot allocate exception records");
     SehDispatch *d = new SehDispatch{c, storage, supplied_record ? supplied_record : storage,
-                                     storage + RECORD_BYTES};
+                                     storage + RECORD_BYTES, recomp_callback_depth()};
     state.dispatches.push_back(d);
     fill_context(c, d->context);
     return d;
@@ -174,6 +180,7 @@ jmp_buf *recomp_seh_frame_enter(X86 *c) {
     f->establishing_eip = c->eip;
     f->profile_depth = recomp_profile_depth();
     f->dispatch_depth = state.dispatches.size();
+    f->callback_depth = recomp_callback_depth();
     state.frames.push_back(f); // individually allocated: growing the vector cannot move env
     LOGV("SEH enter: registration=%08x established=%08x ESP=%08x handler=%08x", f->registration,
          f->establishing_eip, c->r[R_ESP], rd32(f->registration + 4));
@@ -184,11 +191,16 @@ void recomp_seh_frame_leave(X86 *c) {
     bool removed = false;
     for (size_t i = state.frames.size(); i-- > 0;) {
         SehFrame *f = state.frames[i];
-        if (f->cpu == c && f->registration < c->r[R_ESP]) {
+        if (f->cpu == c && f->registration < c->r[R_ESP] &&
+            (f->callback_depth == recomp_callback_depth() || f->active_landing)) {
             LOGV("SEH leave: registration=%08x established=%08x EIP=%08x ESP=%08x", f->registration,
                  f->establishing_eip, c->eip, c->r[R_ESP]);
-            state.frames.erase(state.frames.begin() + i);
-            delete f;
+            if (f->active_landing)
+                f->retired = true; // intercept still needs this stable environment
+            else {
+                state.frames.erase(state.frames.begin() + i);
+                delete f;
+            }
             removed = true;
         }
     }
@@ -215,30 +227,41 @@ void recomp_seh_intercept(X86 *c, uint32_t target) {
         invalid_chain(c, reg, target, "unwind target has no live checkpoint");
     state.g_seh_pending_target = 0;
     state.pending_cpu = nullptr;
+    landing->active_landing = true;
+    landing->landing_depth = recomp_callback_depth();
+    c->eip = target;
+    // Windows runs the block on the dispatcher's live stack. It may return
+    // a disposition to that dispatcher via a callback sentinel, or raise
+    // again while both dispatch walks are still live. Only a normal return
+    // here has completed the establishing function's guest RET.
+    recomp_call(c, target);
+    landing->finished = true;
+    bool above = true;
     for (size_t i = state.frames.size(); i-- > 0;) {
         SehFrame *f = state.frames[i];
-        if (f->cpu == c && f->registration < reg) {
+        if (f == landing)
+            above = false;
+        if (f->cpu == c && above) {
             state.frames.erase(state.frames.begin() + i);
             delete f;
         }
     }
     mods_hooks_unwind_to_esp(reg);
     recomp_profile_truncate(landing->profile_depth);
+    recomp_callback_truncate(landing->callback_depth);
     state.landing = landing;
-    c->eip = target;
     longjmp(landing->env, 1);
 }
 
 void recomp_seh_land(X86 *c) {
     trace_frames(c, "landing");
     SehFrame *landing = state.landing;
-    if (!landing || landing->cpu != c)
+    if (!landing || landing->cpu != c || !landing->finished)
         invalid_chain(c, 0, c->eip, "landing without a checkpoint");
     size_t depth = landing->dispatch_depth;
     state.landing = nullptr;
-    recomp_call(c, c->eip);
-    // Normal stores in the block usually retire the checkpoint. If the block
-    // did not store FS:[0], its host frame still ends here, so env must go too.
+    // The block already completed on the dispatcher's stack. The generated
+    // checkpoint returns to the establishing function's host caller once.
     for (size_t i = state.frames.size(); i-- > 0;)
         if (state.frames[i] == landing) {
             state.frames.erase(state.frames.begin() + i);
@@ -252,7 +275,27 @@ void recomp_seh_land(X86 *c) {
     }
 }
 
+void recomp_seh_callback_leave(X86 *c, uint32_t depth) {
+    for (size_t i = state.frames.size(); i-- > 0;) {
+        SehFrame *f = state.frames[i];
+        if (f->cpu != c)
+            continue;
+        if (f->active_landing && f->landing_depth >= depth)
+            f->active_landing = false;
+        if (f->callback_depth >= depth || (f->retired && !f->active_landing)) {
+            state.frames.erase(state.frames.begin() + i);
+            delete f;
+        }
+    }
+    for (size_t i = state.dispatches.size(); i-- > 0;)
+        if (state.dispatches[i]->cpu == c && state.dispatches[i]->callback_depth >= depth) {
+            release_dispatch(state.dispatches[i]);
+            state.dispatches.erase(state.dispatches.begin() + i);
+        }
+}
+
 void recomp_seh_reset(X86 *c) {
+    recomp_callback_reset(c);
     for (size_t i = state.frames.size(); i-- > 0;)
         if (!c || state.frames[i]->cpu == c) {
             if (state.landing == state.frames[i])

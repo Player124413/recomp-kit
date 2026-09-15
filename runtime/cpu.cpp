@@ -7,6 +7,7 @@
 #include "intrinsics.h"
 #include "win32.h"
 #include "thunks.h"
+#include "seh.h"
 
 #include <setjmp.h>
 #include <stdio.h>
@@ -26,6 +27,7 @@ struct SetjmpRecord {
     jmp_buf env;
     bool armed = false;
     uint32_t profile_depth = 0;
+    uint32_t callback_depth = 0;
 };
 // Keyed by the guest jmp_buf address. Heap allocated so a record outlives the
 // frame that created it.
@@ -83,11 +85,9 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
     if (recomp_run_thunk(c, target))
         return;
     if (target == GUEST_RETURN_SENTINEL) {
-        // The guest returned to the address the runtime pushes for a callback
-        // and then called it, or a callback's RET was translated as a call.
-        LOGW("call to the runtime callback return address %08x: a guest callback "
-             "returned into its own return sentinel",
-             target);
+        recomp_callback_return(c);
+        // With no matching live callback this is an ordinary undeliverable
+        // CALL, whose pushed return still needs to be consumed.
         return_as_if_ret(c);
         return;
     }
@@ -186,6 +186,7 @@ jmp_buf *recomp_setjmp_prepare(X86 *c) {
     rec->buf = buf;
     rec->saved = *c;
     rec->profile_depth = recomp_profile_depth();
+    rec->callback_depth = recomp_callback_depth();
     rec->armed = true;
     g_setjmp_ctx = c;
     // Leave a marker in the guest jmp_buf so a stale buffer is recognisable.
@@ -233,6 +234,8 @@ void recomp_longjmp(X86 *c) {
     // are restored, because the ESP being unwound to is the saved one.
     mods_hooks_unwind_to_esp(rec->saved.r[R_ESP]);
     recomp_profile_truncate(rec->profile_depth);
+    recomp_seh_callback_leave(c, rec->callback_depth + 1);
+    recomp_callback_truncate(rec->callback_depth);
     *c = rec->saved; // guest registers as they were at the _setjmp
     g_setjmp_ctx = c;
     LOGV("_longjmp(%08x, %d): restoring ESP=%08x", buf, value, c->r[R_ESP]);

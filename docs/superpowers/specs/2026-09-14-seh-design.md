@@ -137,8 +137,11 @@ chain establishment store it emits the same two-call pattern as `_setjmp`:
 
 `enter` allocates stable storage for the environment; it never executes
 `setjmp` itself. A normal chain restoration calls `recomp_seh_frame_leave`
-after the store. Retirement removes records **strictly below current ESP**;
-equality is a live record and must be retained. A leave with nothing to
+after the store. Retirement removes records **strictly below current ESP**
+at the same `guest_call` nesting level; equality is a live record and must
+be retained. An active landing may retire its establishing registration at
+the dispatcher's deeper level, but its environment remains allocated until
+the block completes or returns to the dispatcher. A leave with nothing to
 remove logs at verbose level and returns, since other chain-head stores can
 occur in a function with frames.
 
@@ -162,17 +165,41 @@ pending registration and returns. A target absent from the chain aborts.
 The generated `recomp_jump` checks the pending registration **before table
 lookup**, including a destination already in the dispatch table. The
 runtime locates its checkpoint by registration identity, independent of the
-dispatcher's current ESP. It clears pending state, removes checkpoints
-strictly below that registration, truncates profiling and mod-hook state,
-sets guest EIP to the jump destination, and `longjmp`s to the live generated
-frame. An absent checkpoint aborts with registration and destination.
+dispatcher's current ESP. It clears pending state, marks the frame as an
+active landing, sets guest EIP to the destination, and calls the block
+synchronously through `recomp_call` on the current host stack. The handler's
+`guest_call` and the dispatcher beneath it remain live. An absent checkpoint
+aborts with registration and destination.
 `recomp_call` does not intercept; the accepting transfer is a computed jump.
 
-`recomp_seh_land` calls the recovered block through `recomp_call(c, c->eip)`.
-That block reaches any remaining listed body through an alternate entry
-and executes the guest RET. When it returns, the checkpoint returns from
-the establishing host frame as well. Guest registers, including the
-accepting dispatcher's ESP, are not restored to a snapshot by the host jump.
+If the block returns normally to `intercept`, it has executed the
+establishing function's guest RET. Only then does the runtime remove frames
+above the landing checkpoint, truncate profiling, mod hooks and abandoned
+callback records, and `longjmp` to that checkpoint with a finished flag in
+its heap record. `recomp_seh_land` checks the flag, releases the completed
+frame and abandoned dispatch records, and returns without calling the block
+again. The emitted checkpoint's `return` resumes the establishing function's
+host caller exactly once. Guest registers are not restored to a snapshot;
+EIP and ESP already reflect the completed guest RET.
+
+A cleanup block may instead remove dispatcher words from the guest stack
+and RET to the handler callback's `GUEST_RETURN_SENTINEL` with EAX=1. Each
+`guest_call` owns a stable, thread-local-stack record with a `jmp_buf`,
+callback nesting depth (its position), saved ESP/EIP, return-slot bounds,
+and profiling depth. A translated RET or unknown-call sentinel check runs
+deeper on the host stack than that live invocation and jumps directly to
+its environment. The innermost callback's guest return-slot range must also
+match: a completing landing can RET to an older callback's identical
+sentinel, which must finish through the SEH checkpoint instead. No general
+translated-call counter or changed checkpoint emission is needed.
+
+On callback return, the runtime drops SEH records created within that
+callback and clears active-landing markers for blocks it abandoned. Older
+checkpoints stay until normal leave or completed outer landing. `guest_call`
+preserves the disposition in EAX and restores its ordinary caller ESP/EIP;
+the live dispatcher continues at the next registration. A raise inside a
+landing likewise reaches an outer handler while the original dispatcher
+and its exception record remain valid.
 
 ## What is emitted per function
 
@@ -225,10 +252,11 @@ computed-jump table calls the pending-target accessor before interception.
 Each host thread owns its SEH state. Individually allocated frames keep
 `jmp_buf` stable even when their pointer vector grows. A frame records its
 32-bit registration address, CPU-context identity, host environment,
-profiling depth and exception-dispatch depth. Matching by both context and
+profiling depth, exception-dispatch depth and callback depth, plus active,
+retired and finished landing state. Matching by both context and
 registration prevents selecting another context's checkpoint on that host
-thread. Normal retirement and landing discard only addresses strictly below
-their respective ESP/registration boundary.
+thread. Normal retirement observes the ESP and callback-level boundary;
+completion discards frames above the landing in establishment order.
 
 The corrected boundary was verified on the pinned image's two nested
 establishments at `0x008811b1` and `0x008811bf`. The normal restoration at
@@ -244,8 +272,8 @@ in thread state before callbacks, so a nonlocal transfer cannot leak an
 automatic owner. A checkpoint's saved dispatch depth bounds what its landing
 reclaims **after** the guest block returns; exception data remain valid
 through the accepting routine's cleanup. Nested landings reclaim only their
-own abandoned dispatches. A returned landing also retires its checkpoint if
-no chain store already removed it: its host environment is no longer live.
+own abandoned dispatches. A completed landing retires its checkpoint even if
+no chain store marked it retired: its host environment is no longer live.
 
 The walker reads stack bounds from the current TEB, supporting the main
 stack and heap-backed worker stacks. Registrations require eight aligned
@@ -253,12 +281,20 @@ bytes inside those bounds. Repeated addresses, more than 4,096 links,
 invalid records, unsupported dispositions and missing unwind targets fail
 with guest addresses instead of continuing with corrupted state.
 
-Thread exit drops its frames and dispatches before publishing
+Thread exit drops its frames, callback environments and dispatches before publishing
 completion; host thread-local destruction is a final cleanup. Context reuse
 and guest-arena teardown explicitly reset owned state. A synchronous worker
 return retires frames below its caller's restored ESP. The import dispatcher
 copies its description into a fixed character buffer, so no local
 `std::string` remains live across the shim call that can longjmp.
+The `_longjmp` intrinsic also truncates callback state to its saved nesting
+depth, so later callbacks cannot select an abandoned environment.
+
+The native regressions cover a completed landing returning to its host caller
+once, a helper returning disposition 1 nonlocally through both sentinel paths
+before the outer landing completes, and a nested raise reaching the outer
+handler. They check block counts, guest returns, empty final frame state,
+exception-allocation reclamation, profiling depth and a subsequent callback.
 
 ## Failure modes
 

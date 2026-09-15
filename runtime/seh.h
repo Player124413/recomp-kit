@@ -10,7 +10,7 @@ extern "C" {
 
 /* setjmp must be executed by the live generated function, never in enter(). */
 jmp_buf *recomp_seh_frame_enter(X86 *c);
-/* Drop records strictly below ESP; equality belongs to a still-live frame. */
+/* Drop records below ESP at this callback level; retain active landings. */
 void recomp_seh_frame_leave(X86 *c);
 void recomp_seh_land(X86 *c);
 uint32_t recomp_seh_pending_target(void);
@@ -18,6 +18,8 @@ void recomp_seh_intercept(X86 *c, uint32_t target);
 
 /* Context reuse/teardown on its owning host thread; NULL drops all its state. */
 void recomp_seh_reset(X86 *c);
+/* A callback return abandons frames/landings created at this call depth. */
+void recomp_seh_callback_leave(X86 *c, uint32_t depth);
 /* Returns zero for an exhausted chain; kernel32 retains its abort diagnostics.
  * A nonzero return is possible only through the test-only unhandled hook. */
 int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint32_t args);

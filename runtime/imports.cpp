@@ -2,6 +2,9 @@
 #include "gdi32_internal.h"
 #include "user32_internal.h"
 #include "kernel32_internal.h"
+#include "seh.h"
+#include "profile.h"
+#include "mods_seam.h"
 
 // Defined in kernel32.cpp with the scheduler.
 void sched_checkpoint();
@@ -431,10 +434,63 @@ bool imports_dispatch(X86 *c, uint32_t target) {
 // ---------------------------------------------------------------------------
 // Calling guest code from a shim.
 // ---------------------------------------------------------------------------
+namespace {
+struct Callback {
+    X86 *cpu;
+    jmp_buf env;
+    uint32_t saved_esp, saved_eip, return_sp, profile_depth;
+};
+struct Callbacks {
+    std::vector<Callback *> stack;
+    ~Callbacks() {
+        for (Callback *call : stack)
+            delete call;
+    }
+};
+thread_local Callbacks callbacks;
+} // namespace
+
+uint32_t recomp_callback_depth(void) {
+    return (uint32_t)callbacks.stack.size();
+}
+
+void recomp_callback_truncate(uint32_t depth) {
+    while (callbacks.stack.size() > depth) {
+        delete callbacks.stack.back();
+        callbacks.stack.pop_back();
+    }
+}
+
+void recomp_callback_reset(X86 *c) {
+    for (size_t i = callbacks.stack.size(); i-- > 0;)
+        if (!c || callbacks.stack[i]->cpu == c) {
+            delete callbacks.stack[i];
+            callbacks.stack.erase(callbacks.stack.begin() + i);
+        }
+}
+
+void recomp_callback_return(X86 *c) {
+    if (callbacks.stack.empty())
+        return;
+    Callback *call = callbacks.stack.back();
+    // Every translated return here is deeper on the host stack than this
+    // live guest_call. Match the guest return slot as well: a completing SEH
+    // landing may RET to an older callback's identical sentinel, in which
+    // case intercept must finish that function through its SEH checkpoint.
+    if (call->cpu != c || c->r[R_ESP] < call->return_sp + 4 || c->r[R_ESP] > call->saved_esp)
+        return;
+    mods_hooks_unwind_to_esp(call->return_sp);
+    recomp_profile_truncate(call->profile_depth);
+    longjmp(call->env, 1);
+}
+
 uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) {
-    uint32_t saved_esp = c->r[R_ESP];
-    uint32_t saved_eip = c->eip;
-    uint32_t esp = saved_esp;
+    Callback *call = new Callback{};
+    call->cpu = c;
+    call->saved_esp = c->r[R_ESP];
+    call->saved_eip = c->eip;
+    call->profile_depth = recomp_profile_depth();
+    uint32_t esp = call->saved_esp;
     for (int i = nargs - 1; i >= 0; --i) {
         esp -= 4;
         wr32(esp, args[i]);
@@ -442,10 +498,16 @@ uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) {
     esp -= 4;
     wr32(esp, GUEST_RETURN_SENTINEL);
     c->r[R_ESP] = esp;
-    recomp_call(c, fn);
+    call->return_sp = esp;
+    callbacks.stack.push_back(call);
+    if (!setjmp(call->env))
+        recomp_call(c, fn);
+    recomp_seh_callback_leave(c, recomp_callback_depth());
     uint32_t eax = c->r[R_EAX];
-    c->r[R_ESP] = saved_esp;
-    c->eip = saved_eip;
+    c->r[R_ESP] = call->saved_esp;
+    c->eip = call->saved_eip;
+    callbacks.stack.pop_back();
+    delete call;
     return eax;
 }
 
