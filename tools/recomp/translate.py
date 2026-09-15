@@ -2181,6 +2181,7 @@ class Translator(object):
             L.append(write_op(dst, size, read_op(src, size)))
             if (fn.seh_sites and (seh_chain_operand(dst) or i in fn.seh_sites)
                     and src.kind == "reg" and src.size == 32):
+                L.append("c->eip = %s;" % hexlit(ins.addr))
                 if src.reg == 4:
                     L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
                              "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")

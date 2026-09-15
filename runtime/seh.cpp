@@ -16,6 +16,7 @@ constexpr uint32_t MAX_LINKS = 4096;
 struct SehFrame {
     X86 *cpu;
     uint32_t registration;
+    uint32_t establishing_eip;
     jmp_buf env;
     uint32_t profile_depth;
     size_t dispatch_depth;
@@ -54,6 +55,19 @@ thread_local SehState state;
 #ifdef POPM_TESTING
 thread_local RecompSehUnhandledHook unhandled_hook = nullptr;
 #endif
+
+// Verbose traces retain guest addresses only; they distinguish an omitted
+// establishment from a checkpoint retired while its registration remains live.
+void trace_frames(X86 *c, const char *phase) {
+    LOGV("SEH %s: pending=%08x EIP=%08x ESP=%08x live=%zu", phase, state.g_seh_pending_target,
+         c->eip, c->r[R_ESP], state.frames.size());
+    if (log_level() < 2)
+        return;
+    for (const SehFrame *f : state.frames)
+        if (f->cpu == c)
+            LOGV("SEH live: registration=%08x established=%08x", f->registration,
+                 f->establishing_eip);
+}
 
 [[noreturn]] void invalid_chain(X86 *c, uint32_t reg, uint32_t target, const char *why) {
     LOGW("SEH: %s (registration=%08x target=%08x FS=%08x ESP=%08x)", why, reg, target, c->fs_base,
@@ -155,9 +169,12 @@ jmp_buf *recomp_seh_frame_enter(X86 *c) {
     SehFrame *f = new SehFrame{};
     f->cpu = c;
     f->registration = c->r[R_ESP];
+    f->establishing_eip = c->eip;
     f->profile_depth = recomp_profile_depth();
     f->dispatch_depth = state.dispatches.size();
     state.frames.push_back(f); // individually allocated: growing the vector cannot move env
+    LOGV("SEH enter: registration=%08x established=%08x ESP=%08x handler=%08x", f->registration,
+         f->establishing_eip, c->r[R_ESP], rd32(f->registration + 4));
     return &f->env;
 }
 
@@ -166,6 +183,8 @@ void recomp_seh_frame_leave(X86 *c) {
     for (size_t i = state.frames.size(); i-- > 0;) {
         SehFrame *f = state.frames[i];
         if (f->cpu == c && f->registration < c->r[R_ESP]) {
+            LOGV("SEH leave: registration=%08x established=%08x EIP=%08x ESP=%08x", f->registration,
+                 f->establishing_eip, c->eip, c->r[R_ESP]);
             state.frames.erase(state.frames.begin() + i);
             delete f;
             removed = true;
@@ -182,6 +201,7 @@ uint32_t recomp_seh_pending_target(void) {
 // Called only for computed jumps, before even an existing dispatch-table hit.
 // The dispatcher keeps its own ESP; the pending registration identifies env.
 void recomp_seh_intercept(X86 *c, uint32_t target) {
+    trace_frames(c, "intercept");
     uint32_t reg = state.g_seh_pending_target;
     SehFrame *landing = nullptr;
     for (size_t i = state.frames.size(); i-- > 0;)
@@ -208,6 +228,7 @@ void recomp_seh_intercept(X86 *c, uint32_t target) {
 }
 
 void recomp_seh_land(X86 *c) {
+    trace_frames(c, "landing");
     SehFrame *landing = state.landing;
     if (!landing || landing->cpu != c)
         invalid_chain(c, 0, c->eip, "landing without a checkpoint");
@@ -288,6 +309,7 @@ int recomp_seh_raise(X86 *c, uint32_t code, uint32_t flags, uint32_t nargs, uint
 // the dispatcher and lands on the saved host checkpoint.
 void recomp_seh_unwind(X86 *c, uint32_t target, uint32_t target_ip, uint32_t record,
                        uint32_t retval) {
+    trace_frames(c, "unwind begin");
     SehDispatch *d = new_dispatch(c, record);
     if (!record) {
         wr32(d->record, 0xc0000027u); // STATUS_UNWIND
@@ -313,6 +335,7 @@ void recomp_seh_unwind(X86 *c, uint32_t target, uint32_t target_ip, uint32_t rec
     state.pending_cpu = target ? c : nullptr;
     c->r[R_EAX] = retval;
     LOGV("RtlUnwind: registration=%08x target_ip=%08x retval=%08x", target, target_ip, retval);
+    trace_frames(c, "unwind ready");
     finish_dispatch(d);
 }
 

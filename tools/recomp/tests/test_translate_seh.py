@@ -150,3 +150,11 @@ def test_omitted_landing_is_a_structural_entry(tmp_path, monkeypatch, typed, def
     jump = table_text.split("void recomp_jump(", 1)[1]
     assert "recomp_seh_intercept(c, target)" in jump
     assert jump.index("recomp_seh_intercept") < jump.index("recomp_lookup")
+
+
+def test_checkpoint_trace_identifies_the_establishing_and_restoring_instructions():
+    case, _, _ = seh_case()
+    text = translate_case(case)
+    stores = [BASE + off for off, asm in case.lines if asm.startswith("MOV dword ptr FS:")]
+    for site in stores:
+        assert "c->eip = 0x%xu;" % site in text
