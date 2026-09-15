@@ -41,6 +41,19 @@ bool g_phys_mod[256];
 uint8_t g_guest_modifiers;
 
 void post(uint32_t msg, uint32_t wparam, uint32_t lparam) {
+    // Keyboard input is addressed to the focus, not to a window the host
+    // picked: the runtime knows which window has it, and in a VCL application
+    // the first window created is the invisible application one, which does
+    // nothing with a keystroke. Mouse messages from this path carry a guest
+    // position, so they are routed by it.
+    if (msg >= 0x0100 && msg <= 0x0109) {
+        host_post_key_message(msg, wparam, lparam);
+        return;
+    }
+    if (msg >= 0x0200 && msg <= 0x0209) {
+        host_post_mouse_message(msg, wparam, int16_t(lparam), int16_t(lparam >> 16));
+        return;
+    }
     uint32_t hwnd = host_main_window();
     if (hwnd)
         host_post_message(hwnd, msg, wparam, lparam);

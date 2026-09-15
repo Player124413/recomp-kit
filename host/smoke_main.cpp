@@ -652,6 +652,10 @@ uint32_t make_lparam(int32_t x, int32_t y) {
 }
 
 void post(uint32_t msg, uint32_t wparam, uint32_t lparam) {
+    if (msg >= 0x0100 && msg <= 0x0109) {
+        host_post_key_message(msg, wparam, lparam);
+        return;
+    }
     if (msg >= 0x200 && msg <= 0x209) {
         host_post_mouse_message(msg, wparam, int16_t(lparam), int16_t(lparam >> 16));
         return;

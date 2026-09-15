@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Keyboard input goes to the window with the focus, as Windows sends it.
+  Hosts posted it to the first window the guest created, which in a VCL
+  application is the invisible application window: every keystroke went
+  somewhere that does nothing with one, so a text field could not be typed
+  into. The runtime knows which window holds the focus and now routes by it,
+  falling back to the active window and then to the first.
+
 - Translator: `--allow-unmodelled REASON` turns an instruction the translator
   cannot model into a trap at its own address instead of refusing the image,
   and reports every one. A listing routinely decodes the data past a

@@ -5483,6 +5483,28 @@ static void test_host_mouse_routing() {
     check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x200, 0x209, 1}) == 0 &&
               call_import(&c, "USER32.dll", "GetActiveWindow", {}) == ordinary,
           "WM_MOUSEACTIVATE can refuse activation and eat the press");
+    // Keyboard input goes to the focus, which is not the window the mouse is
+    // over and not the first window created. A VCL application's first window
+    // is the invisible application one, so a host that posted keystrokes
+    // there typed into nothing.
+    {
+        call_import(&c, "USER32.dll", "SetFocus", {ordinary});
+        host_post_key_message(0x0100, 0x41, 0x1e0001);
+        check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x100, 0x109, 1}) == 1 &&
+                  rd32(msg) == ordinary && rd32(msg + 4) == 0x0100 && rd32(msg + 8) == 0x41,
+              "a key goes to the focus window");
+        call_import(&c, "USER32.dll", "SetFocus", {child});
+        host_post_key_message(0x0102, 'x', 0x2d0001);
+        check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x100, 0x109, 1}) == 1 &&
+                  rd32(msg) == child && rd32(msg + 8) == 'x',
+              "and follows the focus when it moves, character messages included");
+        // With no focus at all it falls back rather than dropping the key.
+        call_import(&c, "USER32.dll", "SetFocus", {0});
+        host_post_key_message(0x0101, 0x41, 0xc01e0001);
+        check(call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0x100, 0x109, 1}) == 1 &&
+                  rd32(msg) != 0,
+              "and reaches some window when nothing holds the focus");
+    }
     for (uint32_t w : {top, ordinary, hidden, disabled})
         call_import(&c, "USER32.dll", "DestroyWindow", {w});
 }
