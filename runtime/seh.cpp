@@ -145,6 +145,8 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
     uint32_t handler = rd32(reg + 4);
     if (!handler || !gm_valid(handler, 1))
         invalid_chain(c, reg, handler, "invalid handler");
+    LOGV("SEH handler: registration=%08x handler=%08x flags=%08x", reg, handler,
+         rd32(d->record + 4));
     uint32_t args[] = {d->record, reg, d->context, 0};
     uint32_t disposition = guest_call(c, handler, args, 4);
     if (disposition == 0) {

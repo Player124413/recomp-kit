@@ -730,6 +730,31 @@ class Image(object):
             raise TranslateError("SEH landing %08x is not in code" % (stub + 5))
         return [stub + 5], None
 
+    def seh_constructor_helper(self, va):
+        """Return the handler stored by Delphi's returning constructor helper.
+
+        The helper saves EDX/ECX/EBX, optionally calls the allocator, then
+        fills the caller's 16-byte registration at ESP+16 through ECX. Match
+        the whole sequence, including zeroing the FS base and restoring the
+        saved registers. The handler immediate is image data, never a kit
+        address. setjmp must live in the caller AFTER this helper returns.
+        """
+        if not hasattr(self, "_seh_constructor_cache"):
+            self._seh_constructor_cache = {}
+        if va not in self._seh_constructor_cache:
+            prefix = bytes.fromhex("52515384d27c03ff50f431d28d4c2410648b1a8919896908c74104")
+            suffix = bytes.fromhex("89410c64890a5b595ac3")
+            size = len(prefix) + 4 + len(suffix)
+            code = self.data[va - self.base:va - self.base + size] if self.is_exec(va) else b""
+            stub = None
+            if (len(code) == size and code.startswith(prefix) and code.endswith(suffix)
+                    and self.is_exec(va + size - 1)):
+                candidate = self.rd32(va + len(prefix))
+                if self.is_exec(candidate):
+                    stub = candidate
+            self._seh_constructor_cache[va] = stub
+        return self._seh_constructor_cache[va]
+
     def looks_like_function(self, va):
         """Does `va` look like a function start for this game's compiler?
 
@@ -1219,9 +1244,25 @@ def seh_chain_operand(op, zero_base=0):
             and op.base in (None, zero_base) and op.index is None and op.disp == 0)
 
 
-def seh_frame_sites(fn):
-    """Map establishing MOV indices to pushed stub addresses in this body."""
+def seh_frame_sites(fn, image=None):
+    """Map establishing MOV/helper CALL indices to their handler addresses."""
     sites = {}
+    helper = getattr(image, "seh_constructor_helper", None)
+    if helper is not None:
+        for i, ins in enumerate(fn.insns):
+            if not i or ins.mnem != "CALL" or not fn.contiguous[i - 1]:
+                continue
+            target = Translator.branch_target(ins)
+            reserve = fn.insns[i - 1]
+            if target is None or reserve.mnem not in ("ADD", "SUB") or len(reserve.ops) != 2:
+                continue
+            dst, amount = [parse_operand(op) for op in reserve.ops]
+            if (dst.kind != "reg" or dst.reg != 4 or dst.size != 32 or amount.kind != "imm"
+                    or amount.imm & 0xffffffff != (0xfffffff0 if reserve.mnem == "ADD" else 16)):
+                continue
+            stub = helper(target)
+            if stub is not None:
+                sites[i] = stub
     for i in range(2, len(fn.insns)):
         mov, push = fn.insns[i], fn.insns[i - 1]
         if mov.mnem != "MOV" or push.mnem != "PUSH" or len(mov.ops) != 2:
@@ -1952,7 +1993,7 @@ class Translator(object):
         error."""
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
         fn.pushed_continuations = self.pushed_continuations(fn)
-        fn.seh_sites = seh_frame_sites(fn)
+        fn.seh_sites = seh_frame_sites(fn, self.image)
         self.strict = strict
         for i, ins in enumerate(fn.insns):
             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
@@ -2284,6 +2325,8 @@ class Translator(object):
                 raise TranslateError("non-32-bit POP")
             L.append("uint32_t v_ = rd32(c->r[4]); c->r[4] += 4;")
             L.append(write_op(ops[0], 32, "v_"))
+            if fn.seh_sites and seh_chain_operand(ops[0]) and ops[0].base is None:
+                L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
             return L
 
         if m == "PUSHAD":
@@ -2512,6 +2555,10 @@ class Translator(object):
                 else:
                     self.stats["_call_unknown"] += 1
                     L.append("recomp_call(c, %s);" % hexlit(t))
+                if i in fn.seh_sites:
+                    L.append("c->eip = %s;" % hexlit(ins.addr))
+                    L.append("{ jmp_buf *b_ = recomp_seh_frame_enter(c); "
+                             "if (setjmp(*b_)) { recomp_seh_land(c); return; } }")
                 if t in self.noreturn_callees:
                     # The callee throws or exits; what follows is padding and
                     # tables, never code.  Reaching this line means it came
@@ -3397,7 +3444,7 @@ def main():
             while fragments:
                 probe_fn = Function(t, "candidate", 0, [fragments[a] for a in sorted(fragments)])
                 probe_fn.measure(image)
-                stubs = set(seh_frame_sites(probe_fn).values())
+                stubs = set(seh_frame_sites(probe_fn, image).values())
                 for ins in probe_fn.insns:
                     if ins.mnem == "PUSH" and ins.ops:
                         op = parse_operand(ins.ops[0])
@@ -3476,7 +3523,7 @@ def main():
         """
         changed = False
         span_end = span_ends.get(fn.addr)
-        stubs = set(seh_frame_sites(fn).values())
+        stubs = set(seh_frame_sites(fn, image).values())
 
         def adopt(target, in_span=False, guessed=False):
             if guessed and target in withdrawn_span_guesses:
@@ -3576,7 +3623,7 @@ def main():
                                 all_addrs.add(landing)
                                 changed = True
 
-        for stub in seh_frame_sites(fn).values():
+        for stub in seh_frame_sites(fn, image).values():
             landings, table_range = image.seh_landings(stub)
             if table_range or landings != [stub + 5]:
                 continue
@@ -3661,7 +3708,7 @@ def main():
         for fn in list(parsed):
             if fn in retired_finally_bodies:
                 continue
-            for stub in seh_frame_sites(fn).values():
+            for stub in seh_frame_sites(fn, image).values():
                 if stub in seh_stubs:
                     continue
                 seh_stubs.add(stub)
@@ -3973,7 +4020,7 @@ def main():
                     if op.kind == "imm" and home.addr <= op.imm < span_ends[home.addr]:
                         if op.imm not in withdrawn_span_guesses:
                             targets.add(op.imm)
-        for stub in seh_frame_sites(fn).values():
+        for stub in seh_frame_sites(fn, image).values():
             targets.add(stub)
             landings, table_range = image.seh_landings(stub)
             targets.update(landings)

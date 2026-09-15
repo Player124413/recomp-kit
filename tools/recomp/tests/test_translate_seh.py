@@ -158,3 +158,58 @@ def test_checkpoint_trace_identifies_the_establishing_and_restoring_instructions
     stores = [BASE + off for off, asm in case.lines if asm.startswith("MOV dword ptr FS:")]
     for site in stores:
         assert "c->eip = 0x%xu;" % site in text
+
+
+@pytest.mark.parametrize("base", [BASE, BASE + 0x1000])
+@pytest.mark.parametrize("variant", ["constructor", "short-reservation", "nonzero-fs-base"])
+def test_constructor_helper_checkpoint_belongs_to_its_caller(tmp_path, monkeypatch, base, variant):
+    helper, stub, routine = base + 0x100, base + 0x180, base + 0x200
+    # A Delphi constructor reserves 16 bytes, then a returning helper fills
+    # them through ECX. A checkpoint in the helper would outlive its C frame.
+    caller = bytes.fromhex("83c4f0e8") + struct.pack("<i", helper - base - 8)
+    caller += bytes.fromhex("648f050000000083c40cc3")
+    helper_code = bytes.fromhex("52515384d27c03ff50f431d28d4c2410648b1a8919896908c74104")
+    helper_code += struct.pack("<I", stub)
+    helper_code += bytes.fromhex("89410c64890a5b595ac3")
+    if variant == "short-reservation":
+        caller = caller.replace(bytes.fromhex("83c4f0"), bytes.fromhex("83c4f4"))
+    if variant == "nonzero-fs-base":
+        helper_code = helper_code.replace(bytes.fromhex("31d2"), bytes.fromhex("09d2"))
+    handler = b"\xe9" + struct.pack("<i", routine - stub - 5) + bytes.fromhex("b82a000000c3")
+    img = synthetic_image({base: caller, helper: helper_code, stub: handler,
+                           routine: bytes.fromhex("b801000000c3")}, base=base - 0x100, size=0x1000)
+    listings = tmp_path / "functions"
+    listings.mkdir()
+    for addr, code in ((base, caller), (helper, helper_code), (routine, bytes.fromhex("b801000000c3"))):
+        insns = [img.instruction_at(ins.address) for ins in img.md.disasm(code, addr)]
+        (listings / ("%08x.asm" % addr)).write_text("\n".join(ins.raw for ins in insns) + "\n")
+    table = tmp_path / "functions.tsv"
+    table.write_text("address\tname\tsize\n%08x\tconstructor\t%d\n%08x\thelper\t%d\n"
+                     "%08x\tdispatcher\t6\n" % (base, len(caller), helper, len(helper_code), routine))
+    binary = tmp_path / "image"
+    binary.write_bytes(img.data)
+    curated = tmp_path / "globals.toml"
+    curated.write_text("")
+    out = tmp_path / "gen"
+    monkeypatch.setattr(T, "configure", lambda cfg: None)
+    monkeypatch.setattr(T.game_config, "load", lambda path: {})
+    for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
+                        ("BINARY", binary), ("CURATED", curated)):
+        monkeypatch.setattr(T, name, str(value))
+    monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
+    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
+                                     "--out", str(out), "--quiet"])
+    assert T.main() == 0
+    text = "\n".join(p.read_text() for p in out.glob("*.c"))
+    body = text.split("void fn_%08x(X86 *c) {" % base, 1)[1].split("\n}", 1)[0]
+    helper_body = text.split("void fn_%08x(X86 *c) {" % helper, 1)[1].split("\n}", 1)[0]
+    assert "setjmp" not in helper_body
+    if variant != "constructor":
+        assert "recomp_seh_frame_enter" not in body
+        return
+    assert body.count("recomp_seh_frame_enter(c)") == 1
+    assert body.index("CALL_FN(%08x)" % helper) < body.index("setjmp(*b_)")
+    assert "recomp_seh_frame_leave(c)" in body  # POP FS:[0] retires the 16-byte record
+    symbols = json.loads((out / "symbols.json").read_text())["functions"]
+    assert any(f["addr"] == "%08x" % (stub + 5) and f["provenance"] == "seh" for f in symbols)
