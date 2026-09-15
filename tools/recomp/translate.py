@@ -296,10 +296,10 @@ class Op(object):
 
 
 PTR_SIZE = {"byte": 8, "word": 16, "dword": 32, "qword": 64, "tword": 80,
-            "float": 32, "double": 64, "extended double": 80}
+            "float": 32, "double": 64, "extended double": 80, "xmmword": 128}
 
 MEM_RE = re.compile(
-    r"^(?:(byte|word|dword|qword|tword|float|double|extended double) ptr )?"
+    r"^(?:(byte|word|dword|qword|tword|xmmword|float|double|extended double) ptr )?"
     r"(?:([CDEFGS]S):)?"
     r"\[([^\]]*)\]$")
 
@@ -309,6 +309,9 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
 #: reloads a segment register.
 SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, "GS": 0x00}
 ST_RE = re.compile(r"^ST([0-7])$")
+
+
+XMM_RE = re.compile(r"^XMM([0-7])$")
 
 
 def parse_reg(text):
@@ -367,6 +370,9 @@ def parse_operand(text):
     r = parse_reg(text)
     if r is not None:
         return Op("reg", reg=r[0], size=r[1], part=r[2])
+    m = XMM_RE.match(text)
+    if m:
+        return Op("xmm", reg=int(m.group(1)), size=128)
     m = ST_RE.match(text)
     if m:
         return Op("st", sti=int(m.group(1)))
@@ -2764,6 +2770,55 @@ class Translator(object):
                 return L
             return ["c->eip = rd32(c->r[4]); c->r[4] += %du; " % (4 + n) +
                     orphan + "recomp_return(c); return;"]
+
+        # ------------------------------------------------------------ SSE --
+        # Data movement only, in dword lanes. A Delphi runtime's FillChar and
+        # Move reach for these unconditionally - SSE2 predates every CPU the
+        # compiler supports, so there is no feature test to fail - while the
+        # AVX forms beside them are gated on a CPUID bit this kit does not
+        # set, and stay traps nobody reaches.
+        if m in ("MOVUPS", "MOVAPS", "MOVDQU", "MOVDQA", "MOVQ", "MOVD", "PSHUFD"):
+            def lane(op, i):
+                if op.kind == "xmm":
+                    return "c->xmm[%d][%d]" % (op.reg, i)
+                return "rd32(%s + %du)" % (addr_expr(op), 4 * i)
+
+            def put(op, i, value):
+                if op.kind == "xmm":
+                    return "c->xmm[%d][%d] = %s;" % (op.reg, i, value)
+                return "wr32(%s + %du, %s);" % (addr_expr(op), 4 * i, value)
+
+            dst, src = ops[0], ops[1]
+            if m == "PSHUFD":
+                sel = parse_imm(ins.ops[2])
+                # Read every lane before writing one: the destination is
+                # commonly the source, and a shuffle is not a sequence of
+                # independent moves.
+                L.extend("uint32_t s%d_ = %s;" % (i, lane(src, i)) for i in range(4))
+                L.extend(put(dst, i, "s%d_" % ((sel >> (2 * i)) & 3)) for i in range(4))
+                return L
+            if m == "MOVD":
+                # A dword between an XMM lane and a general register or memory,
+                # zeroing what is above it when the XMM side is written.
+                if dst.kind == "xmm":
+                    L.append(put(dst, 0, read_op(src, 32)))
+                    L.extend(put(dst, i, "0u") for i in range(1, 4))
+                    return L
+                L.append(write_op(dst, 32, lane(src, 0)))
+                return L
+            lanes = 2 if m == "MOVQ" else 4
+            L.extend("uint32_t s%d_ = %s;" % (i, lane(src, i)) for i in range(lanes))
+            L.extend(put(dst, i, "s%d_" % i) for i in range(lanes))
+            # MOVQ into a register clears the upper half; into memory it
+            # writes eight bytes and stops.
+            if m == "MOVQ" and dst.kind == "xmm":
+                L.extend(put(dst, i, "0u") for i in range(2, 4))
+            return L
+        if m in ("SFENCE", "LFENCE", "MFENCE", "VZEROUPPER", "VZEROALL", "PREFETCHNTA",
+                 "PREFETCHT0", "PREFETCHT1", "PREFETCHT2"):
+            # Ordering and cache hints on a machine with one guest thread of
+            # execution at a time, and no AVX state to clear.
+            return [";"]
 
         # --------------------------------------------------------- system --
         if m == "RDTSC":

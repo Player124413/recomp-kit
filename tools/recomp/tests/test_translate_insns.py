@@ -70,6 +70,7 @@ class X86(C.Structure):
         ("fpu_cw", C.c_uint16), ("fpu_sw", C.c_uint16),
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),
+        ("xmm", (C.c_uint32 * 4) * 8),
     ]
 
 
@@ -240,6 +241,25 @@ CASES = [
     # forms. A user-mode guest never reaches one, so what matters is that the
     # build survives them and that they move the pointer and count the way
     # every other string form does: the harness's port shim reads as zero.
+    # A Delphi runtime's FillChar and Move use SSE2 unconditionally: it
+    # predates every CPU the compiler supports, so there is no feature test
+    # to fail and no scalar path to fall back to. Only data movement is
+    # modelled, so memory is where the result has to agree.
+    Case("SSE2 moves a vector through memory and broadcasts a dword", 0x0D02E000,
+         [(0, "MOVUPS XMM0,xmmword ptr [ESI]"),
+          (3, "MOVUPS xmmword ptr [EDI],XMM0"),
+          (6, "MOVD XMM1,ECX"),
+          (10, "PSHUFD XMM1,XMM1,0x0"),
+          (15, "MOVUPS xmmword ptr [EDI + 0x10],XMM1"),
+          (19, "MOVQ XMM2,qword ptr [ESI + 0x8]"),
+          (24, "MOVQ qword ptr [EDI + 0x20],XMM2"),
+          (29, "RET")],
+         "0f 10 06 0f 11 07 66 0f 6e c9 66 0f 70 c9 00 0f 11 4f 10 f3 0f 7e 56 08 "
+         "66 0f d6 57 20 c3",
+         lambda rng: {"regs": dict(rand_regs(rng), ESI=SCRATCH + 0x200,
+                                   EDI=SCRATCH + 0x100, ECX=0xa5b6c7d8),
+                      "mem": [(SCRATCH + 0x200, bytes(range(0x40, 0x50))),
+                              (SCRATCH + 0x100, b"\x00" * 0x30)]}),
     Case("Port string forms store the port read and advance", 0x0D02D000,
          [(0, "INSD ES:EDI,DX"), (1, "INSD.REP ES:EDI,DX"), (3, "OUTSD ESI,DX"),
           (4, "RET")],

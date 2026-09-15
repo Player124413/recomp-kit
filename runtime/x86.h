@@ -197,6 +197,17 @@ struct X86 {
      * use.  Initialise to 0xffff (the post-FINIT all-empty state). */
     uint16_t fpu_tag;
     uint32_t fs_base;
+    /* SSE2. The translator models the data-movement subset only -
+     * loads, stores, a dword broadcast - which is all a Delphi runtime's
+     * FillChar and Move use, and byte order is then the only thing that has
+     * to be right. There are eight in 32-bit mode. CPUID advertises no SSE,
+     * so nothing chooses one of these paths from a feature test; the RTL
+     * takes them unconditionally because every CPU it supports has SSE2.
+     * Held as dwords: every modelled form - load, store, MOVD, MOVQ and
+     * PSHUFD's selector - addresses the register in dword lanes, and on a
+     * little-endian host the byte order of a copy then takes care of
+     * itself. Lane 0 is the low four bytes. */
+    uint32_t xmm[8][4];
 };
 typedef struct X86 X86;
 
