@@ -2713,6 +2713,7 @@ class Translator(object):
                 elif t in self.func_addrs:
                     L.append("CALL_FN(%08x);" % t)
                 else:
+                    self.reject_offimage_call(t)
                     self.stats["_call_unknown"] += 1
                     L.append("recomp_call(c, %s);" % hexlit(t))
                 if t in self.seh_helpers:
@@ -2788,6 +2789,31 @@ class Translator(object):
         raise TranslateError("unhandled mnemonic %s" % m)
 
     # ---- control-flow helpers -------------------------------------------
+
+    def reject_offimage_call(self, t):
+        """A direct CALL whose literal target is not in the image at all.
+
+        No such instruction can be real: the bytes were decoded out of step
+        with the stream, which is what a listing does to the padding and
+        tables behind a function's last instruction. Under --allow-unmodelled
+        it goes through the same door as any other instruction the translator
+        cannot model - a trap at its own address - rather than surviving as a
+        dispatch target that reaches no translated code and fails the build
+        later, far from its cause. Without the switch the dangling-target
+        check still reports it, which is the stricter reading and stays the
+        default.
+
+        Only a call. A conditional jump out of the image is how a bad
+        speculative block gives itself away, and discovery already prunes it."""
+        if not self.allow_unmodelled:
+            return
+        if self.image.end <= self.image.base:
+            return  # a translator built without bytes, as the unit tests are
+        if self.image.base <= t < self.image.end:
+            return
+        if GUEST_SHIM_BASE <= t < GUEST_SHIM_END or t == INTRINSIC_SETJMP:
+            return
+        raise TranslateError("call to %08x, which is outside the image" % t)
 
     def goto_target(self, fn, t, ins):
         if t in fn.index:
@@ -4097,6 +4123,15 @@ def main():
         try:
             tr.prepare(fn, strict=True)
         except TranslateError as e:
+            # The same tolerance the emit path has. A function whose jump
+            # table cannot be decoded because one of its instructions cannot
+            # be modelled is the padding case again: the instruction itself
+            # already becomes a trap, so failing the build here only hides
+            # that. The site stays in table_sites, so the coverage check still
+            # reports the table nobody decoded.
+            if tr.allow_unmodelled:
+                tr.unmodelled.append((fn.addr, "jump table: %s" % e))
+                continue
             failures.append((fn.addr, "jump table: %s" % e))
     tr.discover_seh_helpers(parsed)
 

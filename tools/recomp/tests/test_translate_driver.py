@@ -1312,3 +1312,76 @@ def test_auxiliary_module_emits_prefixed_tables_that_self_register(tmp_path, mon
         assert main_only not in text
     assert "recomp_blit_func_addrs[i_]" in header and "recomp_blit_hooked[i_]" in header
     assert re.search(r"recomp_func_addrs\b", header) is None
+
+
+class _Bytes(object):
+    """An image that occupies 0x00400000..0x00401000 and nothing else."""
+    base = 0x00400000
+    end = 0x00401000
+    size = 0x1000
+    md = None
+
+    def insn_end(self, addr, mnem):
+        return None
+
+    def rd32(self, va):
+        return None
+
+    def rd8(self, va):
+        return None
+
+    def is_exec(self, va):
+        return self.base <= va < self.end
+
+    def relocated_pointers(self):
+        return set()
+
+
+class _Opts(object):
+    eager_flags = False
+    allow_unmodelled = None
+
+
+def _translator(reason="padding"):
+    opts = _Opts()
+    opts.allow_unmodelled = reason
+    return T.Translator(_Bytes(), set(), opts)
+
+
+def test_a_call_outside_the_image_is_unmodelled_under_the_switch():
+    """A listing that decodes padding as code invents calls to nowhere. With
+    the switch, such a call is refused where the instruction is, so it becomes
+    a trap there instead of a dispatch target reported from far away."""
+    tr = _translator()
+    with pytest.raises(T.TranslateError) as e:
+        tr.reject_offimage_call(0x8F28759A)
+    assert "outside the image" in str(e.value)
+    with pytest.raises(T.TranslateError):
+        tr.reject_offimage_call(0x00401000)  # one past the end
+
+
+def test_a_call_inside_the_image_or_to_a_shim_is_allowed():
+    tr = _translator()
+    tr.reject_offimage_call(0x00400000)
+    tr.reject_offimage_call(0x00400fff)
+    tr.reject_offimage_call(T.GUEST_SHIM_BASE)
+    tr.reject_offimage_call(T.INTRINSIC_SETJMP)
+
+
+def test_without_the_switch_the_dangling_check_keeps_it():
+    """The stricter reading stays the default: nothing is swallowed unless
+    the build asked for the tolerance by name."""
+    tr = T.Translator(_Bytes(), set(), _Opts())
+    tr.reject_offimage_call(0x8F28759A)
+
+
+def test_a_translator_with_no_bytes_rejects_nothing():
+    """The unit tests build translators over an empty image; the check has
+    nothing to say about a program whose extent is not known."""
+    class Empty(_Bytes):
+        base = 0
+        end = 0
+    opts = _Opts()
+    opts.allow_unmodelled = "padding"
+    tr = T.Translator(Empty(), set(), opts)
+    tr.reject_offimage_call(0x8F28759A)
