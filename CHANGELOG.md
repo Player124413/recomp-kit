@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime: GetModuleHandleA/W exposes registered DLLs before LoadLibrary,
+  sharing stable pseudo-module handles with later loads and GetProcAddress.
+
 - Runtime: configure the reported Windows version with
   `[game] windows_version = "major.minor[.build]"`. GetVersion,
   GetVersionExA/W and VerifyVersionInfoW share that identity. The default

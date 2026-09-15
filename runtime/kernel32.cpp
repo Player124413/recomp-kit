@@ -1031,6 +1031,8 @@ void k_GetModuleFileNameW(X86 *c) {
     set_eax(c, gm_put_wstr(arg(c, 1), path, arg(c, 2)));
 }
 
+void load_library_named(X86 *c, const std::string &module_name);
+
 void get_module_handle_named(X86 *c, const std::string &module_name) {
     std::string name = lower(module_name);
     auto it = modules().find(name);
@@ -1042,9 +1044,9 @@ void get_module_handle_named(X86 *c, const std::string &module_name) {
         set_eax(c, IMAGE_BASE);
         return;
     }
-    // A module the guest has not loaded through us: report "not loaded".
-    set_last_error(126); // ERROR_MOD_NOT_FOUND
-    set_eax(c, 0);
+    // Registered DLLs are already available to static imports. Materialize
+    // their pseudo handles through the same path as an explicit LoadLibrary.
+    load_library_named(c, module_name);
 }
 
 void k_GetModuleHandleA(X86 *c) {

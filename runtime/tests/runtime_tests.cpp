@@ -243,6 +243,24 @@ static void test_modules_and_wide() {
     static const ImportShim shims[] = {{"DDRAW.dll", "DirectDrawCreate", 3, nullptr}};
     imports_register(shims, sizeof shims / sizeof shims[0]);
     uint32_t name = 0x00300000; // scratch in the arena below the image
+    for (const auto &entry :
+         std::vector<std::pair<const char *, const char *>>{{"kernel32.dll", "GetVersion"},
+                                                            {"user32.dll", "IsWindow"},
+                                                            {"gdi32.dll", "GetDeviceCaps"}}) {
+        gm_put_wstr(name, entry.first, 64);
+        uint32_t module = call_import(&c, "KERNEL32.dll", "GetModuleHandleW", {name});
+        check(module != 0, "GetModuleHandleW(%s) works before LoadLibrary", entry.first);
+        check(call_import(&c, "KERNEL32.dll", "GetModuleHandleW", {name}) == module,
+              "GetModuleHandleW(%s) is stable", entry.first);
+        gm_put_str(name + 128, entry.first, 64);
+        check(call_import(&c, "KERNEL32.dll", "GetModuleHandleA", {name + 128}) == module,
+              "GetModuleHandleA(%s) shares the wide handle", entry.first);
+        gm_put_str(name + 64, entry.second, 64);
+        check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, name + 64}) != 0,
+              "GetProcAddress resolves %s from the implicit module", entry.second);
+        check(call_import(&c, "KERNEL32.dll", "LoadLibraryW", {name}) == module,
+              "LoadLibraryW(%s) reuses the implicit module", entry.first);
+    }
     gm_put_str(name, "ddraw.dll", 64);
     uint32_t h = call_import(&c, "KERNEL32.dll", "LoadLibraryA", {name});
     check(h != 0, "LoadLibraryA(ddraw.dll) -> %08x", h);
