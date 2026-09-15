@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Translator: the port string instructions (INS/OUTS, with and without REP)
+  translate instead of failing the build. A user-mode guest never reaches one;
+  they appear where a listing misdecodes data as code, and one such byte in a
+  startup stub was enough to stop a whole image from translating. They read
+  and write through the existing port shims and advance the pointer and count
+  exactly as the other string forms do.
+
 - Native overrides are reachable from a game: game.toml `[translate]
   overrides` names a header the generated sources include before they define
   FN_<addr>, so a game can replace one translated function with a native one

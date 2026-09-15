@@ -236,6 +236,18 @@ def fbstp_setup(rng):
 
 
 CASES = [
+    # A listing that misdecodes data as code can produce the port string
+    # forms. A user-mode guest never reaches one, so what matters is that the
+    # build survives them and that they move the pointer and count the way
+    # every other string form does: the harness's port shim reads as zero.
+    Case("Port string forms store the port read and advance", 0x0D02D000,
+         [(0, "INSD ES:EDI,DX"), (1, "INSD.REP ES:EDI,DX"), (3, "OUTSD ESI,DX"),
+          (4, "RET")],
+         "6d f3 6d 6f c3",
+         lambda rng: {"regs": dict(rand_regs(rng), EDI=SCRATCH + 0x100, ESI=SCRATCH + 0x200,
+                                   ECX=2, EDX=0x3f8),
+                      "mem": [(SCRATCH + 0x100, b"\xaa" * 32),
+                              (SCRATCH + 0x200, struct.pack("<I", 0x11223344))]}),
     Case("Vtable adapter RET enters the method with Self and the caller return", 0x0D029000,
          [(0, "ADD EAX,-0x8"), (3, "PUSH EAX"), (4, "MOV EAX,dword ptr [EAX]"),
           (6, "MOV EAX,dword ptr [EAX + 0x8]"), (9, "XCHG dword ptr [ESP],EAX"),

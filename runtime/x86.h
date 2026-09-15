@@ -734,6 +734,30 @@ static inline void x86_popad(X86 *c) {
             c->r[R_ECX]--;                                                                         \
         }                                                                                          \
     }                                                                                              \
+    /* The port string forms. A user-mode guest that reaches one has been      \
+     * misdecoded - Windows would fault - so they exist to be translatable      \
+     * rather than useful: the port shims answer, and the pointer and count     \
+     * advance exactly as the other string forms do. */                   \
+    static inline void ins##SUF(X86 *c) {                                                          \
+        WR(c->r[R_EDI], (UT)recomp_in(c, c->r[R_EDX] & 0xffffu, BITS / 8));                        \
+        c->r[R_EDI] += c->eflags_df ? (uint32_t)-(BITS / 8) : (uint32_t)(BITS / 8);                \
+    }                                                                                              \
+    static inline void rep_ins##SUF(X86 *c) {                                                      \
+        while (c->r[R_ECX]) {                                                                      \
+            ins##SUF(c);                                                                           \
+            c->r[R_ECX]--;                                                                         \
+        }                                                                                          \
+    }                                                                                              \
+    static inline void outs##SUF(X86 *c) {                                                         \
+        recomp_out(c, c->r[R_EDX] & 0xffffu, RD(c->r[R_ESI]), BITS / 8);                           \
+        c->r[R_ESI] += c->eflags_df ? (uint32_t)-(BITS / 8) : (uint32_t)(BITS / 8);                \
+    }                                                                                              \
+    static inline void rep_outs##SUF(X86 *c) {                                                     \
+        while (c->r[R_ECX]) {                                                                      \
+            outs##SUF(c);                                                                          \
+            c->r[R_ECX]--;                                                                         \
+        }                                                                                          \
+    }                                                                                              \
     static inline void lods##SUF(X86 *c) {                                                         \
         UT v = RD(c->r[R_ESI]);                                                                    \
         if (BITS == 32)                                                                            \

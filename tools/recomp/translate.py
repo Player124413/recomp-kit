@@ -2331,7 +2331,12 @@ class Translator(object):
 
     STRING_MNEM = frozenset(("STOSB", "STOSW", "STOSD", "MOVSB", "MOVSW", "MOVSD",
                              "LODSB", "LODSW", "LODSD", "SCASB", "SCASW", "SCASD",
-                             "CMPSB", "CMPSW", "CMPSD"))
+                             "CMPSB", "CMPSW", "CMPSD",
+                             # The port forms. A user-mode guest never reaches
+                             # one; they turn up where a listing misdecodes
+                             # data as code, and refusing them would fail a
+                             # whole build over a byte nothing executes.
+                             "INSB", "INSW", "INSD", "OUTSB", "OUTSW", "OUTSD"))
 
     def _emit(self, fn, i, ins, m, nxt, live):
         if m in self.STRING_MNEM:
