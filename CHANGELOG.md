@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Translator: `--allow-unmodelled REASON` turns an instruction the translator
+  cannot model into a trap at its own address instead of refusing the image,
+  and reports every one. A listing routinely decodes the data past a
+  function's last instruction as code - sixteen-bit addressing and port
+  instructions in a thirty-two-bit user-mode image are the signature - and an
+  image should not be refused over bytes nothing executes. Without the switch
+  such an instruction still refuses the image, and reaching one at run time is
+  fatal either way, loudly and with its address.
+
+- An analysis pass no longer crashes a build on a body it cannot parse: a
+  function whose instructions will not read is simply not a SEH helper, and
+  the translation pass reports it the way it reports every other failure.
+
 - Translator: the port string instructions (INS/OUTS, with and without REP)
   translate instead of failing the build. A user-mode guest never reaches one;
   they appear where a listing misdecodes data as code, and one such byte in a

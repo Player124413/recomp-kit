@@ -256,6 +256,14 @@ void recomp_hlt(X86 *c) {
     log_once("hlt", "HLT ignored");
 }
 
+void recomp_unmodelled(X86 *c, uint32_t addr) {
+    LOGW("unmodelled instruction at %08x reached (EAX=%08x ECX=%08x EDX=%08x EBX=%08x ESP=%08x "
+         "EBP=%08x ESI=%08x EDI=%08x)",
+         addr, c->r[R_EAX], c->r[R_ECX], c->r[R_EDX], c->r[R_EBX], c->r[R_ESP], c->r[R_EBP],
+         c->r[R_ESI], c->r[R_EDI]);
+    abort();
+}
+
 void recomp_int(X86 *c, uint32_t vec) {
     LOGW("INT %02x at EIP %08x: no interrupt handling, continuing", vec, c->eip);
 }

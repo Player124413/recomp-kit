@@ -1381,6 +1381,13 @@ class Translator(object):
         self.func_addrs = func_addrs      # set of all known function entry points
         self.opts = opts
         self.stats = defaultdict(int)
+        # Instructions replaced by a trap because this translator cannot model
+        # them. Reported at the end of a run: a listing decoding data as code
+        # should be visible, not silent.
+        self.unmodelled = []
+        # --allow-unmodelled: without a reason on the command line an
+        # instruction this translator cannot model still refuses the image.
+        self.allow_unmodelled = getattr(opts, "allow_unmodelled", None)
         self.notes = []
         self.jumptables = {}
         self.unlisted_targets = set()
@@ -1444,7 +1451,11 @@ class Translator(object):
         while True:
             before = len(self.seh_helpers)
             for fn in functions:
-                if self.seh_escaping_returns(fn):
+                try:
+                    escaping = self.seh_escaping_returns(fn)
+                except TranslateError:
+                    continue  # a body this pass cannot read is not a helper
+                if escaping:
                     self.seh_helpers.add(fn.addr)
             if len(self.seh_helpers) == before:
                 break
@@ -2310,6 +2321,9 @@ class Translator(object):
     # ---- the instruction dispatcher --------------------------------------
 
     def emit(self, fn, i, live):
+        # Instructions replaced by a trap, reported at the end of a run so a
+        # listing that is decoding data as code is visible rather than silent.
+
         ins = fn.insns[i]
         m = ins.mnem
         # A recovered block can end on a CALL, with its last-byte estimate
@@ -2320,7 +2334,17 @@ class Translator(object):
             body = self._emit(fn, i, ins, m, nxt, live)
             body = visual_animation_read(ins.addr, body)
         except TranslateError as e:
-            raise TranslateError("%08x %s: %s" % (ins.addr, ins.raw.split("  ", 1)[1], e))
+            # An instruction this translator cannot model becomes a trap at its
+            # own address rather than the end of the build. A listing routinely
+            # decodes the data past a function's real last instruction as code
+            # - sixteen-bit addressing and port instructions in a thirty-two-bit
+            # user-mode image are the signature - and refusing the image over
+            # bytes nothing executes helps nobody. Reaching one is still fatal,
+            # loudly and with its address, which is the property that matters.
+            if not self.allow_unmodelled:
+                raise TranslateError("%08x %s: %s" % (ins.addr, ins.raw.split("  ", 1)[1], e))
+            self.unmodelled.append((ins.addr, "%s: %s" % (ins.raw.split("  ", 1)[1], e)))
+            body = ["recomp_unmodelled(c, 0x%08xu);" % ins.addr]
         self.stats[m] += 1
         declares = any(body[0].startswith(t) for t in
                        ("uint8_t ", "uint16_t ", "uint32_t ", "uint64_t ", "double "))
@@ -3176,6 +3200,11 @@ def main():
                     help="report flags that would cross CALL/RET boundaries")
     ap.add_argument("--report", default=None, help="write a JSON stats file")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--allow-unmodelled", metavar="REASON", default=None,
+                    help="Translate instructions this translator cannot model into a trap at "
+                         "their own address instead of refusing the image. For a listing that "
+                         "decodes the data past a function's last instruction as code; reaching "
+                         "one at run time is still fatal.")
     ap.add_argument("--allow-table-gaps", metavar="REASON", default=None,
                     help="accept jump-table entries that dispatch nowhere, "
                          "recording the reason in the report")
@@ -4706,6 +4735,12 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
                  len(image.thunk_candidates), len(image.weak_candidates),
                  len(image.string_candidates), len(image.interior_candidates),
                  len(image.recover_errors)))
+        if tr.unmodelled:
+            print("%d instructions could not be modelled and trap if reached:" % len(tr.unmodelled))
+            for a, why in tr.unmodelled[:20]:
+                print("  %08x  %s" % (a, why))
+            if len(tr.unmodelled) > 20:
+                print("  ... and %d more" % (len(tr.unmodelled) - 20))
         if failures:
             print("FAILED %d functions:" % len(failures))
             for a, why in failures[:40]:
@@ -4734,6 +4769,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
                                 ["%08x" % m for m in ms]]
                                for f, a, t, ms in table_gaps],
                 "table_gaps_allowed": args.allow_table_gaps,
+                "unmodelled_allowed": args.allow_unmodelled,
                 "table_sites_undecoded": [["%08x" % f, "%08x" % a, "%08x" % b]
                                           for f, a, b in undecoded],
                 "stale_alternate_entries": len(tr.stale_entries),
@@ -4747,6 +4783,7 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
                                      for f in sorted(recovered, key=lambda x: x.addr)],
                 "seconds": dt,
                 "failures": [["%08x" % a, w] for a, w in failures],
+                "unmodelled": [["%08x" % a, w] for a, w in tr.unmodelled],
                 "mnemonics": dict(tr.stats),
                 "notes": tr.notes[:200],
             }, fh, indent=1)

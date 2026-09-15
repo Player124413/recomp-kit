@@ -304,7 +304,8 @@ def publish_generated(build_root, translate):
     shutil.rmtree(old, ignore_errors=True)
 
 
-def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modules=()):
+def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modules=(),
+                   allow_unmodelled=None):
     """Translate the image into `stage`, then each auxiliary module (game.toml
     [modules.aux.<key>]) into `stage/aux-<key>`, which cmake/Translate.cmake
     compiles into its own library."""
@@ -313,6 +314,8 @@ def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modul
                "--report", str(Path(build_root) / "recomp/translate-report.json")]
     if allow_table_gaps:
         command += ["--allow-table-gaps", allow_table_gaps]
+    if allow_unmodelled:
+        command += ["--allow-unmodelled", allow_unmodelled]
     subprocess.run(command, cwd=ROOT, check=True)
     for key in aux_modules:
         out = Path(stage) / ("aux-" + key)
@@ -343,6 +346,9 @@ def parse_args(argv, system=None):
     parser.add_argument("--regenerate", action="store_true", help="Regenerate and compile translated C")
     parser.add_argument("--allow-table-gaps", metavar="REASON", default=None,
                         help="Accept jump-table sites the translator cannot decode (passed to translate.py)")
+    parser.add_argument("--allow-unmodelled", metavar="REASON", default=None,
+                        help="Translate instructions the translator cannot model into a trap at "
+                             "their own address (passed to translate.py)")
     parser.add_argument("--target", choices=sorted(TARGETS), default="app")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--preset", default=default_preset(system), help="CMake configure preset")
@@ -398,7 +404,8 @@ def main():
                 publish_generated(args.build_root,
                                   lambda stage: run_translator(stage, args.game_dir, args.build_root,
                                                                args.allow_table_gaps,
-                                                               [m["key"] for m in cfg["aux_modules"]]))
+                                                               [m["key"] for m in cfg["aux_modules"]],
+                                                               args.allow_unmodelled))
             # Generated sources include the adjacent runtime header. Refresh
             # it under the same lock even when their translation is unchanged.
             header = args.build_root / "recomp/gen/x86.h"

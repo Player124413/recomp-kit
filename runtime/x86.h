@@ -244,6 +244,11 @@ void recomp_cli(X86 *c);
 void recomp_sti(X86 *c);
 void recomp_hlt(X86 *c);
 void recomp_int(X86 *c, uint32_t vec);
+/* An instruction the translator could not model, reached at run time. The
+ * translation carries a trap at that address instead of refusing the whole
+ * image, because a listing routinely decodes the data past a function's last
+ * instruction as code. Reaching one is fatal and says where. */
+void recomp_unmodelled(X86 *c, uint32_t addr);
 
 /* ------------------------------------------------------ hook dispatch -- */
 
