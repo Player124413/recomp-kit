@@ -37,6 +37,12 @@ bool surface_owns_screen() {
 extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *, uint32_t *) {
     return false;
 }
+// The same for a DXGI swap chain that went fullscreen: it changes the mode the
+// desktop is in, and a guest that asks USER32 what the screen is has to be told,
+// or it lays its windows out on the mode before the switch.
+extern "C" __attribute__((weak)) bool dxgi_display_mode(uint32_t *, uint32_t *, uint32_t *) {
+    return false;
+}
 // One virtual screen is shared by USER32 metrics, GDI captures and host input.
 // A selected DirectDraw mode takes precedence over the smoke desktop size.
 void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
@@ -47,6 +53,10 @@ void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
         *bpp = 32;
         return;
     }
+    // A fullscreen swap chain is the latest word on what mode the display is
+    // in; releasing it leaves the DirectDraw mode in charge again.
+    if (dxgi_display_mode(w, h, bpp))
+        return;
     if (ddraw_display_mode(w, h, bpp))
         return;
     *w = 1024;

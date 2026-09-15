@@ -1186,6 +1186,38 @@ static void test_blt_and_colorkey() {
 // A store in the last bytes of a row that is not a whole number of eight-byte
 // words is still noticed through a retained pointer: the hash takes eight
 // bytes a step and has to cover the tail as well.
+// A fullscreen swap chain changes the mode the desktop is in, and USER32's
+// metrics have to say so: a guest that lays out windows or clamps its cursor
+// by the screen size would otherwise use the mode from before the switch.
+static void test_fullscreen_swapchain_sets_the_desktop_mode() {
+    g_presents.clear();
+    cpu_reset();
+    const uint32_t before_w = call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0});
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, 0x80);
+    wr32(desc + 0, 1920);  // BufferDesc.Width
+    wr32(desc + 4, 1080);  // BufferDesc.Height
+    wr32(desc + 16, 28);   // BufferDesc.Format: R8G8B8A8_UNORM
+    wr32(desc + 28, 1);    // SampleDesc.Count
+    wr32(desc + 36, 0x20); // BufferUsage: render target output
+    wr32(desc + 40, 1);    // BufferCount
+    wr32(desc + 48, 0);    // Windowed: FALSE
+    uint32_t device = 0, context = 0, swap = 0;
+    CHECK_EQ(call_shim(tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
+                       {0, 1, 0, 0, 0, 0, 7, desc, sc(4), sc(8), 0, sc(12)}),
+             0u);
+    swap = rd32(sc(4));
+    device = rd32(sc(8));
+    context = rd32(sc(12));
+    CHECK(swap != 0 && device != 0);
+    (void)context;
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 1920u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {1}), 1080u);
+    // Leaving fullscreen puts the desktop back the way it was.
+    CHECK_EQ(call_method(swap, 10 /* IDXGISwapChain::SetFullscreenState */, {0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), before_w);
+}
+
 static void test_retained_pointer_tail_bytes() {
     g_presents.clear();
     cpu_reset();
@@ -10866,6 +10898,7 @@ int main() {
         {"blt and colour key", test_blt_and_colorkey},
         {"retained pointer writes", test_retained_pointer_writes},
 {"retained pointer tail bytes", test_retained_pointer_tail_bytes},
+        {"fullscreen swap chain sets the desktop mode", test_fullscreen_swapchain_sets_the_desktop_mode},
         {"display ABI", test_display_abi},
         {"record and coverage", test_record_basic_and_coverage},
         {"keyed blit coverage", test_keyed_blit_coverage_and_key_values},

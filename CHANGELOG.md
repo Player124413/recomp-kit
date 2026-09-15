@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A fullscreen DXGI swap chain sets the mode USER32 reports. `GetSystemMetrics`
+  and everything else reading the virtual screen took the DirectDraw mode or
+  the default desktop, so a game that switched to 1920x1080 through Direct3D
+  still laid out and hit-tested against the mode before the switch: in Siege's
+  character creator the pop-up lists sat beyond the old 1024-pixel width and
+  no click on them landed. Releasing fullscreen hands the screen back to the
+  DirectDraw mode.
+
 - DirectDraw locks are cheaper when a guest locks a whole surface to change a
   little of it, which is how a DXR text draw works and why hovering a menu's
   text crawled. The retained-pointer hash takes eight bytes a step instead of

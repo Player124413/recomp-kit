@@ -5,6 +5,13 @@
 #include "../runtime/display_seam.h"
 #include "../runtime/win32.h"
 #include <cstring>
+
+namespace {
+// The mode a fullscreen swap chain put the display in, for USER32's metrics.
+// Zero while every swap chain is windowed, which leaves the desktop as it was.
+uint32_t g_fs_w = 0, g_fs_h = 0;
+
+} // namespace
 namespace dx11 {
 uint32_t swapchain(ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
     D3D11_TEXTURE2D_DESC td{};
@@ -23,6 +30,8 @@ uint32_t swapchain(ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
     o->swap = d;
     o->fullscreen = !d.Windowed;
     if (o->fullscreen) {
+        g_fs_w = d.BufferDesc.Width;
+        g_fs_h = d.BufferDesc.Height;
         host_set_display_mode(d.BufferDesc.Width, d.BufferDesc.Height, 32);
         host_display_request_window(2);
     }
@@ -67,9 +76,12 @@ void present(X86 *c) {
 // Fullscreen requests go through the existing queued host window seam.
 // No native window or platform API is accessed from the guest thread.
 void apply_mode(dx11::Object &s) {
-    if (s.fullscreen)
+    if (s.fullscreen) {
+        g_fs_w = s.swap.BufferDesc.Width;
+        g_fs_h = s.swap.BufferDesc.Height;
         host_set_display_mode(s.swap.BufferDesc.Width, s.swap.BufferDesc.Height, 32);
-    else {
+    } else {
+        g_fs_w = g_fs_h = 0;
         uint32_t w = 0, h = 0, bpp = 0;
         win32_display_mode(&w, &h, &bpp);
         host_set_display_mode(w, h, bpp);
@@ -211,6 +223,15 @@ static const ComMethod output_methods[] = {
 };
 static_assert(std::size(output_methods) == 19);
 } // namespace
+extern "C" bool dxgi_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
+    if (!g_fs_w || !g_fs_h)
+        return false;
+    *w = g_fs_w;
+    *h = g_fs_h;
+    *bpp = 32;
+    return true;
+}
+
 void dxgi_register() {
     dx11::define(IF_DXGI_OUTPUT, K_DXGI_OUTPUT, "dxgi.dll", "IDXGIOutput", output_methods,
                  std::size(output_methods), "ae02eedb-c735-4690-8d52-5a8dc20213aa");
