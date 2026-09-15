@@ -2220,6 +2220,31 @@ static void fake_service_thread(X86 *c) {
     set_eax(c, 0x5e12);
 }
 
+// A worker for the ExitProcess check: it counts passes and waits briefly, so
+// it only advances when something schedules it. Shaped like fake_service_thread
+// but with its own counter, because the exit check runs in a child process
+// that must attribute every pass to this worker alone.
+static uint32_t g_exit_worker_loops = 0;
+static uint32_t g_exit_worker_event = 0;
+
+static void fake_exit_worker(X86 *c) {
+    uint32_t waitfn = imports_resolve("KERNEL32.dll", "WaitForSingleObject");
+    for (;;) {
+        ++g_exit_worker_loops;
+        uint32_t esp = c->r[R_ESP];
+        uint32_t sp = esp;
+        sp -= 4;
+        wr32(sp, 5); // 5 ms timeout
+        sp -= 4;
+        wr32(sp, g_exit_worker_event);
+        sp -= 4;
+        wr32(sp, 0x00401000);
+        c->r[R_ESP] = sp;
+        imports_dispatch(c, waitfn);
+        c->r[R_ESP] = esp;
+    }
+}
+
 // Reads one TLS slot, writes its own marker, reads it back, and reports
 // whether the slot was private to it.
 static uint32_t g_tls_index = 0;
@@ -3500,6 +3525,63 @@ static void run_on_guest_thread(X86 *c, void (*fn)()) {
     poll_exit_code(c, th, pcode, 4096);
     call_import(c, "KERNEL32.dll", "CloseHandle", {th});
     g_run_on_guest_fn = nullptr;
+}
+
+// ExitProcess on the main thread ends every other guest thread. Windows runs
+// no further user code on them, and the guest has just freed what they were
+// working with, so a worker resuming afterwards runs against torn-down state.
+// Run in a child: performing the exit is not something this process recovers
+// from. The child returns 0 when no worker advanced after the exit, 3 when one
+// did, and 2 when its own setup failed.
+static int child_exit_stops_workers() {
+    mem_init();
+    imports_init();
+    if (!loader_load(nullptr))
+        return 2;
+    X86 *c = loader_context();
+    g_exit_worker_loops = 0;
+    g_exit_worker_event = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, 0});
+    uint32_t fn = imports_alloc_trampoline("test", "exit_worker", fake_exit_worker, 1);
+    if (!call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, fn, 0, 0, 0}))
+        return 2;
+    // Let it get going, so "it did not advance" means the exit stopped it and
+    // not that it never started.
+    double t0 = wall_seconds();
+    while (g_exit_worker_loops < 2 && wall_seconds() - t0 < 2.0)
+        call_import(c, "KERNEL32.dll", "GetTickCount", {});
+    if (g_exit_worker_loops < 2)
+        return 2;
+
+    if (setjmp(*process_exit_jmp()) == 0) {
+        call_import(c, "KERNEL32.dll", "ExitProcess", {0});
+        return 2; // ExitProcess must not return
+    }
+    if (!process_exited())
+        return 2;
+    // The run thread retires and the shutdown drive runs, exactly as a host's
+    // teardown does. Nothing here may put the worker back on a guest
+    // instruction, so its counter must stand still.
+    uint32_t after_exit = g_exit_worker_loops;
+    sched_run_thread_finished();
+    sched_drive_until_stopped(0.25);
+    sched_drive_release();
+    t0 = wall_seconds();
+    while (wall_seconds() - t0 < 0.25)
+        os_sleep_us(1000);
+    return g_exit_worker_loops == after_exit ? 0 : 3;
+}
+
+static void test_exit_process_stops_workers(X86 *c) {
+    section("ExitProcess stops guest workers");
+    (void)c;
+    fflush(stdout);
+    char exe[4096];
+    check(os_exe_path(exe, sizeof exe) == 0, "the test knows its own path");
+    const char *child_argv[] = {exe, "--child-exit-stops-workers", nullptr};
+    int64_t pid = 0;
+    int code = -1;
+    check(os_spawn(child_argv, &pid) == 0 && os_wait(pid, &code) == 0 && code == 0,
+          "no guest code ran on a worker after ExitProcess (child exit %d)", code);
 }
 
 static void test_mod_seams(X86 *c) {
@@ -5710,6 +5792,8 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    if (argc == 2 && strcmp(argv[1], "--child-exit-stops-workers") == 0)
+        return child_exit_stops_workers();
     if (argc == 3 && strcmp(argv[1], "--child-import-trace") == 0) {
         if (!freopen(argv[2], "w", stderr))
             return 2;
@@ -5785,6 +5869,7 @@ int main(int argc, char **argv) {
     test_guest_thunks(c);
     test_callbacks(c);
     test_scheduling(c);
+    test_exit_process_stops_workers(c);
     test_mod_seams(c);
     test_input_wakes_a_parked_thread(c);
     test_intrinsics(c);

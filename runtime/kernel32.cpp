@@ -2792,9 +2792,27 @@ void *thread_host_main(void *arg) {
     t_id = t->id;
 
     g_sched_m.lock();
-    while (g_baton != t->index)
+    while (g_baton != t->index && !g_exit_requested)
         g_sched_cv.wait(g_sched_m);
+    bool exiting = g_exit_requested;
     g_sched_m.unlock();
+    // Created before the exit, first scheduled after it: Windows would never
+    // run this body, so neither does this thread. It still ends through the
+    // ordinary path so its handle reports an exit code.
+    if (exiting) {
+        thread_run_exit_cleanup(t);
+        g_sched_m.lock();
+        t->finished = true;
+        release_mutexes_of_locked(t->id);
+        if (HObj *o = handle_any(t->handle)) {
+            o->exit_code = 0;
+            o->thread_ran = false;
+        }
+        if (g_baton == t->index)
+            sched_handoff_on_exit_locked(t->index, "process exit before start");
+        g_sched_m.unlock();
+        return nullptr;
+    }
 
     uint32_t start = 0, param = 0;
     if (HObj *o = handle_any(t->handle)) {
@@ -2831,6 +2849,9 @@ void thread_finish_exit_process() {
     if (me->is_main) {
         g_exited = true;
         g_exit_code = g_exit_requested_code;
+        // The request is consumed here: the main thread is performing it, and
+        // leaving it set would send this thread back into this function the
+        // next time it reached a scheduling point.
         g_exit_requested = false;
         if (g_exit_jmp_valid)
             longjmp(g_exit_jmp, 1);
@@ -2855,6 +2876,23 @@ void thread_finish_exit_process() {
 // thread and end this one; the main thread performs the exit the instant it is
 // running again. Returns true when it has taken responsibility, in which case
 // it never returns at all.
+// ExitProcess ends every other thread: Windows runs no further user code on
+// them, and the guest has just torn down the objects they were working with.
+// Publishing the pending exit is what stops them, because thread_runnable
+// offers the baton to no one but the main thread while one is pending. A
+// worker parked in a wait stays parked, which is the same thing Windows does
+// to it. Called on the thread performing the exit, without g_sched_m.
+// Not called for an exit a worker requested: the main thread consumes that
+// request when it serves it, because it is the thread that has to come back
+// through the landing pad.
+void publish_process_exit(uint32_t code) {
+    g_sched_m.lock();
+    g_exit_requested = true;
+    g_exit_requested_code = code;
+    g_sched_cv.notify_all();
+    g_sched_m.unlock();
+}
+
 bool request_process_exit(uint32_t code) {
     if (cur_thread()->is_main)
         return false;
@@ -3045,6 +3083,7 @@ void k_ExitThread(X86 *c) {
         longjmp(g_sync_thread_jmp, 1);
     }
     LOGW("ExitThread(%u) outside a thread body: treating it as ExitProcess", code);
+    publish_process_exit(code);
     g_exited = true;
     g_exit_code = code;
     if (g_exit_jmp_valid)
@@ -3156,6 +3195,7 @@ void k_ExitProcess(X86 *c) {
     LOGW("ExitProcess(%u)", arg(c, 0));
     if (request_process_exit(arg(c, 0)))
         return; // never returns
+    publish_process_exit(arg(c, 0));
     g_exit_code = arg(c, 0);
     g_exited = true;
     if (g_exit_jmp_valid)
@@ -3169,6 +3209,7 @@ void k_TerminateProcess(X86 *c) {
     LOGW("TerminateProcess(%u)", arg(c, 1));
     if (request_process_exit(arg(c, 1)))
         return; // never returns
+    publish_process_exit(arg(c, 1));
     g_exit_code = arg(c, 1);
     g_exited = true;
     if (g_exit_jmp_valid)
