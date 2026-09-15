@@ -1366,7 +1366,7 @@ void k_GetDiskFreeSpaceA(X86 *c) {
 }
 
 void k_GetSystemDirectoryA(X86 *c) {
-    static const char dir[] = "C:\\WINDOWS\\SYSTEM";
+    static const char dir[] = "C:\\Windows\\System32";
     uint32_t buf = arg(c, 0), size = arg(c, 1);
     uint32_t len = sizeof dir - 1;
     if (size <= len) {

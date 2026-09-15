@@ -82,7 +82,7 @@ void k_GetFullPathNameW(X86 *c) {
     set_eax(c, n);
 }
 void k_GetSystemDirectoryW(X86 *c) {
-    const std::string dir = "C:\\WINDOWS\\SYSTEM";
+    const std::string dir = "C:\\Windows\\System32";
     uint32_t cap = arg(c, 1);
     set_eax(c, !arg(c, 0) || cap <= dir.size() ? (uint32_t)dir.size() + 1
                                                : gm_put_wstr(arg(c, 0), dir, cap));

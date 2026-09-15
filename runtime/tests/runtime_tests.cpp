@@ -1388,10 +1388,10 @@ static void test_misc_shims(X86 *c) {
     check(rd32(spc) == 8 && rd32(bps) == 512 && rd32(fr) == 0x00100000 && rd32(tot) == 0x00200000,
           "GetDiskFreeSpaceA reports 4 GB free of 8 GB");
     uint32_t sysdir = scratch_block(64);
-    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 64}) == 17 &&
-              gm_str(sysdir) == "C:\\WINDOWS\\SYSTEM",
+    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 64}) == 19 &&
+              gm_str(sysdir) == "C:\\Windows\\System32",
           "GetSystemDirectoryA");
-    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 4}) == 18,
+    check(call_import(c, "KERNEL32.dll", "GetSystemDirectoryA", {sysdir, 4}) == 20,
           "GetSystemDirectoryA reports the size needed when the buffer is short");
 }
 
@@ -4028,9 +4028,19 @@ static void test_kernel32_wide() {
     check(call_import(&c, "KERNEL32.dll", "GetFileAttributesExW", {s, 0, fd}) == 1 &&
               rd32(fd + 32) > 0,
           "GetFileAttributesExW includes file size");
-    check(call_import(&c, "KERNEL32.dll", "GetSystemDirectoryW", {fd, 128}) == 17 &&
-              gm_wstr(fd) == "C:\\WINDOWS\\SYSTEM",
-          "GetSystemDirectoryW");
+    memset(g_mem + fd, 0xa5, 42);
+    check(call_import(&c, "KERNEL32.dll", "GetSystemDirectoryW", {fd, 20}) == 19 &&
+              gm_wstr(fd) == "C:\\Windows\\System32" && rd16(fd + 38) == 0 &&
+              rd16(fd + 40) == 0xa5a5,
+          "GetSystemDirectoryW writes System32 as UTF-16 and counts characters without NUL");
+    memset(g_mem + fd, 0xa5, 42);
+    check(call_import(&c, "KERNEL32.dll", "GetSystemDirectoryW", {fd, 19}) == 20 &&
+              rd16(fd) == 0xa5a5 && rd16(fd + 38) == 0xa5a5,
+          "GetSystemDirectoryW reports space including NUL when only the text fits");
+    check(call_import(&c, "KERNEL32.dll", "GetSystemDirectoryW", {0, 0}) == 20 &&
+              call_import(&c, "KERNEL32.dll", "GetSystemDirectoryW", {fd, 0}) == 20 &&
+              rd16(fd) == 0xa5a5,
+          "GetSystemDirectoryW supports size queries without writing a buffer");
     check(call_import(&c, "KERNEL32.dll", "GetDriveTypeW", {0}) == 3, "GetDriveTypeW");
     check(call_import(&c, "KERNEL32.dll", "GetLogicalDriveStringsW", {5, fd}) == 4 &&
               gm_wstr(fd) == "C:\\" && rd16(fd + 8) == 0,
