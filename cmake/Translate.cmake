@@ -41,6 +41,27 @@ if(POP_HAVE_GEN)
   target_include_directories(recomp_gen INTERFACE ${POP_GEN_DIR})
   target_compile_options(recomp_gen PRIVATE ${POP_WARN_GEN})
   pop_optimize(recomp_gen 2)
+  # Auxiliary modules (game.toml [modules.aux.<key>]) are translated into
+  # gen/aux-<key>/ with their own funcs.h and prefixed tables, so each is its
+  # own library; their table.c registers with the runtime's module registry.
+  set(POP_GEN_AUX_TARGETS "")
+  file(GLOB POP_GEN_AUX_DIRS CONFIGURE_DEPENDS LIST_DIRECTORIES true ${POP_GEN_DIR}/aux-*)
+  foreach(dir ${POP_GEN_AUX_DIRS})
+    if(NOT EXISTS ${dir}/table.c)
+      continue()
+    endif()
+    get_filename_component(key ${dir} NAME)
+    string(REPLACE "aux-" "recomp_gen_" aux_target ${key})
+    file(GLOB aux_sources CONFIGURE_DEPENDS ${dir}/chunk_*.c ${dir}/table.c)
+    add_library(${aux_target} STATIC ${aux_sources})
+    set_target_properties(${aux_target} PROPERTIES
+      ARCHIVE_OUTPUT_DIRECTORY ${POP_OUT} OUTPUT_NAME ${aux_target})
+    target_include_directories(${aux_target} PRIVATE ${dir} ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/runtime)
+    target_compile_options(${aux_target} PRIVATE ${POP_WARN_GEN})
+    pop_optimize(${aux_target} 2)
+    list(APPEND POP_GEN_AUX_TARGETS ${aux_target})
+    message(STATUS "Auxiliary module translation: ${dir}")
+  endforeach()
 endif()
 
 # The portable spelling of -Wl,-force_load: every generated object is kept
@@ -48,5 +69,8 @@ endif()
 # reached by address.
 function(pop_link_gen target)
   target_link_libraries(${target} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,recomp_gen>")
+  foreach(aux_target ${POP_GEN_AUX_TARGETS})
+    target_link_libraries(${target} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${aux_target}>")
+  endforeach()
   target_include_directories(${target} PRIVATE ${POP_GEN_DIR})
 endfunction()

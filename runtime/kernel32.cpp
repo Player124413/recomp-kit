@@ -1085,6 +1085,34 @@ void load_library_named(X86 *c, const std::string &module_name) {
         set_eax(c, it->second);
         return;
     }
+    // A translated auxiliary module: the loader mapped it at its configured
+    // base, which is its handle. Its entry point runs once, on first load,
+    // as DllMain(base, DLL_PROCESS_ATTACH, 0) would; a module whose entry is
+    // not among its translated functions is served without it.
+    if (LoaderModule *m = loader_module_named(name.c_str())) {
+        if (!m->attached) {
+            m->attached = true;
+            if (m->entry && recomp_module_lookup(m->entry) >= 0) {
+                uint32_t esp = c->r[R_ESP];
+                wr32(esp - 4, 0);
+                wr32(esp - 8, 1); // DLL_PROCESS_ATTACH
+                wr32(esp - 12, m->base);
+                wr32(esp - 16, GUEST_RETURN_SENTINEL);
+                c->r[R_ESP] = esp - 16;
+                uint32_t eip = c->eip;
+                recomp_call(c, m->entry);
+                c->r[R_ESP] = esp;
+                c->eip = eip;
+                LOGV("LoadLibrary(\"%s\"): entry point %08x returned %08x", name.c_str(), m->entry,
+                     c->r[R_EAX]);
+            } else {
+                LOGV("LoadLibrary(\"%s\"): entry point %08x is not translated, not run",
+                     name.c_str(), m->entry);
+            }
+        }
+        set_eax(c, m->base);
+        return;
+    }
     if (!runtime_serves_module(name)) {
         log_once(("loadlib:" + name).c_str(),
                  "LoadLibrary(\"%s\"): no shims for that module, reporting it as missing",
@@ -1120,6 +1148,15 @@ void k_FreeLibrary(X86 *c) {
 void k_GetProcAddress(X86 *c) {
     uint32_t hmod = arg(c, 0);
     std::string proc = gm_str(arg(c, 1));
+    if (const LoaderModule *m = loader_module_containing(hmod)) {
+        uint32_t a = hmod == m->base ? loader_module_export(*m, proc.c_str()) : 0;
+        if (!a)
+            log_once(("gpa:" + m->name + "!" + proc).c_str(),
+                     "GetProcAddress(%s, \"%s\") -> 0 (no such export)", m->name.c_str(),
+                     proc.c_str());
+        set_eax(c, a);
+        return;
+    }
     std::string dll;
     for (const auto &kv : modules())
         if (kv.second == hmod) {
@@ -1342,9 +1379,7 @@ void k_IsBadWritePtr(X86 *c) {
 }
 void k_IsBadCodePtr(X86 *c) {
     uint32_t p = arg(c, 0);
-    set_eax(c, (p >= loader_image_base() && p < loader_image_limit()) || imports_is_trampoline(p)
-                   ? 0
-                   : 1);
+    set_eax(c, loader_in_image(p) || imports_is_trampoline(p) ? 0 : 1);
 }
 
 void k_GetVolumeInformationA(X86 *c) {
@@ -3263,10 +3298,9 @@ std::vector<uint32_t> win32_stack_return_candidates(uint32_t esp, uint32_t bytes
 
 std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max) {
     std::vector<uint32_t> out;
-    uint32_t lo = loader_image_base(), hi = loader_image_limit();
     while (ebp && gm_valid(ebp, 8) && out.size() < max) {
         uint32_t ret = rd32(ebp + 4), next = rd32(ebp);
-        if (ret < lo || ret >= hi)
+        if (!loader_in_image(ret))
             break;
         out.push_back(ret);
         if (next <= ebp)

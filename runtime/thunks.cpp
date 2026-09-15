@@ -12,7 +12,7 @@ namespace {
 bool thunk_bytes(uint32_t at, uint32_t size) {
     if (at >= GUEST_SIZE || size > GUEST_SIZE - at)
         return false;
-    if (at < loader_image_limit() && at + size > loader_image_base())
+    if (loader_in_image(at) || loader_in_image(at + size - 1))
         return false;
     return (at >= HEAP_BASE && at < HEAP_LIMIT && size <= HEAP_LIMIT - at) ||
            (at >= STACK_LIMIT && at < STACK_TOP && size <= STACK_TOP - at);

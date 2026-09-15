@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Auxiliary guest modules: game.toml `[modules.aux.<key>]` names a DLL the
+  runtime maps beside the image at its preferred base (content-hashed, no
+  relocation) with `[game] guest_size` growing the arena to hold it.
+  `translate.py --module <key>` translates it into `gen/aux-<key>/` with
+  prefixed, self-registering tables; the image's dispatch falls back to the
+  module registry. LoadLibrary hands out the module's base and runs its
+  entry point once, GetProcAddress answers from its export directory, and
+  the bundle keeps the DLL regardless of `*.dll` exclusions.
+
 - SEH: adopt registrations left installed by returning compiler helpers
   into a checkpoint in their live caller, including POP/JMP return helpers
   and helpers that fill caller-reserved stack records.

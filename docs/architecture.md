@@ -29,6 +29,16 @@ instruction helpers used by generated functions. Functions retain stable guest
 addresses for dispatch, hooks and diagnostics. Those addresses are identifiers,
 not host pointers and not evidence of human-recovered intent.
 
+A game that ships part of its code as a DLL can name it in game.toml as an
+auxiliary module (`[modules.aux.<key>]`). The loader maps it beside the image
+at its preferred base, above the shim trampolines, so `[game] guest_size`
+grows the arena to hold it. The translator turns the module into its own
+generated library with prefixed tables that register with the runtime at
+start-up; `recomp_call` and `recomp_jump` consult that registry after the
+image's own table misses, so calls in either direction cross the boundary
+without a special case. `LoadLibrary` of the module's name returns its base
+and `GetProcAddress` reads its export directory, which is all the game sees.
+
 ## Threads and ownership
 
 Original game threads are cooperatively scheduled by `runtime/kernel32.cpp`.

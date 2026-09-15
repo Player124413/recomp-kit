@@ -737,9 +737,11 @@ uint32_t virtual_query(uint32_t address, uint32_t out, uint32_t len) {
     struct Region {
         uint32_t base, end, type, protection;
     };
-    const Region regions[] = {{loader_image_base(), loader_image_limit(), 0x1000000, 0x40},
-                              {HEAP_BASE, HEAP_LIMIT, 0x20000, 4},
-                              {STACK_LIMIT, STACK_TOP, 0x20000, 4}};
+    std::vector<Region> regions = {{loader_image_base(), loader_image_limit(), 0x1000000, 0x40},
+                                   {HEAP_BASE, HEAP_LIMIT, 0x20000, 4},
+                                   {STACK_LIMIT, STACK_TOP, 0x20000, 4}};
+    for (uint32_t i = 0; const LoaderModule *m = loader_module(i); ++i)
+        regions.push_back({m->base, m->base + m->size, 0x1000000, 0x40});
     uint32_t page = address & ~0xfffu, end = GUEST_SIZE, allocation = 0, type = 0, protection = 0;
     for (const auto &r : regions) {
         if (address >= r.base && address < r.end) {

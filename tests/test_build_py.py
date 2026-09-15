@@ -91,6 +91,18 @@ class BuildPyTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             build_py.parse_args(["--target", "ios"], system="Darwin")  # no team
 
+    def test_run_translator_translates_each_auxiliary_module_into_its_own_directory(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, patch.object(build_py.subprocess, "run") as run:
+            build_py.run_translator(tmp, "/g", "/b", None, ["dfx"])
+            self.assertEqual(run.call_count, 2)
+            main_cmd, aux_cmd = run.call_args_list[0][0][0], run.call_args_list[1][0][0]
+            self.assertNotIn("--module", main_cmd)
+            self.assertEqual(aux_cmd[aux_cmd.index("--module") + 1], "dfx")
+            self.assertEqual(aux_cmd[aux_cmd.index("--out") + 1], str(Path(tmp) / "aux-dfx"))
+            self.assertTrue((Path(tmp) / "aux-dfx").is_dir())
+            self.assertIn("translate-dfx-report.json", aux_cmd[aux_cmd.index("--report") + 1])
+
     def test_pick_device_prefers_the_single_paired_ipad(self):
         devices = [
             {"identifier": "A", "hardwareProperties": {"productType": "iPhone16,1"},

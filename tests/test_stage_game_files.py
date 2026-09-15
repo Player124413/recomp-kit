@@ -35,6 +35,23 @@ class StageTests(unittest.TestCase):
             self.assertEqual((dest / ".stamp").read_text().strip(), hashlib.sha256(b"MZ-game").hexdigest())
             self.assertEqual(copied, 2)
 
+    def test_kept_names_survive_the_exclusions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "gog"
+            dest = Path(tmp) / "out"
+            (src / "sub").mkdir(parents=True)
+            (src / "Game.exe").write_bytes(b"MZ-game")
+            (src / "Dfx_p6s.dll").write_bytes(b"x")
+            (src / "ddraw.dll").write_bytes(b"x")
+            (src / "sub" / "dfx_p6s.dll").write_bytes(b"x")
+            copied = stage.stage(src, dest, "Game.exe", ["*.dll"], keep=["dfx_p6s.dll"])
+            self.assertTrue((dest / "Dfx_p6s.dll").is_file())
+            self.assertFalse((dest / "ddraw.dll").exists())
+            self.assertFalse((dest / "sub" / "dfx_p6s.dll").exists())
+            self.assertEqual(copied, 2)
+        self.assertEqual(stage.kept({"aux_modules": [{"name": "Dfx_p6s.dll"}]}), ["Dfx_p6s.dll"])
+        self.assertEqual(stage.kept({}), [])
+
     def test_second_run_copies_nothing_when_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "gog"

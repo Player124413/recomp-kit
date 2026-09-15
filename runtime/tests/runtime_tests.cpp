@@ -5566,6 +5566,50 @@ static void test_user32_services() {
     call_import(&c, "GDI32.dll", "DeleteObject", {bmp});
 }
 
+// Auxiliary modules from game.toml [modules.aux.*]: the loader mapped each at
+// its configured base, LoadLibrary hands that base out as the handle and
+// GetProcAddress answers from the module's own export directory. A game with
+// no auxiliary modules exercises only the empty registry.
+static void test_auxiliary_modules() {
+    section("auxiliary modules");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00300000;
+    check(loader_module_count() == RECOMP_AUX_MODULE_COUNT, "%u auxiliary modules mapped",
+          loader_module_count());
+    for (uint32_t i = 0; const LoaderModule *m = loader_module(i); ++i) {
+        gm_put_wstr(s, m->name.c_str(), 64);
+        gm_put_str(s + 128, m->name.c_str(), 64);
+        uint32_t h = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {s});
+        check(h == m->base, "LoadLibraryW(%s) -> %08x, the configured base %08x", m->name.c_str(),
+              h, m->base);
+        check(call_import(&c, "KERNEL32.dll", "GetModuleHandleA", {s + 128}) == h,
+              "GetModuleHandleA(%s) shares the handle", m->name.c_str());
+        check(call_import(&c, "KERNEL32.dll", "IsBadCodePtr", {m->base}) == 0,
+              "the module's base is code");
+        check(rd16(m->base) == 0x5a4d, "PE headers mapped at %08x", m->base);
+        gm_put_str(s + 256, "no-such-export", 64);
+        check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {h, s + 256}) == 0,
+              "GetProcAddress(%s, no-such-export) -> 0", m->name.c_str());
+        if (!m->export_rva)
+            continue;
+        uint32_t dir = m->base + m->export_rva;
+        uint32_t nnames = rd32(dir + 24), names = rd32(dir + 32);
+        for (uint32_t n = 0; n < nnames && n < 4; ++n) {
+            std::string name = gm_str(m->base + rd32(m->base + names + 4 * n), 260);
+            gm_put_str(s + 256, name.c_str(), 128);
+            uint32_t a = call_import(&c, "KERNEL32.dll", "GetProcAddress", {h, s + 256});
+            check(a >= m->base && a < m->base + m->size &&
+                      a == loader_module_export(*m, name.c_str()),
+                  "GetProcAddress(%s, %s) -> %08x inside the module", m->name.c_str(), name.c_str(),
+                  a);
+        }
+        check(recomp_module_containing(m->base) == nullptr ||
+                  recomp_module_containing(m->base)->base == m->base,
+              "a registered translation of %s agrees on its base", m->name.c_str());
+    }
+}
+
 static void test_delphi_dlls() {
     section("Delphi DLLs");
     X86 c;
@@ -5699,6 +5743,7 @@ int main(int argc, char **argv) {
     }
 
     test_loader();
+    test_auxiliary_modules();
     test_import_return_trace();
     test_modules_and_wide();
     test_preferred_ui_languages();

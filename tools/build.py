@@ -226,7 +226,8 @@ def android_push_game(command, cfg, build_root):
     staged = Path(build_root) / "android/game"
     if staged.exists():
         shutil.rmtree(staged)
-    count = stage_game_files.stage(source, staged, executable, cfg["bundle"]["exclude"])
+    count = stage_game_files.stage(source, staged, executable, cfg["bundle"]["exclude"],
+                                   stage_game_files.kept(cfg))
     destination = "/sdcard/Android/data/%s/files" % cfg["game"]["bundle_id"]
     print("Staged %d game files in %s; pushing to %s/game" % (count, staged, destination), flush=True)
     subprocess.run(command + ["shell", "mkdir", "-p", destination], check=True)
@@ -303,13 +304,23 @@ def publish_generated(build_root, translate):
     shutil.rmtree(old, ignore_errors=True)
 
 
-def run_translator(stage, game_dir, build_root, allow_table_gaps=None):
+def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modules=()):
+    """Translate the image into `stage`, then each auxiliary module (game.toml
+    [modules.aux.<key>]) into `stage/aux-<key>`, which cmake/Translate.cmake
+    compiles into its own library."""
     command = [sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
                "--game", str(game_dir),
                "--report", str(Path(build_root) / "recomp/translate-report.json")]
     if allow_table_gaps:
         command += ["--allow-table-gaps", allow_table_gaps]
     subprocess.run(command, cwd=ROOT, check=True)
+    for key in aux_modules:
+        out = Path(stage) / ("aux-" + key)
+        out.mkdir()
+        subprocess.run([sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(out),
+                        "--game", str(game_dir), "--module", key,
+                        "--report", str(Path(build_root) / ("recomp/translate-%s-report.json" % key))],
+                       cwd=ROOT, check=True)
 
 
 def texture_pack(game_dir, build_root):
@@ -386,7 +397,8 @@ def main():
                     parser.error("Translation listings are missing; run tools/setup.py without --link-only")
                 publish_generated(args.build_root,
                                   lambda stage: run_translator(stage, args.game_dir, args.build_root,
-                                                               args.allow_table_gaps))
+                                                               args.allow_table_gaps,
+                                                               [m["key"] for m in cfg["aux_modules"]]))
             # Generated sources include the adjacent runtime header. Refresh
             # it under the same lock even when their translation is unchanged.
             header = args.build_root / "recomp/gen/x86.h"
