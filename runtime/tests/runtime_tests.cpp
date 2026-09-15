@@ -330,6 +330,55 @@ static void test_modules_and_wide() {
           "gm_put_wstr rejects addresses outside the arena");
 }
 
+static void test_media_foundation_unavailable() {
+    section("Media Foundation present but unsupported");
+    X86 c;
+    loader_init_context(&c);
+    uint32_t name = 0x00300000, out = name + 256;
+    gm_put_wstr(name, "mfplat.dll", 64);
+    uint32_t platform = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {name});
+    check(platform != 0, "LoadLibraryW(mfplat.dll) succeeds");
+    gm_put_str(name + 128, "MFStartup", 64);
+    uint32_t startup = call_import(&c, "KERNEL32.dll", "GetProcAddress", {platform, name + 128});
+    check(startup != 0, "GetProcAddress resolves MFStartup");
+    check(call_import(&c, "mfplat.dll", "MFStartup", {0x20070, 0}) == 0xc00d36e3u,
+          "MFStartup reports MF_E_BAD_STARTUP_VERSION without a delay-load exception");
+    check(call_import(&c, "mfplat.dll", "MFShutdown", {}) == 0,
+          "MFShutdown is harmless after an unsupported startup");
+
+    gm_put_wstr(name, "mf.dll", 64);
+    uint32_t media = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {name});
+    check(media != 0, "LoadLibraryW(mf.dll) succeeds");
+    struct Factory {
+        const char *name;
+        std::vector<uint32_t> args;
+    };
+    for (const Factory &factory : {
+             Factory{"MFCreateMediaSession", {0, out}},
+             Factory{"MFCreateSourceResolver", {out}},
+             Factory{"MFCreateTopology", {out}},
+             Factory{"MFCreateTopologyNode", {0, out}},
+             Factory{"MFCreateAudioRendererActivate", {out}},
+             Factory{"MFCreateVideoRendererActivate", {0, out}},
+             Factory{"MFGetService", {0, 0, 0, out}},
+         }) {
+        gm_put_str(name + 128, factory.name, 64);
+        check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {media, name + 128}) != 0,
+              "mf.dll resolves %s", factory.name);
+        wr32(out - 4, 0x12345678);
+        wr32(out, 0xdeadbeef);
+        wr32(out + 4, 0x87654321);
+        check(call_import(&c, "mf.dll", factory.name, factory.args) == 0x80004001u,
+              "%s returns E_NOTIMPL", factory.name);
+        check(rd32(out) == 0 && rd32(out - 4) == 0x12345678 && rd32(out + 4) == 0x87654321,
+              "%s clears only its 32-bit output pointer", factory.name);
+        auto null_args = factory.args;
+        null_args.back() = 0;
+        check(call_import(&c, "mf.dll", factory.name, null_args) == 0x80004001u,
+              "%s accepts a null output while reporting unsupported", factory.name);
+    }
+}
+
 static void test_loader() {
     section("loader");
     bool ok = loader_load(nullptr);
@@ -5416,6 +5465,7 @@ int main(int argc, char **argv) {
     test_loader();
     test_import_return_trace();
     test_modules_and_wide();
+    test_media_foundation_unavailable();
     test_kernel32_wide();
     test_delphi_dlls();
     test_delphi_automation();
