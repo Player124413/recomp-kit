@@ -1355,9 +1355,10 @@ static void test_misc_shims(X86 *c) {
 
     uint32_t osvi = scratch_block(160);
     wr32(osvi, 148);
-    check(call_import(c, "KERNEL32.dll", "GetVersionExA", {osvi}) == 1 && rd32(osvi + 4) == 4 &&
-              rd32(osvi + 8) == 10 && rd32(osvi + 16) == 1,
-          "GetVersionExA reports Windows 98 SE (4.10, platform 1)");
+    check(call_import(c, "KERNEL32.dll", "GetVersionExA", {osvi}) == 1 &&
+              rd32(osvi + 4) == RECOMP_WINDOWS_MAJOR && rd32(osvi + 8) == RECOMP_WINDOWS_MINOR &&
+              rd32(osvi + 16) == RECOMP_WINDOWS_PLATFORM,
+          "GetVersionExA reports the configured Windows version");
     check(call_import(c, "KERNEL32.dll", "GetProcessHeap", {}) != 0, "GetProcessHeap");
     check(call_import(c, "KERNEL32.dll", "IsBadCodePtr", {loader_entry_point()}) == 0 &&
               call_import(c, "KERNEL32.dll", "IsBadCodePtr", {loader_image_limit()}) == 1,
@@ -3977,6 +3978,80 @@ static uint64_t call_condition_mask(X86 *c, uint64_t mask, uint32_t type, uint32
     return ((uint64_t)c->r[R_EDX] << 32) | c->r[R_EAX];
 }
 
+static void test_windows_version(X86 *c) {
+    section("configured Windows version");
+    const bool nt = RECOMP_WINDOWS_PLATFORM == 2;
+    const uint32_t build =
+        nt ? RECOMP_WINDOWS_BUILD
+           : (RECOMP_WINDOWS_MAJOR << 24) | (RECOMP_WINDOWS_MINOR << 16) | RECOMP_WINDOWS_BUILD;
+    const uint32_t sp = RECOMP_WINDOWS_MAJOR == 6 && RECOMP_WINDOWS_MINOR == 1 ? 1 : 0;
+    const char *csd = sp ? "Service Pack 1" : nt ? "" : " A ";
+    uint32_t packed = call_import(c, "KERNEL32.dll", "GetVersion", {});
+    check(packed == ((nt ? RECOMP_WINDOWS_BUILD << 16 : 0xc0000000u) | (RECOMP_WINDOWS_MINOR << 8) |
+                     RECOMP_WINDOWS_MAJOR),
+          "GetVersion packs the configured version and NT/9x platform");
+    uint32_t p = scratch_block(300);
+    for (bool wide : {false, true}) {
+        const char *api = wide ? "GetVersionExW" : "GetVersionExA";
+        uint32_t base = wide ? 276 : 148;
+        for (uint32_t size : {base, base + 8}) {
+            memset(g_mem + p, 0xa5, 300);
+            wr32(p, size);
+            check(call_import(c, "KERNEL32.dll", api, {p}) == 1 && rd32(p) == size &&
+                      rd32(p + 4) == RECOMP_WINDOWS_MAJOR && rd32(p + 8) == RECOMP_WINDOWS_MINOR &&
+                      rd32(p + 12) == build && rd32(p + 16) == RECOMP_WINDOWS_PLATFORM &&
+                      (wide ? gm_wstr(p + 20) : gm_str(p + 20)) == csd &&
+                      rd32(p + size) == 0xa5a5a5a5,
+                  "%s fills size %u without overwriting its guard", api, size);
+            if (size > base)
+                check(rd16(p + base) == sp && rd16(p + base + 2) == 0 && rd16(p + base + 4) == 0 &&
+                          rd8(p + base + 6) == 1 && rd8(p + base + 7) == 0,
+                      "%s EX reports service pack and workstation product type", api);
+        }
+        wr32(p, base - 1);
+        check(call_import(c, "KERNEL32.dll", api, {p}) == 0 &&
+                  call_import(c, "KERNEL32.dll", "GetLastError", {}) == 87,
+              "%s rejects an invalid structure size", api);
+    }
+    wr32(p, 284);
+    call_import(c, "KERNEL32.dll", "GetVersionExW", {p});
+    auto verify = [&](uint32_t types, uint64_t mask) {
+        return call_import(c, "KERNEL32.dll", "VerifyVersionInfoW",
+                           {p, types, (uint32_t)mask, (uint32_t)(mask >> 32)});
+    };
+    uint64_t equal = 0;
+    for (uint32_t bit : {1u, 2u, 4u, 8u, 16u, 32u, 128u})
+        equal = call_condition_mask(c, equal, bit, 1);
+    check(verify(0xbf, equal) == 1, "VerifyVersionInfoW agrees with all GetVersionExW fields");
+    wr32(p + 12, build + 1);
+    check(verify(4, equal) == 0 && call_import(c, "KERNEL32.dll", "GetLastError", {}) == 1150,
+          "VerifyVersionInfoW rejects a different build with ERROR_OLD_WIN_VERSION");
+    for (uint32_t op = 1; op <= 5; ++op) {
+        uint64_t mask = call_condition_mask(c, 0, 4, op);
+        check(verify(4, mask) == (op == 4 || op == 5),
+              "VerifyVersionInfoW compares a newer build with operator %u", op);
+    }
+    // Major/minor/service-pack comparison is hierarchical: an older major wins
+    // regardless of its larger minor and service-pack values.
+    wr32(p + 4, RECOMP_WINDOWS_MAJOR - 1);
+    wr32(p + 8, 255);
+    wr16(p + 276, 99);
+    uint64_t ge = 0;
+    for (uint32_t bit : {1u, 2u, 16u, 32u})
+        ge = call_condition_mask(c, ge, bit, 3);
+    check(verify(0x33, ge) == 1, "VerifyVersionInfoW compares version tuples hierarchically");
+    wr32(p + 4, RECOMP_WINDOWS_MAJOR);
+    wr32(p + 8, RECOMP_WINDOWS_MINOR);
+    check(verify(0x33, ge) == 0,
+          "VerifyVersionInfoW rejects a newer service pack at equal major/minor");
+    wr16(p + 280, 1);
+    check(verify(0x40, call_condition_mask(c, 0, 0x40, 6)) == 0 &&
+              verify(0x40, call_condition_mask(c, 0, 0x40, 7)) == 0,
+          "VerifyVersionInfoW applies suite AND/OR to the workstation suite mask");
+    check(verify(2, 0) == 0 && call_import(c, "KERNEL32.dll", "GetLastError", {}) == 87,
+          "VerifyVersionInfoW rejects a missing condition");
+}
+
 static std::vector<std::string> g_resource_names;
 static uint32_t g_resource_module, g_resource_type, g_resource_param;
 static bool g_resource_stop = false;
@@ -4259,8 +4334,8 @@ static void test_kernel32_wide() {
     call_import(&c, "KERNEL32.dll", "GetStartupInfoW", {fd});
     check(rd32(fd) == 68 && rd32(fd + 64) == 0 && rd32(fd + 68) == 0xa5a5a5a5,
           "GetStartupInfoW writes exactly 68 bytes");
-    check(call_import(&c, "KERNEL32.dll", "VerifyVersionInfoW", {fd, 0, 0, 0}) == 1,
-          "VerifyVersionInfoW");
+    check(call_import(&c, "KERNEL32.dll", "VerifyVersionInfoW", {fd, 0, 0, 0}) == 0,
+          "VerifyVersionInfoW rejects an empty request");
     check(call_condition_mask(&c, 0x8000000000001234ull, 0x80, 5) ==
               (0x8000000000001234ull | (5ull << 21)),
           "VerSetConditionMask preserves EDX:EAX and the three-bit condition field");
@@ -5500,6 +5575,7 @@ int main(int argc, char **argv) {
     test_pinned_clock(c);
     test_cadence_trace(c);
     test_misc_shims(c);
+    test_windows_version(c);
     test_boot_shims(c);
     test_gdi_and_com(c);
     test_cxx_throw_description(c);

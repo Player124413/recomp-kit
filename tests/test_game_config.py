@@ -20,6 +20,38 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_windows_version_defaults_and_optional_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            base = "\n".join(line for line in stub.splitlines()
+                             if not line.startswith("windows_version ="))
+            (game / "globals.toml").write_text("")
+            for version, expected in ((None, (4, 10, 2222, 1)),
+                                      ("6.1", (6, 1, 7601, 2)),
+                                      ("6.1.7600", (6, 1, 7600, 2)),
+                                      ("5.0", (5, 0, 0, 2))):
+                setting = "" if version is None else 'windows_version = "%s"\n' % version
+                (game / "game.toml").write_text(base.replace("[game]\n", "[game]\n" + setting))
+                cfg = game_config.load(game)
+                self.assertEqual(cfg["game"]["windows_version"], version or "4.10")
+                header = gen_game_config.render_header(cfg)
+                for field, value in zip(("MAJOR", "MINOR", "BUILD", "PLATFORM"), expected):
+                    self.assertIn("#define RECOMP_WINDOWS_%s %du" % (field, value), header)
+
+    def test_windows_version_rejects_invalid_components(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            base = "\n".join(line for line in stub.splitlines()
+                             if not line.startswith("windows_version ="))
+            (game / "globals.toml").write_text("")
+            for bad in ('"6"', '"6.1.2.3"', '"6.-1"', '"6.256"', '"6.1.32768"', '6.1', 'true'):
+                (game / "game.toml").write_text(base.replace(
+                    "[game]\n", "[game]\nwindows_version = %s\n" % bad))
+                with self.assertRaisesRegex(ValueError, "windows_version"):
+                    game_config.load(game)
+
     def test_function_alignment_defaults_to_16_and_can_be_overridden(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

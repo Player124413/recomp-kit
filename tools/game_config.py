@@ -4,6 +4,7 @@ This module is the only place that knows the schema. Python 3.9 has no
 tomllib, so the pinned tomli is the fallback."""
 
 from pathlib import Path
+import re
 
 try:
     import tomllib
@@ -15,6 +16,18 @@ REQUIRED_GAME_KEYS = ("id", "name", "app_name", "bundle_id", "executable", "sha2
 
 HEAP_BASE_DEFAULT = 0x01000000
 HEAP_END = 0x0e000000        # runtime/x86.h GUEST_HEAP_END; the mods' heap starts there
+
+
+def windows_version(value):
+    """Decode major.minor[.build]; keep the historical 9x default and 6.1 SP1."""
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", value):
+        raise ValueError("[game] windows_version must be major.minor[.build]")
+    parts = [int(part) for part in value.split(".")]
+    major, minor = parts[:2]
+    build = parts[2] if len(parts) == 3 else {(4, 10): 2222, (6, 1): 7601}.get((major, minor), 0)
+    if major > 255 or minor > 255 or build > 32767:
+        raise ValueError("[game] windows_version requires byte-sized major/minor and a 15-bit build")
+    return major, minor, build, 2 if major >= 5 else 1
 
 
 def validate_heap_base(value):
@@ -35,6 +48,7 @@ def load(game_dir):
     if missing:
         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
     game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
+    windows_version(game.setdefault("windows_version", "4.10"))
     translate = cfg.setdefault("translate", {})
     alignment = translate.setdefault("function_alignment", 16)
     if type(alignment) is not int or alignment <= 0:

@@ -1,5 +1,6 @@
 // UTF-16 kernel32 entry points. File operations share the ANSI shim's path seam.
 #include "kernel32_internal.h"
+#include "windows_version.h"
 #include "loader.h"
 #include "resources.h"
 #include "memory.h"
@@ -564,7 +565,81 @@ void k_GetStartupInfoW(X86 *c) {
     startup_info(c);
 }
 void k_VerifyVersionInfoW(X86 *c) {
-    set_eax(c, 1);
+    uint32_t p = arg(c, 0), types = arg(c, 1);
+    uint64_t mask = (uint64_t)arg(c, 2) | ((uint64_t)arg(c, 3) << 32);
+    auto fail = [&](uint32_t error) {
+        set_last_error(error);
+        set_eax(c, 0);
+    };
+    if (!p || !gm_valid(p, 284) || rd32(p) != 284 || !types || (types & ~0xffu)) {
+        fail(87); // ERROR_INVALID_PARAMETER
+        return;
+    }
+    uint32_t conditions[8] = {};
+    for (unsigned bit = 0; bit < 8; ++bit) {
+        if (!(types & (1u << bit)))
+            continue;
+        uint32_t op = conditions[bit] = (uint32_t)(mask >> (3 * bit)) & 7;
+        if (bit == 6 ? (op != 6 && op != 7) : (op < 1 || op > 5)) {
+            fail(87);
+            return;
+        }
+    }
+    auto compare = [](uint32_t actual, uint32_t wanted, uint32_t op) {
+        switch (op) {
+        case 1:
+            return actual == wanted;
+        case 2:
+            return actual > wanted;
+        case 3:
+            return actual >= wanted;
+        case 4:
+            return actual < wanted;
+        case 5:
+            return actual <= wanted;
+        default:
+            return false;
+        }
+    };
+    uint32_t actual[] = {windows_version::minor,
+                         windows_version::major,
+                         windows_version::build,
+                         windows_version::platform,
+                         0,
+                         windows_version::service_pack,
+                         0,
+                         1};
+    uint32_t wanted[] = {rd32(p + 8),   rd32(p + 4),   rd32(p + 12),  rd32(p + 16),
+                         rd16(p + 278), rd16(p + 276), rd16(p + 280), rd8(p + 282)};
+    bool matched = true;
+    // Major, minor, SP major and SP minor form one ordered version tuple.
+    // The first requested condition governs the tuple's comparison.
+    uint32_t tuple_op = 0;
+    bool tuple_different = false;
+    for (unsigned bit : {1u, 0u, 5u, 4u}) {
+        if (!(types & (1u << bit)))
+            continue;
+        if (!tuple_op)
+            tuple_op = conditions[bit];
+        if (actual[bit] != wanted[bit]) {
+            matched = compare(actual[bit], wanted[bit], tuple_op);
+            tuple_different = true;
+            break;
+        }
+    }
+    if (tuple_op && !tuple_different)
+        matched = compare(0, 0, tuple_op);
+    for (unsigned bit : {2u, 3u, 7u}) {
+        if (types & (1u << bit))
+            matched = matched && compare(actual[bit], wanted[bit], conditions[bit]);
+    }
+    if (types & 0x40)
+        matched = matched && (conditions[6] == 6 ? (actual[6] & wanted[6]) == wanted[6]
+                                                 : (actual[6] & wanted[6]) != 0);
+    if (!matched)
+        fail(1150); // ERROR_OLD_WIN_VERSION
+    else
+        set_eax(c, 1);
 }
 void k_VerSetConditionMask(X86 *c) {
     // ULONGLONG occupies two x86 slots. Both version APIs use stdcall (four

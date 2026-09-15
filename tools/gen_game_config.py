@@ -36,6 +36,9 @@ def render_header(cfg):
         lines.append("#define %s %s" % (macro, c_string(game[key])))
     for key, macro in ADDRESSES:
         lines.append("#define %s %s" % (macro, c_hex(game[key])))
+    for field, value in zip(("MAJOR", "MINOR", "BUILD", "PLATFORM"),
+                            game_config.windows_version(game["windows_version"])):
+        lines.append("#define RECOMP_WINDOWS_%s %du" % (field, value))
     # Absolute: the developer's game lives beside game.toml, not under the kit.
     lines.append("#define RECOMP_DEVELOPER_EXE %s" % c_string(cfg["developer_exe_path"].as_posix()))
     lines.append("#define RECOMP_DEVELOPER_GAME_DIR %s" % c_string(cfg["developer_exe_path"].parent.as_posix()))

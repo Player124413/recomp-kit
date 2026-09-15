@@ -9,6 +9,7 @@
 // case-insensitive and '\' is translated to '/'.
 #include "imports.h"
 #include "kernel32_internal.h"
+#include "windows_version.h"
 #include "mods_seam.h"
 #include "display_seam.h"
 #include "frame_deadline.h"
@@ -1261,55 +1262,42 @@ void k_GetProcessHeap(X86 *c) {
     set_eax(c, g_process_heap);
 }
 
-// OSVERSIONINFO(A|W) for Windows 98 SE: major 4, minor 10, build 2222, and the
-// 9x platform id, matching what GetVersion reports.
-void k_GetVersionExA(X86 *c) {
+// OSVERSIONINFO(A|W), including the eight-byte EX suffix when requested.
+void get_version_info(X86 *c, bool wide) {
     uint32_t p = arg(c, 0);
-    if (!p) {
-        set_eax(c, 0);
-        return;
-    }
-    uint32_t size = rd32(p);
-    if (size < 148) {
+    uint32_t size = p && gm_valid(p, 4) ? rd32(p) : 0;
+    uint32_t base = wide ? 276 : 148;
+    if ((size != base && size != base + 8) || !gm_valid(p, size)) {
         set_last_error(87 /* ERROR_INVALID_PARAMETER */);
         set_eax(c, 0);
         return;
     }
     memset(g_mem + p + 4, 0, size - 4);
-    wr32(p + 4, 4);                 // dwMajorVersion
-    wr32(p + 8, 10);                // dwMinorVersion
-    wr32(p + 12, 0x040a08ae);       // dwBuildNumber: build 2222, major/minor in the high word
-    wr32(p + 16, 1);                // VER_PLATFORM_WIN32_WINDOWS
-    gm_put_str(p + 20, " A ", 128); // szCSDVersion
+    wr32(p + 4, windows_version::major);
+    wr32(p + 8, windows_version::minor);
+    wr32(p + 12, windows_version::build);
+    wr32(p + 16, windows_version::platform);
+    if (wide)
+        gm_put_wstr(p + 20, windows_version::csd, 128);
+    else
+        gm_put_str(p + 20, windows_version::csd, 128);
+    if (size > base) {
+        wr16(p + base, windows_version::service_pack);
+        wr8(p + base + 6, 1); // VER_NT_WORKSTATION
+    }
     set_eax(c, 1);
+}
+
+void k_GetVersionExA(X86 *c) {
+    get_version_info(c, false);
 }
 
 void k_GetVersionExW(X86 *c) {
-    uint32_t p = arg(c, 0);
-    if (!p) {
-        set_eax(c, 0);
-        return;
-    }
-    uint32_t size = rd32(p);
-    if (size < 276) {
-        set_last_error(87);
-        set_eax(c, 0);
-        return;
-    }
-    memset(g_mem + p + 4, 0, size - 4);
-    wr32(p + 4, 4);
-    wr32(p + 8, 10);
-    wr32(p + 12, 0x040a08ae);
-    wr32(p + 16, 1);
-    const char *csd = " A ";
-    for (int i = 0; csd[i]; ++i)
-        wr16(p + 20 + 2 * (uint32_t)i, (uint16_t)csd[i]);
-    set_eax(c, 1);
+    get_version_info(c, true);
 }
 
 void k_GetVersion(X86 *c) {
-    // Windows 98 SE: major 4, minor 10, platform bit set (not NT).
-    set_eax(c, 0xc0000a04u);
+    set_eax(c, windows_version::packed);
 }
 
 void k_GetStdHandle(X86 *c) {

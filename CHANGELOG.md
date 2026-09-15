@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Runtime: configure the reported Windows version with
+  `[game] windows_version = "major.minor[.build]"`. GetVersion,
+  GetVersionExA/W and VerifyVersionInfoW share that identity. The default
+  remains 4.10 (build 2222); 6.1 defaults to build 7601 and Service Pack 1.
+
 - Build: refresh the generated directory's runtime header on incremental
   builds, without regenerating translated sources or touching unchanged files.
 
