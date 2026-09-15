@@ -13,6 +13,12 @@
   necessary chunk" on a perfect file - but every unit after the one building
   the tables was missing.
 
+- The guest's main stack is 8 MB, not 1 MB. Windows commits a reserve
+  lazily, so a program is free to lean on it at one moment - a display-mode
+  switch that re-enters its window procedure, say - and a fixed megabyte was
+  exactly the depth Siege of Avalon's 1.19 launcher exhausted on Play. The
+  region below the stack was unused; worker stacks come from the heap.
+
 - Every import the Siege of Avalon 1.19 image names now has an argument
   count: `SafeArrayAccessData`, `SafeArrayUnaccessData`, `ValidateRect` and
   `GetUpdateRect` do what they say, `LoadCursorFromFile{A,W}` hand out a

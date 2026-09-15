@@ -29,7 +29,13 @@ static const uint32_t IMAGE_BASE = GUEST_IMAGE_BASE; // PE preferred base, no re
 static const uint32_t HEAP_BASE = GUEST_HEAP_BASE; // heap arena start
 static const uint32_t HEAP_LIMIT = GUEST_HEAP_END; // heap arena end (exclusive)
 static const uint32_t STACK_TOP = GUEST_STACK_TOP; // initial ESP region top, grows down
-static const uint32_t STACK_SIZE = 0x00100000u;    // 1 MB
+// 8 MB, the reserve the games this kit has met ask Windows for (Siege of
+// Avalon's 2021 image: SizeOfStackReserve 0x800000). Windows commits a
+// reserve lazily, so a program is free to lean on it at one moment - a
+// display-mode switch that re-enters its window procedure, say - and a fixed
+// megabyte was exactly the depth Siege's 1.19 launcher exhausted on Play.
+// The region below the stack down to GUEST_HEAP_END is otherwise unused.
+static const uint32_t STACK_SIZE = 0x00800000u;
 static const uint32_t STACK_LIMIT = STACK_TOP - STACK_SIZE;
 static const uint32_t TEB_BASE = GUEST_TEB_BASE; // FS segment base
 static const uint32_t TEB_SIZE = 0x1000u;
