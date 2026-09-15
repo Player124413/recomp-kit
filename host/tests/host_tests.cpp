@@ -7241,7 +7241,16 @@ static void test_guest_click_injection() {
     X86 ctx;
     memset(&ctx, 0, sizeof ctx);
     loader_init_context(&ctx);
-    gate_make_window(&ctx);
+    uint32_t hwnd = gate_make_window(&ctx);
+    // A click is routed by hit test, and nothing is under the pointer while
+    // the window is hidden. Validating it keeps the update region from
+    // answering every peek with WM_PAINT; the window goes back to hidden at
+    // the end because the gate tests share it.
+    gate_call_import(&ctx, "USER32.dll", "ShowWindow", {hwnd, 5});
+    uint32_t ps = gate_scratch(0x280);
+    memset(gm_ptr(ps), 0, 64);
+    gate_call_import(&ctx, "USER32.dll", "BeginPaint", {hwnd, ps});
+    gate_call_import(&ctx, "USER32.dll", "EndPaint", {hwnd, ps});
     gate_drain(&ctx);
 
     g_consume_button = false;
@@ -7300,6 +7309,7 @@ static void test_guest_click_injection() {
     CHECK_EQ(px, 12); // and not moved
     CHECK_EQ(py, 34);
     g_consume_button = false;
+    gate_call_import(&ctx, "USER32.dll", "ShowWindow", {hwnd, 0});
 }
 
 static void test_input_gate_modifiers() {

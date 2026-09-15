@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- A SAFEARRAY may have more than one dimension. `SafeArrayCreate` refused
+  anything else and the header it allocated was a fixed 24 bytes, so a guest
+  that wrote `array[x, y]` got a null array back and had to abandon whatever
+  it was building. The header is 16 bytes plus one bound per dimension, and
+  creation, validation, copying, element addressing and the two bound queries
+  all read `cDims` now. `rgsabound[i]` describes the dimension an index list
+  names i'th, which is the order guests use.
+
+- DirectDraw clips a blit that runs off its destination instead of refusing
+  it. `Blt` and `BltFast` required the whole rectangle to lie inside the
+  surface, so a draw that hung off an edge wrote nothing at all; real
+  DirectDraw writes the part that lands, which a game relies on whenever it
+  draws a scrolled buffer or a tile page at a border.
+
 - Keyboard input goes to the window with the focus, as Windows sends it.
   Hosts posted it to the first window the guest created, which in a VCL
   application is the invisible application window: every keystroke went
