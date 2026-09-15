@@ -348,6 +348,28 @@ static void test_modules_and_wide() {
           "gm_put_wstr rejects addresses outside the arena");
 }
 
+static void test_session_notification_service_unavailable() {
+    section("session notification service");
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t text = 0x00308000;
+    gm_put_wstr(text, "wtsapi32.dll", 64);
+    uint32_t module = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {text});
+    check(module != 0, "session notification module is present even without a session service");
+    for (const char *name :
+         {"WTSRegisterSessionNotification", "WTSUnRegisterSessionNotification"}) {
+        gm_put_str(text + 128, name, 64);
+        check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0,
+              "%s resolves through the module handle", name);
+    }
+    check(call_import(&c, "WTSAPI32.dll", "WTSRegisterSessionNotification", {0x20004, 0}) == 0 &&
+              call_import(&c, "KERNEL32.dll", "GetLastError", {}) == 1702,
+          "session registration reports RPC_S_INVALID_BINDING when the service is absent");
+    check(call_import(&c, "WTSAPI32.dll", "WTSUnRegisterSessionNotification", {0x20004}) == 0 &&
+              call_import(&c, "KERNEL32.dll", "GetLastError", {}) == 1702,
+          "session unregistration reports the same unavailable service");
+}
+
 static void test_preferred_ui_languages() {
     section("preferred UI languages");
     X86 c;
@@ -5641,6 +5663,7 @@ int main(int argc, char **argv) {
     test_import_return_trace();
     test_modules_and_wide();
     test_preferred_ui_languages();
+    test_session_notification_service_unavailable();
     test_media_foundation_unavailable();
     test_kernel32_wide();
     test_delphi_dlls();

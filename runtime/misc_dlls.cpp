@@ -14,6 +14,12 @@ void yes(X86 *c) {
 void zero(X86 *c) {
     set_eax(c, 0);
 }
+void session_service_unavailable(X86 *c) {
+    // No Remote Desktop Services endpoint is running in the guest runtime.
+    // Expose the exports so callers receive the service error as a BOOL result.
+    set_last_error(1702); // RPC_S_INVALID_BINDING
+    set_eax(c, 0);
+}
 void enum_printers(X86 *c) {
     zero_out(arg(c, 5));
     zero_out(arg(c, 6));
@@ -71,6 +77,8 @@ void folder_path(X86 *c) {
     set_eax(c, 0);
 }
 const ImportShim shims[] = {
+    {"WTSAPI32.dll", "WTSRegisterSessionNotification", 2, session_service_unavailable},
+    {"WTSAPI32.dll", "WTSUnRegisterSessionNotification", 1, session_service_unavailable},
     {"WINSPOOL.DRV", "EnumPrintersW", 7, enum_printers},
     {"WINSPOOL.DRV", "GetDefaultPrinterW", 2, default_printer},
     {"WINSPOOL.DRV", "OpenPrinterW", 3, open_printer},

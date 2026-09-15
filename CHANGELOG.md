@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime: WTS session notification exports report an unavailable session
+  service through their normal BOOL/error result instead of a missing DLL.
+
 - Kernel32: GetNativeSystemInfo reports the same 32-bit guest system
   information as GetSystemInfo for delay-loaded platform probes.
 
