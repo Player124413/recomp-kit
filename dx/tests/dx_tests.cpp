@@ -4624,6 +4624,45 @@ static void test_access_counts_by_reason() {
     CHECK_EQ(a.texture_load, 0u);
 }
 
+// A Unicode program asks for DirectInputCreateW and, refused, runs with no
+// DirectInput at all. The W object is the A object remembering that the two
+// structures carrying device names use the DIDEVICEINSTANCEW layout: the
+// names are 260 UTF-16 units each, at 40 and 560, and the record is 1100.
+static void test_dinput_create_w() {
+    cpu_reset();
+    uint32_t create = tramp("DINPUT.dll", "DirectInputCreateW");
+    CHECK(create != 0);
+    CHECK_EQ(call_shim(create, {0x400000, 0x0500, sc(0), 0}), DI_OK);
+    uint32_t di = rd32(sc(0));
+    CHECK(di != 0);
+    uint32_t guid = sc(0x40);
+    static const uint8_t MOUSE[16] = {0x60, 0x2B, 0x1D, 0x6F, 0xA0, 0xD5, 0xCF, 0x11,
+                                      0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    for (int i = 0; i < 16; ++i)
+        wr8(guid + (uint32_t)i, MOUSE[i]);
+    CHECK_EQ(call_method(di, DI_CreateDevice, {guid, sc(0x50), 0}), DI_OK);
+    uint32_t dev = rd32(sc(0x50));
+    CHECK(dev != 0);
+    uint32_t info = sc(0x100);
+    wr32(info, 1100);
+    CHECK_EQ(call_method(dev, 15 /* GetDeviceInfo */, {info}), DI_OK);
+    CHECK_EQ(rd16(info + 40), (uint32_t)'M');
+    CHECK_EQ(rd16(info + 42), (uint32_t)'o');
+    CHECK_EQ(rd16(info + 560), (uint32_t)'M');
+    CHECK_EQ(rd8(info + 41), 0u); // UTF-16, not bytes
+
+    // DirectInputCreateEx names the interface by IID; the W IIDs are the A
+    // ones plus one, and an IID this shim does not know is E_NOINTERFACE.
+    uint32_t ex = tramp("DINPUT.dll", "DirectInputCreateEx");
+    uint32_t iid = sc(0x60);
+    wr32(iid, 0x9A4CB685u); // IDirectInput7W
+    CHECK_EQ(call_shim(ex, {0x400000, 0x0700, iid, sc(0x70), 0}), DI_OK);
+    CHECK(rd32(sc(0x70)) != 0);
+    wr32(iid, 0x12345678u);
+    CHECK_EQ(call_shim(ex, {0x400000, 0x0700, iid, sc(0x70), 0}), 0x80004002u);
+    CHECK_EQ(rd32(sc(0x70)), 0u);
+}
+
 static void test_dinput_event_notification() {
     cpu_reset();
     uint32_t create = tramp("DINPUT.dll", "DirectInputCreateA");
@@ -10832,6 +10871,7 @@ int main() {
         {"palette bumps a tex", test_palette_write_bumps_a_texture_revision},
         {"revisions are unique", test_revisions_are_unique_across_surfaces},
         {"dinput notification", test_dinput_event_notification},
+        {"dinput create W and Ex", test_dinput_create_w},
         {"mouse motion survives", test_mouse_motion_survives_keyboard_poll},
         {"unchanged state buffered", test_unchanged_state_produces_no_buffered_event},
         {"re-attach a palette", test_setpalette_self},

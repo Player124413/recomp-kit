@@ -244,6 +244,7 @@ struct ComObj {
 
     // --- K_DINPUT / K_DIDEVICE
     uint32_t di_version = 0;
+    bool di_wide = false; // created through DirectInputCreateW: DIDEVICEINSTANCEW layouts
     uint32_t dev_type = 0; // DIDEVTYPE_MOUSE / _KEYBOARD
     bool acquired = false;
     uint32_t di_coop = 0;

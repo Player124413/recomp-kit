@@ -13,6 +13,14 @@
   necessary chunk" on a perfect file - but every unit after the one building
   the tables was missing.
 
+- `DirectInputCreateW` and `DirectInputCreateEx`. A Unicode program asks for
+  the W entry and, refused, runs with no DirectInput at all and reads its
+  mouse some slower way. The W object is the A object remembering that
+  `DIDEVICEINSTANCEW` carries its two names as 260 UTF-16 units each, at 40
+  and 560, in an 1100-byte record - which `GetDeviceInfo` used to reject as
+  too large. The Ex entry names the interface by IID; the W IIDs are the A
+  ones plus one, and an unknown IID is E_NOINTERFACE.
+
 - The guest's main stack is 8 MB, not 1 MB. Windows commits a reserve
   lazily, so a program is free to lean on it at one moment - a display-mode
   switch that re-enters its window procedure, say - and a fixed megabyte was

@@ -48,6 +48,14 @@ static const uint8_t GUID_SysMouse_[16] =
 static const uint8_t GUID_SysKeyboard_[16] =
     IID_BYTES(0x6F1D2B61, 0xD5A0, 0x11CF, 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00);
 
+// An ASCII name as UTF-16, NUL-terminated, in a field of `units` characters.
+static void put_wide(uint32_t at, const char *name, uint32_t units) {
+    uint32_t i = 0;
+    for (; name[i] && i + 1 < units; ++i)
+        wr16(at + 2 * i, (uint8_t)name[i]);
+    wr16(at + 2 * i, 0);
+}
+
 namespace {
 
 // DIPROP_* are GUIDs cast from small integers, so the pointer value itself is
@@ -559,7 +567,9 @@ void Device_GetDeviceInfo(X86 *c) {
     // tszInstanceName[260], tszProductName[260], guidFFDriver, wUsagePage,
     // wUsage. Only the size the caller declared is written.
     uint32_t size = rd32(out);
-    if (size < 8 || size > 1024 || !gm_valid(out, size)) {
+    // DIDEVICEINSTANCEA is 580 bytes; the W record, with its two names as
+    // 260 UTF-16 units each, is 1100.
+    if (size < 8 || size > 1100 || !gm_valid(out, size)) {
         com_ret(c, DIERR_INVALIDPARAM);
         return;
     }
@@ -572,6 +582,15 @@ void Device_GetDeviceInfo(X86 *c) {
         memcpy(gm_ptr(out + 20), g, 16);
     if (size >= 40)
         wr32(out + 36, d->dev_type);
+    // DIDEVICEINSTANCEW carries the two names as 260 UTF-16 units each, so
+    // its fields past dwDevType sit at 40 and 560 and the record is 1100 bytes.
+    if (d->di_wide) {
+        for (uint32_t at : {40u, 560u})
+            if (size >= at + 520)
+                put_wide(out + at, mouse ? "Mouse" : "Keyboard", 260);
+        com_ret(c, DI_OK);
+        return;
+    }
     if (size >= 40 + 260)
         gm_put_str(out + 40, mouse ? "Mouse" : "Keyboard", 260);
     if (size >= 300 + 260)
@@ -676,6 +695,7 @@ void DI_CreateDevice(X86 *c) {
 
     ComObj *d = com_new(K_DIDEVICE);
     d->dev_type = type;
+    d->di_wide = di->di_wide;
     d->di_version = di->di_version;
     uint32_t view = com_view(d, IF_DINPUTDEVICE);
     if (!view) {
@@ -697,7 +717,9 @@ void DI_EnumDevices(X86 *c) {
     }
     // DIDEVICEINSTANCEA is 4 + 16 + 16 + 4 + 260 + 260 + 16 + 4 = 580 bytes
     // in the DirectX 5 layout the game was built against.
-    const uint32_t INST_SIZE = 580;
+    ComObj *di_ = this_dinput(c);
+    const bool wide = di_ && di_->di_wide;
+    const uint32_t INST_SIZE = wide ? 1100 : 580;
     struct Dev {
         uint32_t type;
         const uint8_t *guid;
@@ -719,8 +741,13 @@ void DI_EnumDevices(X86 *c) {
         memcpy(gm_ptr(a + 4), d.guid, 16);
         memcpy(gm_ptr(a + 20), d.guid, 16);
         wr32(a + 36, d.type);
-        gm_put_str(a + 40, d.name, 260);
-        gm_put_str(a + 300, d.name, 260);
+        if (wide) {
+            put_wide(a + 40, d.name, 260);
+            put_wide(a + 560, d.name, 260);
+        } else {
+            gm_put_str(a + 40, d.name, 260);
+            gm_put_str(a + 300, d.name, 260);
+        }
         if (guest_call(c, cb, a, ref) != DDENUMRET_OK)
             break;
     }
@@ -765,10 +792,41 @@ const ComMethod g_dinput[] = {
 // DINPUT.dll exports
 // ===========================================================================
 // DirectInputCreateA(hinst, dwVersion, lplpDirectInput, punkOuter)
+// The A and W entries make the same object; what differs is the layout of
+// the two structures that carry device names, which the object remembers.
+// A Unicode Delphi program asks for the W entry and, refused, runs with no
+// DirectInput at all - which is a mouse read some slower way.
+void direct_input_create(X86 *c, uint32_t version, uint32_t out, uint32_t outer, bool wide);
 void DirectInputCreateA(X86 *c) {
-    uint32_t version = arg(c, 1);
-    uint32_t out = arg(c, 2);
-    uint32_t outer = arg(c, 3);
+    direct_input_create(c, arg(c, 1), arg(c, 2), arg(c, 3), false);
+}
+void DirectInputCreateW(X86 *c) {
+    direct_input_create(c, arg(c, 1), arg(c, 2), arg(c, 3), true);
+}
+// DirectInputCreateEx(hinst, version, riid, out, outer): the IID names the
+// interface, and the W ones are the A ones plus one in their first dword.
+void DirectInputCreateEx(X86 *c) {
+    uint32_t riid = arg(c, 2), out = arg(c, 3);
+    if (!riid || !gm_valid(riid, 16)) {
+        com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    uint32_t data1 = rd32(riid);
+    static const uint32_t ansi[] = {0x89521360u, 0x5944E662u, 0x9A4CB684u}; // IDirectInput{,2,7}A
+    bool known = false, wide = false;
+    for (uint32_t a : ansi) {
+        if (data1 == a) known = true;
+        if (data1 == a + 1) known = wide = true;
+    }
+    if (!known) {
+        if (out && gm_valid(out, 4))
+            wr32(out, 0);
+        com_ret(c, 0x80004002u); // E_NOINTERFACE
+        return;
+    }
+    direct_input_create(c, arg(c, 1), out, arg(c, 4), wide);
+}
+void direct_input_create(X86 *c, uint32_t version, uint32_t out, uint32_t outer, bool wide) {
     if (!out || !gm_valid(out, 4)) {
         com_ret(c, DIERR_INVALIDPARAM);
         return;
@@ -790,6 +848,7 @@ void DirectInputCreateA(X86 *c) {
     }
     ComObj *di = com_new(K_DINPUT);
     di->di_version = version;
+    di->di_wide = wide;
     uint32_t view = com_view(di, IF_DINPUT);
     if (!view) {
         com_release(di);
@@ -803,6 +862,8 @@ void DirectInputCreateA(X86 *c) {
 
 const ImportShim g_dinput_exports[] = {
     {"DINPUT.dll", "DirectInputCreateA", 4, DirectInputCreateA},
+    {"DINPUT.dll", "DirectInputCreateW", 4, DirectInputCreateW},
+    {"DINPUT.dll", "DirectInputCreateEx", 5, DirectInputCreateEx},
 };
 
 } // namespace
