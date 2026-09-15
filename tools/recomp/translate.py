@@ -2657,7 +2657,7 @@ class Translator(object):
                 if t in self.seh_helpers:
                     L.append("c->eip = %s;" % hexlit(ins.addr))
                     L.append("{ jmp_buf *b_ = recomp_seh_frame_adopt(c); "
-                             "if (b_ && setjmp(*b_)) { recomp_seh_land(c); return; } }")
+                             "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } } }")
                 if t in self.noreturn_callees:
                     # The callee throws or exits; what follows is padding and
                     # tables, never code.  Reaching this line means it came

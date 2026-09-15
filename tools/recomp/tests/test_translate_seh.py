@@ -45,7 +45,8 @@ def test_popped_return_helper_adopts_only_an_escaping_frame(tmp_path, monkeypatc
     assert ("recomp_seh_frame_adopt(c)" in body) == (not restore)
     if not restore:
         assert body.index("CALL_FN(%08x)" % helper) < body.index("recomp_seh_frame_adopt")
-        assert "if (b_ && setjmp(*b_)) { recomp_seh_land(c); return; }" in body
+        assert "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } }" in body
+        assert "&& setjmp" not in body
     assert "c->eip = c->r[2]; return;" in helper_body
 
 

@@ -164,7 +164,9 @@ Every direct CALL of a marked helper takes this checkpoint after the call:
 
 ```c
 { jmp_buf *b_ = recomp_seh_frame_adopt(c);
-  if (b_ && setjmp(*b_)) { recomp_seh_land(c); return; } }
+  if (b_) {
+    if (setjmp(*b_)) { recomp_seh_land(c); return; }
+  } }
 ```
 
 Adoption selects the newest orphan for that CPU and callback level whose
@@ -174,6 +176,9 @@ depths. It returns null when the helper took a path that installed nothing,
 or when there is no fresh orphan. The new setjmp overwrites the helper's
 expired environment in stable heap storage. Registration identity remains
 unchanged, so normal unlink helpers retire the adopted record as usual.
+The null guard is separate because C requires setjmp to be the complete
+controlling expression (or one of its specifically permitted forms), not
+an operand of a logical AND expression.
 
 The record is read from the published FS:[0] head, not assumed to equal ESP:
 some compiler helpers fill caller-reserved words above their saved registers.

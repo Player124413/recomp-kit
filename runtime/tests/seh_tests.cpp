@@ -308,9 +308,11 @@ static void adopting_caller(X86 *c, bool raise, bool install) {
     {
         jmp_buf *b_ = recomp_seh_frame_adopt(c);
         CHECK((b_ != nullptr) == install);
-        if (b_ && setjmp(*b_)) {
-            recomp_seh_land(c);
-            return;
+        if (b_) {
+            if (setjmp(*b_)) {
+                recomp_seh_land(c);
+                return;
+            }
         }
     }
     CHECK(recomp_seh_frame_adopt(c) == nullptr); // Cannot adopt twice.
