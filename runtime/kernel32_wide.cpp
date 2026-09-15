@@ -493,6 +493,48 @@ void k_GetUserDefaultUILanguage(X86 *c) {
 void k_GetSystemDefaultUILanguage(X86 *c) {
     set_eax(c, 0x0409);
 }
+void k_GetThreadUILanguage(X86 *c) {
+    set_eax(c, 0x0409);
+}
+
+// The runtime exposes one installed UI language. Sizes are WCHAR counts,
+// including both terminators of the single-entry multi-string.
+void k_GetPreferredUILanguages(X86 *c) {
+    uint32_t flags = arg(c, 0), count = arg(c, 1), out = arg(c, 2), size = arg(c, 3);
+    if ((flags & 12) == 12 || !count || !gm_valid(count, 4) || !size || !gm_valid(size, 4)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    const char *language = flags & 4 ? "0409" : "en-US";
+    uint32_t need = (uint32_t)strlen(language) + 2, cap = rd32(size);
+    wr32(count, 1);
+    wr32(size, need);
+    if (!out) {
+        set_eax(c, 1);
+        return;
+    }
+    if (cap < need || !gm_valid(out, need * 2)) {
+        set_last_error(122);
+        set_eax(c, 0);
+        return;
+    }
+    gm_put_wstr(out, language, need);
+    wr16(out + (need - 1) * 2, 0);
+    set_eax(c, 1);
+}
+void k_SetThreadPreferredUILanguages(X86 *c) {
+    // Acknowledge the preference; the installed-language set stays en-US.
+    uint32_t count = arg(c, 2);
+    if (count && !gm_valid(count, 4)) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    if (count)
+        wr32(count, 1);
+    set_eax(c, 1);
+}
 void k_IsDBCSLeadByteEx(X86 *c) {
     set_eax(c, 0);
 }
@@ -886,6 +928,11 @@ static const ImportShim g_kernel32_wide[] = {
     {"KERNEL32.dll", "GetCPInfoExW", 3, k_GetCPInfoExW},
     {"KERNEL32.dll", "GetUserDefaultUILanguage", 0, k_GetUserDefaultUILanguage},
     {"KERNEL32.dll", "GetSystemDefaultUILanguage", 0, k_GetSystemDefaultUILanguage},
+    {"KERNEL32.dll", "GetThreadUILanguage", 0, k_GetThreadUILanguage},
+    {"KERNEL32.dll", "GetThreadPreferredUILanguages", 4, k_GetPreferredUILanguages},
+    {"KERNEL32.dll", "GetUserPreferredUILanguages", 4, k_GetPreferredUILanguages},
+    {"KERNEL32.dll", "GetSystemPreferredUILanguages", 4, k_GetPreferredUILanguages},
+    {"KERNEL32.dll", "SetThreadPreferredUILanguages", 3, k_SetThreadPreferredUILanguages},
     {"KERNEL32.dll", "IsDBCSLeadByteEx", 2, k_IsDBCSLeadByteEx},
     {"KERNEL32.dll", "GetConsoleCP", 0, k_GetConsoleCP},
     {"KERNEL32.dll", "GetConsoleOutputCP", 0, k_GetConsoleOutputCP},

@@ -348,6 +348,58 @@ static void test_modules_and_wide() {
           "gm_put_wstr rejects addresses outside the arena");
 }
 
+static void test_preferred_ui_languages() {
+    section("preferred UI languages");
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t count = 0x00308000, size = count + 8, buffer = count + 32;
+    check(call_import(&c, "KERNEL32.dll", "GetThreadUILanguage", {}) == 0x0409,
+          "GetThreadUILanguage returns the en-US language identifier");
+    for (const char *api : {"GetThreadPreferredUILanguages", "GetUserPreferredUILanguages",
+                            "GetSystemPreferredUILanguages"}) {
+        for (uint32_t flags : {0u, 8u, 4u}) {
+            const char *expected = flags == 4 ? "0409" : "en-US";
+            uint32_t need = (uint32_t)strlen(expected) + 2;
+            memset(g_mem + count, 0xa5, 128);
+            wr32(size, 0);
+            check(call_import(&c, "KERNEL32.dll", api, {flags, count, 0, size}) == 1 &&
+                      rd32(count) == 1 && rd32(size) == need && rd32(count + 4) == 0xa5a5a5a5 &&
+                      rd32(size + 4) == 0xa5a5a5a5,
+                  "%s size query includes both WCHAR terminators (flags=%u)", api, flags);
+            wr32(size, need - 1);
+            check(call_import(&c, "KERNEL32.dll", api, {flags, count, buffer, size}) == 0 &&
+                      call_import(&c, "KERNEL32.dll", "GetLastError", {}) == 122 &&
+                      rd32(size) == need && rd16(buffer) == 0xa5a5,
+                  "%s rejects a short buffer without a partial write", api);
+            wr32(size, need);
+            check(call_import(&c, "KERNEL32.dll", api, {flags, count, buffer, size}) == 1 &&
+                      rd32(count) == 1 && rd32(size) == need && gm_wstr(buffer) == expected &&
+                      rd16(buffer + (need - 2) * 2) == 0 && rd16(buffer + (need - 1) * 2) == 0 &&
+                      rd16(buffer + need * 2) == 0xa5a5,
+                  "%s writes the complete multi-string and preserves its guard", api);
+        }
+        check(call_import(&c, "KERNEL32.dll", api, {12, count, 0, size}) == 0 &&
+                  call_import(&c, "KERNEL32.dll", "GetLastError", {}) == 87,
+              "%s rejects conflicting language formats", api);
+        check(call_import(&c, "KERNEL32.dll", api, {8, count, 0, 0}) == 0,
+              "%s rejects a missing size pointer", api);
+    }
+    wr32(size, 0);
+    check(call_import(&c, "KERNEL32.dll", "GetThreadPreferredUILanguages",
+                      {0x38, count, 0, size}) == 1 &&
+              rd32(size) == 7,
+          "thread language query accepts merged fallback flags");
+    gm_put_wstr(buffer, "en-US", 32);
+    wr16(buffer + 12, 0);
+    wr32(count, 0);
+    check(call_import(&c, "KERNEL32.dll", "SetThreadPreferredUILanguages", {8, buffer, count}) ==
+                  1 &&
+              rd32(count) == 1 && rd32(count + 4) == 0xa5a5a5a5,
+          "SetThreadPreferredUILanguages acknowledges the fixed en-US preference");
+    check(call_import(&c, "KERNEL32.dll", "SetThreadPreferredUILanguages", {0, 0, 0}) == 1,
+          "SetThreadPreferredUILanguages accepts optional null pointers");
+}
+
 static void test_media_foundation_unavailable() {
     section("Media Foundation present but unsupported");
     X86 c;
@@ -5580,6 +5632,7 @@ int main(int argc, char **argv) {
     test_loader();
     test_import_return_trace();
     test_modules_and_wide();
+    test_preferred_ui_languages();
     test_media_foundation_unavailable();
     test_kernel32_wide();
     test_delphi_dlls();

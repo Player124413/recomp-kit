@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Kernel32: expose en-US thread, user and system preferred UI languages,
+  with UTF-16 multi-string size queries and bounded writes for MUI callers.
+
 - Runtime: GetModuleHandleA/W exposes registered DLLs before LoadLibrary,
   sharing stable pseudo-module handles with later loads and GetProcAddress.
 
