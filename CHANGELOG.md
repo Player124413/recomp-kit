@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Scheduler: `ExitProcess` on the main thread ends every other guest thread.
+  No worker runs guest code again, so a host no longer crashes in one running
+  on state the guest has already torn down; each is offered the baton once, to
+  end, so a host's shutdown drive finishes instead of waiting out its bound.
+
 - Auxiliary guest modules: game.toml `[modules.aux.<key>]` names a DLL the
   runtime maps beside the image at its preferred base (content-hashed, no
   relocation) with `[game] guest_size` growing the arena to hold it.

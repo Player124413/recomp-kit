@@ -2161,15 +2161,25 @@ void dump_scheduler_locked(const char *what, size_t me) {
 }
 
 bool thread_runnable(const GuestThread *t) {
-    if (t->finished || t->blocked)
-        return false;
-    if (t->suspend_count > 0)
+    if (t->finished)
         return false;
     if (!t->is_main && !t->spawned)
         return false;
-    // Once a process exit is pending only the main thread may run: it owns the
-    // landing pad ExitProcess longjmps to.
+    // Once a process exit is pending a worker may take the baton for one
+    // purpose: to end. Every point at which one resumes - guest_block,
+    // guest_yield, a thread body about to start - checks the pending exit
+    // before the next guest instruction and terminates the thread there, so
+    // this offers no guest code a chance to run. Blocked and suspended ones
+    // are offered it too, because their wait is never going to be satisfied
+    // now and Windows would not have let them continue either. It is what
+    // unwinds their frames and lets a host's shutdown drive finish instead of
+    // waiting out its bound. The main thread keeps the ordinary rules: it owns
+    // the landing pad, and sched_run_others_locked wakes it from any wait.
     if (g_exit_requested && !t->is_main)
+        return true;
+    if (t->blocked)
+        return false;
+    if (t->suspend_count > 0)
         return false;
     return true;
 }
@@ -2369,8 +2379,11 @@ void sched_run_others_locked(size_t me, const char *why) {
         // A worker can ask the process to exit while this thread is parked in
         // a wait nothing is ever going to satisfy. The exit outranks the wait:
         // the main thread owns the landing pad, so it has to come back and
-        // take it however long it was told to wait for.
-        if (g_exit_requested && threads()[me]->is_main) {
+        // take it however long it was told to wait for. Only until the exit
+        // has been performed, though: after that this thread is draining, and
+        // taking the baton straight back here would leave the workers it is
+        // draining no chance to end.
+        if (g_exit_requested && !g_exited && threads()[me]->is_main) {
             GuestThread *t = threads()[me];
             t->blocked = false;
             t->wait_kind = W_NONE;

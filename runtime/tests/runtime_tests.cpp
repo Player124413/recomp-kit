@@ -3563,12 +3563,14 @@ static int child_exit_stops_workers() {
     // instruction, so its counter must stand still.
     uint32_t after_exit = g_exit_worker_loops;
     sched_run_thread_finished();
-    sched_drive_until_stopped(0.25);
+    bool stopped = sched_drive_until_stopped(2.0);
     sched_drive_release();
     t0 = wall_seconds();
     while (wall_seconds() - t0 < 0.25)
         os_sleep_us(1000);
-    return g_exit_worker_loops == after_exit ? 0 : 3;
+    if (g_exit_worker_loops != after_exit)
+        return 3;           // guest code ran on the worker after the exit
+    return stopped ? 0 : 4; // the worker must also END, not just stop running
 }
 
 static void test_exit_process_stops_workers(X86 *c) {
@@ -3581,7 +3583,9 @@ static void test_exit_process_stops_workers(X86 *c) {
     int64_t pid = 0;
     int code = -1;
     check(os_spawn(child_argv, &pid) == 0 && os_wait(pid, &code) == 0 && code == 0,
-          "no guest code ran on a worker after ExitProcess (child exit %d)", code);
+          "after ExitProcess no guest code ran on a worker and every worker ended "
+          "(child exit %d)",
+          code);
 }
 
 static void test_mod_seams(X86 *c) {
