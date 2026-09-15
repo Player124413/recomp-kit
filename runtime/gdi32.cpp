@@ -1000,6 +1000,22 @@ bool dc_has_alpha(uint32_t dc) {
     auto *d = dib_in_dc(dc);
     return d && d->bpp == 32 && d->compression == 0;
 }
+// One bit of a monochrome bitmap, as MaskBlt reads its mask: a set bit selects
+// the foreground raster operation. False when the handle is not a 1-bit bitmap
+// or (x, y) lies outside it, which the caller treats as unmasked.
+bool mask_bit(uint32_t bitmap, int64_t x, int64_t y, bool *set) {
+    Dib *d = dib_of(bitmap);
+    if (!d || d->bpp != 1)
+        return false;
+    int64_t h = std::abs(int64_t(d->height));
+    if (x < 0 || y < 0 || x >= d->width || y >= h)
+        return false;
+    uint32_t at = d->bits + uint32_t(d->height > 0 ? h - 1 - y : y) * d->stride + uint32_t(x / 8);
+    if (!gm_valid(at, 1))
+        return false;
+    *set = ((rd8(at) >> (7 - x % 8)) & 1) != 0;
+    return true;
+}
 bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *p, bool preserve_alpha) {
     return pixel(dc, x, y, p, false, false, preserve_alpha);
 }

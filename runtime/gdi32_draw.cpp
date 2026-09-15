@@ -51,8 +51,13 @@ void pen_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t p) {
             out |= (i & 2 ? p : ~p) & (i & 1 ? old : ~old);
     write_pixel(dc, x, y, out | 0xff000000);
 }
+// `mask` is MaskBlt's monochrome bitmap, sampled from (mx, my) one bit per
+// destination pixel: a set bit takes the foreground raster operation, byte 2
+// of `rop`, and a clear one the background, byte 3 (what MAKEROP4 builds).
+// Without a mask every pixel takes the foreground, which is an ordinary blit.
 bool blit(uint32_t dst, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t src, int32_t sx,
-          int32_t sy, int32_t sw, int32_t sh, uint32_t rop) {
+          int32_t sy, int32_t sw, int32_t sh, uint32_t rop, uint32_t mask = 0, int32_t mx = 0,
+          int32_t my = 0) {
     int dw, dh, srcw, srch;
     if (!dc_size(dst, &dw, &dh) || !dc_size(src, &srcw, &srch) || !w || !h || !sw || !sh)
         return false;
@@ -87,18 +92,24 @@ bool blit(uint32_t dst, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t src
         for (int64_t xx = left; xx < right; ++xx) {
             auto &sample = copy[size_t((yy - top) * (right - left) + xx - left)];
             uint32_t old;
-            if (sample.valid && read_pixel(dst, xx, yy, &old))
-                write_pixel(dst, xx, yy, raster((rop >> 16) & 255, pattern, sample.p, old));
+            if (!sample.valid || !read_pixel(dst, xx, yy, &old))
+                continue;
+            unsigned index = (rop >> 16) & 255;
+            if (mask) {
+                bool set = true;
+                // A mask bit outside the bitmap leaves the pixel alone rather
+                // than guessing an operation for it.
+                if (!mask_bit(mask, int64_t(mx) + xx - x, int64_t(my) + yy - y, &set))
+                    continue;
+                index = set ? index : (rop >> 24) & 255;
+            }
+            write_pixel(dst, xx, yy, raster(index, pattern, sample.p, old));
         }
     return true;
 }
 // Window blits target an active DirectDraw primary. Its seam pairs the write
 // with the existing readback, mutation recorder and present machinery.
 void blit_shim(X86 *c, int mode) {
-    if (mode == 2 && arg(c, 8)) {
-        set_eax(c, 0);
-        return;
-    }
     uint32_t dest = arg(c, 0), primary = 0;
     auto *dc = dc_of(dest);
     if (dc && !dc->memory && !dc->bitmap)
@@ -115,7 +126,8 @@ void blit_shim(X86 *c, int mode) {
                    mode == 1 ? si(c, 8) : si(c, 3), mode == 1 ? si(c, 9) : si(c, 4),
                    arg(c, mode == 1   ? 10
                           : mode == 2 ? 11
-                                      : 8));
+                                      : 8),
+                   mode == 2 ? arg(c, 8) : 0, mode == 2 ? si(c, 9) : 0, mode == 2 ? si(c, 10) : 0);
     if (primary)
         ddraw_gdi_end_primary(primary);
     set_eax(c, ok);

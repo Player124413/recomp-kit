@@ -278,6 +278,42 @@ static void test_drawing() {
                       {dc, 24, 24, 2, 2, mem, 0, 0, 0, 0, 0, 0xcc0020}) == 1 &&
               call_import(&c, "GDI32.dll", "GetPixel", {dc, 24, 24}) == 0xff00,
           "zero-mask MaskBlt");
+    // A monochrome mask: a set bit takes the foreground operation, SRCCOPY, and
+    // a clear one the background, 0xaa, which leaves the destination. This is
+    // how the VCL draws a transparent bitmap, so a refusal here loses whole
+    // window backgrounds rather than one blit.
+    {
+        uint32_t m = s + 0x400;
+        memset(g_mem + m, 0, 40);
+        wr32(m, 40);
+        wr32(m + 4, 2);
+        wr32(m + 8, -2); // top-down, so row 0 is the first byte
+        wr16(m + 12, 1);
+        wr16(m + 14, 1);
+        wr32(m + 40, 0x00000000); // colour 0: black
+        wr32(m + 44, 0x00ffffff); // colour 1: white
+        uint32_t mask =
+            call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, m, 0, m + 128, 0, 0});
+        uint32_t mbits = rd32(m + 128);
+        check(mask != 0 && mbits != 0, "a 1-bit mask bitmap");
+        wr8(mbits, 0x80);     // row 0: mask bit set at x=0, clear at x=1
+        wr8(mbits + 4, 0x40); // row 1: clear at x=0, set at x=1
+        for (int i = 0; i < 4; ++i)
+            call_import(&c, "GDI32.dll", "SetPixel",
+                        {dc, uint32_t(28 + i % 2), uint32_t(28 + i / 2), 0x123456});
+        // The source DC still holds the 2x2 DIB: (0,0) and (1,0) are 0x00ff00
+        // after the SetPixel above, the bottom row 0xff0000.
+        check(call_import(&c, "GDI32.dll", "MaskBlt",
+                          {dc, 28, 28, 2, 2, mem, 0, 0, mask, 0, 0, 0xaacc0020}) == 1,
+              "MaskBlt with a mask is served");
+        check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 28, 28}) != 0x123456 &&
+                  call_import(&c, "GDI32.dll", "GetPixel", {dc, 29, 28}) == 0x123456,
+              "the top row copied where the mask bit was set and held elsewhere");
+        check(call_import(&c, "GDI32.dll", "GetPixel", {dc, 28, 29}) == 0x123456 &&
+                  call_import(&c, "GDI32.dll", "GetPixel", {dc, 29, 29}) != 0x123456,
+              "and the bottom row took the opposite bits");
+        call_import(&c, "GDI32.dll", "DeleteObject", {mask});
+    }
     uint32_t copy = call_import(&c, "GDI32.dll", "CreateDIBitmap", {dc, s, 4, bits, s, 0});
     check(copy && call_import(&c, "GDI32.dll", "GetObjectW", {copy, 24, s + 160}) == 24 &&
               rd32(s + 164) == 2,

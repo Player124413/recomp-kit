@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- GDI: MaskBlt honours its mask bitmap instead of refusing every call that
+  supplies one. A set mask bit takes the foreground raster operation and a
+  clear one the background, which is how the VCL draws a transparent bitmap;
+  refusing it lost whole window backgrounds, not single blits.
+
 - Scheduler: `ExitProcess` on the main thread ends every other guest thread.
   No worker runs guest code again, so a host no longer crashes in one running
   on state the guest has already torn down; each is offered the baton once, to

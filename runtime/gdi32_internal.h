@@ -49,6 +49,9 @@ bool dc_size(uint32_t dc, int *w, int *h);
 // Preserve alpha only for 32-bit BI_RGB DIB storage; normal GDI reads are opaque.
 bool dc_has_alpha(uint32_t dc);
 bool read_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t *pixel, bool preserve_alpha = false);
+// MaskBlt's mask: true with *set written when `bitmap` is a 1-bit bitmap and
+// (x, y) is inside it. A set bit selects the foreground raster operation.
+bool mask_bit(uint32_t bitmap, int64_t x, int64_t y, bool *set);
 bool write_pixel(uint32_t dc, int64_t x, int64_t y, uint32_t pixel, bool blend = false);
 Rect clip_box(uint32_t dc);
 bool drawable(uint32_t dc, int64_t x, int64_t y);
