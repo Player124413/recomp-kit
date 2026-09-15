@@ -4326,6 +4326,34 @@ def main():
             seh_stubs.add(stub)
             if table_range:
                 tr.table_ranges.add(table_range)
+        # A pushed continuation. Delphi leaves a finally block with
+        # `PUSH continuation; ...; POP EAX; JMP EAX`, and the jump is emitted
+        # as a dispatch on a variable, so the continuation is never a literal
+        # dangling target - and when the listing stopped short of it, nothing
+        # else names it either. Recursive descent cannot follow a push. An
+        # in-window code address a body pushes and does not contain is that
+        # body's own continuation, and it grows into it like any other.
+        # Only the idiom, exactly: the body must consume a pushed address with
+        # `POP reg; JMP reg`, and a push whose next instruction pushes FS:[..]
+        # is a try frame's handler, which has its own recovery above.
+        consumes = any(fn.insns[k].mnem == "POP" and fn.insns[k + 1].mnem == "JMP"
+                       and fn.insns[k].ops and fn.insns[k + 1].ops
+                       and fn.insns[k].ops[0] == fn.insns[k + 1].ops[0]
+                       for k in range(len(fn.insns) - 1))
+        window_end = span_ends.get(fn.addr, fn.end + 0x10000)
+        for k, ins in enumerate(fn.insns):
+            if not consumes or ins.mnem != "PUSH" or not ins.ops:
+                continue
+            nxt = fn.insns[k + 1] if k + 1 < len(fn.insns) else None
+            if nxt is not None and nxt.mnem == "PUSH" and nxt.ops and "FS:" in nxt.ops[0]:
+                continue
+            try:
+                op = parse_operand(ins.ops[0])
+            except TranslateError:
+                continue
+            if (op.kind == "imm" and fn.addr < op.imm < window_end and image.is_exec(op.imm)
+                    and op.imm not in fn.addrs and op.imm not in tr.all_insn_addrs):
+                targets.add(op.imm)
         return targets - known
 
     pending = set()

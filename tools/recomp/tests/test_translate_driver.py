@@ -1400,3 +1400,22 @@ def test_a_dangling_target_becomes_a_trap_under_the_switch():
     out = T.retarget_withdrawn(body, {0x004103CF})
     assert out[1].startswith("recomp_unknown_call(c, 0x004103cfu); return;")
     assert out[2] == "CALL_FN(00410370);"   # a real entry is untouched
+
+
+def test_a_truncated_listing_grows_into_its_pushed_continuation(tmp_path, monkeypatch):
+    """Delphi leaves a finally block with PUSH continuation; POP EAX; JMP EAX.
+    When the listing stops before the continuation, nothing names it: the
+    jump dispatches on a variable, so it is never a dangling literal. The body
+    must grow into it anyway, or the jump reaches no translated code at run
+    time."""
+    import struct
+    fn, cont = 0x00401000, 0x00401020
+    listed = b"\x55\x8b\xec" + b"\x68" + struct.pack("<I", cont) + b"\x58\xff\xe0"
+    blocks = {fn: listed, cont: b"\xb8\x01\x00\x00\x00\x5d\xc3"}
+    img = synthetic_image(blocks)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    img.plausible_immediate_target = lambda addr: False
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, {fn: listed})
+    assert "L_00401020:" in text, "the continuation was not decoded into the body"
+    assert ("case 0x401020u: goto L_00401020;" in text
+            or "case 0x00401020u: goto L_00401020;" in text)
