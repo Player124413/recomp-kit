@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Three more shapes of the listing defect `--allow-unmodelled` exists for.
+  A direct call whose literal target is not in the image at all becomes a
+  trap at its own address; the jump-table pass gets the same tolerance the
+  emit path has, so a table that cannot be decoded because one of its own
+  instructions cannot be modelled no longer fails the build; and a literal
+  dispatch target that no instruction boundary agrees with - a jump decoded
+  out of padding, landing inside a real instruction - becomes the trap a
+  withdrawn block gets. Without the switch each one still fails the build.
+
 - A SAFEARRAY may have more than one dimension. `SafeArrayCreate` refused
   anything else and the header it allocated was a fixed 24 bytes, so a guest
   that wrote `array[x, y]` got a null array back and had to abandon whatever
