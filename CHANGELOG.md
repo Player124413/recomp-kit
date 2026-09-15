@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Native overrides are reachable from a game: game.toml `[translate]
+  overrides` names a header the generated sources include before they define
+  FN_<addr>, so a game can replace one translated function with a native one
+  and every call site, tail call and jump-table case for that address follows.
+  The translator has emitted the hook since Task 8; nothing set it until now.
+  A named header that does not exist is an error, because a path that quietly
+  failed to resolve would leave a build looking replaced while running the
+  original.
+
 - Input: pending mouse moves are coalesced, as Windows does. The routing pump
   delivers one message per call, so a host reporting motion faster than the
   guest pumps built a backlog and the pointer trailed the hand by its length.

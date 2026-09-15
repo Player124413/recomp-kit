@@ -70,6 +70,18 @@ def load(game_dir):
     # ignored original/ and analysis/ directories.
     cfg["developer_exe_path"] = (game_dir / game["developer_exe"]).resolve()
     cfg["listings_path"] = (game_dir / translate.get("listings", "analysis")).resolve()
+    # [translate] overrides: a header the generated sources include before they
+    # define FN_<addr>, so a game can replace one translated function with a
+    # native one (translate.py's RECOMP_OVERRIDE_HEADER). Absent by default,
+    # and required to exist when named: a path that silently does not resolve
+    # would leave the build looking replaced while running the original.
+    overrides = translate.get("overrides")
+    cfg["overrides_header"] = None
+    if overrides is not None:
+        path = (game_dir / overrides).resolve()
+        if not path.is_file():
+            raise ValueError("%s: [translate] overrides names no file: %s" % (source, path))
+        cfg["overrides_header"] = path
     cfg["aux_modules"] = load_aux_modules(cfg, game_dir, source)
     return cfg
 

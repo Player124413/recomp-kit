@@ -119,6 +119,32 @@ class LoadTests(unittest.TestCase):
             self.assertIn('#define RECOMP_GAME_DIR "%s"' % game.resolve().as_posix(), header)
             self.assertIn('#define RECOMP_KIT_DIR "%s"' % ROOT.resolve().as_posix(), header)
 
+    def test_override_header_is_optional_and_must_exist(self):
+        """[translate] overrides names the header the generated sources include
+        before they define FN_<addr>, which is how a game replaces one
+        translated function with a native one. Absent by default; named and
+        missing is an error, because a path that quietly failed to resolve
+        would leave a build looking replaced while running the original."""
+        base = game_config.load(ROOT / "games/stub")
+        self.assertIsNone(base["overrides_header"])
+        self.assertIn('set(RECOMP_OVERRIDE_HEADER "")', gen_game_config.render_cmake(base))
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp) / "g"
+            game.mkdir()
+            text = (ROOT / "games/stub/game.toml").read_text()
+            text = text.replace("[translate]", '[translate]\noverrides = "native/overrides.h"', 1)
+            (game / "game.toml").write_text(text)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            with self.assertRaises(ValueError):
+                game_config.load(game)  # named but absent
+            (game / "native").mkdir()
+            (game / "native/overrides.h").write_text("/* none yet */\n")
+            cfg = game_config.load(game)
+            self.assertEqual(cfg["overrides_header"], (game / "native/overrides.h").resolve())
+            self.assertIn('set(RECOMP_OVERRIDE_HEADER "%s")'
+                          % (game / "native/overrides.h").resolve().as_posix(),
+                          gen_game_config.render_cmake(cfg))
+
     def test_auxiliary_modules_and_guest_size(self):
         """[modules.aux.<key>] names a DLL the guest loads at run time that the kit
         translates as a second image at its preferred base; [game] guest_size

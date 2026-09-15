@@ -40,6 +40,19 @@ if(POP_HAVE_GEN)
   target_include_directories(recomp_gen PRIVATE ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/runtime)
   target_include_directories(recomp_gen INTERFACE ${POP_GEN_DIR})
   target_compile_options(recomp_gen PRIVATE ${POP_WARN_GEN})
+  # A game's native replacements. funcs.h includes this header before it
+  # defines FN_<addr>, so every call site, tail call and jump-table case for a
+  # replaced address goes to the native function instead.
+  if(RECOMP_OVERRIDE_HEADER)
+    if(NOT EXISTS ${RECOMP_OVERRIDE_HEADER})
+      message(FATAL_ERROR "RECOMP_OVERRIDE_HEADER does not exist: ${RECOMP_OVERRIDE_HEADER}")
+    endif()
+    target_compile_definitions(recomp_gen PRIVATE
+      RECOMP_OVERRIDE_HEADER="${RECOMP_OVERRIDE_HEADER}")
+    get_filename_component(_override_dir ${RECOMP_OVERRIDE_HEADER} DIRECTORY)
+    target_include_directories(recomp_gen PRIVATE ${_override_dir})
+    message(STATUS "Native overrides: ${RECOMP_OVERRIDE_HEADER}")
+  endif()
   pop_optimize(recomp_gen 2)
   # Auxiliary modules (game.toml [modules.aux.<key>]) are translated into
   # gen/aux-<key>/ with their own funcs.h and prefixed tables, so each is its
