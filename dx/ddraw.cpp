@@ -570,6 +570,60 @@ bool read_rect(uint32_t addr, const ComObj *s, int32_t r[4]) {
     return true;
 }
 
+// A blit rectangle, without the requirement that it lie inside the surface.
+// Ordering and readability are still errors; hanging off an edge is not,
+// because Blt clips rather than refusing. A null rectangle still means the
+// whole surface.
+bool read_rect_loose(uint32_t addr, const ComObj *s, int32_t r[4]) {
+    if (!addr) {
+        r[0] = 0;
+        r[1] = 0;
+        r[2] = (int32_t)s->width;
+        r[3] = (int32_t)s->height;
+        return true;
+    }
+    if (!gm_valid(addr, 16))
+        return false;
+    for (int i = 0; i < 4; ++i)
+        r[i] = (int32_t)rd32(addr + 4u * (uint32_t)i);
+    return r[2] >= r[0] && r[3] >= r[1];
+}
+
+// Clip a blit to the destination surface, carrying the source rectangle with
+// it so a stretch keeps its ratio. DirectDraw clips a blit whose destination
+// runs off the surface - a game drawing a tile page or a scrolled buffer at
+// an edge does it constantly - and refusing one loses the whole draw. False
+// when nothing is left, which is a blit that succeeded and wrote nothing.
+bool clip_blit(const ComObj *dst, int32_t d[4], int32_t sr[4], bool have_src) {
+    const int32_t w = d[2] - d[0], h = d[3] - d[1];
+    if (w <= 0 || h <= 0)
+        return false;
+    const int32_t sw = have_src ? sr[2] - sr[0] : 0, sh = have_src ? sr[3] - sr[1] : 0;
+    const int32_t left = std::max(d[0], 0), top = std::max(d[1], 0);
+    const int32_t right = std::min(d[2], (int32_t)dst->width);
+    const int32_t bottom = std::min(d[3], (int32_t)dst->height);
+    if (right <= left || bottom <= top)
+        return false;
+    if (have_src) {
+        // Each destination edge moved by this much of the source span.
+        const int32_t nsl = sr[0] + (int32_t)((int64_t)(left - d[0]) * sw / w);
+        const int32_t nst = sr[1] + (int32_t)((int64_t)(top - d[1]) * sh / h);
+        const int32_t nsr = sr[2] - (int32_t)((int64_t)(d[2] - right) * sw / w);
+        const int32_t nsb = sr[3] - (int32_t)((int64_t)(d[3] - bottom) * sh / h);
+        sr[0] = nsl;
+        sr[1] = nst;
+        sr[2] = nsr;
+        sr[3] = nsb;
+        if (sr[2] <= sr[0] || sr[3] <= sr[1])
+            return false;
+    }
+    d[0] = left;
+    d[1] = top;
+    d[2] = right;
+    d[3] = bottom;
+    return true;
+}
+
 uint32_t read_pixel(const ComObj *s, int32_t x, int32_t y) {
     uint32_t a = s->pixels + (uint32_t)y * s->pitch + (uint32_t)x * bytes_per_pixel(s->bpp);
     switch (bytes_per_pixel(s->bpp)) {
@@ -2358,20 +2412,31 @@ void Surface_Blt(X86 *c) {
     d3d_flush_surface(dst, "Blt dst");
     d3d_flush_surface(src, "Blt src");
 
+    // The destination may hang off the surface; Blt clips rather than
+    // refusing, and the clip happens below once the source is known so a
+    // stretch keeps its ratio.
     int32_t d[4], sr[4] = {0, 0, 0, 0};
-    if (!read_rect(dst_rect, dst, d)) {
+    if (!read_rect_loose(dst_rect, dst, d)) {
         com_ret(c, DDERR_INVALIDRECT);
         return;
     }
 
     bool have_fx = fx && gm_valid(fx, DDBLTFX_SIZE);
     if (flags & DDBLT_COLORFILL) {
+        if (!clip_blit(dst, d, sr, false)) {
+            com_ret(c, DD_OK); // entirely outside: nothing to fill
+            return;
+        }
         uint32_t value = have_fx ? rd32(fx + DDBLTFX_OFF_dwFillColor) : 0;
         uint8_t *cov = record_blit(dst, d, nullptr, sr, BlitKeys{}, true, value);
         ddraw_before_write(dst);
         blit(dst, d, nullptr, sr, BlitKeys{}, true, value, cov);
         apply_last_blit(dst);
     } else if (flags & DDBLT_DEPTHFILL) {
+        if (!clip_blit(dst, d, sr, false)) {
+            com_ret(c, DD_OK);
+            return;
+        }
         uint32_t value = have_fx ? rd32(fx + DDBLTFX_OFF_dwFillColor) : 0;
         uint8_t *cov = record_blit(dst, d, nullptr, sr, BlitKeys{}, true, value);
         ddraw_before_write(dst);
@@ -2382,8 +2447,14 @@ void Surface_Blt(X86 *c) {
             com_ret(c, DDERR_INVALIDPARAMS);
             return;
         }
+        // The source must lie inside its surface: there is nothing to read
+        // outside it, and unlike the destination that is a caller error.
         if (!read_rect(src_rect, src, sr)) {
             com_ret(c, DDERR_INVALIDRECT);
+            return;
+        }
+        if (!clip_blit(dst, d, sr, true)) {
+            com_ret(c, DD_OK); // entirely outside: nothing to copy
             return;
         }
         BlitKeys keys;

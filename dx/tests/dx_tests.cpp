@@ -1090,6 +1090,34 @@ static void test_blt_and_colorkey() {
         CHECK_EQ(q.pixels[(size_t)60 * q.pitch + 208], 1); // keyed out, fill intact
     }
 
+    // A destination that runs off the surface is clipped, not refused: a game
+    // drawing a buffer or a tile page at an edge does it constantly, and
+    // refusing loses the whole draw rather than the part that hangs over.
+    {
+        uint32_t off = sc(0x3d0);
+        wr32(off + 0, 632); // 16 wide from x=632 on a 640-wide primary: 8 over
+        wr32(off + 4, 100);
+        wr32(off + 8, 648);
+        wr32(off + 12, 116);
+        CHECK_EQ(call_method(primary, S_Blt, {off, src, 0, DDBLT_WAIT, 0}), DD_OK);
+        const Present &q = g_presents.back();
+        CHECK_EQ(q.pixels[(size_t)100 * q.pitch + 632], 7); // the part on the surface
+        CHECK_EQ(q.pixels[(size_t)100 * q.pitch + 639], 7); // right up to its last column
+        // Entirely outside writes nothing and still succeeds.
+        wr32(off + 0, 700);
+        wr32(off + 8, 716);
+        CHECK_EQ(call_method(primary, S_Blt, {off, src, 0, DDBLT_WAIT, 0}), DD_OK);
+        // A colour fill clips the same way.
+        wr32(off + 0, 600);
+        wr32(off + 4, 470);
+        wr32(off + 8, 700);
+        wr32(off + 12, 500);
+        wr32(fx + DDBLTFX_OFF_dwFillColor, 9);
+        CHECK_EQ(call_method(primary, S_Blt, {off, 0, 0, DDBLT_COLORFILL | DDBLT_WAIT, fx}), DD_OK);
+        const Present &f = g_presents.back();
+        CHECK_EQ(f.pixels[(size_t)479 * f.pitch + 639], 9);
+    }
+
     // DDBLT_KEYSRCOVERRIDE takes the key from the DDBLTFX instead of the
     // surface, so a caller can key one blit without touching the surface. Key
     // out 7 this time, which is the half the surface's own key keeps.
