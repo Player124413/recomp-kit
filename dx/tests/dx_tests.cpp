@@ -4925,6 +4925,66 @@ static void test_query_interface() {
 static uint32_t g_enum_count = 0;
 static uint32_t g_enum_modes[16][3];
 
+static uint32_t g_device_enum_calls;
+static bool g_device_enum_wide, g_device_enum_extended;
+
+static void device_enum_callback(X86 *c) {
+    ++g_device_enum_calls;
+    CHECK_EQ(arg(c, 0), 0u); // Primary display has no GUID.
+    const char *expected[] = {"Primary Display Driver", "display"};
+    for (unsigned n = 0; n < 2; ++n) {
+        uint32_t str = arg(c, n + 1);
+        for (unsigned j = 0; j <= strlen(expected[n]); ++j)
+            CHECK_EQ(g_device_enum_wide ? rd16(str + j * 2) : rd8(str + j),
+                     (uint8_t)expected[n][j]);
+    }
+    CHECK_EQ(arg(c, 3), 0x12345678u);
+    if (g_device_enum_extended)
+        CHECK_EQ(arg(c, 4), 0u); // Primary display's HMONITOR is null.
+    set_eax(c, 0);               // Stop enumeration after this device.
+}
+
+static void test_directdraw_enumeration() {
+    cpu_reset();
+    uint32_t callbacks[] = {
+        imports_alloc_trampoline("TEST", "EnumDevice", device_enum_callback, 4),
+        imports_alloc_trampoline("TEST", "EnumDeviceEx", device_enum_callback, 5),
+    };
+    const char *names[] = {"DirectDrawEnumerateA", "DirectDrawEnumerateW", "DirectDrawEnumerateExA",
+                           "DirectDrawEnumerateExW"};
+    for (unsigned n = 0; n < 4; ++n) {
+        uint32_t target = tramp("DDRAW.dll", names[n]);
+        CHECK(target != 0);
+        if (!target)
+            continue;
+        g_device_enum_wide = n & 1;
+        g_device_enum_extended = n >= 2;
+        uint32_t cb = callbacks[n >= 2];
+        // A registration just above the arguments must survive callback and
+        // stdcall cleanup. A missing three-argument export leaves these words
+        // below ESP and makes a subsequent guest unlink read the callback.
+        uint32_t sp = g_cpu.r[4];
+        wr32(sp, 0xffffffffu);
+        wr32(sp + 4, cb);
+        g_device_enum_calls = 0;
+        CHECK_EQ(n >= 2 ? call_shim(target, {cb, 0x12345678, 0})
+                        : call_shim(target, {cb, 0x12345678}),
+                 DD_OK);
+        CHECK_EQ(g_device_enum_calls, 1u);
+        CHECK_EQ(g_cpu.r[4], sp);
+        CHECK_EQ(rd32(sp), 0xffffffffu);
+        CHECK_EQ(rd32(sp + 4), cb);
+        CHECK_EQ(n >= 2 ? call_shim(target, {0, 0, 0}) : call_shim(target, {0, 0}),
+                 DDERR_INVALIDPARAMS);
+        if (n >= 2) {
+            CHECK_EQ(call_shim(target, {cb, 0x12345678, 7}), DD_OK);
+            CHECK_EQ(g_device_enum_calls, 2u);
+            CHECK_EQ(call_shim(target, {cb, 0x12345678, 8}), DDERR_INVALIDPARAMS);
+            CHECK_EQ(g_device_enum_calls, 2u);
+        }
+    }
+}
+
 static void test_enum_display_modes() {
     cpu_reset();
     reset_ddraw_for_test();
@@ -10251,6 +10311,7 @@ int main() {
         {"DirectDrawCreateEx fallback", test_directdraw_create_ex_fallback},
         {"QueryInterface", test_query_interface},
         {"display modes", test_enum_display_modes},
+        {"DirectDraw enumeration", test_directdraw_enumeration},
         {"configurable modes", test_configurable_display_modes},
         {"Classic probe surfaces", test_classic_probe_surface_creation},
         {"Direct3D pipeline", test_d3d_pipeline},

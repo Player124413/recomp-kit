@@ -4278,23 +4278,45 @@ void DirectDrawCreateEx(X86 *c) {
     com_ret(c, DDERR_UNSUPPORTED);
 }
 
-void DirectDrawEnumerateA(X86 *c) {
+void enumerate_devices(X86 *c, bool wide, bool extended) {
     uint32_t cb = arg(c, 0);
     uint32_t ctx = arg(c, 1);
-    if (!cb) {
+    if (!cb || (extended && (arg(c, 2) & ~7u))) {
         com_ret(c, DDERR_INVALIDPARAMS);
         return;
     }
-    // One device, the primary display driver. Real DirectDraw passes a null
-    // GUID for it, and the game's callback stores that GUID and later hands it
-    // back to DirectDrawCreate.
-    uint32_t strs = scratch(128);
+    // One primary device, shared with GDI. Extended enumeration includes it
+    // regardless of the requested secondary/non-display device flags. Both
+    // its GUID and HMONITOR are null, per the DirectDraw callback contract.
+    uint32_t strs = scratch(256);
     uint32_t desc_str = strs;
-    uint32_t name_str = strs + 64;
-    gm_put_str(desc_str, "Primary Display Driver", 64);
-    gm_put_str(name_str, "display", 64);
-    guest_call(c, cb, 0 /* lpGUID */, desc_str, name_str, ctx);
+    uint32_t name_str = strs + 128;
+    if (wide) {
+        gm_put_wstr(desc_str, "Primary Display Driver", 64);
+        gm_put_wstr(name_str, "display", 64);
+    } else {
+        gm_put_str(desc_str, "Primary Display Driver", 128);
+        gm_put_str(name_str, "display", 128);
+    }
+    if (extended) {
+        const uint32_t args[] = {0, desc_str, name_str, ctx, 0};
+        guest_call(c, cb, args, 5);
+    } else
+        guest_call(c, cb, 0, desc_str, name_str, ctx);
     com_ret(c, DD_OK);
+}
+
+void DirectDrawEnumerateA(X86 *c) {
+    enumerate_devices(c, false, false);
+}
+void DirectDrawEnumerateW(X86 *c) {
+    enumerate_devices(c, true, false);
+}
+void DirectDrawEnumerateExA(X86 *c) {
+    enumerate_devices(c, false, true);
+}
+void DirectDrawEnumerateExW(X86 *c) {
+    enumerate_devices(c, true, true);
 }
 
 // DirectDrawCreateClipper(dwFlags, lplpDDClipper, pUnkOuter): a clipper with
@@ -4321,6 +4343,9 @@ const ImportShim g_ddraw_exports[] = {
     {"DDRAW.dll", "DirectDrawCreate", 3, DirectDrawCreate},
     {"DDRAW.dll", "DirectDrawCreateEx", 4, DirectDrawCreateEx},
     {"DDRAW.dll", "DirectDrawEnumerateA", 2, DirectDrawEnumerateA},
+    {"DDRAW.dll", "DirectDrawEnumerateW", 2, DirectDrawEnumerateW},
+    {"DDRAW.dll", "DirectDrawEnumerateExA", 3, DirectDrawEnumerateExA},
+    {"DDRAW.dll", "DirectDrawEnumerateExW", 3, DirectDrawEnumerateExW},
     {"DDRAW.dll", "DirectDrawCreateClipper", 3, DirectDrawCreateClipper},
 };
 

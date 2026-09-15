@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- DirectDraw: expose ANSI and Unicode legacy/extended device enumeration,
+  reporting the primary display through callbacks with the correct ABI.
+
 - Translator: recognize POP restores of FS:[0] through a proven zero
   register, including unlink helpers that do not establish their own frame.
 
