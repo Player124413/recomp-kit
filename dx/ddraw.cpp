@@ -1000,6 +1000,14 @@ void recycle_frame(Frame &f) {
     f.display_palette_version = 0;
 }
 uint64_t g_frame_id = 1;
+// How many sealed frames the recorder keeps before releasing the oldest. A
+// presenter holds at most three in flight; the rest is slack for a host that
+// is slow to release and for the tests that hold several deliberately.
+const size_t kRetainedFrames = 16;
+// How many source leases one frame keeps. A frame that is sealed normally
+// holds a handful; this is the bound for one that is never sealed at all,
+// which is what a screen drawn only with blits produces.
+const size_t kLeasesPerFrame = 128;
 uint32_t g_seq = 0;
 bool g_after_first_draw = false;
 bool g_after_first_hud = false;
@@ -1872,6 +1880,24 @@ uint8_t *record_blit(ComObj *dst, const int32_t d[4], const ComObj *src, const i
         Retained &ret = retained()[retained_key(r->src.surface, r->src.revision)];
         ++ret.frame_leases;
         f.leases.push_back(r->src);
+        // A frame ends when something is presented or drawn. A screen that
+        // does neither - one built entirely from blits into a back buffer the
+        // guest never flips - records into the same frame indefinitely, and
+        // every lease it takes can cost a full copy of those pixels the moment
+        // the guest overwrites them. The oldest leases of an unsealed frame
+        // are therefore let go: nothing has been able to ask for them, because
+        // only a sealed frame is offered to a presenter.
+        while (f.leases.size() > kLeasesPerFrame) {
+            const HostSurfaceKey old_key = f.leases.front();
+            f.leases.erase(f.leases.begin());
+            auto it = retained().find(retained_key(old_key.surface, old_key.revision));
+            if (it == retained().end())
+                continue;
+            if (it->second.frame_leases)
+                --it->second.frame_leases;
+            if (!it->second.held())
+                retained().erase(it);
+        }
     }
 
     // Zeroed, and filled by the blit itself as it writes. Predicting it here
@@ -1953,6 +1979,19 @@ void seal_frame(const char * /*why*/) {
     g_present_since_seal = false;
     g_drew_since_seal = false;
     ++g_frame_id;
+    // A sealed frame holds a lease on every surface revision it recorded, and
+    // each held revision keeps a full copy of those pixels. A host releases
+    // the frames it took; one that never does - or one that faults before it
+    // can - would otherwise keep every frame of the run, which on a screen
+    // that records many blits is megabytes a second. The recorder therefore
+    // keeps a bounded window of recent frames and releases anything older,
+    // which is far more than the three a presenter has in flight.
+    while (frames().size() > kRetainedFrames) {
+        auto oldest = frames().begin();
+        if (oldest->first >= g_frame_id) // never the frame being recorded
+            break;
+        host_frame_release(HostFrameHandle{oldest->first});
+    }
     g_seq = 0;
     g_after_first_draw = g_after_first_hud = false;
     // Allocate the next arena only when needed; four target leases may still

@@ -7,6 +7,16 @@
   guest pumps built a backlog and the pointer trailed the hand by its length.
   A move between a press and a release is kept, so a drag is unaffected.
 
+- DirectDraw recorder: what a frame retains is bounded. A frame ends when
+  something is presented or drawn, so a screen built entirely from blits into
+  a back buffer the guest never flips records into one frame indefinitely, and
+  every source lease it takes can cost a full copy of those pixels. The oldest
+  leases of an unsealed frame are now let go - nothing can have asked for them,
+  since only a sealed frame is offered to a presenter - and the recorder keeps
+  a bounded window of sealed frames, releasing anything older. This halves an
+  observed growth of 15 MB a second on that kind of screen; the remainder is
+  still under investigation.
+
 - Diagnostics are bounded. A guest that generates code writes a new routine at
   a new address every time, so a report keyed by that address is a new key on
   every call: the once-only log now caps its key set, the undeliverable-call
