@@ -575,6 +575,40 @@ void u_InvalidateRect(X86 *c) {
     set_eax(c, 1);
 }
 
+// A layered window's transparency. Windows requires WS_EX_LAYERED, and the
+// VCL sets it before calling; a window without it is refused, as there it is.
+void u_SetLayeredWindowAttributes(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    if (!w || !(w->exstyle & 0x00080000u)) { // WS_EX_LAYERED
+        set_last_error(87);                  // ERROR_INVALID_PARAMETER
+        set_eax(c, 0);
+        return;
+    }
+    w->layered_key = arg(c, 1) & 0xffffffu;
+    w->layered_alpha = arg(c, 2) & 255u;
+    w->layered_flags = arg(c, 3) & 3u;
+    w->surface.dirty = true;
+    LOGV("SetLayeredWindowAttributes(%08x, key=%06x, alpha=%u, flags=%u)", w->hwnd, w->layered_key,
+         w->layered_alpha, w->layered_flags);
+    set_eax(c, 1);
+}
+
+void u_GetLayeredWindowAttributes(X86 *c) {
+    Window *w = find_window(arg(c, 0));
+    if (!w || !(w->exstyle & 0x00080000u) || !w->layered_flags) {
+        set_last_error(87); // ERROR_INVALID_PARAMETER
+        set_eax(c, 0);
+        return;
+    }
+    if (uint32_t p = arg(c, 1))
+        wr32(p, w->layered_key);
+    if (uint32_t p = arg(c, 2))
+        wr8(p, uint8_t(w->layered_alpha));
+    if (uint32_t p = arg(c, 3))
+        wr32(p, w->layered_flags);
+    set_eax(c, 1);
+}
+
 void u_SetWindowLongA(X86 *c) {
     Window *w = find_window(arg(c, 0));
     int32_t idx = (int32_t)arg(c, 1);
@@ -1382,6 +1416,8 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "ClientToScreen", 2, u_ClientToScreen},
     {"USER32.dll", "SetRect", 5, u_SetRect},
     {"USER32.dll", "InvalidateRect", 3, u_InvalidateRect},
+    {"USER32.dll", "SetLayeredWindowAttributes", 4, u_SetLayeredWindowAttributes},
+    {"USER32.dll", "GetLayeredWindowAttributes", 4, u_GetLayeredWindowAttributes},
     {"USER32.dll", "SetWindowLongA", 3, u_SetWindowLongA},
     {"USER32.dll", "GetWindowLongA", 2, u_GetWindowLongA},
     {"USER32.dll", "SetWindowTextA", 2, u_SetWindowTextA},

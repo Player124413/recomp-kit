@@ -48,6 +48,10 @@ struct Window {
     // know whether it is empty, which is what UpdateWindow and BeginPaint act
     // on. Showing a window invalidates it, painting it validates it.
     bool update_pending = false;
+    // SetLayeredWindowAttributes: LWA_COLORKEY (1) makes every pixel of that
+    // colour transparent, LWA_ALPHA (2) applies one opacity to the whole
+    // window. Both are honoured where the window surfaces are composited.
+    uint32_t layered_flags = 0, layered_key = 0, layered_alpha = 255;
 };
 
 struct Msg {

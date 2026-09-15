@@ -542,6 +542,63 @@ static void test_draw_text() {
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
 // Exercise msimg32 through real stdcall trampolines and top-down guest DIBs.
+// A layered window: the key colour is dropped when the window surfaces are
+// composited, and the rest is blended at the constant alpha. This is how a
+// shaped form reaches the screen; without it the key colour covers it.
+static void test_layered_window() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00300000;
+    uint32_t hwnd = make_test_window(&c, s, 8, 4);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    uint32_t rect = s + 0x100;
+    wr32(rect, 0);
+    wr32(rect + 4, 0);
+    wr32(rect + 8, 8);
+    wr32(rect + 12, 4);
+    uint32_t key = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0x00ff00ffu}); // magenta
+    call_import(&c, "USER32.dll", "FillRect", {dc, rect, key});
+    wr32(rect + 8, 4); // the left half stays magenta, the right becomes white
+    wr32(rect, 4);
+    wr32(rect + 8, 8);
+    uint32_t white = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0x00ffffffu});
+    call_import(&c, "USER32.dll", "FillRect", {dc, rect, white});
+    call_import(&c, "USER32.dll", "ShowWindow", {hwnd, 5});
+
+    std::vector<uint32_t> frame(size_t(8 * 4), 0xff000000u);
+    check(call_import(&c, "USER32.dll", "SetLayeredWindowAttributes",
+                      {hwnd, 0x00ff00ffu, 255, 1}) == 0,
+          "a window without WS_EX_LAYERED is refused");
+    call_import(&c, "USER32.dll", "SetWindowLongW", {hwnd, uint32_t(-20), 0x00080000u});
+    check(call_import(&c, "USER32.dll", "SetLayeredWindowAttributes",
+                      {hwnd, 0x00ff00ffu, 255, 1}) == 1,
+          "SetLayeredWindowAttributes with a colour key");
+    gdi_composite_windows(frame.data(), 8, 4);
+    check(frame[0] == 0xff000000u, "the key colour is not composited");
+    check((frame[4] & 0xffffffu) == 0xffffffu, "the rest of the window is");
+
+    // The same window at half opacity blends over what is already there.
+    std::fill(frame.begin(), frame.end(), 0xff000000u);
+    check(call_import(&c, "USER32.dll", "SetLayeredWindowAttributes",
+                      {hwnd, 0x00ff00ffu, 128, 3}) == 1,
+          "and with an alpha as well");
+    gdi_composite_windows(frame.data(), 8, 4);
+    check(frame[0] == 0xff000000u, "the key still drops out");
+    uint32_t blended = frame[4] & 255u;
+    check(blended > 100 && blended < 160, "and the rest blended to %u, about half", blended);
+
+    uint32_t out_key = s + 0x200;
+    check(call_import(&c, "USER32.dll", "GetLayeredWindowAttributes",
+                      {hwnd, out_key, out_key + 8, out_key + 16}) == 1 &&
+              rd32(out_key) == 0x00ff00ffu && rd8(out_key + 8) == 128 && rd32(out_key + 16) == 3,
+          "GetLayeredWindowAttributes reports them back");
+
+    call_import(&c, "GDI32.dll", "DeleteObject", {key});
+    call_import(&c, "GDI32.dll", "DeleteObject", {white});
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
+
 static void test_msimg32() {
     X86 c;
     loader_init_context(&c);
@@ -674,6 +731,7 @@ int main(int argc, char **argv) {
     }
     if (argc < 2 || strcmp(argv[1], "model") != 0) {
         test_drawing();
+        test_layered_window();
         test_msimg32();
         test_dib_rows_and_regions();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);

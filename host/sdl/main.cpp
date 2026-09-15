@@ -24,6 +24,7 @@
 #include "../audio.h"
 #include "../audio_capture.h"
 #include "../boot.h"
+#include "../../runtime/display_seam.h"
 #include "../d3d_render.h"
 #include "../game_path.h"
 #include "../gpu/gpu_factory.h"
@@ -285,6 +286,12 @@ bool window_fullscreen() {
 // what the guest is doing: an FMV reads the mouse exactly as gameplay does.
 bool pointer_capture_wanted() {
     if (!platform_ui_pointer_capture_supported())
+        return false;
+    // Nothing to stand in for the system pointer until the guest has a display
+    // surface of its own: while it is still showing plain windows - a launcher,
+    // a settings form - it draws no cursor, so hiding the host one would leave
+    // the player with nothing to aim.
+    if (!ddraw_gdi_primary_active())
         return false;
     if (!g_focused || !g_window || !window_focused() || g_escape_held)
         return false;

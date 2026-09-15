@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- user32: SetLayeredWindowAttributes and GetLayeredWindowAttributes. The
+  window compositor drops the colour key and applies the constant alpha, so a
+  shaped form is drawn as its artwork rather than as a rectangle of the key
+  colour.
+
+- Host: the system pointer stays visible until the guest has a display surface
+  of its own. While it is still showing plain windows it draws no cursor, so
+  hiding the host one left nothing to aim with.
+
 - GDI: MaskBlt honours its mask bitmap instead of refusing every call that
   supplies one. A set mask bit takes the foreground raster operation and a
   clear one the background, which is how the VCL draws a transparent bitmap;

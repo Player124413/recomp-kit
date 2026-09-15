@@ -1129,12 +1129,33 @@ void gdi_composite_windows(uint32_t *argb, int w, int h) {
         user32::client_origin(host_main_window(), &origin_x, &origin_y);
     for (auto *window : visible_surfaces()) {
         auto &s = window->surface;
+        // A layered window: LWA_COLORKEY drops every pixel of the key colour,
+        // LWA_ALPHA blends the rest over what is already there. Together they
+        // are how a shaped form is drawn, and without them its key colour
+        // covers the screen instead of vanishing.
+        const bool keyed = (window->layered_flags & 1) != 0;
+        const uint32_t key = gdi::argb(window->layered_key) & 0xffffffu;
+        const uint32_t alpha = (window->layered_flags & 2) ? window->layered_alpha : 255u;
         int64_t dx = int64_t(window->x) - origin_x, dy = int64_t(window->y) - origin_y;
         for (int64_t y = std::max<int64_t>(0, dy); y < std::min<int64_t>(h, dy + s.h); ++y)
             for (int64_t x = std::max<int64_t>(0, dx); x < std::min<int64_t>(w, dx + s.w); ++x) {
                 uint32_t p = s.argb[size_t(y - dy) * s.w + size_t(x - dx)];
-                if (p >> 24)
-                    argb[size_t(y) * w + size_t(x)] = p;
+                if (!(p >> 24))
+                    continue;
+                if (keyed && (p & 0xffffffu) == key)
+                    continue;
+                uint32_t &dst = argb[size_t(y) * w + size_t(x)];
+                if (alpha == 255) {
+                    dst = p;
+                    continue;
+                }
+                uint32_t out = 0xff000000u;
+                for (unsigned shift = 0; shift < 24; shift += 8)
+                    out |= ((((p >> shift) & 255) * alpha + ((dst >> shift) & 255) * (255 - alpha) +
+                             127) /
+                            255)
+                           << shift;
+                dst = out;
             }
     }
 }
