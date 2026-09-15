@@ -613,22 +613,22 @@ void k_VerifyVersionInfoW(X86 *c) {
                          rd16(p + 278), rd16(p + 276), rd16(p + 280), rd8(p + 282)};
     bool matched = true;
     // Major, minor, SP major and SP minor form one ordered version tuple.
-    // The first requested condition governs the tuple's comparison.
+    // Equality permits the next field's own condition. Once a direction is
+    // chosen, lower fields may narrow it to equality but cannot reverse it.
     uint32_t tuple_op = 0;
-    bool tuple_different = false;
     for (unsigned bit : {1u, 0u, 5u, 4u}) {
         if (!(types & (1u << bit)))
             continue;
-        if (!tuple_op)
-            tuple_op = conditions[bit];
-        if (actual[bit] != wanted[bit]) {
-            matched = compare(actual[bit], wanted[bit], tuple_op);
-            tuple_different = true;
+        uint32_t op = conditions[bit];
+        if (tuple_op <= 1)
+            tuple_op = op;
+        bool same_direction = (op >= 4) == (tuple_op >= 4);
+        if (op != 1 && !same_direction)
+            op = tuple_op;
+        matched = compare(actual[bit], wanted[bit], op);
+        if (actual[bit] != wanted[bit])
             break;
-        }
     }
-    if (tuple_op && !tuple_different)
-        matched = compare(0, 0, tuple_op);
     for (unsigned bit : {2u, 3u, 7u}) {
         if (types & (1u << bit))
             matched = matched && compare(actual[bit], wanted[bit], conditions[bit]);

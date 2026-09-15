@@ -4044,6 +4044,18 @@ static void test_windows_version(X86 *c) {
     wr32(p + 8, RECOMP_WINDOWS_MINOR);
     check(verify(0x33, ge) == 0,
           "VerifyVersionInfoW rejects a newer service pack at equal major/minor");
+    wr32(p + 8, RECOMP_WINDOWS_MINOR + 1);
+    uint64_t mixed = call_condition_mask(c, 0, 2, 1);
+    mixed = call_condition_mask(c, mixed, 1, 4);
+    check(verify(3, mixed) == 1,
+          "VerifyVersionInfoW allows equal major with a separate minor comparison");
+    wr32(p + 8, RECOMP_WINDOWS_MINOR - 1);
+    mixed = call_condition_mask(c, 0, 2, 3);
+    mixed = call_condition_mask(c, mixed, 1, 1);
+    check(verify(3, mixed) == 0, "VerifyVersionInfoW retains a lower-field equality condition");
+    mixed = call_condition_mask(c, 0, 2, 3);
+    mixed = call_condition_mask(c, mixed, 1, 4);
+    check(verify(3, mixed) == 1, "VerifyVersionInfoW keeps the major comparison direction");
     wr16(p + 280, 1);
     check(verify(0x40, call_condition_mask(c, 0, 0x40, 6)) == 0 &&
               verify(0x40, call_condition_mask(c, 0, 0x40, 7)) == 0,
