@@ -370,6 +370,23 @@ static void test_session_notification_service_unavailable() {
           "session unregistration reports the same unavailable service");
 }
 
+static void test_buffered_paint_unavailable() {
+    section("buffered painting unavailable");
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t text = 0x00308000;
+    gm_put_wstr(text, "uxtheme.dll", 64);
+    uint32_t module = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {text});
+    check(module != 0, "the theme module exposes the buffered-paint availability probe");
+    gm_put_str(text + 128, "BufferedPaintInit", 64);
+    check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0,
+          "BufferedPaintInit resolves through GetProcAddress");
+    check(call_import(&c, "UXTHEME.dll", "BufferedPaintInit", {}) == 0x80004001u,
+          "BufferedPaintInit reports E_NOTIMPL for unavailable buffered painting");
+    check(call_import(&c, "UXTHEME.dll", "BufferedPaintUnInit", {}) == 0,
+          "BufferedPaintUnInit safely completes without buffered-paint resources");
+}
+
 static void test_preferred_ui_languages() {
     section("preferred UI languages");
     X86 c;
@@ -5664,6 +5681,7 @@ int main(int argc, char **argv) {
     test_modules_and_wide();
     test_preferred_ui_languages();
     test_session_notification_service_unavailable();
+    test_buffered_paint_unavailable();
     test_media_foundation_unavailable();
     test_kernel32_wide();
     test_delphi_dlls();

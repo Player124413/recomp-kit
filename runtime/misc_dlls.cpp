@@ -20,6 +20,9 @@ void session_service_unavailable(X86 *c) {
     set_last_error(1702); // RPC_S_INVALID_BINDING
     set_eax(c, 0);
 }
+void buffered_paint_unavailable(X86 *c) {
+    set_eax(c, 0x80004001u); // E_NOTIMPL: use the caller's ordinary GDI path.
+}
 void enum_printers(X86 *c) {
     zero_out(arg(c, 5));
     zero_out(arg(c, 6));
@@ -77,6 +80,8 @@ void folder_path(X86 *c) {
     set_eax(c, 0);
 }
 const ImportShim shims[] = {
+    {"UXTHEME.dll", "BufferedPaintInit", 0, buffered_paint_unavailable},
+    {"UXTHEME.dll", "BufferedPaintUnInit", 0, zero},
     {"WTSAPI32.dll", "WTSRegisterSessionNotification", 2, session_service_unavailable},
     {"WTSAPI32.dll", "WTSUnRegisterSessionNotification", 1, session_service_unavailable},
     {"WINSPOOL.DRV", "EnumPrintersW", 7, enum_printers},

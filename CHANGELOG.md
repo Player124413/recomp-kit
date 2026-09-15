@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Runtime: buffered-paint initialization reports E_NOTIMPL through the
+  uxtheme export, with safe cleanup for callers using ordinary GDI painting.
+
 - Runtime: WTS session notification exports report an unavailable session
   service through their normal BOOL/error result instead of a missing DLL.
 
