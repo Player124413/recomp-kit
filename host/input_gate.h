@@ -127,6 +127,27 @@ void host_gate_reset(void);
 // against the game's integrated pointer. Until that pointer is readable,
 // successive positions divided by scene scale supply motion. No capture warp.
 // host_pointer_motion and host_gate_pointer_event retain the relative-motion
+// One queued input event, reduced to what the batching rule needs to know.
+struct HostInputStep {
+    uint8_t is_button; // a press or a release, rather than motion or a wheel
+    uint8_t button;    // 0 left, 1 right, 2 middle
+    uint8_t down;      // 1 press, 0 release
+};
+
+// How many of a queued batch may be applied in one guest turn.
+//
+// A guest that polls its buttons cannot see a press and its release applied
+// between two polls: it reads the state once and finds the button up again, so
+// the click never happened. That is what the DirectInput shim's buffered
+// events are built from, and what a window's click handling comes down to. The
+// batch is cut before the release of a button pressed within it, and the rest
+// waits for the next turn. Every other ordering is preserved, because order is
+// what keeps a focus loss behind the presses it must follow.
+//
+// Returns `count` when nothing needs deferring, and never 0 for a non-empty
+// batch: the first event is always applicable.
+uint32_t host_input_batch_limit(const struct HostInputStep *steps, uint32_t count);
+
 // arithmetic for non-window callers; window events use host_gate_window_pointer.
 // ---------------------------------------------------------------------------
 

@@ -241,11 +241,30 @@ void deliver_pending_input() {
             return;
         batch.swap(g_pending_input);
     }
+    // A press and its release must not be applied in the same guest turn, or a
+    // guest that polls its buttons never sees the button down at all. The rule
+    // is in input_gate.cpp, where it is tested without a window.
+    std::vector<HostInputStep> steps;
+    steps.reserve(batch.size());
+    for (const PendingInput &e : batch)
+        steps.push_back(
+            {uint8_t(e.kind == PendingInput::BUTTON), uint8_t(e.button), uint8_t(e.down ? 1 : 0)});
+    const uint32_t limit = host_input_batch_limit(steps.data(), uint32_t(steps.size()));
     // Applied outside the lock, in arrival order. Order is the whole point: a
     // focus loss sits in this queue among the presses it must follow, so
     // replaying a press after it cannot leave a key stuck down.
-    for (const PendingInput &e : batch)
-        apply_input(e);
+    for (uint32_t i = 0; i < limit; ++i)
+        apply_input(batch[i]);
+    if (limit >= batch.size())
+        return;
+    {
+        std::lock_guard<std::mutex> held(g_pending_input_m);
+        g_pending_input.insert(g_pending_input.begin(), batch.begin() + limit, batch.end());
+    }
+    // The deferred remainder is input the guest has not seen yet, so the
+    // scheduler must come back for it rather than park until something else
+    // arrives.
+    sched_input_arrived();
 }
 
 // ---------------------------------------------------------------------------

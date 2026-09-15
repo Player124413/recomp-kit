@@ -544,6 +544,24 @@ bool host_gate_key(uint16_t mac, bool down) {
     HostKeyMapping m = host_key_mapping(mac);
     return mods_input_key(m.dik, m.vk, down);
 }
+uint32_t host_input_batch_limit(const HostInputStep *steps, uint32_t count) {
+    if (!steps || count == 0)
+        return 0;
+    uint8_t pressed = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!steps[i].is_button || steps[i].button > 2)
+            continue;
+        const uint8_t bit = uint8_t(1u << steps[i].button);
+        if (steps[i].down) {
+            pressed |= bit;
+            continue;
+        }
+        if (pressed & bit)
+            return i; // its press is in this batch: the release waits a turn
+    }
+    return count;
+}
+
 bool host_gate_button(int button, bool down, int32_t x, int32_t y) {
     return mods_input_button(button, down, x, y);
 }

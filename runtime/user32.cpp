@@ -5,6 +5,7 @@
 // (Task 7) pushes real events in with host_post_message() and the guest pulls
 // them out through PeekMessageA/GetMessageA exactly as it would on Win32.
 #include "user32_internal.h"
+#include "../platform/os.h"
 #include "gdi_image.h"
 #include "win32.h"
 #include "memory.h"
@@ -116,6 +117,13 @@ void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lp
     // Record timer delivery on the same cadence seam as other host messages.
     if (msg == 0x0113)
         host_note_cadence("WM_TIMER");
+    if (msg == 0x0201 && recomp_env("CLICK_TRACE")) {
+        Window *w = find_window(hwnd);
+        LOGW("click-trace: WM_LBUTTONDOWN to %08x class=%s at %d,%d size %dx%d visible=%d "
+             "lparam=%08x cursor=%d,%d",
+             hwnd, w ? w->cls.c_str() : "?", w ? w->x : -1, w ? w->y : -1, w ? w->w : -1,
+             w ? w->h : -1, w ? int(w->visible) : -1, lparam, g_cursor_x, g_cursor_y);
+    }
     Msg m{hwnd, msg, wparam, lparam, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
     queue().push_back(m);
 }

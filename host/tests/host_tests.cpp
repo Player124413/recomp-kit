@@ -6384,6 +6384,41 @@ static void test_script_hold_frames() {
 // byte-identical menu frames diverged at the first click, one loading the level
 // and the other sitting at turn 0 with no textures, which is the flake
 // signature exactly.
+// A press and its release must not reach the guest in the same turn: a guest
+// that polls its buttons would read the state once, find the button up, and
+// the click would never have happened.
+static void test_input_batch_limit() {
+    const HostInputStep motion{0, 0, 0};
+    const HostInputStep down{1, 0, 1};
+    const HostInputStep up{1, 0, 0};
+    const HostInputStep right_down{1, 1, 1};
+    const HostInputStep right_up{1, 1, 0};
+
+    CHECK_EQ(host_input_batch_limit(nullptr, 0), 0u);
+    // Nothing to defer: motion, a press on its own, a release whose press was
+    // applied in an earlier turn.
+    const HostInputStep only_motion[] = {motion, motion};
+    CHECK_EQ(host_input_batch_limit(only_motion, 2), 2u);
+    const HostInputStep press_only[] = {motion, down};
+    CHECK_EQ(host_input_batch_limit(press_only, 2), 2u);
+    const HostInputStep release_only[] = {motion, up, motion};
+    CHECK_EQ(host_input_batch_limit(release_only, 3), 3u);
+
+    // A whole click in one batch is cut before the release, and the motion
+    // that preceded the press still goes with it.
+    const HostInputStep click[] = {motion, down, up};
+    CHECK_EQ(host_input_batch_limit(click, 3), 2u);
+    // The cut is before the release even with events between.
+    const HostInputStep held[] = {down, motion, motion, up};
+    CHECK_EQ(host_input_batch_limit(held, 4), 3u);
+    // A different button's release is not deferred by this button's press.
+    const HostInputStep other[] = {down, right_up, motion};
+    CHECK_EQ(host_input_batch_limit(other, 3), 3u);
+    // Two clicks: only the first release matters, the rest waits its turn.
+    const HostInputStep two[] = {down, up, right_down, right_up};
+    CHECK_EQ(host_input_batch_limit(two, 4), 1u);
+}
+
 static void test_script_input_hold_frames() {
     // The case that was failing: 120 ms is 2.4 frames, floored to 4.
     CHECK_EQ(host_script_input_hold_frames(120, 50), 4u);
@@ -8986,6 +9021,7 @@ int main(int argc, char **argv) {
         {"await at least", test_script_await_at_least},
         {"await hold in frames", test_script_hold_frames},
         {"entity click waits", test_entity_click_wait},
+        {"a click is not applied in one turn", test_input_batch_limit},
         {"input hold in frames", test_script_input_hold_frames},
     };
     bool gpu_only = argc == 2 && !strcmp(argv[1], "--gpu-only");

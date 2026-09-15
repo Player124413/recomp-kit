@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Input: a button press and its release are never applied to the guest in the
+  same turn. Queued input arrives in batches, so a real click landed as a
+  press and a release between two of the guest's polls, and a guest that reads
+  its button state rather than the message queue never saw the button down at
+  all. The batch is cut before the release and the rest waits a turn.
+
 - Windows: child windows are composited with their parents, clipped to every
   ancestor. Only top-level windows reached the screen before, so a control
   that paints into its own window - which is most of them - was invisible.
