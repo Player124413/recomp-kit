@@ -4418,6 +4418,23 @@ def main():
     for fn in ok:
         for target, line in dangling_targets(bodies[fn.addr], known):
             dangling.append((fn.addr, target, line))
+    if dangling and args.allow_unmodelled:
+        # The last shape of the same listing defect. Once recovery has
+        # settled, a literal target that is still not an entry point is one
+        # no instruction boundary anywhere agrees with - a jump decoded out
+        # of the padding behind a function, landing in the middle of a real
+        # instruction. Under the switch it becomes the trap a withdrawn block
+        # gets, at the site that names it, rather than the end of the build.
+        by_caller = {}
+        for caller, target, _line in dangling:
+            by_caller.setdefault(caller, set()).add(target)
+        for caller, targets in by_caller.items():
+            bodies[caller] = retarget_withdrawn(bodies[caller], targets)
+        for caller, target, line in sorted(dangling):
+            tr.unmodelled.append(
+                (caller, "dispatches to %08x, which is not an entry point: %s"
+                 % (target, line[:110])))
+        dangling = []
     if dangling:
         # A target that Ghidra listed but that failed to translate is the
         # usual cause, so name the failures first: they are what to fix.

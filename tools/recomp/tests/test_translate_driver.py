@@ -1385,3 +1385,18 @@ def test_a_translator_with_no_bytes_rejects_nothing():
     opts.allow_unmodelled = "padding"
     tr = T.Translator(Empty(), set(), opts)
     tr.reject_offimage_call(0x8F28759A)
+
+
+def test_a_dangling_target_becomes_a_trap_under_the_switch():
+    """The last shape of the listing defect: after recovery has settled, a
+    literal target no instruction boundary agrees with. With the switch it
+    becomes the trap a withdrawn block gets, at the site that names it."""
+    body = [
+        "void fn_00410170(X86 *c) {",
+        "c->eip = 0x004102f0u; recomp_jump(c, 0x004103cfu); return;",
+        "CALL_FN(00410370);",
+        "}",
+    ]
+    out = T.retarget_withdrawn(body, {0x004103CF})
+    assert out[1].startswith("recomp_unknown_call(c, 0x004103cfu); return;")
+    assert out[2] == "CALL_FN(00410370);"   # a real entry is untouched
