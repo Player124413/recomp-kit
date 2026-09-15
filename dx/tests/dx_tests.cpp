@@ -22,6 +22,8 @@
 #include "../../runtime/win32.h"
 #include "../../platform/os.h"
 #include "fixtures/tone_mp3.h"
+#include "fixtures/quad_hlsl.h"
+#include <cmath>
 
 #include <algorithm>
 #include <stdlib.h>
@@ -10316,7 +10318,7 @@ static uint32_t matrix_call(const char *name, std::initializer_list<uint32_t> ar
     g_cpu.r[R_ESP] -= 4;
     wr32(g_cpu.r[R_ESP], 0x00401000);
     CHECK(imports_dispatch(&g_cpu, target));
-    CHECK_EQ(g_cpu.r[R_ESP], sp - 4 * v.size()); // cdecl: caller cleanup
+    CHECK_EQ(g_cpu.r[R_ESP], sp); // stdcall: the SDK and Delphi callers require callee cleanup
     g_cpu.r[R_ESP] = sp;
     return g_cpu.r[R_EAX];
 }
@@ -10362,6 +10364,365 @@ static void test_d3dx_math_and_blob() {
     }
 }
 
+// This mesh and its matrix products reproduce the published 2D API contract,
+// including the UV Y flip and the R16 shader's 32/64 divisors (not 31/63).
+static void test_d3d11_quad(bool alpha) {
+    cpu_reset();
+    gm_zero(sc(0), 0x4000);
+    uint32_t live = com_live_count();
+    uint32_t sd = sc(0x100);
+    wr32(sd, 8);
+    wr32(sd + 4, 8);
+    wr32(sd + 16, 28);
+    wr32(sd + 28, 1);
+    wr32(sd + 36, 0x20);
+    wr32(sd + 40, 2);
+    wr32(sd + 48, 1);
+    CHECK_EQ(call_shim(tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
+                       {0, 1, 0, 0, 0, 0, 7, sd, sc(0), sc(4), sc(8), sc(12)}),
+             S_OK);
+    uint32_t swap = rd32(sc(0)), dev = rd32(sc(4)), ctx = rd32(sc(12));
+    if (!swap || !dev || !ctx)
+        return;
+    std::vector<uint32_t> owned{swap, dev, ctx};
+    auto cleanup = [&]() {
+        call_method(ctx, 110);
+        for (auto it = owned.rbegin(); it != owned.rend(); ++it)
+            call_method(*it, 2);
+    };
+    const uint8_t iid[] = {0xf2, 0xaa, 0x15, 0x6f, 0x08, 0xd2, 0x89, 0x4e,
+                           0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c};
+    memcpy(gm_ptr(sc(0x80)), iid, 16);
+    call_method(swap, 9, {0, sc(0x80), sc(16)});
+    uint32_t back = rd32(sc(16));
+    owned.push_back(back);
+    call_method(dev, 9, {back, 0, sc(20)});
+    uint32_t rtv = rd32(sc(20));
+    owned.push_back(rtv);
+    float blue[] = {0, 0, 1, 1};
+    memcpy(gm_ptr(sc(0x200)), blue, 16);
+    call_method(ctx, 50, {rtv, sc(0x200)});
+    call_method(ctx, 33, {1, sc(20), 0});
+    float vp[] = {0, 0, 8, 8, 0, 1};
+    memcpy(gm_ptr(sc(0x220)), vp, 24);
+    call_method(ctx, 44, {1, sc(0x220)});
+    wr32(sc(0x240), 1);
+    call_method(ctx, 95, {sc(0x240), sc(0x260)});
+    CHECK(memcmp(gm_ptr(sc(0x260)), vp, 24) == 0);
+    call_method(ctx, 3, {sc(24)});
+    CHECK_EQ(rd32(sc(24)), dev);
+    call_method(rd32(sc(24)), 2);
+    auto buffer = [&](uint32_t bytes, uint32_t bind, const void *data) {
+        uint32_t d = sc(0x300);
+        gm_zero(d, 24);
+        wr32(d, bytes);
+        wr32(d + 4, 2);
+        wr32(d + 8, bind);
+        wr32(d + 12, 0x10000);
+        wr32(sc(28), 0);
+        CHECK_EQ(call_method(dev, 3, {d, 0, sc(28)}), S_OK);
+        uint32_t b = rd32(sc(28));
+        if (!b)
+            return uint32_t(0);
+        owned.push_back(b);
+        CHECK_EQ(call_method(ctx, 14, {b, 0, 4, 0, sc(0x340)}), S_OK);
+        uint32_t ptr = rd32(sc(0x340));
+        CHECK(ptr != 0);
+        if (ptr && data)
+            memcpy(gm_ptr(ptr), data, bytes);
+        call_method(ctx, 15, {b, 0});
+        return b;
+    };
+    float vertices[] = {-1, -1, 0, 0, 0, 1, 1, 0, 1, 1, -1, 1, 0, 0, 1, 1, -1, 0, 1, 0};
+    uint16_t indices[] = {0, 2, 1, 0, 1, 3, 0};
+    uint32_t vb = buffer(sizeof(vertices), 1, vertices), ib = buffer(sizeof(indices), 2, indices);
+    if (!vb || !ib) {
+        cleanup();
+        return;
+    }
+    // SetDestRect(2,1,6,5) in an 8x8 viewport, using the original D3DX sequence.
+    matrix_call("D3DXMatrixTranslation", {sc(0x400), float_word(-0.5f), float_word(-0.25f), 0});
+    matrix_call("D3DXMatrixScaling",
+                {sc(0x440), float_word(0.5f), float_word(0.5f), float_word(1)});
+    matrix_call("D3DXMatrixTranslation", {sc(0x480), float_word(1), float_word(1), 0});
+    matrix_call("D3DXMatrixMultiply", {sc(0x4c0), sc(0x480), sc(0x440)});
+    matrix_call("D3DXMatrixMultiplyTranspose", {sc(0x500), sc(0x4c0), sc(0x400)});
+    matrix_call("D3DXMatrixScaling", {sc(0x540), float_word(1), float_word(1), float_word(1)});
+    uint32_t cb = buffer(128, 4, gm_ptr(sc(0x500)));
+    if (!cb) {
+        cleanup();
+        return;
+    }
+    auto shader = [&](const char *source, bool vertex) {
+        gm_put_str(sc(0x1000), source, 2048);
+        gm_put_str(sc(0x1800), vertex ? "VSEntry" : "PSEntry", 32);
+        gm_put_str(sc(0x1840), vertex ? "vs_4_0" : "ps_4_0", 32);
+        CHECK_EQ(call_shim(tramp("d3dcompiler_47.dll", "D3DCompile"),
+                           {sc(0x1000), uint32_t(strlen(source)), 0, 0, 0, sc(0x1800), sc(0x1840),
+                            0, 0, sc(0x1880), sc(0x1884)}),
+                 S_OK);
+        uint32_t blob = rd32(sc(0x1880));
+        if (!blob)
+            return uint32_t(0);
+        owned.push_back(blob);
+        uint32_t p = call_method(blob, 3), n = call_method(blob, 4);
+        wr32(sc(0x1888), 0);
+        CHECK_EQ(call_method(dev, vertex ? 12 : 15, {p, n, 0, sc(0x1888)}), S_OK);
+        uint32_t sh = rd32(sc(0x1888));
+        if (sh)
+            owned.push_back(sh);
+        return sh;
+    };
+    uint32_t vs = shader(quad_vertex_shader, true);
+    // Keep the VS tag for CreateInputLayout before compiling the PS.
+    uint32_t vsblob = rd32(sc(0x1880)), vsdata = call_method(vsblob, 3),
+             vssize = call_method(vsblob, 4);
+    uint32_t ps = shader(alpha ? quad_fragment_shader : quad_fragment_shader_R16_int, false);
+    if (!vs || !ps) {
+        cleanup();
+        return;
+    }
+    gm_zero(sc(0x600), 56);
+    gm_put_str(sc(0x680), "POSITION", 32);
+    gm_put_str(sc(0x6a0), "TEXCOORD", 32);
+    wr32(sc(0x600), sc(0x680));
+    wr32(sc(0x608), 6);
+    wr32(sc(0x61c), sc(0x6a0));
+    wr32(sc(0x624), 16);
+    wr32(sc(0x62c), 0xffffffff);
+    CHECK_EQ(call_method(dev, 11, {sc(0x600), 2, vsdata, vssize, sc(32)}), S_OK);
+    uint32_t layout = rd32(sc(32));
+    owned.push_back(layout);
+    uint32_t td = sc(0x700);
+    gm_zero(td, 44);
+    wr32(td, 4);
+    wr32(td + 4, 4);
+    wr32(td + 12, 1);
+    wr32(td + 16, alpha ? 28 : 56);
+    wr32(td + 20, 1);
+    wr32(td + 32, 0x28);
+    wr32(td + 40, 1);
+    CHECK_EQ(call_method(dev, 5, {td, 0, sc(36)}), S_OK);
+    uint32_t tex = rd32(sc(36));
+    owned.push_back(tex);
+    if (!tex) {
+        cleanup();
+        return;
+    }
+    gm_zero(sc(0x740), 24);
+    wr32(sc(0x740), alpha ? 28 : 56);
+    wr32(sc(0x744), 4);
+    wr32(sc(0x74c), 1);
+    CHECK_EQ(call_method(dev, 7, {tex, sc(0x740), sc(40)}), S_OK);
+    uint32_t srv = rd32(sc(40));
+    owned.push_back(srv);
+    // Padded rows ensure UpdateSubresource honours source row pitch.
+    const uint16_t colours[] = {0xf800, 0x07e0, 0x001f, 0xffff, 0x0000, 0x1234, 0xabcd, 0xf81f,
+                                0x5678, 0x7bef, 0x0400, 0x8410, 0xffe0, 0x07ff, 0x780f, 0x0010};
+    for (unsigned y = 0; y < 4; ++y)
+        for (unsigned x = 0; x < 4; ++x) {
+            if (alpha)
+                wr32(sc(0x800) + y * 24 + x * 4, 0x800000ffu);
+            else
+                wr16(sc(0x800) + y * 16 + x * 2, colours[y * 4 + x]);
+        }
+    call_method(ctx, 48, {tex, 0, 0, sc(0x800), alpha ? 24u : 16u, 0});
+    gm_zero(sc(0x900), 52);
+    wr32(sc(0x900), 0x15); // linear, same-size draw samples texel centres
+    for (unsigned i = 1; i <= 3; ++i)
+        wr32(sc(0x900) + i * 4, 1);
+    wr32(sc(0x918), 8);
+    CHECK_EQ(call_method(dev, 23, {sc(0x900), sc(44)}), S_OK);
+    uint32_t sampler = rd32(sc(44));
+    owned.push_back(sampler);
+    uint32_t blend = 0;
+    if (alpha) {
+        gm_zero(sc(0xa00), 264);
+        uint32_t d = sc(0xa08);
+        wr32(d, 1);
+        wr32(d + 4, 5);
+        wr32(d + 8, 6);
+        wr32(d + 12, 1);
+        wr32(d + 16, 1);
+        wr32(d + 20, 1);
+        wr32(d + 24, 1);
+        wr8(d + 28, 15);
+        CHECK_EQ(call_method(dev, 20, {sc(0xa00), sc(48)}), S_OK);
+        blend = rd32(sc(48));
+        owned.push_back(blend);
+    }
+    call_method(ctx, 35, {blend, 0, 0xffffffff});
+    call_method(ctx, 17, {layout});
+    call_method(ctx, 11, {vs, 0, 0});
+    call_method(ctx, 9, {ps, 0, 0});
+    wr32(sc(52), vb);
+    wr32(sc(56), 20);
+    wr32(sc(60), 0);
+    call_method(ctx, 18, {0, 1, sc(52), sc(56), sc(60)});
+    call_method(ctx, 19, {ib, 57, 0});
+    call_method(ctx, 24, {4});
+    wr32(sc(64), cb);
+    call_method(ctx, 7, {0, 1, sc(64)});
+    call_method(ctx, 8, {0, 1, sc(40)});
+    call_method(ctx, 10, {0, 1, sc(44)});
+    call_method(ctx, 12, {6, 0, 0});
+    call_method(swap, 8, {0, 0});
+    const auto &p = g_presents.back();
+    for (unsigned y = 0; y < 8; ++y)
+        for (unsigned x = 0; x < 8; ++x) {
+            uint32_t expected = 0xff0000ffu;
+            if (x >= 2 && x < 6 && y >= 1 && y < 5) {
+                if (alpha)
+                    expected = 0xff80007fu;
+                else {
+                    uint16_t v = colours[(y - 1) * 4 + x - 2];
+                    expected = 0xff000000u |
+                               uint32_t(std::lround(((v >> 11) & 31) * 255.f / 32)) << 16 |
+                               uint32_t(std::lround(((v >> 5) & 63) * 255.f / 64)) << 8 |
+                               uint32_t(std::lround((v & 31) * 255.f / 32));
+                }
+            }
+            uint32_t actual = 0;
+            memcpy(&actual, p.pixels.data() + y * p.pitch + x * 4, 4);
+            CHECK_EQ(actual, expected);
+        }
+    if (!alpha) {
+        // A constant source coordinate at a four-texel junction distinguishes
+        // linear filtering before packed decoding from decoding before filtering.
+        matrix_call("D3DXMatrixScaling", {sc(0xc00), 0, 0, float_word(1)});
+        matrix_call("D3DXMatrixTranslation", {sc(0xc40), float_word(0.5f), float_word(0.5f), 0});
+        matrix_call("D3DXMatrixMultiplyTranspose", {sc(0xc80), sc(0xc00), sc(0xc40)});
+        call_method(ctx, 14, {cb, 0, 4, 0, sc(0xd00)});
+        uint32_t ptr = rd32(sc(0xd00));
+        memcpy(gm_ptr(ptr), gm_ptr(sc(0x500)), 64);
+        memcpy(gm_ptr(ptr + 64), gm_ptr(sc(0xc80)), 64);
+        call_method(ctx, 15, {cb, 0});
+        call_method(ctx, 12, {6, 0, 0});
+        call_method(swap, 8, {0, 0});
+        uint32_t colour = 0;
+        const auto &linear = g_presents.back();
+        memcpy(&colour, linear.pixels.data() + 2 * linear.pitch + 3 * 4, 4);
+        CHECK_EQ(colour, 0xff48ebdfu); // mean packed word 20348, then R16 shader arithmetic
+        // SetSourceRect(1,1,3,3) with point sampling crops and repeats a 2x2 area.
+        matrix_call("D3DXMatrixScaling",
+                    {sc(0xc00), float_word(0.5f), float_word(0.5f), float_word(1)});
+        matrix_call("D3DXMatrixTranslation", {sc(0xc40), float_word(0.25f), float_word(0.25f), 0});
+        matrix_call("D3DXMatrixMultiplyTranspose", {sc(0xc80), sc(0xc00), sc(0xc40)});
+        call_method(ctx, 14, {cb, 0, 4, 0, sc(0xd00)});
+        ptr = rd32(sc(0xd00));
+        memcpy(gm_ptr(ptr), gm_ptr(sc(0x500)), 64);
+        memcpy(gm_ptr(ptr + 64), gm_ptr(sc(0xc80)), 64);
+        call_method(ctx, 15, {cb, 0});
+        wr32(sc(0x900), 0);
+        call_method(dev, 23, {sc(0x900), sc(72)});
+        owned.push_back(rd32(sc(72)));
+        call_method(ctx, 10, {0, 1, sc(72)});
+        call_method(ctx, 12, {6, 0, 0});
+        call_method(swap, 8, {0, 0});
+        const auto &point = g_presents.back();
+        for (unsigned y = 0; y < 4; ++y)
+            for (unsigned x = 0; x < 4; ++x) {
+                uint16_t v = colours[(1 + y / 2) * 4 + 1 + x / 2];
+                uint32_t expected = 0xff000000u |
+                                    uint32_t(std::lround(((v >> 11) & 31) * 255.f / 32)) << 16 |
+                                    uint32_t(std::lround(((v >> 5) & 63) * 255.f / 64)) << 8 |
+                                    uint32_t(std::lround((v & 31) * 255.f / 32));
+                memcpy(&colour, point.pixels.data() + (y + 1) * point.pitch + (x + 2) * 4, 4);
+                CHECK_EQ(colour, expected);
+            }
+    }
+    // A different program cannot receive a plausible but wrong shader.
+    wr32(vsdata + 8, rd32(vsdata + 8) ^ 1);
+    wr32(sc(68), 0xdeadbeef);
+    CHECK_EQ(call_method(dev, 12, {vsdata, vssize, 0, sc(68)}), E_FAIL);
+    CHECK_EQ(rd32(sc(68)), 0);
+    cleanup();
+    CHECK_EQ(com_live_count(), live);
+}
+static void test_d3d11_quad_pixels() {
+    test_d3d11_quad(false);
+}
+static void test_d3d11_alpha_pixels() {
+    test_d3d11_quad(true);
+}
+
+static void test_d3d11_resource_bounds() {
+    cpu_reset();
+    gm_zero(sc(0), 0x4000);
+    uint32_t sd = sc(0x100);
+    wr32(sd, 4);
+    wr32(sd + 4, 4);
+    wr32(sd + 16, 28);
+    wr32(sd + 28, 1);
+    wr32(sd + 40, 1);
+    wr32(sd + 48, 1);
+    call_shim(tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
+              {0, 1, 0, 0, 0, 0, 7, sd, sc(0), sc(4), sc(8), sc(12)});
+    uint32_t swap = rd32(sc(0)), dev = rd32(sc(4)), ctx = rd32(sc(12));
+    if (!swap || !dev || !ctx) {
+        CHECK(false);
+        return;
+    }
+    for (uint32_t format : {28u, 87u, 85u, 56u}) {
+        uint32_t td = sc(0x200);
+        gm_zero(td, 44);
+        wr32(td, 4);
+        wr32(td + 4, 4);
+        wr32(td + 8, 1);
+        wr32(td + 12, 1);
+        wr32(td + 16, format);
+        wr32(td + 20, 1);
+        wr32(td + 28, 3);
+        wr32(td + 36, 0x30000);
+        CHECK_EQ(call_method(dev, 5, {td, 0, sc(16)}), S_OK);
+        uint32_t tex = rd32(sc(16));
+        if (!tex)
+            continue;
+        uint32_t bpp = format == 28 || format == 87 ? 4 : 2, row = 2 * bpp;
+        for (unsigned i = 0; i < 64; ++i)
+            wr8(sc(0x400) + i, uint8_t(i + 1));
+        uint32_t box[] = {1, 1, 0, 3, 3, 1};
+        memcpy(gm_ptr(sc(0x300)), box, 24);
+        call_method(ctx, 48, {tex, 0, sc(0x300), sc(0x400), 16, 0});
+        CHECK_EQ(call_method(ctx, 14, {tex, 0, 3, 0, sc(0x500)}), S_OK);
+        uint32_t data = rd32(sc(0x500)), pitch = rd32(sc(0x504));
+        CHECK_EQ(pitch, 4 * bpp);
+        CHECK_EQ(rd32(sc(0x508)), pitch * 4);
+        for (unsigned y = 0; y < 4; ++y)
+            for (unsigned x = 0; x < pitch; ++x) {
+                uint8_t expected = y >= 1 && y < 3 && x >= bpp && x < bpp + row
+                                       ? uint8_t((y - 1) * 16 + x - bpp + 1)
+                                       : 0;
+                CHECK_EQ(rd8(data + y * pitch + x), expected);
+            }
+        wr8(data, 0xa5); // no copy: a remap sees the same guest-visible resource
+        call_method(ctx, 15, {tex, 0});
+        call_method(ctx, 14, {tex, 0, 1, 0, sc(0x500)});
+        CHECK_EQ(rd8(rd32(sc(0x500))), 0xa5);
+        call_method(ctx, 15, {tex, 0});
+        // Malformed destination boxes and overflowing source spans leave bytes intact.
+        wr32(sc(0x30c), 5);
+        CHECK_EQ(call_method(ctx, 48, {tex, 0, sc(0x300), sc(0x400), 16, 0}), E_INVALIDARG);
+        wr32(sc(0x30c), 3);
+        CHECK_EQ(call_method(ctx, 48, {tex, 0, sc(0x300), GUEST_SIZE - 1, 0xffffffff, 0}),
+                 E_INVALIDARG);
+        CHECK_EQ(rd8(data), 0xa5);
+        call_method(tex, 10, {sc(0x600)});
+        CHECK(memcmp(gm_ptr(sc(0x600)), gm_ptr(td), 44) == 0);
+        call_method(tex, 2);
+    }
+    // A sampler containing NaN cannot be evaluated by the software pipeline.
+    gm_zero(sc(0x800), 52);
+    wr32(sc(0x804), 4);
+    wr32(sc(0x808), 4);
+    wr32(sc(0x80c), 4);
+    wr32(sc(0x81c), 0x7fc00000);
+    CHECK_EQ(call_method(dev, 23, {sc(0x800), sc(20)}), E_NOTIMPL);
+    CHECK_EQ(rd32(sc(20)), 0);
+    call_method(ctx, 2);
+    call_method(dev, 2);
+    call_method(swap, 2);
+}
 int main() {
     // Unbuffered, not line buffered: Windows treats _IOLBF as full buffering
     // and a fail-fast abort drops everything queued, including the name of
@@ -10382,6 +10743,9 @@ int main() {
         const char *name;
         void (*fn)();
     } tests[] = {
+        {"D3D11 resource bounds", test_d3d11_resource_bounds},
+        {"D3D11 quad pixels", test_d3d11_quad_pixels},
+        {"D3D11 alpha pixels", test_d3d11_alpha_pixels},
         {"D3D11 scaffold", test_d3d11_scaffold},
         {"D3DX math and blob", test_d3dx_math_and_blob},
         {"vtable integrity", test_vtable_integrity},

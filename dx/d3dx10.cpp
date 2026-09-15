@@ -1,7 +1,7 @@
 // d3dx10.cpp - D3DX row-vector matrix arithmetic. Translation occupies
 // _41/_42/_43. MultiplyTranspose supplies column-major HLSL constant bytes.
 // Calculations use local matrices so pOut may alias either input. These
-// exports use the caller-cleaned ABI requested by this adapter's clients.
+// exports use the SDK stdcall ABI: 4 dwords for construction, 3 for products.
 #include "d3d11.h"
 #include <cstring>
 namespace {
@@ -55,9 +55,9 @@ void multiply_transpose(X86 *c) {
 } // namespace
 void d3dx10_register() {
     static const ImportShim shims[] = {
-        {"d3dx10_41.dll", "D3DXMatrixTranslation", ARGC_CDECL, translation},
-        {"d3dx10_41.dll", "D3DXMatrixScaling", ARGC_CDECL, scaling},
-        {"d3dx10_41.dll", "D3DXMatrixMultiply", ARGC_CDECL, multiply},
-        {"d3dx10_41.dll", "D3DXMatrixMultiplyTranspose", ARGC_CDECL, multiply_transpose}};
+        {"d3dx10_41.dll", "D3DXMatrixTranslation", 4, translation},
+        {"d3dx10_41.dll", "D3DXMatrixScaling", 4, scaling},
+        {"d3dx10_41.dll", "D3DXMatrixMultiply", 3, multiply},
+        {"d3dx10_41.dll", "D3DXMatrixMultiplyTranspose", 3, multiply_transpose}};
     imports_register(shims, std::size(shims));
 }

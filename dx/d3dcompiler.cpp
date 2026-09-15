@@ -72,3 +72,26 @@ void d3dcompiler_register() {
     static const ImportShim shims[] = {{"d3dcompiler_47.dll", "D3DCompile", 11, compile}};
     imports_register(shims, std::size(shims));
 }
+
+// These exact FNV-1a digests name the HLSL quoted in d3d11.cpp. Unknown
+// programs fail closed; neither an entry-point name nor the tag alone is proof.
+uint32_t dx11::shader_kind(uint32_t data, uint32_t size, bool vertex) {
+    ShaderTag t{};
+    if (size == sizeof(t) && span(data, size))
+        memcpy(&t, gm_ptr(data), sizeof(t));
+    if (t.magic == 0x31425352 && t.version == 1 && memchr(t.entry, 0, sizeof(t.entry)) &&
+        memchr(t.target, 0, sizeof(t.target))) {
+        if (vertex && strcmp(t.entry, "VSEntry") == 0 && strcmp(t.target, "vs_4_0") == 0 &&
+            t.hash == 0x148f2b3ecca795cbull)
+            return 1;
+        if (!vertex && strcmp(t.entry, "PSEntry") == 0 && strcmp(t.target, "ps_4_0") == 0) {
+            if (t.hash == 0xe55fa4c2afc9ddb6ull)
+                return 2;
+            if (t.hash == 0xd70f8e9650a037daull)
+                return 3;
+        }
+    }
+    LOGW("D3D11: refusing unknown %s shader hash=%016llx", vertex ? "vertex" : "pixel",
+         (unsigned long long)t.hash);
+    return 0;
+}
