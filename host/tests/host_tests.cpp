@@ -198,6 +198,37 @@ static void test_rgb565_expansion() {
     CHECK_EQ(out[14], 255);
 }
 
+static void test_window_size() {
+    // A mode that fits keeps the whole multiple of points it always had.
+    HostWindowSize s = host_window_size_for(800, 600, 1512, 945, 2.0);
+    CHECK_EQ(s.w, 800);
+    CHECK_EQ(s.h, 600);
+    CHECK_EQ(s.min_w, 800);
+    s = host_window_size_for(640, 480, 2560, 1415, 1.0);
+    CHECK_EQ(s.w, 1280);
+    CHECK_EQ(s.h, 960);
+    CHECK_EQ(s.min_w, 640);
+    CHECK_EQ(s.min_h, 480);
+    // 1920x1080 on a 1512x945-point Retina screen: one drawable pixel per guest
+    // pixel is 960x540 points, which fits; 1920x1080 points does not.
+    s = host_window_size_for(1920, 1080, 1512, 945, 2.0);
+    CHECK_EQ(s.w, 960);
+    CHECK_EQ(s.h, 540);
+    CHECK_EQ(s.min_w, 960);
+    CHECK_EQ(s.min_h, 540);
+    // No whole multiple fits a 1280x775-point, one-pixel-per-point screen: the
+    // largest aspect-preserving size inside 95% of it.
+    s = host_window_size_for(1920, 1080, 1280, 775, 1.0);
+    CHECK_EQ(s.w, 1216);
+    CHECK_EQ(s.h, 684);
+    CHECK_EQ(s.min_w, 1216);
+    CHECK_EQ(s.min_h, 684);
+    // An unknown screen: one point per guest pixel.
+    s = host_window_size_for(1920, 1080, 0, 0, 2.0);
+    CHECK_EQ(s.w, 1920);
+    CHECK_EQ(s.min_h, 1080);
+}
+
 static void test_letterbox() {
     // A 1280x960 drawable is exactly two 640x480 frames across.
     HostFit fit = host_present_fit(1280, 960, 640, 480);
@@ -8981,6 +9012,7 @@ int main(int argc, char **argv) {
         {"palette expansion", test_palette_expansion},
         {"5-6-5 expansion", test_rgb565_expansion},
         {"letterbox geometry", test_letterbox},
+        {"window size for a guest mode", test_window_size},
         {"scan code map", test_scancodes},
         {"input state", test_input_state},
         {"input gate", test_input_gate},

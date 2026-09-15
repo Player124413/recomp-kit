@@ -29,8 +29,8 @@ GamePath platform_ui_resolve_game(const char *flag, std::string *error) {
     return game_path_resolve(flag); // an empty result means: show the picker
 }
 
-SDL_Window *platform_ui_create_window(const char *title, int mode_w, int mode_h, int scale,
-                                      SDL_WindowFlags surface_flag, int *window_mode) {
+SDL_Window *platform_ui_create_window(const char *title, int window_w, int window_h, int min_w,
+                                      int min_h, SDL_WindowFlags surface_flag, int *window_mode) {
 #ifdef __ANDROID__
     // App lifecycle events go to watchers even when SDL cannot pump while
     // backgrounded. Match the mobile host's audio/presenter suspension seam.
@@ -49,12 +49,12 @@ SDL_Window *platform_ui_create_window(const char *title, int mode_w, int mode_h,
     return SDL_CreateWindow(title, 0, 0,
                             surface_flag | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
 #else
-    SDL_Window *w = SDL_CreateWindow(title, mode_w * scale, mode_h * scale,
+    SDL_Window *w = SDL_CreateWindow(title, window_w, window_h,
                                      surface_flag | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                          SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
     if (!w)
         return nullptr;
-    SDL_SetWindowMinimumSize(w, mode_w, mode_h);
+    SDL_SetWindowMinimumSize(w, min_w, min_h);
     SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     if (window_mode)
         *window_mode = 0;

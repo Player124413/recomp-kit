@@ -317,16 +317,33 @@ uint32_t bytes_per_pixel(uint32_t bpp) {
 
 // FNV-1a over every byte in the guest rectangle, without pitch padding or
 // sampling: even a one-pixel sprite must change the retained-pointer hash.
+// Compared only with itself, to notice stores made through a pointer kept
+// after Unlock. It runs at every final Unlock of such a surface, and a DXR
+// text draw locks the whole back buffer, so it takes eight bytes a step: a
+// byte at a time was most of a hovered menu's frame. Each step is a bijection
+// of the running value, so one changed word always changes the result.
 uint64_t hash_rect(const ComObj *s, const int32_t r[4]) {
     uint64_t h = 1469598103934665603ull;
-    uint32_t bb = bytes_per_pixel(s->bpp);
+    const uint32_t bb = bytes_per_pixel(s->bpp);
+    if (r[2] <= r[0])
+        return h;
+    const size_t n = size_t(r[2] - r[0]) * bb;
+    auto mix = [](uint64_t acc, uint64_t v) {
+        acc = (acc ^ v) * 0x9e3779b97f4a7c15ull;
+        return acc ^ (acc >> 29);
+    };
     for (int32_t y = r[1]; y < r[3]; ++y) {
         const uint8_t *row =
             (const uint8_t *)gm_ptr(s->pixels + (uint32_t)y * s->pitch + (uint32_t)r[0] * bb);
-        for (int32_t i = 0, n = (r[2] - r[0]) * (int32_t)bb; i < n; ++i) {
-            h ^= row[i];
-            h *= 1099511628211ull;
+        size_t i = 0;
+        for (; i + 8 <= n; i += 8) {
+            uint64_t v;
+            memcpy(&v, row + i, 8);
+            h = mix(h, v);
         }
+        uint64_t tail = 0;
+        memcpy(&tail, row + i, n - i);
+        h = mix(h, tail ^ (uint64_t(n - i) << 56)); // under 8 bytes, so the length has its own byte
     }
     return h;
 }
@@ -2080,6 +2097,34 @@ void lock_shadow_forget(const ComObj *s) {
 
 // What a write lock is about to change, remembered so Unlock can say what it
 // did change. Read-only locks arm nothing.
+namespace {
+// Shadow buffers are the size of what the guest locks, which for a DXR draw
+// is the whole back buffer, once per word of text. A fresh vector zero-fills
+// megabytes that the copy then overwrites; a few kept from earlier locks,
+// already the right size, cost only the copy.
+std::vector<std::vector<uint8_t>> &shadow_pool() {
+    static std::vector<std::vector<uint8_t>> pool;
+    return pool;
+}
+std::vector<uint8_t> shadow_buffer(size_t n) {
+    auto &pool = shadow_pool();
+    for (size_t i = pool.size(); i-- > 0;)
+        if (pool[i].size() >= n) {
+            std::vector<uint8_t> v = std::move(pool[i]);
+            pool.erase(pool.begin() + (ptrdiff_t)i);
+            v.resize(n);
+            return v;
+        }
+    return std::vector<uint8_t>(n);
+}
+void shadow_recycle(std::vector<uint8_t> &&v) {
+    auto &pool = shadow_pool();
+    if (v.empty() || pool.size() >= 4)
+        return;
+    pool.push_back(std::move(v));
+}
+} // namespace
+
 void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr) {
     std::vector<LockShadow> &stack = lock_shadows()[s->id];
     stack.emplace_back();
@@ -2097,7 +2142,7 @@ void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lo
     sh.bpp = s->bpp;
     for (int i = 0; i < 4; ++i)
         sh.r[i] = r[i];
-    sh.bytes.resize((size_t)sh.row_bytes * h);
+    sh.bytes = shadow_buffer((size_t)sh.row_bytes * h);
     for (int32_t y = 0; y < h; ++y) {
         uint32_t row = s->pixels + (uint32_t)((r[1] + y) * (int32_t)s->pitch + r[0] * (int32_t)bb);
         memcpy(sh.bytes.data() + (size_t)y * sh.row_bytes, gm_ptr(row), (size_t)sh.row_bytes);
@@ -2212,6 +2257,10 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
     }
     LockShadow sh = std::move(stack[at]);
     stack.erase(stack.begin() + (ptrdiff_t)at);
+    struct Recycle {
+        LockShadow &sh;
+        ~Recycle() { shadow_recycle(std::move(sh.bytes)); }
+    } recycle{sh};
     if (stack.empty())
         lock_shadows().erase(it);
     if (!sh.armed)
@@ -2226,19 +2275,35 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
     // The changed pixels, and their bounding box. A decoder rewrites the whole
     // region; a menu writes a few words of it. Recording the box rather than
     // the lock keeps the payload the size of the write.
-    std::vector<uint8_t> changed((size_t)lw * lh, 0);
+    // Only the band of rows that differ gets a mask: a text draw locks the
+    // whole back buffer and changes a line of it.
+    auto row_now = [&](int32_t y) {
+        return (const uint8_t *)gm_ptr(s->pixels + (uint32_t)((sh.r[1] + y) * (int32_t)s->pitch +
+                                                              sh.r[0] * (int32_t)bb));
+    };
+    auto row_differs = [&](int32_t y) {
+        return memcmp(sh.bytes.data() + (size_t)y * sh.row_bytes, row_now(y),
+                      (size_t)sh.row_bytes) != 0;
+    };
+    int32_t band0 = 0, band1 = lh - 1;
+    while (band0 < lh && !row_differs(band0))
+        ++band0;
+    if (band0 == lh)
+        return false;
+    while (band1 > band0 && !row_differs(band1))
+        --band1;
+    const int32_t band_h = band1 - band0 + 1;
+    std::vector<uint8_t> changed((size_t)lw * band_h, 0);
     int32_t x0 = lw, y0 = lh, x1 = -1, y1 = -1;
-    for (int32_t y = 0; y < lh; ++y) {
+    for (int32_t y = band0; y <= band1; ++y) {
         const uint8_t *was = sh.bytes.data() + (size_t)y * sh.row_bytes;
-        uint32_t row =
-            s->pixels + (uint32_t)((sh.r[1] + y) * (int32_t)s->pitch + sh.r[0] * (int32_t)bb);
-        const uint8_t *now = (const uint8_t *)gm_ptr(row);
+        const uint8_t *now = row_now(y);
         if (!memcmp(was, now, (size_t)sh.row_bytes))
             continue;
         for (int32_t x = 0; x < lw; ++x) {
             if (!memcmp(was + (size_t)x * bb, now + (size_t)x * bb, bb))
                 continue;
-            changed[(size_t)y * lw + x] = 1;
+            changed[(size_t)(y - band0) * lw + x] = 1;
             if (x < x0)
                 x0 = x;
             if (x > x1)
@@ -2254,15 +2319,16 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
 
     std::vector<HostDirtyRect> boxes;
     std::map<std::pair<int, int>, size_t> previous;
-    for (int y = 0; y < lh; ++y) {
+    for (int y = band0; y <= band1; ++y) {
         std::map<std::pair<int, int>, size_t> next;
+        const size_t base = (size_t)(y - band0) * lw;
         for (int x = 0; x < lw;) {
-            if (!changed[(size_t)y * lw + x]) {
+            if (!changed[base + x]) {
                 ++x;
                 continue;
             }
             int start = x;
-            while (x < lw && changed[(size_t)y * lw + x])
+            while (x < lw && changed[base + x])
                 ++x;
             auto span = std::make_pair(start, x);
             auto old = previous.find(span);

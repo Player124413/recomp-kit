@@ -33,6 +33,22 @@ struct HostFit {
 };
 struct HostFit host_present_fit(double drawable_w, double drawable_h, int guest_w, int guest_h);
 
+// The window a guest mode opens in, in points, on a screen whose usable area
+// is `usable_w` x `usable_h` points at `density` drawable pixels per point. A
+// mode that fits at one point per pixel takes the largest whole multiple that
+// leaves 5% spare, as it always has. A larger mode takes the largest whole
+// multiple of its frame in drawable pixels that fits - 1920x1080 on a Retina
+// laptop is 960x540 points, every guest pixel one drawable pixel - and, when
+// not even one fits, the largest size that does, which the fit above scales
+// into. The minimum size never exceeds the window. An unknown screen keeps one
+// point per guest pixel.
+struct HostWindowSize {
+    int w, h;         // the window, in points
+    int min_w, min_h; // its minimum size, in points
+};
+struct HostWindowSize host_window_size_for(int guest_w, int guest_h, int usable_w, int usable_h,
+                                           double density);
+
 // The same mapping run backwards: a point in the drawable, in drawable pixels
 // with the origin at the top left, becomes a pixel in the guest's frame. A
 // point in the letterbox border clamps to the edge rather than being dropped,

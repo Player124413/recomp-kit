@@ -19,11 +19,11 @@ void platform_ui_init_hints();
 // the copy failed. Android resolves its external files root directly in main.
 GamePath platform_ui_resolve_game(const char *flag, std::string *error);
 
-// The one window. Desktop: mode_w*scale x mode_h*scale, resizable, centered,
-// hidden until shown. iOS/Android: fullscreen. *window_mode receives 0 (desktop
-// window) or 2 (fullscreen).
-SDL_Window *platform_ui_create_window(const char *title, int mode_w, int mode_h, int scale,
-                                      SDL_WindowFlags surface_flag, int *window_mode);
+// The one window. Desktop: window_w x window_h points with a min_w x min_h
+// minimum, resizable, centered, hidden until shown. iOS/Android: fullscreen.
+// *window_mode receives 0 (desktop window) or 2 (fullscreen).
+SDL_Window *platform_ui_create_window(const char *title, int window_w, int window_h, int min_w,
+                                      int min_h, SDL_WindowFlags surface_flag, int *window_mode);
 
 // True when `e` was an app lifecycle event this platform consumed
 // (background: pause audio and presentation; foreground: resume). Desktop:

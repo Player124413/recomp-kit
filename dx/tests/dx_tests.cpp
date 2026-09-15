@@ -1183,6 +1183,47 @@ static void test_blt_and_colorkey() {
 
 // A game can keep the pointer Lock handed it and draw through it between
 // frames. The next blit and present must notice those writes without Unlock.
+// A store in the last bytes of a row that is not a whole number of eight-byte
+// words is still noticed through a retained pointer: the hash takes eight
+// bytes a step and has to cover the tail as well.
+static void test_retained_pointer_tail_bytes() {
+    g_presents.clear();
+    cpu_reset();
+    CHECK_EQ(call_shim(tramp("DDRAW.dll", "DirectDrawCreate"), {0, sc(0), 0}), DD_OK);
+    uint32_t dd = rd32(sc(0));
+    CHECK_EQ(call_method(dd, DD_SetDisplayMode, {640, 480, 16}), DD_OK);
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_PRIMARYSURFACE);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(4), 0}), DD_OK);
+    uint32_t prim = rd32(sc(4));
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY);
+    wr32(desc + DDSD_OFF_dwWidth, 13); // 26 bytes a row: three words and two bytes over
+    wr32(desc + DDSD_OFF_dwHeight, 5);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(8), 0}), DD_OK);
+    uint32_t small = rd32(sc(8));
+    desc = sc(0x200);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc, DDSD_SIZE);
+    CHECK_EQ(call_method(small, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    uint32_t pixels = rd32(desc + DDSD_OFF_lpSurface), pitch = rd32(desc + DDSD_OFF_lPitch);
+    CHECK_EQ(call_method(small, S_Unlock, {pixels}), DD_OK);
+    uint32_t id = com_this(small)->id;
+    uint32_t rect = sc(0x300);
+    wr32(rect, 0);
+    wr32(rect + 4, 0);
+    wr32(rect + 8, 13);
+    wr32(rect + 12, 5);
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, small, rect, 0}), DD_OK);
+    uint32_t rev = ddraw_surface_revision(id);
+    wr8(pixels + 4 * pitch + 25, 0x5a); // the last byte of the last row
+    CHECK_EQ(call_method(prim, S_BltFast, {0, 0, small, rect, 0}), DD_OK);
+    CHECK(ddraw_surface_revision(id) != rev);
+}
+
 static void test_retained_pointer_writes() {
     g_presents.clear();
     cpu_reset();
@@ -10824,6 +10865,7 @@ int main() {
         {"gradient, flip, present", test_gradient_flip},
         {"blt and colour key", test_blt_and_colorkey},
         {"retained pointer writes", test_retained_pointer_writes},
+{"retained pointer tail bytes", test_retained_pointer_tail_bytes},
         {"display ABI", test_display_abi},
         {"record and coverage", test_record_basic_and_coverage},
         {"keyed blit coverage", test_keyed_blit_coverage_and_key_values},

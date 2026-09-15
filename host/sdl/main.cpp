@@ -142,19 +142,17 @@ uint32_t current_modifier_flags() {
     return host_modifier_flags_from_sdl(SDL_GetModState());
 }
 
-// The largest whole scale at which the guest's frame still fits comfortably on
-// the screen this window is opening on, so a 640x480 mode is not a postage
-// stamp on a 5K display and a 1024x768 mode still fits on a laptop.
-int window_scale_for(int gw, int gh) {
-    SDL_Rect visible;
+// The window for a guest mode on the screen this window is on or opening on,
+// so a 640x480 mode is not a postage stamp on a 5K display and a 1920x1080
+// mode does not open a window larger than a laptop's screen.
+HostWindowSize window_size_for(int gw, int gh) {
+    SDL_Rect visible = {0, 0, 0, 0};
     SDL_DisplayID display = g_window ? SDL_GetDisplayForWindow(g_window) : SDL_GetPrimaryDisplay();
-    if (gw <= 0 || gh <= 0 || !SDL_GetDisplayUsableBounds(display, &visible))
-        return 1;
-    int scale = 1;
-    while (scale < 4 && (scale + 1) * gw <= visible.w * 0.95 &&
-           (scale + 1) * gh <= visible.h * 0.95)
-        ++scale;
-    return scale;
+    if (!SDL_GetDisplayUsableBounds(display, &visible))
+        visible.w = visible.h = 0;
+    const float density =
+        g_window ? SDL_GetWindowPixelDensity(g_window) : SDL_GetDisplayContentScale(display);
+    return host_window_size_for(gw, gh, visible.w, visible.h, density > 0 ? density : 1.0);
 }
 
 // The window's size in points and in drawable pixels.
@@ -1177,16 +1175,17 @@ void apply_mode_change() {
     host_pointer_set_mode((int)g_pending_mode_w, (int)g_pending_mode_h);
     g_mode_w = (int)g_pending_mode_w;
     g_mode_h = (int)g_pending_mode_h;
-    int scale = window_scale_for(g_mode_w, g_mode_h);
+    const HostWindowSize size = window_size_for(g_mode_w, g_mode_h);
+    // The minimum first, since a window cannot shrink below the one it had. It
+    // is the guest's frame when that fits the screen, so integer scaling always
+    // has a whole multiple to take, and never more than the window.
+    SDL_SetWindowMinimumSize(g_window, size.min_w, size.min_h);
     if (g_window_mode == 0 && !g_fullscreen_transition) {
-        SDL_SetWindowSize(g_window, g_mode_w * scale, g_mode_h * scale);
+        SDL_SetWindowSize(g_window, size.w, size.h);
         SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         post_drawable_size();
     }
     host_set_client_size(host_main_window(), g_mode_w, g_mode_h);
-    // The window may never be smaller than the guest's frame, or the integer
-    // scaling has no whole multiple to take.
-    SDL_SetWindowMinimumSize(g_window, g_mode_w, g_mode_h);
 }
 
 // True when this thread may touch the window at all.
@@ -1457,13 +1456,13 @@ int main(int argc, char **argv) {
         return 3;
     }
 
-    int scale = window_scale_for(g_mode_w, g_mode_h);
+    const HostWindowSize size = window_size_for(g_mode_w, g_mode_h);
     const bool vulkan = strcmp(gpu::default_backend_name(), "vulkan") == 0;
     if (vulkan && !SDL_Vulkan_LoadLibrary(gpu::vulkan_loader_path()))
         fprintf(stderr, RECOMP_APP_NAME ": SDL_Vulkan_LoadLibrary: %s\n", SDL_GetError());
     const SDL_WindowFlags surface_flag = vulkan ? SDL_WINDOW_VULKAN : SDL_WINDOW_METAL;
-    g_window = platform_ui_create_window(RECOMP_GAME_NAME, g_mode_w, g_mode_h, scale, surface_flag,
-                                         &g_window_mode);
+    g_window = platform_ui_create_window(RECOMP_GAME_NAME, size.w, size.h, size.min_w, size.min_h,
+                                         surface_flag, &g_window_mode);
     if (!g_window) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 3;

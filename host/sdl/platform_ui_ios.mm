@@ -95,7 +95,7 @@ bool lifecycle_watch(void *, SDL_Event *e) {
 }
 } // namespace
 
-SDL_Window *platform_ui_create_window(const char *title, int, int, int,
+SDL_Window *platform_ui_create_window(const char *title, int, int, int, int,
                                       SDL_WindowFlags surface_flag, int *window_mode) {
     static bool watching = false;
     if (!watching) {

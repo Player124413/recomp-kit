@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- DirectDraw locks are cheaper when a guest locks a whole surface to change a
+  little of it, which is how a DXR text draw works and why hovering a menu's
+  text crawled. The retained-pointer hash takes eight bytes a step instead of
+  one (and still catches any changed word, tail bytes included), write-lock
+  shadows reuse earlier buffers instead of zero-filling a new one, and the
+  unlock diff masks only the band of rows that changed. On a creator hover
+  script the text routine's share fell from 23.8 s to 4.6 s; the records it
+  produces are unchanged.
+
+- A display mode larger than the screen no longer opens a window larger than
+  the screen. The desktop host sized its window at a whole multiple of the
+  mode in points, never below one, and made the mode its minimum size, so a
+  1920x1080 mode opened a 1920x1080-point window on a 1512x982-point Retina
+  laptop and could not be shrunk. Such a mode now takes the largest whole
+  multiple of its frame in drawable pixels that fits the usable screen -
+  960x540 points there, every guest pixel one drawable pixel - or, when none
+  fits, the largest size that does, with the minimum never above the window.
+  Modes that fit keep the size they had (`host_window_size_for`).
+
 - Fonts a program registers with `AddFontMemResourceEx` are drawn with.
   The data used to be discarded and every string drawn in the fixed 8x16
   cells; now the fonts are kept and rasterized with stb_truetype (vendored,

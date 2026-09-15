@@ -145,6 +145,37 @@ extern "C" struct HostFit host_present_fit(double dw, double dh, int gw, int gh)
     return fit;
 }
 
+extern "C" struct HostWindowSize host_window_size_for(int gw, int gh, int uw, int uh,
+                                                      double density) {
+    HostWindowSize s = {gw, gh, gw, gh};
+    if (gw <= 0 || gh <= 0 || uw <= 0 || uh <= 0)
+        return s;
+    if (density <= 0)
+        density = 1;
+    const double room_w = uw * 0.95, room_h = uh * 0.95;
+    if (gw <= room_w && gh <= room_h) {
+        int scale = 1;
+        while (scale < 4 && (scale + 1) * gw <= room_w && (scale + 1) * gh <= room_h)
+            ++scale;
+        s.w = gw * scale;
+        s.h = gh * scale;
+        return s;
+    }
+    // Larger than the screen at a point a pixel: count in drawable pixels.
+    const int whole = int(std::floor(std::min(room_w * density / gw, room_h * density / gh)));
+    if (whole >= 1) {
+        s.w = int(std::lround(gw * whole / density));
+        s.h = int(std::lround(gh * whole / density));
+    } else {
+        const double f = std::min(room_w / gw, room_h / gh);
+        s.w = int(std::floor(gw * f + 1e-6));
+        s.h = int(std::floor(gh * f + 1e-6));
+    }
+    s.min_w = s.w;
+    s.min_h = s.h;
+    return s;
+}
+
 extern "C" void host_present_point_to_guest(double dw, double dh, int gw, int gh, double px,
                                             double py, int32_t *out_x, int32_t *out_y) {
     if (out_x)
