@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Windows: child windows are composited with their parents, clipped to every
+  ancestor. Only top-level windows reached the screen before, so a control
+  that paints into its own window - which is most of them - was invisible.
+
+- Smoke host: RECOMP_SMOKE_WINDOW_INPUT routes every scripted pointer step
+  through the window mapping a real mouse uses, so a host-side input defect
+  can be reproduced without a hand on the mouse.
+
 - GDI: blits convert between colour and monochrome instead of matching the
   nearest palette entry. Into a 1-bit bitmap the source's background colour
   becomes white and everything else black; out of one, white takes the

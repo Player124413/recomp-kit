@@ -1115,13 +1115,23 @@ bool gdi_release_window_dc(uint32_t hwnd, uint32_t hdc) {
 namespace {
 // Child DCs already write into their top-level owner's surface. Opaque GDI
 // pixels cover the base, while untouched storage leaves DirectDraw visible.
+// Every visible window with pixels, parents before their children and in
+// z-order within each level, which is the order they are drawn in. Child
+// controls have surfaces of their own - the VCL paints each into its own
+// window - so a walk that stopped at the top level left every control blank.
+void collect_surfaces(uint32_t parent, std::vector<user32::Window *> &out) {
+    for (uint32_t hwnd : user32::window_z_order(parent)) {
+        auto *w = user32::find_window(hwnd);
+        if (!w || !w->visible)
+            continue; // a hidden window hides its children with it
+        if (!w->surface.argb.empty())
+            out.push_back(w);
+        collect_surfaces(hwnd, out);
+    }
+}
 std::vector<user32::Window *> visible_surfaces() {
     std::vector<user32::Window *> result;
-    for (uint32_t hwnd : user32::window_z_order(0)) {
-        auto &w = *user32::find_window(hwnd);
-        if (w.visible && !w.surface.argb.empty())
-            result.push_back(&w);
-    }
+    collect_surfaces(0, result);
     return result;
 }
 } // namespace
@@ -1140,9 +1150,31 @@ void gdi_composite_windows(uint32_t *argb, int w, int h) {
         const bool keyed = (window->layered_flags & 1) != 0;
         const uint32_t key = gdi::argb(window->layered_key) & 0xffffffu;
         const uint32_t alpha = (window->layered_flags & 2) ? window->layered_alpha : 255u;
-        int64_t dx = int64_t(window->x) - origin_x, dy = int64_t(window->y) - origin_y;
-        for (int64_t y = std::max<int64_t>(0, dy); y < std::min<int64_t>(h, dy + s.h); ++y)
-            for (int64_t x = std::max<int64_t>(0, dx); x < std::min<int64_t>(w, dx + s.w); ++x) {
+        // A child's position is relative to its parent, so the walk up the
+        // parent chain is what places it; for a top-level window this is its
+        // own position, as before.
+        int32_t ax = 0, ay = 0;
+        user32::client_origin(window->hwnd, &ax, &ay);
+        int64_t dx = int64_t(ax) - origin_x, dy = int64_t(ay) - origin_y;
+        // Clipped to every ancestor, so a control cannot paint outside the
+        // window that owns it.
+        int64_t clip_l = 0, clip_t = 0, clip_r = w, clip_b = h;
+        for (uint32_t up = window->parent; up;) {
+            auto *p = user32::find_window(up);
+            if (!p)
+                break;
+            int32_t px = 0, py = 0;
+            user32::client_origin(up, &px, &py);
+            clip_l = std::max<int64_t>(clip_l, int64_t(px) - origin_x);
+            clip_t = std::max<int64_t>(clip_t, int64_t(py) - origin_y);
+            clip_r = std::min<int64_t>(clip_r, int64_t(px) - origin_x + p->w);
+            clip_b = std::min<int64_t>(clip_b, int64_t(py) - origin_y + p->h);
+            up = p->parent;
+        }
+        for (int64_t y = std::max<int64_t>(clip_t, dy); y < std::min<int64_t>(clip_b, dy + s.h);
+             ++y)
+            for (int64_t x = std::max<int64_t>(clip_l, dx); x < std::min<int64_t>(clip_r, dx + s.w);
+                 ++x) {
                 uint32_t p = s.argb[size_t(y - dy) * s.w + size_t(x - dx)];
                 if (!(p >> 24))
                     continue;

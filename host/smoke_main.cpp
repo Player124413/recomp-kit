@@ -620,7 +620,11 @@ double metric(const char *name, int32_t entity_id = -1) {
 // the cursor nowhere.
 int32_t g_pointer_x = 320, g_pointer_y = 240;
 uint8_t g_buttons = 0;
-bool g_window_gestures = false;
+// RECOMP_SMOKE_WINDOW_INPUT routes every scripted pointer step through the
+// window mapping a real mouse uses, rather than placing the guest pointer
+// directly. It is how a host-side input defect is reproduced without a hand on
+// the mouse. `guestclick` turns it on for its own step whatever this says.
+bool g_window_gestures = recomp_env("SMOKE_WINDOW_INPUT") != nullptr;
 HitResult g_window_hit;
 int g_window_mapping_failures = 0;
 
