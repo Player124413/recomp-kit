@@ -1,8 +1,11 @@
 // Software raster operations over the shared DC pixel path. Destination work
 // is bounded by the backing surface; blits snapshot sources before any write.
 #include "gdi32_internal.h"
+#include "guest.h"
+#include "../platform/os.h"
 #include "display_seam.h"
 #include "win32.h"
+#include <string>
 #include <algorithm>
 #include <cmath>
 #include <climits>
@@ -133,6 +136,11 @@ bool blit(uint32_t dst, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t src
 // Window blits target an active DirectDraw primary. Its seam pairs the write
 // with the existing readback, mutation recorder and present machinery.
 void blit_shim(X86 *c, int mode) {
+    // The guest's return address, read before anything touches the frame. A
+    // zero here is this file's own nested StretchBlt dispatch, which pushes a
+    // zero in the return slot, so an internal draw is never mistaken for one
+    // the guest asked for.
+    const uint32_t blit_ret = rd32(c->r[R_ESP]);
     uint32_t dest = arg(c, 0), primary = 0;
     auto *dc = dc_of(dest);
     if (dc && !dc->memory && !dc->bitmap)
@@ -153,6 +161,34 @@ void blit_shim(X86 *c, int mode) {
                    mode == 2 ? arg(c, 8) : 0, mode == 2 ? si(c, 9) : 0, mode == 2 ? si(c, 10) : 0);
     if (primary)
         ddraw_gdi_end_primary(primary);
+    // A refused blit is an anomaly worth naming: the guest asked for a draw and
+    // got nothing, and the usual cause is a device context with no bitmap
+    // behind it, which the geometry below makes obvious. RECOMP_TRACE_GDI=1
+    // reports every blit instead, which is how "the picture was never drawn"
+    // is told apart from "the picture was drawn and lost".
+    static const bool trace = recomp_env("TRACE_GDI") != nullptr;
+    if (!ok || trace) {
+        int dw = -1, dh = -1, sw2 = -1, sh2 = -1;
+        dc_size(dest, &dw, &dh);
+        dc_size(arg(c, 5), &sw2, &sh2);
+        LOGW("gdi: %s %s dst=%08x(%dx%d) src=%08x(%dx%d) at %d,%d %dx%d rop=%08x ret=%08x",
+             ok ? "" : "REFUSED", mode == 1 ? "stretch" : mode == 2 ? "mask" : "blit", dest, dw, dh,
+             arg(c, 5), sw2, sh2, si(c, 1), si(c, 2), si(c, 3), si(c, 4),
+             arg(c, mode == 1 ? 10 : mode == 2 ? 11 : 8), blit_ret);
+        if (!ok) {
+            // Who asked for it. A frame whose locals were never initialised
+            // says the routine was entered past its own setup, which the
+            // caller chain identifies.
+            std::string line;
+            for (uint32_t ret : win32_return_chain(c->r[R_EBP], 8)) {
+                char word[16];
+                snprintf(word, sizeof word, " %08x", ret);
+                line += word;
+            }
+            LOGW("gdi:   refused from EBP=%08x ESI=%08x chain:%s", c->r[R_EBP], c->r[R_ESI],
+                 line.c_str());
+        }
+    }
     set_eax(c, ok);
 }
 void bitblt(X86 *c) {

@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- A configured entry point is never withdrawn again. This file's own policy
+  says a `[translate] entry_points` address is established code, and `resolve`
+  duly adopts it - but `extend_finally_body` then read a PUSH of that address
+  inside another function's span as naming a pushed cleanup continuation,
+  re-decoded the bytes into the enclosing body, and retired the configured body
+  into an alternate, which emits no dispatch entry at all. The address the port
+  had verified was simply absent from the translation, and the only symptom was
+  a call to it returning zero. For Delphi that PUSH is how a window procedure is
+  handed to `MakeObjectInstance`, so a form's every message - WM_PAINT included
+  - ran nowhere. An address that a jump table, `__initterm` or config names is
+  now neither absorbed as a continuation nor retired, and a declared entry that
+  still fails to be adopted says so rather than going missing quietly.
+
+- A media session posts `MESessionTopologyStatus` carrying
+  `MF_TOPOSTATUS_READY`. A player does its renderer setup from that event and
+  from nowhere else: it is where `MFGetService` is called for
+  `IMFVideoDisplayControl`, where `SetVideoWindow` is called, and where the
+  interface every later repaint goes through is stored. A session that posted
+  only `MESessionTopologySet` left that field nil, and the failure surfaced as
+  a call through a nil interface inside the player, nowhere near this layer -
+  the video was decoding and presenting the whole time, through this layer's
+  own path rather than the renderer the player thought it had. `MFGetService`
+  now also names the object and the service asked of it under
+  `RECOMP_MF_TRACE`, because a refusal there is invisible until something calls
+  through what it did not return.
+
+- A refused blit reports its geometry and the frame that asked for it, and
+  `RECOMP_TRACE_GDI=1` reports every blit. A destination with no bitmap behind
+  it and a source of zero are indistinguishable from the guest, which is told
+  nothing either way; the geometry says which it was, and the caller chain says
+  who asked. It is how "the picture was never drawn" is told apart from "the
+  picture was drawn and lost".
+
 - A call to an address the translation does not cover now reports the caller's
   registers. For an indirect call they say what the call was made ON: a virtual
   dispatch reached its target through a word in the object, so the registers
