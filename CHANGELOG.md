@@ -21,6 +21,17 @@
   creator went from 17 real frames a second to 30-75, with the rest of the
   time now the game's.
 
+- A fullscreen DXGI swap chain sizes its output window to the mode it puts the
+  display in, and gives the bounds back when it leaves fullscreen, through the
+  same path as SetWindowPos so a window procedure hears WM_WINDOWPOSCHANGED. A
+  window created before any mode exists has the desktop fallback's size, and
+  mouse messages are routed by window bounds: a 1024x768 form on a 1920x1080
+  mode left everything right of x=1024 reaching no window at all, which is how
+  half of a character creator - the training list, its OK area, the Continue
+  button - took no clicks while the other half did. Windows does this resize
+  itself; the runtime now does too, and the swap-chain test hands the chain a
+  real window and checks its rectangle both ways.
+
 - A media session raises `MEEndOfPresentation` when the presentation runs out,
   before `MESessionEnded`. A player is entitled to ignore the latter, and this
   one does so by name; what ends playback is the former, from whose handler the

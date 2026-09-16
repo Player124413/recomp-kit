@@ -324,7 +324,7 @@ void create_device(X86 *c) {
     auto *dev = dx11::create(K_D3D11_DEVICE, IF_D3D11_DEVICE);
     auto *ctx = dx11::create(K_D3D11_CONTEXT, IF_D3D11_CONTEXT, dev->id);
     dx11::get(dev)->context = ctx->id;
-    uint32_t swap = dx11::swapchain(dev, sd);
+    uint32_t swap = dx11::swapchain(c, dev, sd);
     if (!swap) {
         com_release(ctx);
         com_release(dev);

@@ -27,7 +27,7 @@ ComObj *create(ComKind kind, ComIface iface, uint32_t device = 0);
 void retain(uint32_t &slot, uint32_t id);
 bool span(uint32_t addr, uint64_t bytes);
 uint32_t texture(ComObj *device, const D3D11_TEXTURE2D_DESC &desc);
-uint32_t swapchain(ComObj *device, const DXGI_SWAP_CHAIN_DESC &desc);
+uint32_t swapchain(X86 *c, ComObj *device, const DXGI_SWAP_CHAIN_DESC &desc);
 void put_pixel(Object &o, uint32_t x, uint32_t y, const std::array<float, 4> &colour);
 std::array<float, 4> pixel(const Object &o, uint32_t x, uint32_t y);
 void present(Object &back, uint32_t owner, uint32_t hwnd, bool fullscreen);

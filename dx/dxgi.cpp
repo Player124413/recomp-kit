@@ -13,7 +13,7 @@ uint32_t g_fs_w = 0, g_fs_h = 0;
 
 } // namespace
 namespace dx11 {
-uint32_t swapchain(ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
+uint32_t swapchain(X86 *c, ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
     D3D11_TEXTURE2D_DESC td{};
     td.Width = d.BufferDesc.Width;
     td.Height = d.BufferDesc.Height;
@@ -34,6 +34,12 @@ uint32_t swapchain(ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
         g_fs_h = d.BufferDesc.Height;
         host_set_display_mode(d.BufferDesc.Width, d.BufferDesc.Height, 32);
         host_display_request_window(2);
+        // DXGI sizes a fullscreen chain's output window to the mode. A window
+        // created before any mode existed has the desktop fallback's size,
+        // and mouse messages are routed by window bounds: the part of the
+        // display outside them - here everything right of 1024 on a 1920
+        // mode - would take clicks that reach no window at all.
+        win32_cover_display(c, d.OutputWindow, d.BufferDesc.Width, d.BufferDesc.Height);
     }
     return obj->id;
 }
@@ -75,16 +81,19 @@ void present(X86 *c) {
 }
 // Fullscreen requests go through the existing queued host window seam.
 // No native window or platform API is accessed from the guest thread.
-void apply_mode(dx11::Object &s) {
+void apply_mode(X86 *c, dx11::Object &s) {
     if (s.fullscreen) {
         g_fs_w = s.swap.BufferDesc.Width;
         g_fs_h = s.swap.BufferDesc.Height;
         host_set_display_mode(s.swap.BufferDesc.Width, s.swap.BufferDesc.Height, 32);
+        win32_cover_display(c, s.swap.OutputWindow, s.swap.BufferDesc.Width,
+                            s.swap.BufferDesc.Height);
     } else {
         g_fs_w = g_fs_h = 0;
         uint32_t w = 0, h = 0, bpp = 0;
         win32_display_mode(&w, &h, &bpp);
         host_set_display_mode(w, h, bpp);
+        win32_uncover_display(c, s.swap.OutputWindow);
     }
     host_display_request_window(s.fullscreen ? 2 : 0);
 }
@@ -97,7 +106,7 @@ void swap_fullscreen(X86 *c) {
     s->fullscreen = arg(c, 1) != 0;
     s->swap.Windowed = !s->fullscreen;
     gdi_forget_surface(com_this_arg(c)->id);
-    apply_mode(*s);
+    apply_mode(c, *s);
     com_ret(c, S_OK);
 }
 void swap_output(X86 *c) {
@@ -171,7 +180,7 @@ void swap_resize(X86 *c) {
     if (arg(c, 1))
         s->swap.BufferCount = arg(c, 1);
     s->swap.Flags = arg(c, 5);
-    apply_mode(*s);
+    apply_mode(c, *s);
     com_ret(c, S_OK);
 }
 

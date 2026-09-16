@@ -10,6 +10,7 @@
 #include "../platform/os.h"
 #include "memory.h"
 
+#include <array>
 #include <deque>
 #include <map>
 #include <string>
@@ -424,60 +425,67 @@ void u_UpdateWindow(X86 *c) {
     set_eax(c, 1);
 }
 
-void u_SetWindowPos(X86 *c) {
-    Window *w = find_window(arg(c, 0));
-    uint32_t flags = arg(c, 6);
-    if (w) {
-        if (!(flags & 4)) // SWP_NOZORDER
-            reorder_window(w->hwnd, arg(c, 1));
-        // A WM_SIZE handler may set the same size while arranging children.
-        // Only actual changes notify it again, or paint is starved forever.
-        bool moved =
-            !(flags & 0x0002) && (w->x != int32_t(arg(c, 2)) || w->y != int32_t(arg(c, 3)));
-        bool sized =
-            !(flags & 0x0001) && (w->w != int32_t(arg(c, 4)) || w->h != int32_t(arg(c, 5)));
-        if (moved) {
-            w->x = (int32_t)arg(c, 2);
-            w->y = (int32_t)arg(c, 3);
-        } // SWP_NOMOVE
-        if (sized) {
-            w->w = (int32_t)arg(c, 4);
-            w->h = (int32_t)arg(c, 5);
-            if (!(flags & 0x0008)) // SWP_NOREDRAW
-                w->update_pending = true;
-        } // SWP_NOSIZE
-        LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h,
-             w->x, w->y, flags, moved, sized);
-        // SWP_SHOWWINDOW and SWP_HIDEWINDOW are ShowWindow's transitions, made
-        // before WM_WINDOWPOSCHANGED as Windows makes them. The VCL shows every
-        // child control this way, so ignoring them left each one hidden.
-        if ((flags & 0x0040) && !w->visible) {
-            w->visible = true;
-            w->style |= WS_VISIBLE;
-            became_visible(w, false); // stacking is SWP_NOZORDER's business
-        } else if ((flags & 0x0080) && w->visible) {
-            w->visible = false;
-            w->style &= ~WS_VISIBLE;
-        }
-        if (moved || sized) {
-            // SetWindowPos sends this before returning. VCL updates its cached
-            // bounds here before setting another dimension. DefWindowProc is
-            // responsible for the derived WM_MOVE/WM_SIZE notifications.
-            uint32_t pos = heap_alloc(28, true);
-            if (pos) {
-                wr32(pos, w->hwnd);
-                wr32(pos + 4, arg(c, 1));
-                wr32(pos + 8, w->x);
-                wr32(pos + 12, w->y);
-                wr32(pos + 16, w->w);
-                wr32(pos + 20, w->h);
-                wr32(pos + 24, flags | (moved ? 0 : 2) | (sized ? 0 : 1));
-                host_dispatch_to_wndproc(c, w->hwnd, 0x47 /* WM_WINDOWPOSCHANGED */, 0, pos);
-                heap_free(pos);
-            }
+// SetWindowPos's body, shared with the runtime's own callers: DXGI sizes a
+// fullscreen swap chain's output window the way Windows does, through here.
+void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int32_t cx,
+                    int32_t cy, uint32_t flags) {
+    if (!(flags & 4)) // SWP_NOZORDER
+        reorder_window(w->hwnd, after);
+    // A WM_SIZE handler may set the same size while arranging children.
+    // Only actual changes notify it again, or paint is starved forever.
+    bool moved = !(flags & 0x0002) && (w->x != x || w->y != y);
+    bool sized = !(flags & 0x0001) && (w->w != cx || w->h != cy);
+    if (moved) {
+        w->x = x;
+        w->y = y;
+    } // SWP_NOMOVE
+    if (sized) {
+        w->w = cx;
+        w->h = cy;
+        if (!(flags & 0x0008)) // SWP_NOREDRAW
+            w->update_pending = true;
+    } // SWP_NOSIZE
+    LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h,
+         w->x, w->y, flags, moved, sized);
+    // SWP_SHOWWINDOW and SWP_HIDEWINDOW are ShowWindow's transitions, made
+    // before WM_WINDOWPOSCHANGED as Windows makes them. The VCL shows every
+    // child control this way, so ignoring them left each one hidden.
+    if ((flags & 0x0040) && !w->visible) {
+        w->visible = true;
+        w->style |= WS_VISIBLE;
+        became_visible(w, false); // stacking is SWP_NOZORDER's business
+    } else if ((flags & 0x0080) && w->visible) {
+        w->visible = false;
+        w->style &= ~WS_VISIBLE;
+    }
+    if (moved || sized) {
+        // SetWindowPos sends this before returning. VCL updates its cached
+        // bounds here before setting another dimension. DefWindowProc is
+        // responsible for the derived WM_MOVE/WM_SIZE notifications.
+        uint32_t pos = heap_alloc(28, true);
+        if (pos) {
+            wr32(pos, w->hwnd);
+            wr32(pos + 4, after);
+            wr32(pos + 8, w->x);
+            wr32(pos + 12, w->y);
+            wr32(pos + 16, w->w);
+            wr32(pos + 20, w->h);
+            wr32(pos + 24, flags | (moved ? 0 : 2) | (sized ? 0 : 1));
+            host_dispatch_to_wndproc(c, w->hwnd, 0x47 /* WM_WINDOWPOSCHANGED */, 0, pos);
+            heap_free(pos);
         }
     }
+}
+void u_SetWindowPos(X86 *c) {
+    if (Window *w = find_window(arg(c, 0)))
+        set_window_pos(c, w, arg(c, 1), int32_t(arg(c, 2)), int32_t(arg(c, 3)), int32_t(arg(c, 4)),
+                       int32_t(arg(c, 5)), arg(c, 6));
     set_eax(c, 1);
+}
+// The bounds a window had before a display took it over, by handle.
+std::map<uint32_t, std::array<int32_t, 4>> &covered_bounds() {
+    static std::map<uint32_t, std::array<int32_t, 4>> m;
+    return m;
 }
 
 void u_GetWindowRect(X86 *c) {
@@ -1450,6 +1458,30 @@ void u_wvsprintfA(X86 *c) {
 }
 
 } // namespace user32
+
+// A display taken over by a fullscreen swap chain has one window on it.
+// Windows sizes that window to the mode, and gives its bounds back when the
+// chain leaves fullscreen; a window procedure learns both through
+// WM_WINDOWPOSCHANGED, as from any SetWindowPos.
+void win32_cover_display(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h) {
+    auto *win = user32::find_window(hwnd);
+    if (!win || hwnd == user32::desktop_handle)
+        return;
+    auto &saved = user32::covered_bounds();
+    if (!saved.count(hwnd))
+        saved[hwnd] = {win->x, win->y, win->w, win->h};
+    user32::set_window_pos(c, win, 0, 0, 0, int32_t(w), int32_t(h), 0x14 /* NOZORDER|NOACTIVATE */);
+}
+void win32_uncover_display(X86 *c, uint32_t hwnd) {
+    auto &saved = user32::covered_bounds();
+    auto it = saved.find(hwnd);
+    if (it == saved.end())
+        return;
+    auto b = it->second;
+    saved.erase(it);
+    if (auto *win = user32::find_window(hwnd))
+        user32::set_window_pos(c, win, 0, b[0], b[1], b[2], b[3], 0x14);
+}
 
 const ImportShim g_user32_shims[] = {
     {"USER32.dll", "RegisterClassA", 1, u_RegisterClassA},

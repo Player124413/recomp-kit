@@ -59,6 +59,10 @@ uint32_t get_last_error();
 extern "C" bool ddraw_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
 // Selected DirectDraw mode, otherwise the host virtual desktop.
 void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
+// A fullscreen swap chain's output window is sized to the mode it put the
+// display in, and gets its bounds back when the chain leaves fullscreen.
+void win32_cover_display(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h);
+void win32_uncover_display(X86 *c, uint32_t hwnd);
 extern "C" bool ddraw_enum_display_mode(uint32_t index, uint32_t *w, uint32_t *h, uint32_t *bpp);
 
 // ---------------------------------------------------------------------------

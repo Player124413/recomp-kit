@@ -1202,6 +1202,18 @@ static void test_fullscreen_swapchain_sets_the_desktop_mode() {
     wr32(desc + 36, 0x20); // BufferUsage: render target output
     wr32(desc + 40, 1);    // BufferCount
     wr32(desc + 48, 0);    // Windowed: FALSE
+    // The output window: 640x480 at 20,30, as a program sizes one from the
+    // desktop fallback before any mode exists. DefWindowProc is its procedure.
+    uint32_t wc = sc(0x200), rect = sc(0x240);
+    gm_zero(wc, 40);
+    wr32(wc + 4, tramp("USER32.dll", "DefWindowProcA"));
+    gm_put_str(sc(0x280), "SwapTarget", 32);
+    wr32(wc + 36, sc(0x280));
+    CHECK(call_shim(tramp("USER32.dll", "RegisterClassA"), {wc}) != 0);
+    uint32_t hwnd = call_shim(tramp("USER32.dll", "CreateWindowExA"),
+                              {0, sc(0x280), sc(0x280), 0x80000000u, 20, 30, 640, 480, 0, 0, 0, 0});
+    CHECK(hwnd != 0);
+    wr32(desc + 44, hwnd); // OutputWindow
     uint32_t device = 0, context = 0, swap = 0;
     CHECK_EQ(call_shim(tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
                        {0, 1, 0, 0, 0, 0, 7, desc, sc(4), sc(8), 0, sc(12)}),
@@ -1213,9 +1225,22 @@ static void test_fullscreen_swapchain_sets_the_desktop_mode() {
     (void)context;
     CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 1920u);
     CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {1}), 1080u);
-    // Leaving fullscreen puts the desktop back the way it was.
+    // The output window now covers the mode, so a click anywhere on it has a
+    // window to reach.
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetWindowRect"), {hwnd, rect}), 1u);
+    CHECK_EQ(rd32(rect), 0u);
+    CHECK_EQ(rd32(rect + 4), 0u);
+    CHECK_EQ(rd32(rect + 8), 1920u);
+    CHECK_EQ(rd32(rect + 12), 1080u);
+    // Leaving fullscreen puts the desktop back the way it was, and the window.
     CHECK_EQ(call_method(swap, 10 /* IDXGISwapChain::SetFullscreenState */, {0, 0}), 0u);
     CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), before_w);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetWindowRect"), {hwnd, rect}), 1u);
+    CHECK_EQ(rd32(rect), 20u);
+    CHECK_EQ(rd32(rect + 4), 30u);
+    CHECK_EQ(rd32(rect + 8), 660u);
+    CHECK_EQ(rd32(rect + 12), 510u);
+    call_shim(tramp("USER32.dll", "DestroyWindow"), {hwnd});
 }
 
 static void test_retained_pointer_tail_bytes() {
