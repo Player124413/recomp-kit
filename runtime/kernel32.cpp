@@ -3997,6 +3997,8 @@ void sched_drive_release(void) {
 // ---------------------------------------------------------------------------
 // Encoding-independent bodies shared by the ANSI and wide import tables.
 void create_file_named(X86 *c, const std::string &name) {
+    if (recomp_env("TRACE_FILES"))
+        LOGW("file: open \"%s\" -> \"%s\"", name.c_str(), win32_host_path(name).c_str());
     uint32_t access = arg(c, 1), disp = arg(c, 4);
     bool want_write = (access & 0x40000000u) != 0; // GENERIC_WRITE
     bool create = (disp == 1 || disp == 2 || disp == 4 || disp == 5);
@@ -4057,6 +4059,8 @@ void create_file_named(X86 *c, const std::string &name) {
 }
 
 void get_file_attributes_named(X86 *c, const std::string &name) {
+    if (recomp_env("TRACE_FILES"))
+        LOGW("file: attrs \"%s\" -> \"%s\"", name.c_str(), win32_host_path(name).c_str());
     std::string host = win32_host_path(name);
     OsStat st{};
     if (host.empty() || os_stat(host.c_str(), &st) != 0) {

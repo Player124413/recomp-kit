@@ -2,6 +2,7 @@
 // names one, else fixed 8x16 bitmap cells. No host font services or guest
 // pointers escape this file; callbacks receive temporary guest-heap records.
 #include "gdi32_internal.h"
+#include "../platform/os.h"
 #include "gdi32_font8x16.h"
 #include "gdi32_truetype.h"
 #include "memory.h"
@@ -262,6 +263,12 @@ namespace gdi {
 // Measurement must use that font too; CALCRECT never mutates canvas pixels.
 uint32_t draw_text(uint32_t hdc, uint32_t text, uint32_t count, uint32_t rp, uint32_t flags) {
     auto *dc = dc_of(hdc);
+    if (recomp_env("TRACE_GDI")) {
+        int dw = -1, dh = -1;
+        dc_size(hdc, &dw, &dh);
+        LOGW("gdi: DrawText hdc=%08x(%dx%d)%s flags=%08x \"%s\"", hdc, dw, dh,
+             dc ? "" : " NO SUCH DC", flags, gm_wstr(text, 64).c_str());
+    }
     if (!dc || !rp || !gm_valid(rp, 16) || !text)
         return 0;
     if (count == UINT32_MAX) {

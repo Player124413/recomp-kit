@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- A media session presents through the window seam, not the DirectDraw one.
+  `host_present` stages a guest-sized copy and leaves publishing to the
+  DirectDraw recorder's frame sealing - and while a movie plays the game is not
+  drawing, so nothing ever seals and every staged frame is dropped: a black
+  screen with the soundtrack playing over it. It also takes only 8 and 16bpp,
+  so the fit had to be flattened to RGB565 first. The frames now go out as
+  32-bit ARGB through `host_display_present_window`, which stages and seals a
+  frame itself, the way a renderer painting its own window does. The smoke host
+  forwards one call to the other, which is exactly why this only ever appeared
+  in the real one.
+
+- `RECOMP_TRACE_FILES=1` names every guest file open and attribute query with
+  the host path it resolved to, and `RECOMP_TRACE_GDI` now also reports
+  `DrawText` with its DC, that DC's size and the string. "The text is missing"
+  and "the text is empty" look identical on screen and are different bugs.
+
 - A JMP through the entry stack slot now ends the way a RET does. The proof
   behind that emission establishes where the jumped-to value came from, never
   what it is, and a block recovered as a function of its own begins at delta

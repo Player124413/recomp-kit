@@ -40,6 +40,7 @@
 #include "../runtime/guest.h"
 #include "../platform/os.h"
 #include "../runtime/imports.h"
+#include "../runtime/display_seam.h"
 #include "../runtime/memory.h"
 #include "../runtime/win32.h"
 
@@ -296,7 +297,7 @@ struct SessionState {
     size_t pcm_pos = 0;
     mf::VideoFrame cur, next;
     bool have_next = false, have_cur = false;
-    std::vector<uint8_t> rgb565;
+    std::vector<uint32_t> screen;
 };
 std::map<uint32_t, std::unique_ptr<SessionState>> &sessions() {
     static auto *m = new std::map<uint32_t, std::unique_ptr<SessionState>>();
@@ -645,16 +646,13 @@ void present_frame(SessionState &s, const mf::VideoFrame &f) {
     if (draw_w <= 0 || draw_h <= 0)
         return;
     const int ox = (dst_w - draw_w) / 2, oy = (dst_h - draw_h) / 2;
-    s.rgb565.assign((size_t)dst_w * (size_t)dst_h * 2, 0);
-    uint16_t *out = (uint16_t *)s.rgb565.data();
+    s.screen.assign((size_t)dst_w * (size_t)dst_h, 0xff000000u);
     for (int y = 0; y < draw_h; ++y) {
         const int sy = (int)((int64_t)y * f.height / draw_h);
         const uint32_t *row = f.argb.data() + (size_t)sy * (size_t)f.width;
-        uint16_t *dst = out + (size_t)(y + oy) * (size_t)dst_w + (size_t)ox;
-        for (int x = 0; x < draw_w; ++x) {
-            const uint32_t p = row[(int)((int64_t)x * f.width / draw_w)]; // 0x00RRGGBB
-            dst[x] = (uint16_t)(((p >> 8) & 0xf800u) | ((p >> 5) & 0x07e0u) | ((p >> 3) & 0x001fu));
-        }
+        uint32_t *dst = s.screen.data() + (size_t)(y + oy) * (size_t)dst_w + (size_t)ox;
+        for (int x = 0; x < draw_w; ++x)
+            dst[x] = 0xff000000u | row[(int)((int64_t)x * f.width / draw_w)];
     }
     if (mf_tracing()) {
         // What actually leaves for the host, after the fit: a black buffer here
@@ -662,17 +660,22 @@ void present_frame(SessionState &s, const mf::VideoFrame &f) {
         // over it afterwards.
         static uint32_t sent = 0;
         if ((sent++ % 60) == 0) {
-            const uint16_t *px = (const uint16_t *)s.rgb565.data();
             size_t lit = 0;
             for (size_t i = 0, n = (size_t)dst_w * (size_t)dst_h; i < n; ++i)
-                if (px[i] != 0)
+                if ((s.screen[i] & 0x00ffffffu) != 0)
                     ++lit;
             MF_TRACE("mf: present %u %dx%d fit %dx%d at %d,%d lit=%.1f%%", sent, dst_w, dst_h,
                      draw_w, draw_h, ox, oy,
                      100.0 * (double)lit / (double)((size_t)dst_w * (size_t)dst_h));
         }
     }
-    host_present(s.rgb565.data(), dst_w, dst_h, 16, nullptr, dst_w * 2);
+    // Not host_present: that stages a guest-sized copy and leaves publishing
+    // to the DirectDraw recorder's frame sealing, and during a movie the game
+    // is not drawing, so nothing ever seals and the staged frames are never
+    // shown - a black screen with the soundtrack playing over it. It also only
+    // accepts 8 and 16bpp. This path stages RGBA and seals the frame itself,
+    // which is what a renderer painting its own window does.
+    host_display_present_window(s.screen.data(), dst_w, dst_h);
 }
 
 void audio_release(SessionState &s) {
