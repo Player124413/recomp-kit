@@ -250,80 +250,90 @@ id<MTLTexture> MetalDevice::native_texture(Texture t) {
     auto it = textures_.find(t.id);
     return it == textures_.end() ? nil : it->second.texture;
 }
+// Every entry point below runs on whichever thread the presenter or the guest
+// calls it from, and none of those threads drains an autorelease pool. Metal
+// hands out its command buffers, encoders and drawables autoreleased, so a
+// pool per call is what lets a drawable's IOSurface go when the frame does;
+// without one they piled up at a frame a refresh until the process was paged
+// out.
 bool MetalDevice::upload(Texture t, Region r, const void *bytes, int pitch, int level) {
-    id<MTLTexture> texture = native_texture(t);
-    if (!texture || !bytes || level < 0 || level >= int(texture.mipmapLevelCount))
-        return false;
-    const int w = std::max(1, int(texture.width) >> level),
-              h = std::max(1, int(texture.height) >> level);
-    if (r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 || r.x + r.w > w || r.y + r.h > h)
-        return false;
-    if (texture.storageMode == MTLStorageModeShared) {
-        [texture replaceRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
-                   mipmapLevel:level
-                     withBytes:bytes
-                   bytesPerRow:pitch];
+    @autoreleasepool {
+        id<MTLTexture> texture = native_texture(t);
+        if (!texture || !bytes || level < 0 || level >= int(texture.mipmapLevelCount))
+            return false;
+        const int w = std::max(1, int(texture.width) >> level),
+                  h = std::max(1, int(texture.height) >> level);
+        if (r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 || r.x + r.w > w || r.y + r.h > h)
+            return false;
+        if (texture.storageMode == MTLStorageModeShared) {
+            [texture replaceRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
+                       mipmapLevel:level
+                         withBytes:bytes
+                       bytesPerRow:pitch];
+            return true;
+        }
+        // Private storage: stage through a shared buffer and a blit.
+        const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
+        const NSUInteger row = NSUInteger(r.w) * bpp;
+        id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
+                                                     options:MTLResourceStorageModeShared];
+        for (int y = 0; y < r.h; ++y)
+            memcpy(static_cast<uint8_t *>(staging.contents) + row * y,
+                   static_cast<const uint8_t *>(bytes) + size_t(pitch) * y, row);
+        id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
+        [blit copyFromBuffer:staging
+                   sourceOffset:0
+              sourceBytesPerRow:row
+            sourceBytesPerImage:row * r.h
+                     sourceSize:MTLSizeMake(r.w, r.h, 1)
+                      toTexture:texture
+               destinationSlice:0
+               destinationLevel:level
+              destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
+        [blit endEncoding];
+        [buffer commit];
+        [buffer waitUntilCompleted];
         return true;
     }
-    // Private storage: stage through a shared buffer and a blit.
-    const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
-    const NSUInteger row = NSUInteger(r.w) * bpp;
-    id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
-                                                 options:MTLResourceStorageModeShared];
-    for (int y = 0; y < r.h; ++y)
-        memcpy(static_cast<uint8_t *>(staging.contents) + row * y,
-               static_cast<const uint8_t *>(bytes) + size_t(pitch) * y, row);
-    id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
-    id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
-    [blit copyFromBuffer:staging
-               sourceOffset:0
-          sourceBytesPerRow:row
-        sourceBytesPerImage:row * r.h
-                 sourceSize:MTLSizeMake(r.w, r.h, 1)
-                  toTexture:texture
-           destinationSlice:0
-           destinationLevel:level
-          destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
-    [blit endEncoding];
-    [buffer commit];
-    [buffer waitUntilCompleted];
-    return true;
 }
 bool MetalDevice::readback(Texture t, Region r, void *bytes, int pitch) {
-    id<MTLTexture> texture = native_texture(t);
-    if (!texture || !bytes || r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
-        r.x + r.w > int(texture.width) || r.y + r.h > int(texture.height))
-        return false;
-    wait_for_gpu();
-    if (texture.storageMode == MTLStorageModeShared) {
-        [texture getBytes:bytes
-              bytesPerRow:pitch
-               fromRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
-              mipmapLevel:0];
+    @autoreleasepool {
+        id<MTLTexture> texture = native_texture(t);
+        if (!texture || !bytes || r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
+            r.x + r.w > int(texture.width) || r.y + r.h > int(texture.height))
+            return false;
+        wait_for_gpu();
+        if (texture.storageMode == MTLStorageModeShared) {
+            [texture getBytes:bytes
+                  bytesPerRow:pitch
+                   fromRegion:MTLRegionMake2D(r.x, r.y, r.w, r.h)
+                  mipmapLevel:0];
+            return true;
+        }
+        const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
+        const NSUInteger row = NSUInteger(r.w) * bpp;
+        id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
+                                                     options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
+        [blit copyFromTexture:texture
+                         sourceSlice:0
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(r.x, r.y, 0)
+                          sourceSize:MTLSizeMake(r.w, r.h, 1)
+                            toBuffer:staging
+                   destinationOffset:0
+              destinationBytesPerRow:row
+            destinationBytesPerImage:row * r.h];
+        [blit endEncoding];
+        [buffer commit];
+        [buffer waitUntilCompleted];
+        for (int y = 0; y < r.h; ++y)
+            memcpy(static_cast<uint8_t *>(bytes) + size_t(pitch) * y,
+                   static_cast<const uint8_t *>(staging.contents) + row * y, row);
         return true;
     }
-    const int bpp = bytes_per_pixel(format_of(texture.pixelFormat));
-    const NSUInteger row = NSUInteger(r.w) * bpp;
-    id<MTLBuffer> staging = [device_ newBufferWithLength:row * r.h
-                                                 options:MTLResourceStorageModeShared];
-    id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
-    id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
-    [blit copyFromTexture:texture
-                     sourceSlice:0
-                     sourceLevel:0
-                    sourceOrigin:MTLOriginMake(r.x, r.y, 0)
-                      sourceSize:MTLSizeMake(r.w, r.h, 1)
-                        toBuffer:staging
-               destinationOffset:0
-          destinationBytesPerRow:row
-        destinationBytesPerImage:row * r.h];
-    [blit endEncoding];
-    [buffer commit];
-    [buffer waitUntilCompleted];
-    for (int y = 0; y < r.h; ++y)
-        memcpy(static_cast<uint8_t *>(bytes) + size_t(pitch) * y,
-               static_cast<const uint8_t *>(staging.contents) + row * y, row);
-    return true;
 }
 void MetalDevice::destroy(Texture t) {
     std::lock_guard lock(mutex_);
@@ -468,13 +478,15 @@ int MetalDevice::thread_execution_width(Pipeline p) {
 // --- command buffers --------------------------------------------------------
 
 CommandBuffer MetalDevice::begin() {
-    id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
-    std::lock_guard lock(mutex_);
-    uint64_t id = next_id_++;
-    Cmd c;
-    c.buffer = buffer;
-    commands_[id] = std::move(c);
-    return {id};
+    @autoreleasepool {
+        id<MTLCommandBuffer> buffer = [queue_ commandBuffer];
+        std::lock_guard lock(mutex_);
+        uint64_t id = next_id_++;
+        Cmd c;
+        c.buffer = buffer;
+        commands_[id] = std::move(c);
+        return {id};
+    }
 }
 void MetalDevice::end_encoders(Cmd &c) {
     if (c.render) {
@@ -491,40 +503,44 @@ void MetalDevice::end_encoders(Cmd &c) {
     }
 }
 id<MTLBlitCommandEncoder> MetalDevice::blit_encoder(Cmd &c) {
-    if (!c.blit) {
-        end_encoders(c);
-        c.blit = [c.buffer blitCommandEncoder];
+    @autoreleasepool {
+        if (!c.blit) {
+            end_encoders(c);
+            c.blit = [c.buffer blitCommandEncoder];
+        }
+        return c.blit;
     }
-    return c.blit;
 }
 void MetalDevice::begin_render_pass(CommandBuffer cb, const RenderPass &pass) {
-    std::lock_guard lock(mutex_);
-    Cmd *c = cmd(cb);
-    if (!c)
-        return;
-    end_encoders(*c);
-    MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
-    for (int i = 0; i < pass.color_count && i < 2; ++i) {
-        auto it = textures_.find(pass.color[i].texture.id);
-        if (it == textures_.end())
-            continue;
-        d.colorAttachments[i].texture = it->second.texture;
-        d.colorAttachments[i].loadAction = load(pass.color[i].load);
-        d.colorAttachments[i].storeAction = store(pass.color[i].store);
-        const float *k = pass.color[i].clear;
-        d.colorAttachments[i].clearColor = MTLClearColorMake(k[0], k[1], k[2], k[3]);
-    }
-    if (pass.depth.texture) {
-        auto it = textures_.find(pass.depth.texture.id);
-        if (it != textures_.end()) {
-            d.depthAttachment.texture = it->second.texture;
-            d.depthAttachment.loadAction = load(pass.depth.load);
-            d.depthAttachment.storeAction = store(pass.depth.store);
-            d.depthAttachment.clearDepth = pass.depth.clear;
+    @autoreleasepool {
+        std::lock_guard lock(mutex_);
+        Cmd *c = cmd(cb);
+        if (!c)
+            return;
+        end_encoders(*c);
+        MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+        for (int i = 0; i < pass.color_count && i < 2; ++i) {
+            auto it = textures_.find(pass.color[i].texture.id);
+            if (it == textures_.end())
+                continue;
+            d.colorAttachments[i].texture = it->second.texture;
+            d.colorAttachments[i].loadAction = load(pass.color[i].load);
+            d.colorAttachments[i].storeAction = store(pass.color[i].store);
+            const float *k = pass.color[i].clear;
+            d.colorAttachments[i].clearColor = MTLClearColorMake(k[0], k[1], k[2], k[3]);
         }
+        if (pass.depth.texture) {
+            auto it = textures_.find(pass.depth.texture.id);
+            if (it != textures_.end()) {
+                d.depthAttachment.texture = it->second.texture;
+                d.depthAttachment.loadAction = load(pass.depth.load);
+                d.depthAttachment.storeAction = store(pass.depth.store);
+                d.depthAttachment.clearDepth = pass.depth.clear;
+            }
+        }
+        c->render = [c->buffer renderCommandEncoderWithDescriptor:d];
+        [c->render setFrontFacingWinding:MTLWindingClockwise];
     }
-    c->render = [c->buffer renderCommandEncoderWithDescriptor:d];
-    [c->render setFrontFacingWinding:MTLWindingClockwise];
 }
 void MetalDevice::set_pipeline(CommandBuffer cb, Pipeline p) {
     std::lock_guard lock(mutex_);
@@ -669,12 +685,14 @@ void MetalDevice::end_render_pass(CommandBuffer cb) {
     }
 }
 void MetalDevice::begin_compute_pass(CommandBuffer cb) {
-    std::lock_guard lock(mutex_);
-    Cmd *c = cmd(cb);
-    if (!c)
-        return;
-    end_encoders(*c);
-    c->compute = [c->buffer computeCommandEncoder];
+    @autoreleasepool {
+        std::lock_guard lock(mutex_);
+        Cmd *c = cmd(cb);
+        if (!c)
+            return;
+        end_encoders(*c);
+        c->compute = [c->buffer computeCommandEncoder];
+    }
 }
 void MetalDevice::dispatch_threads(CommandBuffer cb, int tx, int ty, int gx, int gy) {
     std::lock_guard lock(mutex_);
@@ -767,41 +785,43 @@ void MetalDevice::on_complete(CommandBuffer cb, std::function<void(CommandStatus
         c->on_complete.push_back(std::move(fn));
 }
 void MetalDevice::commit(CommandBuffer cb) {
-    id<MTLCommandBuffer> buffer;
-    std::vector<std::function<void(CommandStatus, double)>> callbacks;
-    {
-        std::lock_guard lock(mutex_);
-        Cmd *c = cmd(cb);
-        if (!c)
-            return;
-        end_encoders(*c);
-        buffer = c->buffer;
-        callbacks.swap(c->on_complete);
-        commands_.erase(cb.id);
-        committed_[cb.id] = buffer;
-        last_committed_ = buffer;
+    @autoreleasepool {
+        id<MTLCommandBuffer> buffer;
+        std::vector<std::function<void(CommandStatus, double)>> callbacks;
+        {
+            std::lock_guard lock(mutex_);
+            Cmd *c = cmd(cb);
+            if (!c)
+                return;
+            end_encoders(*c);
+            buffer = c->buffer;
+            callbacks.swap(c->on_complete);
+            commands_.erase(cb.id);
+            committed_[cb.id] = buffer;
+            last_committed_ = buffer;
+        }
+        const uint64_t cb_id = cb.id;
+        if (!callbacks.empty()) {
+            auto shared = std::make_shared<std::vector<std::function<void(CommandStatus, double)>>>(
+                std::move(callbacks));
+            [buffer addCompletedHandler:^(id<MTLCommandBuffer> done) {
+              const CommandStatus status = done.status == MTLCommandBufferStatusCompleted
+                                               ? CommandStatus::Completed
+                                               : CommandStatus::Error;
+              const double ms = (done.GPUEndTime - done.GPUStartTime) * 1000.0;
+              for (auto &fn : *shared)
+                  fn(status, ms);
+              std::lock_guard lock(mutex_);
+              committed_.erase(cb_id);
+            }];
+        } else {
+            [buffer addCompletedHandler:^(id<MTLCommandBuffer>) {
+              std::lock_guard lock(mutex_);
+              committed_.erase(cb_id);
+            }];
+        }
+        [buffer commit];
     }
-    const uint64_t cb_id = cb.id;
-    if (!callbacks.empty()) {
-        auto shared = std::make_shared<std::vector<std::function<void(CommandStatus, double)>>>(
-            std::move(callbacks));
-        [buffer addCompletedHandler:^(id<MTLCommandBuffer> done) {
-          const CommandStatus status = done.status == MTLCommandBufferStatusCompleted
-                                           ? CommandStatus::Completed
-                                           : CommandStatus::Error;
-          const double ms = (done.GPUEndTime - done.GPUStartTime) * 1000.0;
-          for (auto &fn : *shared)
-              fn(status, ms);
-          std::lock_guard lock(mutex_);
-          committed_.erase(cb_id);
-        }];
-    } else {
-        [buffer addCompletedHandler:^(id<MTLCommandBuffer>) {
-          std::lock_guard lock(mutex_);
-          committed_.erase(cb_id);
-        }];
-    }
-    [buffer commit];
 }
 void MetalDevice::wait(CommandBuffer cb) {
     id<MTLCommandBuffer> buffer;
@@ -880,23 +900,25 @@ Format MetalDevice::swapchain_format(Swapchain) {
     return Format::BGRA8;
 }
 Texture MetalDevice::acquire(Swapchain s) {
-    CAMetalLayer *layer;
-    {
+    @autoreleasepool {
+        CAMetalLayer *layer;
+        {
+            std::lock_guard lock(mutex_);
+            auto it = swapchains_.find(s.id);
+            if (it == swapchains_.end())
+                return {};
+            layer = it->second.layer;
+        }
+        id<CAMetalDrawable> drawable = [layer nextDrawable];
+        if (!drawable)
+            return {};
+        Texture t = import_texture(drawable.texture);
         std::lock_guard lock(mutex_);
         auto it = swapchains_.find(s.id);
-        if (it == swapchains_.end())
-            return {};
-        layer = it->second.layer;
+        if (it != swapchains_.end())
+            it->second.drawables[t.id] = drawable;
+        return t;
     }
-    id<CAMetalDrawable> drawable = [layer nextDrawable];
-    if (!drawable)
-        return {};
-    Texture t = import_texture(drawable.texture);
-    std::lock_guard lock(mutex_);
-    auto it = swapchains_.find(s.id);
-    if (it != swapchains_.end())
-        it->second.drawables[t.id] = drawable;
-    return t;
 }
 void MetalDevice::release_drawable(Swapchain s, Texture t) {
     std::lock_guard lock(mutex_);
@@ -907,33 +929,35 @@ void MetalDevice::release_drawable(Swapchain s, Texture t) {
 }
 void MetalDevice::present(CommandBuffer cb, Swapchain s, Texture t, double min_duration,
                           std::function<void(double)> presented) {
-    id<CAMetalDrawable> drawable;
-    id<MTLCommandBuffer> buffer;
-    {
-        std::lock_guard lock(mutex_);
-        auto chain = swapchains_.find(s.id);
-        Cmd *c = cmd(cb);
-        if (chain == swapchains_.end() || !c)
-            return;
-        auto d = chain->second.drawables.find(t.id);
-        if (d == chain->second.drawables.end())
-            return;
-        drawable = d->second;
-        chain->second.drawables.erase(d);
-        textures_.erase(t.id);
-        end_encoders(*c);
-        buffer = c->buffer;
+    @autoreleasepool {
+        id<CAMetalDrawable> drawable;
+        id<MTLCommandBuffer> buffer;
+        {
+            std::lock_guard lock(mutex_);
+            auto chain = swapchains_.find(s.id);
+            Cmd *c = cmd(cb);
+            if (chain == swapchains_.end() || !c)
+                return;
+            auto d = chain->second.drawables.find(t.id);
+            if (d == chain->second.drawables.end())
+                return;
+            drawable = d->second;
+            chain->second.drawables.erase(d);
+            textures_.erase(t.id);
+            end_encoders(*c);
+            buffer = c->buffer;
+        }
+        if (presented) {
+            auto fn = std::make_shared<std::function<void(double)>>(std::move(presented));
+            [drawable addPresentedHandler:^(id<MTLDrawable> d) {
+              (*fn)(d.presentedTime);
+            }];
+        }
+        if (min_duration > 0)
+            [buffer presentDrawable:drawable afterMinimumDuration:min_duration];
+        else
+            [buffer presentDrawable:drawable];
     }
-    if (presented) {
-        auto fn = std::make_shared<std::function<void(double)>>(std::move(presented));
-        [drawable addPresentedHandler:^(id<MTLDrawable> d) {
-          (*fn)(d.presentedTime);
-        }];
-    }
-    if (min_duration > 0)
-        [buffer presentDrawable:drawable afterMinimumDuration:min_duration];
-    else
-        [buffer presentDrawable:drawable];
 }
 void MetalDevice::destroy(Swapchain s) {
     std::lock_guard lock(mutex_);
