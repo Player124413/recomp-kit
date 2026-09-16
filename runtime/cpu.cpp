@@ -179,8 +179,15 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
     // Bounded for the same reason log_once is: a guest that generates code
     // presents a new target on every call, and a run report wants a sample of
     // them, not all of them.
-    if (log_once(key, "call to unknown target %08x (ESP=%08x, return=%08x): returning 0", target,
-                 c->r[R_ESP], ret) &&
+    // The registers say what the call was made ON. A virtual dispatch holds the
+    // object in a register and reached this target through the object's vtable,
+    // so a null target beside a plausible object means the vtable slot is
+    // empty, while a wild object means the pointer never was one.
+    if (log_once(key,
+                 "call to unknown target %08x (ESP=%08x, return=%08x, EAX=%08x EBX=%08x "
+                 "ECX=%08x EDX=%08x ESI=%08x EDI=%08x): returning 0",
+                 target, c->r[R_ESP], ret, c->r[R_EAX], c->r[R_EBX], c->r[R_ECX], c->r[R_EDX],
+                 c->r[R_ESI], c->r[R_EDI]) &&
         unknown_calls().size() < 256)
         unknown_calls().push_back(UnknownCall{target, ret});
     return_as_if_ret(c);

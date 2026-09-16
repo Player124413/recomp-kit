@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- A call to an address the translation does not cover now reports the caller's
+  registers. For an indirect call they say what the call was made ON: a virtual
+  dispatch reached its target through a word in the object, so the registers
+  separate "the vtable slot is empty" from "the pointer is not an object at
+  all" - a distinction the address alone cannot make, and one that turned an
+  unexplained null call into a pointer that was never an object, its first
+  word being two characters of text.
+
+- `RECOMP_HEAP_QUARANTINE=1` retires a freed guest block instead of returning
+  it to the free list, and lets no neighbour absorb it. A guest that keeps
+  using memory it has freed then reads its own dead object rather than
+  whatever was allocated over the top of it, so a use-after-free faults where
+  it is rather than wherever the reused block happens to be written next. It
+  answers the question either way: a fault that survives quarantine unchanged
+  was never a reuse at all. Off by default, and a run with it on never
+  recycles a byte, so it is a diagnostic and not a way to play.
+
 - Media Foundation plays a file. `dx/mf.cpp` puts the objects a player builds -
   source resolver, media source, presentation and stream descriptors, media
   type handler, topology and its nodes, renderer activates, media session,

@@ -364,8 +364,19 @@ bool heap_free(uint32_t addr) {
     }
     it->second.used = false;
     it->second.req = 0;
-    g_free->insert(addr);
     ++g_total_frees;
+
+    // RECOMP_HEAP_QUARANTINE=1 retires a block instead of returning it: the
+    // address is never handed out again, and no neighbour absorbs it either.
+    // A guest that goes on using memory it has already freed then reads its
+    // own dead object rather than whatever was allocated over the top of it,
+    // which is the difference between a fault that names the culprit and one
+    // that does not. Off by default, and a run with it on gives up every byte
+    // it frees, so it is a diagnostic rather than a way to play.
+    static const bool quarantine = recomp_env("HEAP_QUARANTINE") != nullptr;
+    if (quarantine)
+        return true;
+    g_free->insert(addr);
 
     // Coalesce with the following block.
     auto next = std::next(it);
