@@ -1086,6 +1086,42 @@ static void test_memory_truetype_font() {
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
+// A program that names one of Windows' own interface faces and never
+// registers it - the VCL's default font does exactly that - gets the bundled
+// Open Sans: its proportional advances, and the semibold at weight 600 or
+// more. At a 100-pixel em (2048 units) Open Sans 'i' is 518 units, 25 px, and
+// 'W' 1896, 93; the semibold's are 571 and 1937, 28 and 95. A fixed-pitch or
+// unknown face keeps the 8x16 cells, six times over at this height.
+static void test_windows_face_substitute() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00340000;
+    uint32_t hwnd = make_test_window(&c, s, 256, 128);
+    uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {hwnd});
+    gm_put_wstr(s + 0x200, "iW", 8);
+    auto width = [&](const char *face, uint32_t weight) {
+        memset(g_mem + s + 0x100, 0, 92);
+        wr32(s + 0x100, uint32_t(-100));
+        wr32(s + 0x100 + 16, weight);
+        gm_put_wstr(s + 0x100 + 28, face, 32);
+        uint32_t font = call_import(&c, "GDI32.dll", "CreateFontIndirectW", {s + 0x100});
+        uint32_t old = call_import(&c, "GDI32.dll", "SelectObject", {dc, font});
+        wr32(s + 0x220, 0);
+        call_import(&c, "GDI32.dll", "GetTextExtentPoint32W", {dc, s + 0x200, 2, s + 0x220});
+        call_import(&c, "GDI32.dll", "SelectObject", {dc, old});
+        call_import(&c, "GDI32.dll", "DeleteObject", {font});
+        return rd32(s + 0x220);
+    };
+    uint32_t w;
+    check((w = width("Tahoma", 400)) == 118, "Tahoma is drawn with Open Sans (%u)", w);
+    check((w = width("SEGOE UI", 0)) == 118,
+          "the face name is matched without case, and weight 0 is regular (%u)", w);
+    check((w = width("Tahoma", 700)) == 123, "a bold request takes the semibold (%u)", w);
+    check((w = width("Courier New", 400)) == 96, "a fixed-pitch face keeps the 8x16 cells (%u)", w);
+    check((w = width("RecompUnknown", 400)) == 96, "an unknown face keeps the 8x16 cells (%u)", w);
+    call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
+    call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
+}
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
@@ -1106,6 +1142,7 @@ int main(int argc, char **argv) {
         test_draw_theme_text_ex();
         test_blit_into_moved_child_origin();
         test_memory_truetype_font();
+        test_windows_face_substitute();
         test_window_surface_and_blits(argc < 2 || strcmp(argv[1], "draw") != 0);
     }
     printf("%d checks, %d failures\n", g_checks, g_failures);

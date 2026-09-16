@@ -1,6 +1,8 @@
 // TrueType fonts a program registers from memory (AddFontMemResourceEx),
-// rasterized with stb_truetype. The kit ships no fonts: a face the program
-// did not supply is not found, and its text keeps the 8x16 bitmap cells.
+// rasterized with stb_truetype. The kit carries one family of its own, Open
+// Sans, which stands in for the sans-serif faces every Windows installation
+// has (truetype_windows_substitute). Any other face the program did not supply
+// is not found, and its text keeps the 8x16 bitmap cells.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +21,11 @@ struct TrueTypeGlyph {
 uint32_t truetype_add_memory(const uint8_t *data, size_t size);
 // The registered face with this family name, compared without case, or null.
 const TrueTypeFace *truetype_find(const std::string &family);
+// The bundled face that stands in for this Windows face, or null when the name
+// is not one of Windows' sans-serif interface faces. A weight of 600 or more
+// takes the semibold. Only for a family truetype_find does not know: what a
+// program registers itself always wins.
+const TrueTypeFace *truetype_windows_substitute(const std::string &family, int32_t weight);
 // The scale for a LOGFONT height: negative is the em in pixels, positive the
 // cell height, zero a 16-pixel cell.
 double truetype_scale(const TrueTypeFace *face, int32_t lf_height);

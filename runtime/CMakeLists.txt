@@ -4,6 +4,22 @@ set(POP_RUNTIME_SOURCES
   memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp oleaut32.cpp
   mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp media_foundation.cpp layout.cpp)
 
+# The faces the runtime's GDI draws Windows' own UI fonts with
+# (third_party/fonts/opensans/README.md), embedded as byte arrays.
+set(POP_BUNDLED_FONTS_DIR ${POP_ROOT}/third_party/fonts/opensans)
+set(POP_BUNDLED_FONTS_CPP ${CMAKE_CURRENT_BINARY_DIR}/generated/bundled_fonts.cpp)
+add_custom_command(
+  OUTPUT ${POP_BUNDLED_FONTS_CPP}
+  COMMAND ${CMAKE_COMMAND} -DOUT=${POP_BUNDLED_FONTS_CPP} -DNAMESPACE=gdi
+          "-DENTRIES=bundled_sans_regular=${POP_BUNDLED_FONTS_DIR}/OpenSans-Regular.ttf|bundled_sans_semibold=${POP_BUNDLED_FONTS_DIR}/OpenSans-Semibold.ttf"
+          -P ${POP_ROOT}/cmake/EmbedFiles.cmake
+  DEPENDS ${POP_ROOT}/cmake/EmbedFiles.cmake
+          ${POP_BUNDLED_FONTS_DIR}/OpenSans-Regular.ttf
+          ${POP_BUNDLED_FONTS_DIR}/OpenSans-Semibold.ttf
+  COMMENT "Embedding the bundled fonts"
+  VERBATIM)
+list(APPEND POP_RUNTIME_SOURCES ${POP_BUNDLED_FONTS_CPP})
+
 add_library(recomp_runtime OBJECT ${POP_RUNTIME_SOURCES})
 target_include_directories(recomp_runtime PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recomp_runtime PUBLIC recomp_platform)

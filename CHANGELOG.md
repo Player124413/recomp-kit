@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The runtime's GDI draws Windows' own sans-serif interface faces with a
+  bundled Open Sans (Apache-2.0, `third_party/fonts/opensans`, embedded at
+  build time by `cmake/EmbedFiles.cmake`). A program that draws text without
+  setting a font gets the VCL's default, which is a Windows face - Tahoma,
+  Segoe UI - that no game registers, and the kit drew it in its fixed 8x16
+  bitmap cells: a game's speech over its characters came out as blocky
+  terminal text. Segoe UI, Tahoma, Microsoft/MS Sans Serif, the MS Shell Dlg
+  aliases, Arial, Verdana, Calibri, Trebuchet MS and Helvetica now resolve to
+  Open Sans, the semibold at weight 600 or more; a face the program registers
+  itself still wins, and fixed-pitch, serif, system raster and unknown faces
+  keep the cells. Each substituted name is logged once. `gdi_tests` measures
+  the advances both ways.
+
 - `IDXGISwapChain::Present` honours its sync interval: the guest thread sleeps
   to the presenter's next refresh boundary, as a Present returns at the
   vertical blank on Windows. A renderer that asks for one paces its whole loop

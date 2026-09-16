@@ -1,6 +1,7 @@
 // TrueType faces from AddFontMemResourceEx, measured and rasterized with
 // stb_truetype. The data is the program's own - a font resource in its
-// executable - and is copied, since the caller may free its buffer.
+// executable - and is copied, since the caller may free its buffer. The kit's
+// bundled Open Sans stands in for Windows' own interface faces.
 #include "gdi32_truetype.h"
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,10 @@
 #endif
 
 namespace gdi {
+extern const unsigned char bundled_sans_regular[];
+extern const size_t bundled_sans_regular_size;
+extern const unsigned char bundled_sans_semibold[];
+extern const size_t bundled_sans_semibold_size;
 struct TrueTypeFace {
     std::shared_ptr<std::vector<uint8_t>> data;
     stbtt_fontinfo info{};
@@ -94,6 +99,41 @@ const TrueTypeFace *truetype_find(const std::string &family) {
         if ((*it)->family == key)
             return it->get();
     return nullptr;
+}
+
+namespace {
+// A bundled face, read once from the embedded bytes. The data is the kit's
+// own and lives as long as the process, so it is not copied.
+std::unique_ptr<TrueTypeFace> bundled_face(const unsigned char *data, size_t size) {
+    auto face = std::make_unique<TrueTypeFace>();
+    const int offset = stbtt_GetFontOffsetForIndex(data, 0);
+    if (offset < 0 || size_t(offset) >= size || !stbtt_InitFont(&face->info, data, offset))
+        return nullptr;
+    face->family = family_of(face->info);
+    return face;
+}
+} // namespace
+
+const TrueTypeFace *truetype_windows_substitute(const std::string &family, int32_t weight) {
+    // The sans-serif interface faces a Windows 7 installation has, and the
+    // names that resolve to them: the dialog aliases, the raster MS Sans
+    // Serif, and Helvetica through FontSubstitutes. Serif, fixed-pitch and
+    // the system raster fonts (System, Fixedsys, Terminal) are not here -
+    // the 8x16 cells are the closer stand-in for those.
+    static const char *const windows_sans[] = {
+        "segoe ui",     "tahoma",   "microsoft sans serif", "ms sans serif", "ms shell dlg",
+        "ms shell dlg 2", "arial", "verdana",              "calibri",       "trebuchet ms",
+        "helvetica",
+    };
+    const std::string key = lower_ascii(family);
+    if (std::find(std::begin(windows_sans), std::end(windows_sans), key) == std::end(windows_sans))
+        return nullptr;
+    static const std::unique_ptr<TrueTypeFace> regular =
+        bundled_face(bundled_sans_regular, bundled_sans_regular_size);
+    static const std::unique_ptr<TrueTypeFace> semibold =
+        bundled_face(bundled_sans_semibold, bundled_sans_semibold_size);
+    const TrueTypeFace *face = weight >= 600 && semibold ? semibold.get() : regular.get();
+    return face;
 }
 
 double truetype_scale(const TrueTypeFace *face, int32_t lf_height) {

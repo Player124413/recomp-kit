@@ -1,5 +1,6 @@
 // Text for guest canvases: a TrueType face the program registered when its font
-// names one, else fixed 8x16 bitmap cells. No host font services or guest
+// names one, the bundled stand-in when it names a Windows interface face, else
+// fixed 8x16 bitmap cells. No host font services or guest
 // pointers escape this file; callbacks receive temporary guest-heap records.
 #include "gdi32_internal.h"
 #include "../platform/os.h"
@@ -126,7 +127,21 @@ Pen pen_of(uint32_t hdc) {
             break;
         family.push_back(unit < 128 ? char(unit) : '?');
     }
-    if (family.empty() || !(pen.face = truetype_find(family)))
+    if (family.empty())
+        return pen;
+    pen.face = truetype_find(family);
+    if (!pen.face) {
+        // A face every Windows has and the program never supplied: what it
+        // gets with no font of its own set, from the VCL's default font.
+        const int32_t weight = int32_t(font_word(it->second, 16));
+        pen.face = truetype_windows_substitute(family, weight);
+        if (pen.face)
+            log_once(("gdi-font:" + family).c_str(),
+                     "gdi: \"%s\" is a Windows font the program did not register; drawing it "
+                     "with the bundled Open Sans",
+                     family.c_str());
+    }
+    if (!pen.face)
         return pen;
     pen.scale = truetype_scale(pen.face, int32_t(font_word(it->second, 0)));
     pen.metrics = truetype_metrics(pen.face, pen.scale);
