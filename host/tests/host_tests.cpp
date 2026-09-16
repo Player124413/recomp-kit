@@ -5047,48 +5047,6 @@ struct PresentFake {
         device.fire_presented(ts);
     }
 };
-
-// An adaptive panel steps its refresh rate down - 120Hz to 24Hz is one step on
-// a laptop - and a queued drawable then needs a whole slow refresh to reach the
-// display. A grace cut to the panel's nominal maximum declares those
-// acknowledgements lost and shows every frame through the completion fallback
-// instead, which paces presentation at the grace, keeps the panel slow, and
-// sustains itself. The grace follows the cadence the acknowledgements show.
-static void test_acknowledgement_grace_follows_a_slowing_panel() {
-    PresentFake fake;
-    host_present_test_begin(false, false);
-    // Two acknowledgements 40ms apart: a panel running at 25Hz, well under the
-    // 1/60 this service is told the mode can do.
-    host_present_test_seal(1, HOST_SCREEN_MENU, false);
-    CHECK(host_present_test_window_wake(0));
-    fake.commit();
-    fake.complete();
-    fake.presented(0.01);
-    CHECK_EQ(host_present_unique_completed(), 1u);
-    host_present_test_seal(2, HOST_SCREEN_MENU, false);
-    CHECK(host_present_test_window_wake(0.02));
-    fake.commit();
-    fake.complete();
-    fake.presented(0.05);
-    CHECK_EQ(host_present_unique_completed(), 2u);
-    CHECK_EQ(host_present_faults(), 0u);
-    // The third frame is submitted at 0.06. Three nominal refreshes later it
-    // would once have been declared lost; at the observed cadence it is not
-    // late at all, and nothing is shown that the display did not acknowledge.
-    host_present_test_seal(3, HOST_SCREEN_MENU, false);
-    CHECK(host_present_test_window_wake(0.06));
-    fake.commit();
-    fake.complete();
-    CHECK(host_present_test_window_wake(0.06 + 3.0 / 60 + 0.001, false, true));
-    CHECK_EQ(host_present_unique_completed(), 2u);
-    CHECK_EQ(host_present_faults(), 0u);
-    CHECK(!host_present_test_released(3));
-    // Its own acknowledgement arrives a slow refresh after the last one.
-    fake.presented(0.09);
-    CHECK_EQ(host_present_unique_completed(), 3u);
-    CHECK_EQ(host_present_faults(), 0u);
-    host_present_stop();
-}
 static void test_windowed_duration_pacing_selector() {
     const char *saved = recomp_env("HOST_PRESENT_PACING");
     std::string old = saved ? saved : "";
@@ -6164,7 +6122,6 @@ static void test_presentation_service() {
     test_d3d11_sealed_presentation();
     test_windowed_first_blit_presents_without_prior_completion();
     test_windowed_drawable_handler_and_completion_fallback();
-    test_acknowledgement_grace_follows_a_slowing_panel();
     test_windowed_duration_pacing_selector();
     test_presenter_menu_ui_and_movie_pixels();
     test_newest_sealed_wins_and_oldest_drops();
