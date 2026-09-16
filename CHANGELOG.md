@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A JMP through the entry stack slot now ends the way a RET does. The proof
+  behind that emission establishes where the jumped-to value came from, never
+  what it is, and a block recovered as a function of its own begins at delta
+  zero holding whatever its real caller pushed. Delphi's finally idiom - PUSH
+  resume; CALL cleanup; POP EAX; JMP EAX - puts a continuation INTO the
+  establishing body there, and setting EIP and returning dropped it: the body's
+  epilogue never ran, so it never restored EBP, and its caller went on reading
+  its own locals through a frame pointer that had moved. That surfaced as a
+  window painting nothing, four blits away, with every handle in the call
+  reading as rubbish. Routing it through recomp_return leaves a genuine return
+  exactly as cheap as it was and dispatches the rest.
+
 - `RECOMP_WATCH=<hex address>[:<length>]` reports every guest write that
   touches those bytes, and `RECOMP_WATCH_FRAME=1` reports a guest call that
   returns with EBP changed. A routine that loses the frame pointer corrupts

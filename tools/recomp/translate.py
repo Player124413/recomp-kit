@@ -2907,7 +2907,20 @@ class Translator(object):
         if i in fn.return_jumps:
             self.stats["_jmp_popped_return"] += 1
             orphan = ["recomp_seh_frame_orphan(c, seh_mark_);"] if i in fn.seh_escapes else []
-            return orphan + ["c->eip = %s; return;" % read_op(op, 32)]
+            # A JMP through the entry stack slot is a RET written out longhand,
+            # so it ends like one. Returning on the strength of the proof alone
+            # assumes the slot held this host frame's return address, and the
+            # proof only ever established where the value came from, not what
+            # it is: a block recovered as its own function starts at delta zero
+            # holding whatever its real caller pushed, and for Delphi's finally
+            # idiom - PUSH resume; CALL cleanup; POP EAX; JMP EAX - that is a
+            # continuation INTO the establishing body. Setting EIP and
+            # returning drops it, and the establishing body's epilogue never
+            # runs, so it never restores EBP; its caller then reads its own
+            # locals through a frame pointer that moved, and the damage shows
+            # up as a wrong value somewhere else entirely. recomp_return keeps
+            # a genuine return as cheap as it was and dispatches the rest.
+            return orphan + ["c->eip = %s; recomp_return(c); return;" % read_op(op, 32)]
         targets = self.jumptables.get((fn.addr, ins.addr))
         L = ["uint32_t t_ = %s;" % read_op(op, 32)]
         if not targets:
