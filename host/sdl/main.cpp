@@ -290,6 +290,13 @@ std::atomic<bool> g_escape_held{false};
 std::atomic<bool> g_platform_capture_requested{false};
 void update_platform_pointer_capture();
 
+// Host-side state transitions, stamped on the frame-timings clock so they
+// can be laid beside the presenter's acknowledgement trace.
+static void trace_state(const char *what) {
+    static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
+    if (trace)
+        fprintf(stderr, "[state %.3f] %s\n", double(os_monotonic_ns()) / 1e9, what);
+}
 void apply_pointer_capture(bool want) {
     // No pointer to capture on a touch platform: fingers are placed absolutely.
     want = want && platform_ui_pointer_capture_supported();
@@ -337,10 +344,12 @@ void update_platform_pointer_capture() {
     const bool want = g_platform_capture_requested && pointer_capture_wanted() &&
                       !g_close_requested && !g_fullscreen_transition;
     if (want && !g_pointer_hidden) {
+        trace_state("capture ON: hiding the OS cursor");
         SDL_HideCursor();
         g_pointer_hidden = true;
     }
     if (!want && g_pointer_hidden) {
+        trace_state("capture OFF: showing the OS cursor");
         SDL_ShowCursor();
         g_pointer_hidden = false;
     }
@@ -404,6 +413,18 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy) 
         const double margin = 8 * (bw > 0 ? double(dw) / bw : 1.0);
         if (host_pointer_at_resize_edge(px, py, dw, dh, margin))
             apply_pointer_capture(false);
+    }
+    {
+        static int last_kind = -99;
+        static bool last_delivered = false;
+        if (int(hit.kind) != last_kind || delivered != last_delivered) {
+            char what[96];
+            snprintf(what, sizeof what, "hit kind %d -> %d, delivered %d -> %d", last_kind,
+                     int(hit.kind), int(last_delivered), int(delivered));
+            trace_state(what);
+            last_kind = int(hit.kind);
+            last_delivered = delivered;
+        }
     }
     if (!delivered)
         return;
@@ -873,10 +894,28 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_WINDOW_MOUSE_LEAVE: {
         static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
         if (trace)
-            fprintf(stderr, "[pointer] %s the window\n",
-                    event.type == SDL_EVENT_WINDOW_MOUSE_ENTER ? "entered" : "left");
+            trace_state(event.type == SDL_EVENT_WINDOW_MOUSE_ENTER ? "pointer entered the window"
+                                                                   : "pointer left the window");
         break;
     }
+    case SDL_EVENT_WINDOW_OCCLUDED:
+        trace_state("window OCCLUDED");
+        break;
+    case SDL_EVENT_WINDOW_EXPOSED:
+        trace_state("window exposed");
+        break;
+    case SDL_EVENT_WINDOW_HIDDEN:
+        trace_state("window HIDDEN");
+        break;
+    case SDL_EVENT_WINDOW_SHOWN:
+        trace_state("window shown");
+        break;
+    case SDL_EVENT_WINDOW_MINIMIZED:
+        trace_state("window MINIMIZED");
+        break;
+    case SDL_EVENT_WINDOW_RESTORED:
+        trace_state("window restored");
+        break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (event.button.windowID == ours) {
@@ -910,6 +949,7 @@ void handle_event(const SDL_Event &event) {
         handle_key(event.key, event.type == SDL_EVENT_KEY_DOWN);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
+        trace_state("focus LOST");
         g_platform_capture_requested = false;
         update_platform_pointer_capture();
         g_escape_held = false;
@@ -917,6 +957,7 @@ void handle_event(const SDL_Event &event) {
         note_focus(false);
         break;
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        trace_state("focus gained");
         note_focus(true);
         break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:

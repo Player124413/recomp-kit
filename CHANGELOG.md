@@ -32,6 +32,14 @@
   itself; the runtime now does too, and the swap-chain test hands the chain a
   real window and checks its rectangle both ways.
 
+- `RECOMP_TRACE_POINTER` also stamps host state transitions - focus, window
+  occlusion and exposure, pointer capture and enter/leave, hit-kind changes -
+  on the frame-timings clock, so they can be laid beside the presenter's
+  acknowledgement trace. Laid that way, every completion-fallback stretch
+  matched a focus loss or occlusion exactly: macOS stops presenting a window
+  nobody can see, and the frames that time out then are frames nobody misses.
+  Without the alignment it read as a stutter.
+
 - A media session raises `MEEndOfPresentation` when the presentation runs out,
   before `MESessionEnded`. A player is entitled to ignore the latter, and this
   one does so by name; what ends playback is the former, from whose handler the
