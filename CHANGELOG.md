@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- The software Direct3D 11 rasterizer copies texel rows where it can. A
+  triangle with one 1/w at every vertex has screen-linear texture coordinates,
+  and when those put a texel centre under every pixel centre - both formats
+  four bytes, or the R16 word through the packed-565 decode, no blending, no
+  decode of an 8-bit source - the per-pixel shading reduces to the texel
+  itself, so `raster_triangle` copies each covered row instead of sampling,
+  blending and writing 2 million pixels one float channel at a time. That is
+  the whole-surface present quad a 2D D3D11 pipeline draws every frame, and it
+  cost 60 ms at 1920x1080: a 16 fps ceiling on a game whose own painting took
+  a fraction of that, felt as a pointer that trailed the hand. The copy takes
+  the general loop's own arithmetic to the byte (a 65536-entry table for the
+  packed decode, built from the loop's float expressions), is taken only where
+  that arithmetic would land on texel centres, and a test draws the same scene
+  through both paths and compares every word. `dx11::present` likewise takes
+  8-bit channels as the bytes they are, and the GDI present copies a
+  same-sized presented surface by rows rather than dividing per pixel. The
+  creator went from 17 real frames a second to 30-75, with the rest of the
+  time now the game's.
+
 - A media session raises `MEEndOfPresentation` when the presentation runs out,
   before `MESessionEnded`. A player is entitled to ignore the latter, and this
   one does so by name; what ends playback is the former, from whose handler the

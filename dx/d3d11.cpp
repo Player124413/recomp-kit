@@ -93,6 +93,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <vector>
 #include <cstdio>
 
 namespace dx11 {
@@ -222,13 +223,26 @@ void put_pixel(Object &o, uint32_t x, uint32_t y, const std::array<float, 4> &c)
 // host frame. GDI refreshes retain it; no presenter reads guest memory.
 void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
     std::vector<uint32_t> argb(size_t(o.texture.Width) * o.texture.Height);
-    for (uint32_t y = 0; y < o.texture.Height; ++y)
+    const bool rgba = o.texture.Format == 28, bgra = o.texture.Format == 87;
+    for (uint32_t y = 0; y < o.texture.Height; ++y) {
+        uint32_t *row = argb.data() + size_t(y) * o.texture.Width;
+        if (rgba || bgra) {
+            // Eight-bit channels pass through pixel() and back unchanged;
+            // take the bytes as they are.
+            const uint32_t src = o.data + y * o.pitch;
+            for (uint32_t x = 0; x < o.texture.Width; ++x) {
+                uint32_t c = rd32(src + x * 4);
+                row[x] = 0xff000000u | (bgra ? c & 0xffffffu
+                                             : (c & 0xffu) << 16 | (c & 0xff00u) | (c >> 16 & 0xffu));
+            }
+            continue;
+        }
         for (uint32_t x = 0; x < o.texture.Width; ++x) {
             auto c = pixel(o, x, y);
-            argb[size_t(y) * o.texture.Width + x] =
-                0xff000000u | uint32_t(std::lround(c[0] * 255)) << 16 |
-                uint32_t(std::lround(c[1] * 255)) << 8 | uint32_t(std::lround(c[2] * 255));
+            row[x] = 0xff000000u | uint32_t(std::lround(c[0] * 255)) << 16 |
+                     uint32_t(std::lround(c[1] * 255)) << 8 | uint32_t(std::lround(c[2] * 255));
         }
+    }
     gdi_present_surface(owner, hwnd, argb.data(), o.texture.Width, o.texture.Height, fullscreen);
 }
 void get_device(X86 *c) {
@@ -934,15 +948,191 @@ std::vector<QuadVertex> clip_triangle(const QuadVertex *tri) {
     }
     return polygon;
 }
+struct ScreenVertex {
+    double x, y, iw, u, v;
+};
+double edge(const ScreenVertex &a, const ScreenVertex &b, double x, double y) {
+    return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+}
+// A triangle with one 1/w at every vertex has screen-linear texture
+// coordinates. When they put a texel centre under every pixel centre, in a
+// four-byte format on both sides, with no blending and no packed decode, the
+// shading in raster_triangle reduces to the texel itself: copy each covered
+// row instead. This is the whole-surface present quad a 2D Direct3D 11
+// pipeline draws every frame, which the general loop shades in tens of
+// milliseconds at 1920x1080 - a 16 fps ceiling on a game that paints in one.
+// The copy is taken only where the loop's own arithmetic would land on texel
+// centres, and then it produces the loop's bytes.
+bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, int maxx, int maxy,
+                     const bool tl[3], dx11::Object &target, const dx11::Object &tex,
+                     const D3D11_RENDER_TARGET_BLEND_DESC &blend, uint32_t shader) {
+    const uint32_t tf = tex.texture.Format, of = target.texture.Format;
+    if (blend.BlendEnable || blend.RenderTargetWriteMask != 15)
+        return false;
+    // The packed decode reads a 16-bit word through the red channel; any
+    // other pairing of shader and format is left to the loop.
+    const bool packed = shader == 3;
+    if (packed ? tf != 56 : !(tf == 28 || tf == 87 || tf == 85))
+        return false;
+    if (!(of == 28 || of == 87))
+        return false;
+    // How far from a texel centre the loop's own sample may fall and still
+    // read the texel alone. Eight-bit channels absorb a thousandth of a texel
+    // in rounding; the packed word is decoded by integer division and does
+    // not, so it asks for the centre to within what double arithmetic leaves.
+    const double slack = packed ? 1e-9 : 1e-3;
+    const double iw = p[0].iw;
+    if (std::abs(p[1].iw - iw) > 1e-9 * std::abs(iw) ||
+        std::abs(p[2].iw - iw) > 1e-9 * std::abs(iw))
+        return false;
+    // The coordinate plane through the three vertices, in texels.
+    const double dx1 = p[1].x - p[0].x, dy1 = p[1].y - p[0].y, dx2 = p[2].x - p[0].x,
+                 dy2 = p[2].y - p[0].y;
+    const double w = tex.texture.Width, h = tex.texture.Height;
+    const double u0 = p[0].u / iw * w, du1 = p[1].u / iw * w - u0, du2 = p[2].u / iw * w - u0;
+    const double v0 = p[0].v / iw * h, dv1 = p[1].v / iw * h - v0, dv2 = p[2].v / iw * h - v0;
+    const double dudx = (du1 * dy2 - du2 * dy1) / area, dudy = (du2 * dx1 - du1 * dx2) / area,
+                 dvdx = (dv1 * dy2 - dv2 * dy1) / area, dvdy = (dv2 * dx1 - dv1 * dx2) / area;
+    // The texel under a pixel centre as the sampler computes it, less the
+    // half texel that puts integers on centres. A plane is fixed by three
+    // points, so when all four corners of the bounding box sit on centres by
+    // one offset, every pixel between them does too.
+    auto texel = [&](int x, int y, double &tx, double &ty) {
+        tx = u0 + dudx * (x + 0.5 - p[0].x) + dudy * (y + 0.5 - p[0].y) - 0.5;
+        ty = v0 + dvdx * (x + 0.5 - p[0].x) + dvdy * (y + 0.5 - p[0].y) - 0.5;
+    };
+    double tx0, ty0;
+    texel(minx, miny, tx0, ty0);
+    if (!std::isfinite(tx0) || !std::isfinite(ty0))
+        return false;
+    const long kx = std::lround(tx0) - minx, ky = std::lround(ty0) - miny;
+    for (int corner = 0; corner < 4; ++corner) {
+        int x = corner & 1 ? maxx : minx, y = corner & 2 ? maxy : miny;
+        double tx, ty;
+        texel(x, y, tx, ty);
+        if (!(std::abs(tx - double(x + kx)) <= slack) || !(std::abs(ty - double(y + ky)) <= slack)) {
+            return false;
+        }
+    }
+    // Inside the texture throughout, so no address mode or border applies.
+    if (minx + kx < 0 || maxx + kx >= long(tex.texture.Width) || miny + ky < 0 ||
+        maxy + ky >= long(tex.texture.Height))
+        return false;
+    auto covered = [&](int x, int y) {
+        for (int i = 0; i < 3; ++i) {
+            double e = edge(p[(i + 1) % 3], p[(i + 2) % 3], x + 0.5, y + 0.5);
+            if (e < 0 || (e == 0 && !tl[i]))
+                return false;
+        }
+        return true;
+    };
+    // 5- and 6-bit channels widened as pixel() then put_pixel() would, in
+    // the same float expressions, so the bytes agree.
+    static const auto lut5 = [] {
+        std::array<uint8_t, 32> t{};
+        for (int i = 0; i < 32; ++i)
+            t[i] = uint8_t(std::lround(std::clamp(i / 31.f, 0.f, 1.f) * 255));
+        return t;
+    }();
+    static const auto lut6 = [] {
+        std::array<uint8_t, 64> t{};
+        for (int i = 0; i < 64; ++i)
+            t[i] = uint8_t(std::lround(std::clamp(i / 63.f, 0.f, 1.f) * 255));
+        return t;
+    }();
+    // Every 16-bit word through the packed decode: pixel(), then the shader
+    // arithmetic of raster_triangle, then put_pixel(), in the same float
+    // expressions, so the bytes agree - including where the round trip
+    // through 65535.f truncates a word to the one below it.
+    static const std::vector<uint32_t> lut16 = [] {
+        std::vector<uint32_t> t(65536);
+        auto q = [](float c) { return uint32_t(std::lround(std::clamp(c, 0.f, 1.f) * 255)); };
+        for (int v = 0; v < 65536; ++v) {
+            float s = v / 65535.f;
+            int word = int(s * 65535.f);
+            int blue = word % 32;
+            word = (word - blue) / 32;
+            int green = word % 64;
+            word = (word - green) / 64;
+            int red = word % 32;
+            t[v] = q(red / 32.f) | q(green / 64.f) << 8 | q(blue / 32.f) << 16;
+        }
+        return t;
+    }();
+    const bool target_bgra = of == 87;
+    auto copy_row = [&](uint32_t src, uint32_t dst, uint32_t n) {
+        if (tf == of) {
+            memmove(gm_ptr(dst), gm_ptr(src), n * 4);
+            return;
+        }
+        for (uint32_t i = 0; i < n; ++i, dst += 4) {
+            uint32_t r, g, b, a;
+            if (packed) {
+                uint32_t c = lut16[rd16(src + i * 2)];
+                r = c & 0xff;
+                g = (c >> 8) & 0xff;
+                b = (c >> 16) & 0xff;
+                a = 255;
+            } else if (tf == 85) {
+                uint32_t v = rd16(src + i * 2);
+                r = lut5[(v >> 11) & 31];
+                g = lut6[(v >> 5) & 63];
+                b = lut5[v & 31];
+                a = 255;
+            } else {
+                uint32_t c = rd32(src + i * 4);
+                bool bgra = tf == 87;
+                r = (c >> (bgra ? 16 : 0)) & 0xff;
+                g = (c >> 8) & 0xff;
+                b = (c >> (bgra ? 0 : 16)) & 0xff;
+                a = c >> 24;
+            }
+            wr32(dst, target_bgra ? b | g << 8 | r << 16 | a << 24 : r | g << 8 | b << 16 | a << 24);
+        }
+    };
+    const uint32_t texel_bytes = tf == 85 || tf == 56 ? 2 : 4;
+    bool copied = false;
+    for (int y = miny; y <= maxy; ++y) {
+        // A row's covered pixels form one run. Bound it from the edge lines,
+        // then settle both ends with the loop's own coverage test.
+        double lo = minx, hi = maxx;
+        bool empty = false;
+        for (int i = 0; i < 3 && !empty; ++i) {
+            const ScreenVertex &a = p[(i + 1) % 3], &b = p[(i + 2) % 3];
+            double at_min = edge(a, b, minx + 0.5, y + 0.5), slope = -(b.y - a.y);
+            if (slope > 0)
+                lo = std::max(lo, minx - at_min / slope);
+            else if (slope < 0)
+                hi = std::min(hi, minx - at_min / slope);
+            else
+                empty = at_min < 0 || (at_min == 0 && !tl[i]);
+        }
+        if (empty || !(lo <= hi + 1))
+            continue;
+        int xl = int(std::floor(std::clamp(lo, double(minx), double(maxx)))) - 1,
+            xr = int(std::ceil(std::clamp(hi, double(minx), double(maxx)))) + 1;
+        xl = std::max(xl, minx);
+        xr = std::min(xr, maxx);
+        while (xl <= xr && !covered(xl, y))
+            ++xl;
+        while (xr >= xl && !covered(xr, y))
+            --xr;
+        if (xl > xr)
+            continue;
+        copy_row(tex.data + uint32_t(y + ky) * tex.pitch + uint32_t(xl + kx) * texel_bytes,
+                 target.data + uint32_t(y) * target.pitch + uint32_t(xl) * 4, uint32_t(xr - xl + 1));
+        copied = true;
+    }
+    if (copied)
+        target.dirty = true;
+    return true;
+}
 // Pixel-centre coverage uses the top-left rule: the diagonal shared by two
 // quad triangles shades once, which is observable with alpha blending.
 void raster_triangle(QuadVertex a, QuadVertex b, QuadVertex c, dx11::Object &target,
                      const dx11::Object &tex, const D3D11_VIEWPORT &vp,
                      const D3D11_SAMPLER_DESC &sampler, const D3D11_RENDER_TARGET_BLEND_DESC &blend,
                      const D3D11_RASTERIZER_DESC &raster, uint32_t shader) {
-    struct ScreenVertex {
-        double x, y, iw, u, v;
-    };
     auto screen = [&](const QuadVertex &v) {
         double iw = 1 / v.clip[3];
         return ScreenVertex{vp.TopLeftX + (v.clip[0] * iw + 1) * vp.Width / 2,
@@ -952,9 +1142,6 @@ void raster_triangle(QuadVertex a, QuadVertex b, QuadVertex c, dx11::Object &tar
     if (a.clip[3] <= 0 || b.clip[3] <= 0 || c.clip[3] <= 0)
         return;
     ScreenVertex p[3] = {screen(a), screen(b), screen(c)};
-    auto edge = [](const ScreenVertex &a, const ScreenVertex &b, double x, double y) {
-        return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
-    };
     double area = edge(p[0], p[1], p[2].x, p[2].y);
     if (area == 0 || !std::isfinite(area))
         return;
@@ -975,6 +1162,8 @@ void raster_triangle(QuadVertex a, QuadVertex b, QuadVertex c, dx11::Object &tar
         return b.y < a.y || (b.y == a.y && b.x > a.x);
     };
     bool tl[3] = {top_left(p[1], p[2]), top_left(p[2], p[0]), top_left(p[0], p[1])};
+    if (copy_texel_rows(p, area, minx, miny, maxx, maxy, tl, target, tex, blend, shader))
+        return;
     for (int y = miny; y <= maxy; ++y)
         for (int x = minx; x <= maxx; ++x) {
             double e[3] = {edge(p[1], p[2], x + 0.5, y + 0.5), edge(p[2], p[0], x + 0.5, y + 0.5),

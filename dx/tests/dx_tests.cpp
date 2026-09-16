@@ -10790,6 +10790,249 @@ static void test_d3d11_alpha_pixels() {
     test_d3d11_quad(true);
 }
 
+// The texel-row copy in raster_triangle must produce the general loop's
+// bytes. One scene, drawn without blending (the copy) and with a ONE/ZERO
+// blend that changes nothing but forces the loop, then from a B8G8R8A8
+// texture (the copy with a swizzle) and with a point sampler: four identical
+// presents, all equal to the texels themselves.
+static void test_d3d11_texel_copy() {
+    cpu_reset();
+    gm_zero(sc(0), 0x4000);
+    uint32_t live = com_live_count();
+    uint32_t sd = sc(0x100);
+    wr32(sd, 8);
+    wr32(sd + 4, 8);
+    wr32(sd + 16, 28);
+    wr32(sd + 28, 1);
+    wr32(sd + 36, 0x20);
+    wr32(sd + 40, 2);
+    wr32(sd + 48, 1);
+    CHECK_EQ(call_shim(tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
+                       {0, 1, 0, 0, 0, 0, 7, sd, sc(0), sc(4), sc(8), sc(12)}),
+             S_OK);
+    uint32_t swap = rd32(sc(0)), dev = rd32(sc(4)), ctx = rd32(sc(12));
+    if (!swap || !dev || !ctx)
+        return;
+    std::vector<uint32_t> owned{swap, dev, ctx};
+    auto cleanup = [&]() {
+        call_method(ctx, 110);
+        for (auto it = owned.rbegin(); it != owned.rend(); ++it)
+            call_method(*it, 2);
+    };
+    const uint8_t iid[] = {0xf2, 0xaa, 0x15, 0x6f, 0x08, 0xd2, 0x89, 0x4e,
+                           0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c};
+    memcpy(gm_ptr(sc(0x80)), iid, 16);
+    call_method(swap, 9, {0, sc(0x80), sc(16)});
+    uint32_t back = rd32(sc(16));
+    owned.push_back(back);
+    call_method(dev, 9, {back, 0, sc(20)});
+    uint32_t rtv = rd32(sc(20));
+    owned.push_back(rtv);
+    float blue[] = {0, 0, 1, 1};
+    memcpy(gm_ptr(sc(0x200)), blue, 16);
+    call_method(ctx, 50, {rtv, sc(0x200)});
+    call_method(ctx, 33, {1, sc(20), 0});
+    float vp[] = {0, 0, 8, 8, 0, 1};
+    memcpy(gm_ptr(sc(0x220)), vp, 24);
+    call_method(ctx, 44, {1, sc(0x220)});
+    auto buffer = [&](uint32_t bytes, uint32_t bind, const void *data) {
+        uint32_t d = sc(0x300);
+        gm_zero(d, 24);
+        wr32(d, bytes);
+        wr32(d + 4, 2);
+        wr32(d + 8, bind);
+        wr32(d + 12, 0x10000);
+        wr32(sc(28), 0);
+        CHECK_EQ(call_method(dev, 3, {d, 0, sc(28)}), S_OK);
+        uint32_t b = rd32(sc(28));
+        if (!b)
+            return uint32_t(0);
+        owned.push_back(b);
+        CHECK_EQ(call_method(ctx, 14, {b, 0, 4, 0, sc(0x340)}), S_OK);
+        uint32_t ptr = rd32(sc(0x340));
+        CHECK(ptr != 0);
+        if (ptr && data)
+            memcpy(gm_ptr(ptr), data, bytes);
+        call_method(ctx, 15, {b, 0});
+        return b;
+    };
+    float vertices[] = {-1, -1, 0, 0, 0, 1, 1, 0, 1, 1, -1, 1, 0, 0, 1, 1, -1, 0, 1, 0};
+    uint16_t indices[] = {0, 2, 1, 0, 1, 3, 0};
+    uint32_t vb = buffer(sizeof(vertices), 1, vertices), ib = buffer(sizeof(indices), 2, indices);
+    if (!vb || !ib) {
+        cleanup();
+        return;
+    }
+    // SetDestRect(2,1,6,5) in an 8x8 viewport: a 4x4 texture one-to-one.
+    matrix_call("D3DXMatrixTranslation", {sc(0x400), float_word(-0.5f), float_word(-0.25f), 0});
+    matrix_call("D3DXMatrixScaling",
+                {sc(0x440), float_word(0.5f), float_word(0.5f), float_word(1)});
+    matrix_call("D3DXMatrixTranslation", {sc(0x480), float_word(1), float_word(1), 0});
+    matrix_call("D3DXMatrixMultiply", {sc(0x4c0), sc(0x480), sc(0x440)});
+    matrix_call("D3DXMatrixMultiplyTranspose", {sc(0x500), sc(0x4c0), sc(0x400)});
+    matrix_call("D3DXMatrixScaling", {sc(0x540), float_word(1), float_word(1), float_word(1)});
+    uint32_t cb = buffer(128, 4, gm_ptr(sc(0x500)));
+    if (!cb) {
+        cleanup();
+        return;
+    }
+    auto shader = [&](const char *source, bool vertex) {
+        gm_put_str(sc(0x1000), source, 2048);
+        gm_put_str(sc(0x1800), vertex ? "VSEntry" : "PSEntry", 32);
+        gm_put_str(sc(0x1840), vertex ? "vs_4_0" : "ps_4_0", 32);
+        CHECK_EQ(call_shim(tramp("d3dcompiler_47.dll", "D3DCompile"),
+                           {sc(0x1000), uint32_t(strlen(source)), 0, 0, 0, sc(0x1800), sc(0x1840),
+                            0, 0, sc(0x1880), sc(0x1884)}),
+                 S_OK);
+        uint32_t blob = rd32(sc(0x1880));
+        if (!blob)
+            return uint32_t(0);
+        owned.push_back(blob);
+        uint32_t p = call_method(blob, 3), n = call_method(blob, 4);
+        wr32(sc(0x1888), 0);
+        CHECK_EQ(call_method(dev, vertex ? 12 : 15, {p, n, 0, sc(0x1888)}), S_OK);
+        uint32_t sh = rd32(sc(0x1888));
+        if (sh)
+            owned.push_back(sh);
+        return sh;
+    };
+    uint32_t vs = shader(quad_vertex_shader, true);
+    uint32_t vsblob = rd32(sc(0x1880)), vsdata = call_method(vsblob, 3),
+             vssize = call_method(vsblob, 4);
+    uint32_t ps = shader(quad_fragment_shader, false);
+    if (!vs || !ps) {
+        cleanup();
+        return;
+    }
+    gm_zero(sc(0x600), 56);
+    gm_put_str(sc(0x680), "POSITION", 32);
+    gm_put_str(sc(0x6a0), "TEXCOORD", 32);
+    wr32(sc(0x600), sc(0x680));
+    wr32(sc(0x608), 6);
+    wr32(sc(0x61c), sc(0x6a0));
+    wr32(sc(0x624), 16);
+    wr32(sc(0x62c), 0xffffffff);
+    CHECK_EQ(call_method(dev, 11, {sc(0x600), 2, vsdata, vssize, sc(32)}), S_OK);
+    uint32_t layout = rd32(sc(32));
+    owned.push_back(layout);
+    // Sixteen distinct texels with every alpha, as {r, g, b, a} bytes.
+    uint8_t texels[16][4];
+    for (unsigned i = 0; i < 16; ++i) {
+        texels[i][0] = uint8_t(i * 17);
+        texels[i][1] = uint8_t(255 - i * 13);
+        texels[i][2] = uint8_t(i * i * 3);
+        texels[i][3] = uint8_t(i * 16);
+    }
+    // A 4x4 texture and its view in the given format, the texels swizzled
+    // to that format's byte order; rows padded to 24 bytes as in UpdateSubresource.
+    auto texture = [&](uint32_t format, uint32_t &srv) {
+        uint32_t td = sc(0x700);
+        gm_zero(td, 44);
+        wr32(td, 4);
+        wr32(td + 4, 4);
+        wr32(td + 12, 1);
+        wr32(td + 16, format);
+        wr32(td + 20, 1);
+        wr32(td + 32, 0x28);
+        wr32(td + 40, 1);
+        CHECK_EQ(call_method(dev, 5, {td, 0, sc(36)}), S_OK);
+        uint32_t tex = rd32(sc(36));
+        if (!tex)
+            return uint32_t(0);
+        owned.push_back(tex);
+        gm_zero(sc(0x740), 24);
+        wr32(sc(0x740), format);
+        wr32(sc(0x744), 4);
+        wr32(sc(0x74c), 1);
+        CHECK_EQ(call_method(dev, 7, {tex, sc(0x740), sc(40)}), S_OK);
+        srv = rd32(sc(40));
+        owned.push_back(srv);
+        for (unsigned i = 0; i < 16; ++i) {
+            const uint8_t *t = texels[i];
+            bool bgra = format == 87;
+            uint32_t p = sc(0x800) + (i / 4) * 24 + (i % 4) * 4;
+            wr8(p, bgra ? t[2] : t[0]);
+            wr8(p + 1, t[1]);
+            wr8(p + 2, bgra ? t[0] : t[2]);
+            wr8(p + 3, t[3]);
+        }
+        call_method(ctx, 48, {tex, 0, 0, sc(0x800), 24, 0});
+        return tex;
+    };
+    uint32_t srv_rgba = 0, srv_bgra = 0;
+    if (!texture(28, srv_rgba) || !texture(87, srv_bgra)) {
+        cleanup();
+        return;
+    }
+    auto sampler = [&](uint32_t filter) {
+        gm_zero(sc(0x900), 52);
+        wr32(sc(0x900), filter);
+        for (unsigned i = 1; i <= 3; ++i)
+            wr32(sc(0x900) + i * 4, 1);
+        wr32(sc(0x918), 8);
+        CHECK_EQ(call_method(dev, 23, {sc(0x900), sc(44)}), S_OK);
+        uint32_t s = rd32(sc(44));
+        owned.push_back(s);
+        return s;
+    };
+    uint32_t linear = sampler(0x15), point = sampler(0);
+    // ONE/ZERO blending leaves every channel the source, through the loop.
+    gm_zero(sc(0xa00), 264);
+    uint32_t d = sc(0xa08);
+    wr32(d, 1);
+    wr32(d + 4, 2);
+    wr32(d + 8, 1);
+    wr32(d + 12, 1);
+    wr32(d + 16, 2);
+    wr32(d + 20, 1);
+    wr32(d + 24, 1);
+    wr8(d + 28, 15);
+    CHECK_EQ(call_method(dev, 20, {sc(0xa00), sc(48)}), S_OK);
+    uint32_t one_zero = rd32(sc(48));
+    owned.push_back(one_zero);
+    call_method(ctx, 17, {layout});
+    call_method(ctx, 11, {vs, 0, 0});
+    call_method(ctx, 9, {ps, 0, 0});
+    wr32(sc(52), vb);
+    wr32(sc(56), 20);
+    wr32(sc(60), 0);
+    call_method(ctx, 18, {0, 1, sc(52), sc(56), sc(60)});
+    call_method(ctx, 19, {ib, 57, 0});
+    call_method(ctx, 24, {4});
+    wr32(sc(64), cb);
+    call_method(ctx, 7, {0, 1, sc(64)});
+    auto draw = [&](uint32_t srv, uint32_t sampler, uint32_t blend) {
+        call_method(ctx, 50, {rtv, sc(0x200)});
+        wr32(sc(40), srv);
+        call_method(ctx, 8, {0, 1, sc(40)});
+        wr32(sc(44), sampler);
+        call_method(ctx, 10, {0, 1, sc(44)});
+        call_method(ctx, 35, {blend, 0, 0xffffffff});
+        call_method(ctx, 12, {6, 0, 0});
+        call_method(swap, 8, {0, 0});
+        return g_presents.back();
+    };
+    const Present copy = draw(srv_rgba, linear, 0);
+    for (unsigned y = 0; y < 8; ++y)
+        for (unsigned x = 0; x < 8; ++x) {
+            uint32_t expected = 0xff0000ffu;
+            if (x >= 2 && x < 6 && y >= 1 && y < 5) {
+                const uint8_t *t = texels[(y - 1) * 4 + x - 2];
+                expected = 0xff000000u | uint32_t(t[0]) << 16 | uint32_t(t[1]) << 8 | t[2];
+            }
+            uint32_t actual = 0;
+            memcpy(&actual, copy.pixels.data() + y * copy.pitch + x * 4, 4);
+            CHECK_EQ(actual, expected);
+        }
+    const Present loop = draw(srv_rgba, linear, one_zero), swizzled = draw(srv_bgra, linear, 0),
+                  nearest = draw(srv_rgba, point, 0);
+    for (const Present *other : {&loop, &swizzled, &nearest}) {
+        CHECK_EQ(other->pitch, copy.pitch);
+        CHECK(other->pixels == copy.pixels);
+    }
+    cleanup();
+    CHECK_EQ(com_live_count(), live);
+}
 static void test_d3d11_resource_bounds() {
     cpu_reset();
     gm_zero(sc(0), 0x4000);
@@ -11143,6 +11386,7 @@ int main() {
         {"D3D11 resource bounds", test_d3d11_resource_bounds},
         {"D3D11 quad pixels", test_d3d11_quad_pixels},
         {"D3D11 alpha pixels", test_d3d11_alpha_pixels},
+        {"D3D11 texel copy", test_d3d11_texel_copy},
         {"D3D11 scaffold", test_d3d11_scaffold},
         {"D3DX math and blob", test_d3dx_math_and_blob},
         {"vtable integrity", test_vtable_integrity},

@@ -1306,14 +1306,32 @@ void gdi_present_windows(bool refresh) {
             }
         }
         if (visible && width > 0 && height > 0) {
-            for (int64_t dy = std::max<int64_t>(0, y);
-                 dy < std::min<int64_t>(h, int64_t(y) + height); ++dy)
-                for (int64_t dx = std::max<int64_t>(0, x);
-                     dx < std::min<int64_t>(w, int64_t(x) + width); ++dx) {
-                    size_t sx = size_t((dx - x) * presented.w / width),
-                           sy = size_t((dy - y) * presented.h / height);
-                    pixels[size_t(dy) * w + size_t(dx)] = presented.pixels[sy * presented.w + sx];
+            const int64_t x0 = std::max<int64_t>(0, x), x1 = std::min<int64_t>(w, int64_t(x) + width),
+                          y0 = std::max<int64_t>(0, y), y1 = std::min<int64_t>(h, int64_t(y) + height);
+            // The source column of every destination column, once per frame
+            // rather than once per pixel; a window the snapshot's own size
+            // takes whole rows.
+            const bool same_size = presented.w == width && presented.h == height;
+            std::vector<size_t> column;
+            if (!same_size && x1 > x0) {
+                column.resize(size_t(x1 - x0));
+                for (int64_t dx = x0; dx < x1; ++dx)
+                    column[size_t(dx - x0)] = size_t((dx - x) * presented.w / width);
+            }
+            for (int64_t dy = y0; dy < y1; ++dy) {
+                uint32_t *row = pixels.data() + size_t(dy) * w;
+                if (same_size) {
+                    if (x1 > x0)
+                        memcpy(row + x0, presented.pixels.data() + size_t(dy - y) * presented.w +
+                                             size_t(x0 - x),
+                               size_t(x1 - x0) * 4);
+                    continue;
                 }
+                const uint32_t *src =
+                    presented.pixels.data() + size_t((dy - y) * presented.h / height) * presented.w;
+                for (int64_t dx = x0; dx < x1; ++dx)
+                    row[dx] = src[column[size_t(dx - x0)]];
+            }
         }
     }
     for (auto *window : surfaces)
