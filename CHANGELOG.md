@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- Media Foundation plays a file. `dx/mf.cpp` puts the objects a player builds -
+  source resolver, media source, presentation and stream descriptors, media
+  type handler, topology and its nodes, renderer activates, media session,
+  events, async results, presentation clock, `IMFVideoDisplayControl`,
+  `IMFAudioStreamVolume` and `MFGetService` - over the FFmpeg reader in
+  `mf_media.cpp`. The topology is recorded rather than resolved: the session
+  plays the source its nodes name, which it recognises by the objects handed to
+  `SetUnknown` rather than by the attribute GUID naming them, so it does not
+  depend on knowing `MF_TOPONODE_SOURCE`. What a player actually observes is
+  the event order, so `MESessionTopologySet`, `MESessionStarted`,
+  `MESessionPaused`, `MESessionStopped`, `MESessionEnded` and
+  `MESessionClosed` are posted as they happen and collected through the
+  `IMFAsyncCallback` the player armed with `BeginGetEvent`. `Close` delivers
+  its event before returning, because a player blocks on an event it sets from
+  its own `Invoke` and the frame pump cannot run while that wait holds the
+  guest thread.
+
+- A playing session owns the screen. Video is decoded to the wall clock and
+  presented at the guest's own display mode - aspect kept, the remainder
+  black - never at the file's resolution, because the host maps pointer
+  coordinates back through whatever was last presented. While a session is on
+  screen the DirectDraw primary, the GDI window present and GDI window
+  compositing all stand aside (`mf_owns_the_screen`, weak in `runtime/`, strong
+  in `dx/`), and the screen goes back to the game the moment the file ends.
+  Without the compositing half of that the movie was presented and then painted
+  out by the game's own black window, which is what a real renderer's window
+  would have been sitting in front of.
+
+- `ole32!PropVariantClear` and `PropVariantCopy`. Both are delay imports for a
+  Delphi Media Foundation player, and an unresolved delay import is not quiet:
+  the stub raises 0xC06D007F, which surfaces as an external-exception dialog
+  and takes the process with it. Every PROPVARIANT the shims produce is
+  VT_EMPTY, so emptying the sixteen bytes is the whole of clearing one.
+
+- The vendored FFmpeg decodes MS-MPEG-4 part 2 (`msmpeg4v1,v2,v3`). A `.wmv`
+  from the Windows Media Encoder era usually carries fourcc MP43 rather than a
+  WMV-numbered codec, and the demuxer that reads the container is no use
+  without the decoder that reads the frames.
+
+- Diagnostics: `RECOMP_MF_TRACE` narrates a session (what opened, what the
+  topology named, every event, whether the video keeps up with the clock), and
+  `RECOMP_PRESENT_TRACE` names every frame reaching the screen by geometry,
+  depth and whether it is blank - which is how one presenter is told from
+  another when two of them reach the same screen.
+
 - A fullscreen DXGI swap chain sets the mode USER32 reports. `GetSystemMetrics`
   and everything else reading the virtual screen took the DirectDraw mode or
   the default desktop, so a game that switched to 1920x1080 through Direct3D

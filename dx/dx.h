@@ -37,6 +37,12 @@ void soundlib_register();
 void galaxy_stub_register();
 void bink_register();
 void weanetr_register();
+// Media Foundation: the session, the topology it is given and the file it
+// plays. Registered last of the media shims because nothing else defers to it.
+void mf_register();
+// Drops the decoders, audio channels and event queues before com_reset
+// discards the objects that named them.
+void mf_reset();
 
 // Per-module state resets. Each drops the cached guest addresses and handle
 // tables that pointed into the arena mem_init discarded. dx_reset calls them
@@ -93,6 +99,15 @@ void fmod_frame_pump(X86 *c);
 void soundlib_frame_pump(X86 *c);
 // Keeps a DirectShow graph's audio channel fed and posts its completion.
 void dshow_frame_pump(X86 *c);
+// Advances a playing media session: decodes to the wall clock, presents the
+// video frame that is due, tops the audio stream up, and hands the player the
+// events it armed for with BeginGetEvent.
+void mf_frame_pump(X86 *c);
+// True while a media session is presenting. The display shim asks before it
+// presents the guest's primary: both reach the one screen, and the game draws
+// far more often than a movie has frames, so without this the picture the
+// player sees is the game's, with the movie flickering underneath it.
+extern "C" bool mf_owns_the_screen();
 // The display's frame boundary in the same shape, registered beside it: the
 // display's frame ends where the guest's message loop pumps, and that fact
 // lives with the display shim rather than inside the audio pump.

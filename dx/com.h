@@ -96,6 +96,26 @@ enum ComIface : uint16_t {
     IF_DXGI_SWAP,
     IF_DXGI_OUTPUT,
     IF_D3D_BLOB,
+    // Media Foundation (mf.cpp). A player resolves a URL into a source,
+    // describes its streams, builds a topology and drives a session; the
+    // interfaces no player calls are absent rather than stubbed.
+    IF_MF_SOURCE_RESOLVER,
+    IF_MF_MEDIA_SOURCE,           // IMFMediaEventGenerator is its prefix
+    IF_MF_PRESENTATION_DESCRIPTOR,
+    IF_MF_STREAM_DESCRIPTOR,
+    IF_MF_MEDIA_TYPE_HANDLER,
+    IF_MF_MEDIA_TYPE,
+    IF_MF_TOPOLOGY,
+    IF_MF_TOPOLOGY_NODE,
+    IF_MF_ACTIVATE,
+    IF_MF_MEDIA_SESSION,      // IMFMediaEventGenerator is its prefix too
+    IF_MF_GET_SERVICE,        // IMFGetService, a second view of the session
+    IF_MF_MEDIA_EVENT,
+    IF_MF_ASYNC_RESULT,
+    IF_MF_CLOCK,
+    IF_MF_PRESENTATION_CLOCK, // a second view of the clock
+    IF_MF_VIDEO_DISPLAY,
+    IF_MF_AUDIO_VOLUME,
     IF_COUNT
 };
 
@@ -138,6 +158,21 @@ enum ComKind : uint16_t {
     K_DXGI_SWAP,
     K_DXGI_OUTPUT,
     K_D3D_BLOB,
+    K_MF_SOURCE_RESOLVER,         // turns a URL into a media source
+    K_MF_MEDIA_SOURCE,            // one open file, decoded by mf::Media
+    K_MF_PRESENTATION_DESCRIPTOR, // its streams, and the duration
+    K_MF_STREAM_DESCRIPTOR,       // one of those streams
+    K_MF_MEDIA_TYPE_HANDLER,      // that stream's type, and its major type
+    K_MF_MEDIA_TYPE,
+    K_MF_TOPOLOGY,      // recorded, not resolved: the session plays the source
+    K_MF_TOPOLOGY_NODE, // its nodes, for the attributes a player reads back
+    K_MF_ACTIVATE,      // a renderer the player asked for by name
+    K_MF_MEDIA_SESSION, // playback, and the event queue the player waits on
+    K_MF_MEDIA_EVENT,
+    K_MF_ASYNC_RESULT,  // how one queued event reaches the player's Invoke
+    K_MF_CLOCK,
+    K_MF_VIDEO_DISPLAY, // IMFVideoDisplayControl on the session's renderer
+    K_MF_AUDIO_VOLUME,
 };
 
 // ---------------------------------------------------------------------------

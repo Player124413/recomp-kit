@@ -10867,6 +10867,162 @@ static void test_d3d11_resource_bounds() {
     call_method(dev, 2);
     call_method(swap, 2);
 }
+// ---------------------------------------------------------------------------
+// Media Foundation: the objects a player builds, and the event sequence it
+// drives itself from. No file is opened here - that needs a movie, and these
+// tests carry no assets - so this covers the plumbing either way: the
+// topology it fills in, the attributes it reads back, the events the session
+// posts for each transport call, and the video service it asks the session
+// for by name.
+// ---------------------------------------------------------------------------
+static void put_guid(uint32_t at, const uint8_t (&g)[16]) {
+    for (int i = 0; i < 16; ++i)
+        wr8(at + (uint32_t)i, g[i]);
+}
+
+// Slots, counted from the interface's own vtable. IMFAttributes occupies 3..32
+// of every interface that derives from it, so a topology's own methods start
+// at 33 and a session's - which derives from IMFMediaEventGenerator instead -
+// start at 7.
+enum {
+    MF_ATTR_GetUINT32 = 7,
+    MF_ATTR_SetUINT32 = 21,
+    MF_ATTR_GetCount = 30,
+    MF_TOPO_AddNode = 34,
+    MF_TOPO_GetNodeCount = 36,
+    MF_TOPO_GetNode = 37,
+    MF_NODE_GetNodeType = 35,
+    MF_SESSION_GetEvent = 3,
+    MF_SESSION_SetTopology = 7,
+    MF_SESSION_Start = 9,
+    MF_SESSION_Pause = 10,
+    MF_SESSION_Stop = 11,
+    MF_SESSION_Close = 12,
+    MF_SESSION_GetClock = 14,
+    MF_SESSION_GetCaps = 15,
+    MF_EVENT_GetType = 33,
+    MF_EVENT_GetStatus = 35,
+    MF_VIDEO_SetVideoWindow = 9,
+    MF_VIDEO_GetVideoWindow = 10,
+    MF_CLOCK_GetTime = 10,
+};
+
+// The next event the session has queued, as (type, status).
+static void next_event(uint32_t session, uint32_t *type, uint32_t *status) {
+    *type = *status = 0;
+    wr32(sc(0x40), 0);
+    if (call_method(session, MF_SESSION_GetEvent, {0, sc(0x40)}) != S_OK)
+        return;
+    const uint32_t ev = rd32(sc(0x40));
+    if (!ev)
+        return;
+    call_method(ev, MF_EVENT_GetType, {sc(0x44)});
+    call_method(ev, MF_EVENT_GetStatus, {sc(0x48)});
+    *type = rd32(sc(0x44));
+    *status = rd32(sc(0x48));
+}
+
+static void test_media_foundation_session() {
+    cpu_reset();
+
+    // A topology, a node, and the attribute a player sets on it.
+    wr32(sc(0), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateTopology"), {sc(0)}), S_OK);
+    const uint32_t topo = rd32(sc(0));
+    CHECK(topo != 0);
+
+    wr32(sc(4), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateTopologyNode"), {1, sc(4)}), S_OK);
+    const uint32_t node = rd32(sc(4));
+    CHECK(node != 0);
+    call_method(node, MF_NODE_GetNodeType, {sc(8)});
+    CHECK_EQ(rd32(sc(8)), 1u);
+
+    // MF_TOPONODE_STREAMID is a UINT32 attribute; any key exercises the store.
+    static const uint8_t kKey[16] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                                     0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01};
+    put_guid(sc(0x10), kKey);
+    CHECK_EQ(call_method(node, MF_ATTR_SetUINT32, {sc(0x10), 7}), S_OK);
+    wr32(sc(0x20), 0);
+    CHECK_EQ(call_method(node, MF_ATTR_GetUINT32, {sc(0x10), sc(0x20)}), S_OK);
+    CHECK_EQ(rd32(sc(0x20)), 7u);
+    CHECK_EQ(call_method(node, MF_ATTR_GetCount, {sc(0x24)}), S_OK);
+    CHECK_EQ(rd32(sc(0x24)), 1u);
+    // A key that was never set is absent, not zero: MF_E_ATTRIBUTENOTFOUND.
+    static const uint8_t kAbsent[16] = {0};
+    put_guid(sc(0x30), kAbsent);
+    CHECK_EQ(call_method(node, MF_ATTR_GetUINT32, {sc(0x30), sc(0x20)}), 0xC00D36E6u);
+
+    CHECK_EQ(call_method(topo, MF_TOPO_AddNode, {node}), S_OK);
+    call_method(topo, MF_TOPO_GetNodeCount, {sc(0x28)});
+    CHECK_EQ(rd32(sc(0x28)), 1u);
+    wr32(sc(0x2c), 0);
+    CHECK_EQ(call_method(topo, MF_TOPO_GetNode, {0, sc(0x2c)}), S_OK);
+    CHECK_EQ(rd32(sc(0x2c)), node);
+
+    // The session, and the events each transport call posts.
+    wr32(sc(0x38), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateMediaSession"), {0, sc(0x38)}), S_OK);
+    const uint32_t session = rd32(sc(0x38));
+    CHECK(session != 0);
+    CHECK_EQ(call_method(session, MF_SESSION_GetCaps, {sc(0x3c)}), S_OK);
+    CHECK(rd32(sc(0x3c)) != 0);
+
+    uint32_t type = 0, status = 0;
+    // This topology names no media source, so the session accepts it and says
+    // so in the event's status rather than in SetTopology's return.
+    CHECK_EQ(call_method(session, MF_SESSION_SetTopology, {0, topo}), S_OK);
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 101u); // MESessionTopologySet
+    CHECK_EQ(status, E_FAIL);
+
+    CHECK_EQ(call_method(session, MF_SESSION_Start, {0, 0}), S_OK);
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 103u); // MESessionStarted
+    CHECK_EQ(call_method(session, MF_SESSION_Pause, {}), S_OK);
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 104u); // MESessionPaused
+    CHECK_EQ(call_method(session, MF_SESSION_Stop, {}), S_OK);
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 105u); // MESessionStopped
+    CHECK_EQ(call_method(session, MF_SESSION_Close, {}), S_OK);
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 106u); // MESessionClosed
+    // The queue is empty again; asking anyway is not an error worth a crash.
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 0u);
+
+    // The clock, and the video service a player asks for by name.
+    wr32(sc(0x50), 0);
+    CHECK_EQ(call_method(session, MF_SESSION_GetClock, {sc(0x50)}), S_OK);
+    const uint32_t clock = rd32(sc(0x50));
+    CHECK(clock != 0);
+    CHECK_EQ(call_method(clock, MF_CLOCK_GetTime, {sc(0x54)}), S_OK);
+
+    static const uint8_t kVideoService[16] = {0x6c, 0xa8, 0x92, 0x10, 0x1a, 0xab, 0x9a, 0x45,
+                                              0xa3, 0x36, 0x83, 0x1f, 0xbc, 0x4d, 0x11, 0xff};
+    static const uint8_t kVideoControl[16] = {0xe4, 0xb1, 0x90, 0xa4, 0x84, 0xab, 0x31, 0x4d,
+                                              0xa1, 0xb2, 0x18, 0x1e, 0x03, 0xb1, 0x07, 0x7a};
+    put_guid(sc(0x60), kVideoService);
+    put_guid(sc(0x70), kVideoControl);
+    wr32(sc(0x80), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFGetService"), {session, sc(0x60), sc(0x70), sc(0x80)}),
+             S_OK);
+    const uint32_t video = rd32(sc(0x80));
+    CHECK(video != 0);
+    CHECK_EQ(call_method(video, MF_VIDEO_SetVideoWindow, {0x1234}), S_OK);
+    CHECK_EQ(call_method(video, MF_VIDEO_GetVideoWindow, {sc(0x84)}), S_OK);
+    CHECK_EQ(rd32(sc(0x84)), 0x1234u);
+
+    // A service nobody serves is E_NOINTERFACE with the out-pointer cleared,
+    // which is how a player tells "not available" from "it broke".
+    put_guid(sc(0x90), kKey);
+    wr32(sc(0x80), 0xdeadbeef);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFGetService"), {session, sc(0x90), sc(0x70), sc(0x80)}),
+             E_NOINTERFACE);
+    CHECK_EQ(rd32(sc(0x80)), 0u);
+}
+
 int main() {
     // Unbuffered, not line buffered: Windows treats _IOLBF as full buffering
     // and a fail-fast abort drops everything queued, including the name of
@@ -11007,6 +11163,7 @@ int main() {
         {"texture formats", test_texture_formats},
         {"colour control", test_color_control},
         {"FourCC is a format error", test_fourcc_is_a_pixel_format_error},
+        {"Media Foundation session", test_media_foundation_session},
         {"dx_reset", test_reset},
     };
     for (auto &t : tests) {

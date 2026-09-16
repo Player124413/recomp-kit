@@ -500,6 +500,36 @@ static void test_preferred_ui_languages() {
           "SetThreadPreferredUILanguages accepts optional null pointers");
 }
 
+static void test_propvariant_clear() {
+    section("PropVariantClear empties a variant");
+    X86 c;
+    loader_init_context(&c);
+    const uint32_t pv = 0x00300000;
+    for (uint32_t i = 0; i < 16; ++i)
+        wr8(pv + i, 0xab);
+    check(call_import(&c, "ole32.dll", "PropVariantClear", {pv}) == 0,
+          "PropVariantClear returns S_OK");
+    bool emptied = true;
+    for (uint32_t i = 0; i < 16; ++i)
+        emptied = emptied && rd8(pv + i) == 0;
+    check(emptied, "and leaves the whole sixteen-byte variant VT_EMPTY");
+    check(call_import(&c, "ole32.dll", "PropVariantClear", {0}) == 0x80070057u,
+          "a null variant is E_INVALIDARG rather than a silent success");
+
+    // The copy is the same sixteen bytes, which is what a VT_EMPTY source is.
+    const uint32_t src = pv + 64, dst = pv + 128;
+    for (uint32_t i = 0; i < 16; ++i) {
+        wr8(src + i, (uint8_t)(i + 1));
+        wr8(dst + i, 0xff);
+    }
+    check(call_import(&c, "ole32.dll", "PropVariantCopy", {dst, src}) == 0,
+          "PropVariantCopy returns S_OK");
+    bool copied = true;
+    for (uint32_t i = 0; i < 16; ++i)
+        copied = copied && rd8(dst + i) == (uint8_t)(i + 1);
+    check(copied, "and the destination is the source");
+}
+
 static void test_media_foundation_unavailable() {
     section("Media Foundation present but unsupported");
     X86 c;
@@ -5986,6 +6016,7 @@ int main(int argc, char **argv) {
     test_preferred_ui_languages();
     test_session_notification_service_unavailable();
     test_buffered_paint_unavailable();
+    test_propvariant_clear();
     test_media_foundation_unavailable();
     test_kernel32_wide();
     test_delphi_dlls();

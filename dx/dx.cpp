@@ -568,6 +568,7 @@ static void file_audio_frame_pump(X86 *c) {
     dshow_frame_pump(c);
     fmod_frame_pump(c);
     soundlib_frame_pump(c);
+    mf_frame_pump(c);
 }
 
 void dx_register_shims() {
@@ -596,6 +597,7 @@ void dx_register_shims() {
     galaxy_stub_register();
     bink_register();
     weanetr_register();
+    mf_register();
     // The audio shims need a tick on the main guest thread: the game drives
     // neither QMixer's stream refills nor DirectSound's notification
     // positions, and both need to call back into guest code, which only a
@@ -623,6 +625,7 @@ void dx_reset() {
     dshow_reset();
     dinput_reset();
     bink_reset();
+    mf_reset();
     audio_channels().clear();
     com_reset();
 }

@@ -33,7 +33,10 @@ set -- \
   --disable-swscale --disable-swresample --disable-postproc --disable-network \
   --enable-pic \
   --enable-decoder=bink,binkaudio_rdft,binkaudio_dct,smacker,smackaud \
-  --enable-demuxer=bink,smacker --enable-protocol=file \
+  --enable-decoder=wmv1,wmv2,wmv3,vc1,wmav1,wmav2,wmapro,mp3,mp3float \
+  --enable-decoder=msmpeg4v1,msmpeg4v2,msmpeg4v3 \
+  --enable-demuxer=bink,smacker,asf,mp3 --enable-parser=vc1,mpegaudio \
+  --enable-protocol=file \
   --disable-autodetect --disable-xlib --disable-libxcb --disable-sdl2 \
   --disable-iconv --disable-zlib --disable-bzlib --disable-lzma \
   --disable-securetransport --disable-audiotoolbox --disable-videotoolbox

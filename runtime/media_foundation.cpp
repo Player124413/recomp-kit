@@ -1,6 +1,11 @@
 // Resolve optional Media Foundation imports without claiming playback support.
 // Platform startup succeeds; object creation reports unsupported playback.
 // This lets callers distinguish unavailable media from a platform-version error.
+//
+// A host that links dx/ registers dx/mf.cpp after these, and its factories
+// take the mf.dll names over: a later registration wins. What is left here is
+// the mfplat platform pair, which has no objects to make, and the E_NOTIMPL
+// factories a runtime-only link - the runtime's own tests - still sees.
 #include "imports.h"
 
 namespace {

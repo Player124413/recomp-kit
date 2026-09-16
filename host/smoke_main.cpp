@@ -1950,6 +1950,20 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
             rgba[4 * i + 2] = uint8_t(composed[i]);
         }
     }
+    // RECOMP_PRESENT_TRACE=1 names every frame that reaches the screen by its
+    // geometry and depth, which is what tells one presenter from another: the
+    // window compositor arrives 32-bit, a DirectDraw primary at the mode's
+    // depth, a media session at the mode's size in 16. "blank" is the frame
+    // being wholly black, so a picture that is overwritten can be told from a
+    // picture that was never drawn.
+    if (recomp_env("PRESENT_TRACE")) {
+        bool blank = true;
+        for (size_t i = 0, n = (size_t)w * (size_t)h * 4; i < n && blank; i += 4)
+            if (rgba[i] || rgba[i + 1] || rgba[i + 2])
+                blank = false;
+        fprintf(stderr, "[present] #%llu %dx%d %dbpp %s\n", (unsigned long long)g_presents, w, h,
+                bpp, blank ? "blank" : "picture");
+    }
     host_present_stage_rgba(rgba.data(), w, h);
     g_last_rgb.resize((size_t)w * (size_t)h * 3);
     for (size_t i = 0, n = (size_t)w * (size_t)h; i < n; ++i) {

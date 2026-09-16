@@ -851,8 +851,12 @@ void ddraw_present(ComObj *s) {
         log_once("ddraw.nopal", "ddraw: presenting an 8-bit primary with no palette attached; "
                                 "the host receives indices and a null palette");
     }
-    host_present(gm_ptr(s->pixels), (int)s->width, (int)s->height, (int)s->bpp,
-                 pal ? pal->pal : nullptr, (int)s->pitch);
+    // A media session on screen owns it, exactly as a video renderer's own
+    // window would: presenting the primary here as well would put the game's
+    // drawing over most of the movie's frames.
+    if (!mf_owns_the_screen())
+        host_present(gm_ptr(s->pixels), (int)s->width, (int)s->height, (int)s->bpp,
+                     pal ? pal->pal : nullptr, (int)s->pitch);
     // Presenting is NOT sealing. The screen is refreshed by every write to the
     // primary - a blit, an Unlock, a palette change - and a frame that ended
     // at each of those would be three frames where the guest drew one, with

@@ -933,6 +933,35 @@ void o_IsEqualGUID(X86 *c) {
     set_eax(c, a && b && gm_valid(a, 16) && gm_valid(b, 16) && !memcmp(g_mem + a, g_mem + b, 16));
 }
 
+// PROPVARIANT is sixteen bytes on x86: a two-byte VARTYPE, six reserved, and
+// an eight-byte union. Clearing one means releasing whatever the union owns
+// and then emptying it, and every PROPVARIANT the shims hand out is VT_EMPTY -
+// a media event's value, a property nobody set - so emptying it is the whole
+// of the work. A caller that never sees an owning variant cannot leak one.
+//
+// This is delay-loaded by Delphi's Media Foundation player, and an unresolved
+// delay import does not fail quietly: the stub raises 0xC06D007F, which
+// surfaces as an "external exception" dialog and takes the process with it.
+const uint32_t PROPVARIANT_SIZE = 16;
+void o_PropVariantClear(X86 *c) {
+    const uint32_t pv = arg(c, 0);
+    if (!pv || !gm_valid(pv, PROPVARIANT_SIZE)) {
+        set_eax(c, 0x80070057u); // E_INVALIDARG
+        return;
+    }
+    memset(g_mem + pv, 0, PROPVARIANT_SIZE);
+    set_eax(c, 0);
+}
+void o_PropVariantCopy(X86 *c) {
+    const uint32_t dst = arg(c, 0), src = arg(c, 1);
+    if (!dst || !src || !gm_valid(dst, PROPVARIANT_SIZE) || !gm_valid(src, PROPVARIANT_SIZE)) {
+        set_eax(c, 0x80070057u); // E_INVALIDARG
+        return;
+    }
+    memmove(g_mem + dst, g_mem + src, PROPVARIANT_SIZE);
+    set_eax(c, 0);
+}
+
 // -------------------------------------------------------------------------
 // IMM32: no input method is attached.
 // -------------------------------------------------------------------------
@@ -1903,6 +1932,8 @@ const ImportShim g_misc_shims[] = {
     {"ole32.dll", "CoTaskMemFree", 1, o_CoTaskMemFree},
     {"ole32.dll", "IsEqualGUID", 2, o_IsEqualGUID},
     {"ole32.dll", "CoUninitialize", 0, o_CoUninitialize},
+    {"ole32.dll", "PropVariantClear", 1, o_PropVariantClear},
+    {"ole32.dll", "PropVariantCopy", 2, o_PropVariantCopy},
     // IMM32
     {"IMM32.dll", "ImmGetContext", 1, i_ImmGetContext},
     {"IMM32.dll", "ImmReleaseContext", 2, i_ImmReleaseContext},

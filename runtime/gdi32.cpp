@@ -43,6 +43,14 @@ extern "C" __attribute__((weak)) bool ddraw_display_mode(uint32_t *, uint32_t *,
 extern "C" __attribute__((weak)) bool dxgi_display_mode(uint32_t *, uint32_t *, uint32_t *) {
     return false;
 }
+// A media session playing video owns the screen. Its frames go straight to the
+// host, and the game keeps drawing its own window behind them - far more often
+// than a movie has frames - so compositing both would show the game's picture
+// with the movie flickering underneath. Weak like the hooks above, so a
+// runtime-only binary still links without dx/.
+extern "C" __attribute__((weak)) bool mf_owns_the_screen() {
+    return false;
+}
 // One virtual screen is shared by USER32 metrics, GDI captures and host input.
 // A selected DirectDraw mode takes precedence over the smoke desktop size.
 void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp) {
@@ -1175,6 +1183,11 @@ std::vector<user32::Window *> visible_surfaces() {
 }
 } // namespace
 void gdi_composite_windows(uint32_t *argb, int w, int h) {
+    // A media session owns the screen while it plays. The game leaves its own
+    // window black for the video renderer to draw into, so compositing those
+    // windows over the session's frame paints the picture out entirely.
+    if (mf_owns_the_screen())
+        return;
     if (!argb || w <= 0 || h <= 0)
         return;
     int32_t origin_x = 0, origin_y = 0;
@@ -1303,7 +1316,8 @@ void gdi_present_windows(bool refresh) {
     }
     for (auto *window : surfaces)
         window->surface.dirty = false;
-    host_display_present_window(pixels.data(), w, h);
+    if (!mf_owns_the_screen())
+        host_display_present_window(pixels.data(), w, h);
 }
 
 // The copy is made under the guest baton before the host can seal a frame.
