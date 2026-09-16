@@ -7,6 +7,7 @@
 #include "user32_internal.h"
 #include "gdi_image.h"
 #include "win32.h"
+#include "../platform/os.h"
 #include "memory.h"
 
 #include <deque>
@@ -1015,6 +1016,9 @@ void u_BeginPaint(X86 *c) {
     Window *w = find_window(hwnd);
     if (w)
         w->update_pending = false; // BeginPaint validates the region
+    if (recomp_env("TRACE_GDI"))
+        LOGW("gdi: BeginPaint hwnd=%08x -> hdc=%08x%s", hwnd, hdc,
+             w ? "" : " (no such window)");
     if (ps) {
         memset(g_mem + ps, 0, 64);
         wr32(ps + 0, hdc);                         // hdc

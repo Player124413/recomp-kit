@@ -29,7 +29,11 @@
   through what it did not return.
 
 - A refused blit reports its geometry and the frame that asked for it, and
-  `RECOMP_TRACE_GDI=1` reports every blit. A destination with no bitmap behind
+  `RECOMP_TRACE_GDI=1` reports every blit, the DC every window paint hangs off
+  (`BeginPaint`, and whether the window was one this layer knows),
+  `CreateCompatibleDC`, and a `BeginBufferedPaint` that this layer declines.
+  Between them they say which painting path a program took, which is the
+  question a blank window actually poses. A destination with no bitmap behind
   it and a source of zero are indistinguishable from the guest, which is told
   nothing either way; the geometry says which it was, and the caller chain says
   who asked. It is how "the picture was never drawn" is told apart from "the

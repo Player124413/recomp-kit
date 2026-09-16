@@ -2,6 +2,7 @@
 #include "imports.h"
 #include "user32_internal.h"
 #include "win32.h"
+#include "../platform/os.h"
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -84,6 +85,14 @@ void draw_theme_text_ex(X86 *c) {
 }
 // No paint buffer and no animation: the caller paints its target directly.
 void begin_buffered_paint(X86 *c) {
+    if (recomp_env("TRACE_GDI")) {
+        const uint32_t rc = arg(c, 1);
+        LOGW("gdi: BeginBufferedPaint target=%08x rect=%d,%d,%d,%d format=%u",
+             arg(c, 0), rc && gm_valid(rc, 16) ? (int)rd32(rc) : -1,
+             rc && gm_valid(rc, 16) ? (int)rd32(rc + 4) : -1,
+             rc && gm_valid(rc, 16) ? (int)rd32(rc + 8) : -1,
+             rc && gm_valid(rc, 16) ? (int)rd32(rc + 12) : -1, arg(c, 2));
+    }
     zero_out(arg(c, 4)); // *phdc
     set_eax(c, 0);
 }

@@ -492,6 +492,8 @@ void g_DeleteObject(X86 *c) {
 
 void g_CreateCompatibleDC(X86 *c) {
     uint32_t hdc = gdi_new_dc();
+    if (recomp_env("TRACE_GDI"))
+        LOGW("gdi: CreateCompatibleDC(%08x) -> %08x", arg(c, 0), hdc);
     set_eax(c, hdc);
 }
 
