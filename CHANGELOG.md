@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A DirectDraw blit whose source is its own destination copies as DirectDraw
+  does, as though through a temporary. A game that scrolls its map buffer by
+  blitting it onto itself moves it down or right as often as up or left, and
+  the rows were copied top down, so a downward scroll read back rows it had
+  just written and the first band repeated to the bottom: walls and banners
+  smeared into vertical strips. Rows now run bottom up when the destination is
+  below the source, and a keyed or scaled overlap reads a copy of the source
+  taken first. The host never showed it on a DirectDraw screen - a blit record
+  reads the source's leased revision - which is why only a renderer reading
+  its own back buffer (a D3D11 present) did. `dx_tests` scrolls a surface in
+  every direction, and with a key, against the copy DirectDraw makes.
+
 - The runtime's GDI draws Windows' own sans-serif interface faces with a
   bundled Open Sans (Apache-2.0, `third_party/fonts/opensans`, embedded at
   build time by `cmake/EmbedFiles.cmake`). A program that draws text without

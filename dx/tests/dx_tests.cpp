@@ -960,6 +960,92 @@ static void test_gradient_flip() {
 
 // Blt colour fill and BltFast with a source colour key, both onto the primary,
 // which must present each time.
+// A surface blitted onto itself overlaps its own source, and DirectDraw copies
+// as though through a temporary. A map scrolled that way - destination below
+// or right of the source - came out in repeated strips when the rows were
+// copied top down. Every direction, and a keyed overlap, against a reference
+// computed from the pixels as they were before the call.
+static void test_overlapping_self_blit() {
+    cpu_reset();
+    uint32_t create = tramp("DDRAW.dll", "DirectDrawCreate");
+    call_shim(create, {0, sc(0), 0});
+    uint32_t dd = rd32(sc(0));
+    call_method(dd, DD_SetDisplayMode, {640, 480, 8});
+    uint32_t desc = sc(0x100);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwSize, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwFlags, DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT);
+    wr32(desc + DDSD_OFF_ddsCaps, DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY);
+    wr32(desc + DDSD_OFF_dwWidth, 16);
+    wr32(desc + DDSD_OFF_dwHeight, 16);
+    CHECK_EQ(call_method(dd, DD_CreateSurface, {desc, sc(8), 0}), DD_OK);
+    uint32_t surf = rd32(sc(8));
+    CHECK(surf != 0);
+    if (!surf)
+        return;
+    uint32_t ld = sc(0x200);
+    // Every pixel distinct: its own index.
+    auto paint = [&]() {
+        gm_zero(ld, DDSD_SIZE);
+        wr32(ld + DDSD_OFF_dwSize, DDSD_SIZE);
+        call_method(surf, S_Lock, {0, ld, DDLOCK_WAIT, 0});
+        uint32_t p = rd32(ld + DDSD_OFF_lpSurface), pitch = rd32(ld + DDSD_OFF_lPitch);
+        for (uint32_t y = 0; y < 16; ++y)
+            for (uint32_t x = 0; x < 16; ++x)
+                wr8(p + y * pitch + x, uint8_t(y * 16 + x));
+        call_method(surf, S_Unlock, {0});
+    };
+    auto pixels = [&]() {
+        std::vector<uint8_t> out(256);
+        gm_zero(ld, DDSD_SIZE);
+        wr32(ld + DDSD_OFF_dwSize, DDSD_SIZE);
+        call_method(surf, S_Lock, {0, ld, DDLOCK_WAIT, 0});
+        uint32_t p = rd32(ld + DDSD_OFF_lpSurface), pitch = rd32(ld + DDSD_OFF_lPitch);
+        for (uint32_t y = 0; y < 16; ++y)
+            for (uint32_t x = 0; x < 16; ++x)
+                out[y * 16 + x] = rd8(p + y * pitch + x);
+        call_method(surf, S_Unlock, {0});
+        return out;
+    };
+    uint32_t rect = sc(0x300);
+    // BltFast(x, y) from `sr`, checked against the copy DirectDraw makes.
+    auto scroll = [&](int32_t x, int32_t y, int32_t l, int32_t t, int32_t r, int32_t b,
+                      bool keyed, uint8_t key) {
+        paint();
+        const std::vector<uint8_t> before = pixels();
+        std::vector<uint8_t> want = before;
+        for (int32_t j = 0; j < b - t; ++j)
+            for (int32_t i = 0; i < r - l; ++i) {
+                const uint8_t v = before[(t + j) * 16 + (l + i)];
+                if (keyed && v == key)
+                    continue;
+                want[(y + j) * 16 + (x + i)] = v;
+            }
+        wr32(rect, uint32_t(l));
+        wr32(rect + 4, uint32_t(t));
+        wr32(rect + 8, uint32_t(r));
+        wr32(rect + 12, uint32_t(b));
+        CHECK_EQ(call_method(surf, S_BltFast,
+                             {uint32_t(x), uint32_t(y), surf, rect,
+                              keyed ? DDBLTFAST_SRCCOLORKEY | DDBLTFAST_WAIT : DDBLTFAST_WAIT}),
+                 DD_OK);
+        CHECK(pixels() == want);
+    };
+    scroll(0, 3, 0, 0, 16, 13, false, 0); // down: the case that striped
+    scroll(0, 0, 0, 3, 16, 16, false, 0); // up
+    scroll(3, 0, 0, 0, 13, 16, false, 0); // right
+    scroll(0, 0, 3, 0, 16, 16, false, 0); // left
+    scroll(3, 3, 0, 0, 13, 13, false, 0); // down and right
+    // Keyed, so pixel by pixel: the key is judged on the source as it was.
+    uint32_t ck = sc(0x320);
+    wr32(ck, 0x33);
+    wr32(ck + 4, 0x33);
+    CHECK_EQ(call_method(surf, S_SetColorKey, {DDCKEY_SRCBLT, ck}), DD_OK);
+    scroll(2, 2, 0, 0, 14, 14, true, 0x33);
+    call_method(surf, 2);
+    call_method(dd, 2);
+}
+
 static void test_blt_and_colorkey() {
     g_presents.clear();
     cpu_reset();
@@ -11412,6 +11498,7 @@ int main() {
         {"D3D11 quad pixels", test_d3d11_quad_pixels},
         {"D3D11 alpha pixels", test_d3d11_alpha_pixels},
         {"D3D11 texel copy", test_d3d11_texel_copy},
+        {"overlapping self-blit", test_overlapping_self_blit},
         {"D3D11 scaffold", test_d3d11_scaffold},
         {"D3DX math and blob", test_d3dx_math_and_blob},
         {"vtable integrity", test_vtable_integrity},

@@ -723,10 +723,26 @@ void blit(ComObj *dst, const int32_t d[4], const ComObj *src, const int32_t sr[4
     }
     bool stretch = (sw != dw) || (sh != dh);
     uint32_t bpp_bytes = bytes_per_pixel(dst->bpp);
+    // A surface blitted onto itself - how a game scrolls a map buffer - can
+    // overlap its own source. DirectDraw copies as though through a
+    // temporary, so every pixel written is the source as it was before the
+    // call. Copied front to back instead, a destination below or right of its
+    // source reads back rows and pixels it has just written, and the first
+    // band repeats across the rest: a scrolled map turns into vertical
+    // strips. The host's replay never saw it - a record reads the source's
+    // leased revision - so only a program that reads its own memory back,
+    // such as a renderer uploading its back buffer, shows it.
+    const bool same_buffer = src->pixels == dst->pixels;
+    const bool overlap = same_buffer && d[0] < sr[0] + sw && sr[0] < d[2] && d[1] < sr[1] + sh &&
+                         sr[1] < d[3];
 
-    // The common case: same size, same format, no colour key. One memcpy a row.
+    // The common case: same size, same format, no colour key. One memmove a
+    // row, which handles a sideways overlap; a downward one takes the rows
+    // bottom up.
     if (!stretch && same_format && !keys.src && !keys.dst) {
-        for (int32_t y = 0; y < dh; ++y) {
+        const bool upward = overlap && d[1] > sr[1];
+        for (int32_t i = 0; i < dh; ++i) {
+            const int32_t y = upward ? dh - 1 - i : i;
             uint32_t drow =
                 dst->pixels + (uint32_t)(d[1] + y) * dst->pitch + (uint32_t)d[0] * bpp_bytes;
             uint32_t srow =
@@ -737,11 +753,31 @@ void blit(ComObj *dst, const int32_t d[4], const ComObj *src, const int32_t sr[4
         }
         return;
     }
+    // Keyed or scaled, pixel by pixel: an overlapping source is read from a
+    // copy taken before anything is written.
+    std::vector<uint8_t> snapshot;
+    if (overlap) {
+        snapshot.resize((size_t)sw * (size_t)sh * bpp_bytes);
+        for (int32_t y = 0; y < sh; ++y)
+            memcpy(snapshot.data() + (size_t)y * (size_t)sw * bpp_bytes,
+                   gm_ptr(src->pixels + (uint32_t)(sr[1] + y) * src->pitch +
+                          (uint32_t)sr[0] * bpp_bytes),
+                   (size_t)sw * bpp_bytes);
+    }
+    auto source_pixel = [&](int32_t x, int32_t y) -> uint32_t {
+        if (!overlap)
+            return read_pixel(src, x, y);
+        const uint8_t *p = snapshot.data() +
+                           ((size_t)(y - sr[1]) * (size_t)sw + (size_t)(x - sr[0])) * bpp_bytes;
+        uint32_t v = 0;
+        memcpy(&v, p, bpp_bytes); // little-endian, as read_pixel reads it
+        return v;
+    };
     for (int32_t y = 0; y < dh; ++y) {
         int32_t syy = stretch ? sr[1] + (int32_t)((int64_t)y * sh / dh) : sr[1] + y;
         for (int32_t x = 0; x < dw; ++x) {
             int32_t sxx = stretch ? sr[0] + (int32_t)((int64_t)x * sw / dw) : sr[0] + x;
-            uint32_t v = read_pixel(src, sxx, syy);
+            uint32_t v = source_pixel(sxx, syy);
             if (keys.src && v >= keys.src_lo && v <= keys.src_hi)
                 continue;
             if (keys.dst) {
