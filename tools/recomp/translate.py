@@ -126,6 +126,13 @@ def visual_animation_read(addr, body):
 #: with an unresolvable callee is visible rather than silently dropped.
 STRUCTURAL_PROVENANCE = ("table", "initterm", "config", "seh")
 
+#: The subset of the above that the program itself will call by address: a
+#: jump-table slot, an __initterm entry, and a configured entry point.  These
+#: are function starts, not blocks some other body may absorb.  An SEH landing
+#: is deliberately absent: attaching one to the frame that establishes it is
+#: exactly what extend_finally_body exists to do.
+NAMED_PROVENANCE = ("table", "initterm", "config")
+
 
 def note_structural(provenance, owner, t, why):
     """Record that a jump table, `__initterm` or config names `t` outright.
@@ -3701,6 +3708,16 @@ def main():
         bounds = None
         boundaries = set()
         recovery_stops = listed - prior.addrs if separate else listed
+        if protected and why == "config":
+            # A configured entry states that this address IS a function, but
+            # recovery still needs a ceiling. Unbounded, it runs past the body
+            # into whatever follows, fails the content check and is dropped -
+            # and the address the run asked for is silently absent, which is
+            # the one outcome a declared entry point must never have.
+            section_end = next((end for lo, end, _ in image.exec_ranges if lo <= t < end), t)
+            span_index = bisect_right(listed_starts, t) - 1
+            span_end = span_ends[listed_starts[span_index]] if span_index >= 0 else section_end
+            bounds = (t, min(section_end, span_end))
         if not protected:
             section_end = next((end for lo, end, _ in image.exec_ranges if lo <= t < end), t)
             span_index = bisect_right(listed_starts, t) - 1
@@ -3800,6 +3817,14 @@ def main():
         def adopt(target, in_span=False, guessed=False):
             if guessed and target in withdrawn_span_guesses:
                 return False
+            # A PUSH of an address the program names itself is a callback
+            # registration - Delphi hands a window procedure to
+            # MakeObjectInstance exactly this way - not a pushed cleanup
+            # continuation that happens to live in this span. Absorbing it
+            # retires the entry into an alternate that emits no dispatch
+            # entry, so the call the program makes finds nothing.
+            if provenance.get(target) in NAMED_PROVENANCE:
+                return False
             prior = owner.get(target)
             # A pointer guess may own a real suffix behind an invalid prefix.
             # Follow only the cleanup/epilogue's reachable instructions, not
@@ -3847,7 +3872,8 @@ def main():
                 for addr, body in list(extra.items()):
                     if body is prior and addr in fn.addrs:
                         extra[addr] = fn
-                if prior.addrs <= fn.addrs:
+                if (prior.addrs <= fn.addrs
+                        and provenance.get(prior.addr) not in NAMED_PROVENANCE):
                     parsed.remove(prior)
                     bodies.pop(prior.addr, None)
                     retired_finally_bodies.add(prior)
@@ -3952,7 +3978,13 @@ def main():
     for addr in sorted(EXTRA_ENTRY_POINTS):
         if not image.is_exec(addr):
             raise TranslateError("[translate] entry_points: %08x is not in a code section" % addr)
-        resolve(addr, set(owner), why="config")
+        if not resolve(addr, set(owner), why="config"):
+            # Saying nothing here is how a declared entry point goes missing:
+            # the run that needed it still calls an address the translation
+            # does not carry, and the only symptom is a null call much later.
+            print("  entry_points: %08x was NOT adopted as a function "
+                  "(already owned, or its recovery did not validate)" % addr,
+                  file=sys.stderr)
 
     scanned_pointers = False
     seh_stubs = set()
