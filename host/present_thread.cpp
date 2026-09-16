@@ -124,11 +124,29 @@ struct Service : std::enable_shared_from_this<Service> {
         wake.notify_one();
     }
     double timestamp = 0;
+    // The cadence the display is actually keeping, learned from the
+    // acknowledgements themselves. An adaptive panel - ProMotion, VRR - runs
+    // anywhere between its maximum rate and a small fraction of it, and
+    // `frame_period` only ever knows the maximum: CGDisplayModeGetRefreshRate
+    // reports what the mode can do, not what the panel chose this instant.
+    double observed_period = 0, last_presented_ts = 0;
+    // Never let one pathological refresh buy an unbounded deadline.
+    static constexpr double kSlowestCredibleRefresh = 1.0 / 15;
     // A queued drawable can take several refreshes to reach the display. The
     // old two-refresh deadline retired real frames before their positive
     // presented callbacks arrived, making the native FPS counter undercount.
+    //
+    // Sized against the observed cadence rather than the nominal maximum. At
+    // the maximum the two are the same. When the panel steps down - 120Hz to
+    // 24Hz is one step on a laptop - a refresh takes five times as long as the
+    // nominal period, every acknowledgement lands outside a grace cut to that
+    // period, and every frame is declared lost and shown by the completion
+    // fallback instead. That paces presentation at the grace, the panel sees a
+    // slow client and stays slow, and the loop sustains itself: measured here
+    // as a hard 120fps/24fps alternation with the whole grace, 41.67ms,
+    // between sealing a frame and submitting it.
     double acknowledgement_grace() const {
-        return (flight_limit + 2) * frame_period;
+        return (flight_limit + 2) * std::max(frame_period, observed_period);
     }
     AtomicShared<Message> message;
     std::atomic<int> drawable_w{640}, drawable_h{480};
@@ -329,6 +347,20 @@ struct Service : std::enable_shared_from_this<Service> {
         trace_ack(*f, "presented", ts);
         if (!(ts > 0) && !fake)
             return; // zero presentedTime is not presentation
+        // Learn the panel's real cadence from consecutive acknowledgements.
+        // Widen at once - one slow refresh is all the evidence needed that the
+        // panel has stepped down, and being late to widen is what loses the
+        // next acknowledgement - and narrow gently, so a single quick pair
+        // cannot snap the deadline shut while the panel is still slow.
+        if (ts > 0 && last_presented_ts > 0) {
+            const double dt = ts - last_presented_ts;
+            if (dt > 0 && dt < kSlowestCredibleRefresh)
+                observed_period = std::max(dt, observed_period * 0.9);
+            else if (dt >= kSlowestCredibleRefresh)
+                observed_period = kSlowestCredibleRefresh;
+        }
+        if (ts > 0)
+            last_presented_ts = ts;
         if (f->released || f->dropped || f->shown)
             return;
         f->shown = true;

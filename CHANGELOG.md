@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- The presenter's acknowledgement grace follows the cadence the display is
+  actually keeping, not the rate its mode says it can reach. An adaptive panel
+  steps down - 120Hz to 24Hz is one step on a laptop - and a queued drawable
+  then needs a whole slow refresh to arrive, while `CGDisplayModeGetRefreshRate`
+  keeps reporting the maximum. Every acknowledgement then lands outside a grace
+  cut to the nominal period, every frame is declared lost and shown by the
+  completion fallback, that paces presentation at the grace, the panel sees a
+  slow client and stays slow, and the loop sustains itself. Measured in a real
+  session as a hard alternation between 8.3ms and 41.7ms frames - the whole
+  grace, to the microsecond - with the GPU busy 0.14ms and every frame in the
+  slow stretches marked as a fallback. The grace now widens the moment an
+  acknowledgement shows a slower refresh and narrows gently afterwards, capped
+  so one pathological refresh cannot buy an unbounded deadline.
+
 - A media session raises `MEEndOfPresentation` when the presentation runs out,
   before `MESessionEnded`. A player is entitled to ignore the latter, and this
   one does so by name; what ends playback is the former, from whose handler the
