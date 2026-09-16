@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A media session raises `MEEndOfPresentation` when the presentation runs out,
+  before `MESessionEnded`. A player is entitled to ignore the latter, and this
+  one does so by name; what ends playback is the former, from whose handler the
+  player stops the session and posts its own "playback ended" message to the
+  window that owns the film. Raising only `MESessionEnded` left a film that
+  reached its last frame and then nothing: no Stop, no Close, and a game
+  waiting on a message that never came, showing the black the film had faded
+  to. Only ever reached by letting a film run out - every smoke until now
+  pressed Escape - which is how it stayed hidden behind a movie that was not
+  visible in the first place.
+
 - `RECOMP_TRACE_GDI` also reports keyed `BltFast` calls with the key range and
   the source rectangle, and counts the ones whose rectangle is empty. A sprite
   sheet indexed through a table that never loaded still blits, still reports

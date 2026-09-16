@@ -77,6 +77,9 @@ enum {
     // Not part of that run: the topology reports its own readiness, and a
     // player does its renderer setup only when this arrives.
     ME_SESSION_TOPOLOGY_STATUS = 111,
+    // Raised when the presentation runs out, before the session reports itself
+    // ended. This is the one a player acts on.
+    ME_END_OF_PRESENTATION = 211,
 };
 
 // MF_TOPOSTATUS, carried on that event as MF_EVENT_TOPOLOGY_STATUS.
@@ -848,6 +851,16 @@ void session_advance(SessionState &s) {
         const bool draining = s.audio_started && host_audio_queued_bytes(s.channel) > 0;
         if (!draining) {
             s.ended_posted = true;
+            // MESessionEnded is a statement about the session, and a player is
+            // entitled to ignore it - this one does, by name. What ends
+            // playback is MEEndOfPresentation: the player stops the session
+            // from its handler and posts its own "playback ended" message to
+            // the window that owns the film. Without it the film reaches its
+            // last frame and nothing happens: no Stop, no Close, and the game
+            // waits for a message that is never sent, showing the black the
+            // film faded to. Raise it first, as the presentation ending
+            // precedes the session ending.
+            session_queue_event(s, ME_END_OF_PRESENTATION, S_OK);
             session_queue_event(s, ME_SESSION_ENDED, S_OK);
         }
     }
