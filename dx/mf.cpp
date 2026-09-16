@@ -14,7 +14,8 @@
 //
 // What the player actually observes is the event sequence, so that is what
 // this reproduces exactly: its callback is armed with BeginGetEvent and
-// collected with EndGetEvent, and the session posts MESessionTopologySet,
+// collected with EndGetEvent, and the session posts MESessionTopologyStatus
+// (MF_TOPOSTATUS_READY), MESessionTopologySet,
 // MESessionStarted, MESessionPaused, MESessionStopped, MESessionEnded and
 // MESessionClosed as they happen, because a player's state machine is written
 // against that order and stalls on a missing one.
@@ -72,7 +73,13 @@ enum {
     ME_SESSION_STOPPED = 105,
     ME_SESSION_CLOSED = 106,
     ME_SESSION_ENDED = 107,
+    // Not part of that run: the topology reports its own readiness, and a
+    // player does its renderer setup only when this arrives.
+    ME_SESSION_TOPOLOGY_STATUS = 111,
 };
+
+// MF_TOPOSTATUS, carried on that event as MF_EVENT_TOPOLOGY_STATUS.
+enum { MF_TOPOSTATUS_READY = 100 };
 
 // MF_OBJECT_TYPE
 enum { MF_OBJECT_MEDIASOURCE = 0 };
@@ -113,6 +120,13 @@ constexpr Guid guid_of(uint32_t a, uint16_t b, uint16_t c, uint64_t tail) {
                  (uint8_t)tail}};
 }
 bool guid_eq(const Guid &x, const Guid &y) { return memcmp(x.b, y.b, 16) == 0; }
+// Data1 alone identifies every GUID this layer knows, and is what a trace
+// line can be read against the constants above without a formatter.
+uint32_t guid_tag(const Guid &g) {
+    return (uint32_t)g.b[0] | ((uint32_t)g.b[1] << 8) | ((uint32_t)g.b[2] << 16) |
+           ((uint32_t)g.b[3] << 24);
+}
+
 bool guid_read(uint32_t addr, Guid *out) {
     if (!addr || !gm_valid(addr, 16))
         return false;
@@ -132,6 +146,7 @@ const Guid IID_IMFTopologyNode = guid_of(0x83CF873A, 0xF6DA, 0x4BC8, 0x823FBACFD
 const Guid IID_IMFMediaSource = guid_of(0x279A808D, 0xAEC7, 0x40C8, 0x9C6B0A7A57A51C88ull);
 
 // Services a player asks the session for by name.
+const Guid MF_EVENT_TOPOLOGY_STATUS = guid_of(0x30C5018D, 0x9A53, 0x454B, 0xAD9E6D5F8FA7C43Bull);
 const Guid MR_VIDEO_RENDER_SERVICE = guid_of(0x1092A86C, 0xAB1A, 0x459A, 0xA336831FBC4D11FFull);
 const Guid MR_STREAM_VOLUME_SERVICE = guid_of(0xF8B5FA2F, 0x32EF, 0x46F5, 0xB1721321212FB2C4ull);
 
@@ -726,15 +741,16 @@ void feed_audio(SessionState &s, SourceState &src) {
     }
 }
 
-void session_queue_event(SessionState &s, uint32_t type, uint32_t status) {
+uint32_t session_queue_event(SessionState &s, uint32_t type, uint32_t status) {
     ComObj *e = com_new(K_MF_MEDIA_EVENT);
     if (!e)
-        return;
+        return 0;
     attrs()[e->id] = Attrs{};
     events()[e->id] = EventState{type, status};
     // com_new hands back one reference and that one is the queue's; it goes
     // when the event leaves the queue for the player.
     s.queue.push_back(e->id);
+    return e->id;
 }
 
 // Hands the player one queued event through the callback it armed. Real Media
@@ -1464,6 +1480,16 @@ void Session_SetTopology(X86 *c) {
     MF_TRACE("mf: SetTopology topology=%u nodes=%u source=%u", topo ? topo->id : 0u,
              topo ? (unsigned)topologies()[topo->id].size() : 0u, s->source_obj);
     session_queue_event(*s, ME_SESSION_TOPOLOGY_SET, s->source_obj ? S_OK : E_FAIL);
+    // Setting the topology is not the same statement as the topology being
+    // ready to render, and a player waits for the second one: it asks for
+    // IMFVideoDisplayControl, calls SetVideoWindow and sizes the video only
+    // from this event's handler, then calls straight through the interface it
+    // stored. Without the event that field is never assigned, and the first
+    // repaint calls a nil interface - which is a fault in the player's own
+    // code, reached only because this layer never said the topology was ready.
+    if (s->source_obj)
+        if (uint32_t ev = session_queue_event(*s, ME_SESSION_TOPOLOGY_STATUS, S_OK))
+            attrs()[ev].at(MF_EVENT_TOPOLOGY_STATUS).u32 = MF_TOPOSTATUS_READY;
     com_ret(c, S_OK);
 }
 void Session_ClearTopologies(X86 *c) {
@@ -1811,7 +1837,14 @@ void MFCreateMediaSession(X86 *c) {
 void get_service(X86 *c, ComObj *on, uint32_t service_guid, uint32_t riid, uint32_t out) {
     SessionState *s = on && on->kind == K_MF_MEDIA_SESSION ? session_of(on->id) : nullptr;
     Guid service{}, want{};
-    if (!s || !guid_read(service_guid, &service) || !guid_read(riid, &want)) {
+    const bool read_ok = guid_read(service_guid, &service) && guid_read(riid, &want);
+    // A player stores whatever this returns and calls through it later, so a
+    // refusal here surfaces as a null call somewhere else entirely. Name the
+    // object the request was actually made on.
+    MF_TRACE("mf: GetService kind=%d session=%s service=%08x iid=%08x",
+             on ? (int)on->kind : -1, s ? "yes" : "NO",
+             read_ok ? guid_tag(service) : 0u, read_ok ? guid_tag(want) : 0u);
+    if (!s || !read_ok) {
         factory_fail(c, out, E_INVALIDARG);
         return;
     }
@@ -1836,6 +1869,7 @@ void get_service(X86 *c, ComObj *on, uint32_t service_guid, uint32_t riid, uint3
         out_view(c, out, com_get(s->clock_obj), IF_MF_CLOCK);
         return;
     }
+    MF_TRACE("mf: GetService has no service %08x/%08x", guid_tag(service), guid_tag(want));
     factory_fail(c, out, E_NOINTERFACE);
 }
 void MFGetService(X86 *c) {

@@ -10902,6 +10902,9 @@ enum {
     MF_SESSION_GetCaps = 15,
     MF_EVENT_GetType = 33,
     MF_EVENT_GetStatus = 35,
+    MF_ATTR_SetUnknown = 27,
+    MF_RESOLVER_CreateObjectFromURL = 3,
+    MF_NODE_SetObject = 33,
     MF_VIDEO_SetVideoWindow = 9,
     MF_VIDEO_GetVideoWindow = 10,
     MF_CLOCK_GetTime = 10,
@@ -10920,6 +10923,100 @@ static void next_event(uint32_t session, uint32_t *type, uint32_t *status) {
     call_method(ev, MF_EVENT_GetStatus, {sc(0x48)});
     *type = rd32(sc(0x44));
     *status = rd32(sc(0x48));
+}
+
+
+// A player does its renderer setup from the topology-status event, not from
+// SetTopology returning: that handler is where it asks for
+// IMFVideoDisplayControl and stores the pointer it calls through afterwards.
+// A session that never reports the topology ready leaves that field nil, and
+// the failure surfaces as a nil call inside the player, nowhere near here.
+// This needs a real source, so it opens the tone the audio tests carry: the
+// clip has no video track, and the event sequence does not depend on one.
+static void test_media_foundation_topology_ready() {
+    cpu_reset();
+
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-mf-topology-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    const std::string file = std::string(dir) + "/Movie.mp3";
+    FILE *f = fopen(file.c_str(), "wb");
+    CHECK(f != nullptr);
+    if (!f)
+        return;
+    CHECK_EQ(fwrite(kToneMp3, 1, sizeof kToneMp3, f), sizeof kToneMp3);
+    CHECK_EQ(fclose(f), 0);
+    win32_init(dir);
+
+    wr32(sc(0), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateSourceResolver"), {sc(0)}), S_OK);
+    const uint32_t resolver = rd32(sc(0));
+    CHECK(resolver != 0);
+    gm_put_wstr(sc(0x100), "Movie.mp3", 0x80);
+    wr32(sc(4), 0);
+    wr32(sc(8), 0);
+    CHECK_EQ(call_method(resolver, MF_RESOLVER_CreateObjectFromURL,
+                         {sc(0x100), 1, 0, sc(4), sc(8)}),
+             S_OK);
+    const uint32_t source = rd32(sc(8));
+    CHECK(source != 0);
+
+    // The source hangs off the node as MF_TOPONODE_SOURCE, which is how a
+    // player attaches it and how the session finds it again.
+    wr32(sc(0xc), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateTopology"), {sc(0xc)}), S_OK);
+    const uint32_t topo = rd32(sc(0xc));
+    CHECK(topo != 0);
+    wr32(sc(0x10), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateTopologyNode"), {1, sc(0x10)}), S_OK);
+    const uint32_t node = rd32(sc(0x10));
+    CHECK(node != 0);
+    // MF_TOPONODE_SOURCE {835C58EC-E075-4BC7-BCBA-4DE000DF9AE6}
+    static const uint8_t kNodeSource[16] = {0xec, 0x58, 0x5c, 0x83, 0x75, 0xe0, 0xc7, 0x4b,
+                                            0xbc, 0xba, 0x4d, 0xe0, 0x00, 0xdf, 0x9a, 0xe6};
+    put_guid(sc(0x200), kNodeSource);
+    CHECK_EQ(call_method(node, MF_ATTR_SetUnknown, {sc(0x200), source}), S_OK);
+    CHECK_EQ(call_method(topo, MF_TOPO_AddNode, {node}), S_OK);
+
+    wr32(sc(0x14), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFCreateMediaSession"), {0, sc(0x14)}), S_OK);
+    const uint32_t session = rd32(sc(0x14));
+    CHECK(session != 0);
+    CHECK_EQ(call_method(session, MF_SESSION_SetTopology, {0, topo}), S_OK);
+
+    // This topology names a source, so the set itself succeeds ...
+    uint32_t type = 0, status = 0;
+    next_event(session, &type, &status);
+    CHECK_EQ(type, 101u); // MESessionTopologySet
+    CHECK_EQ(status, S_OK);
+
+    // ... and the readiness the player is waiting for follows it, carrying
+    // MF_TOPOSTATUS_READY as an attribute rather than in the event status.
+    wr32(sc(0x40), 0);
+    CHECK_EQ(call_method(session, MF_SESSION_GetEvent, {0, sc(0x40)}), S_OK);
+    const uint32_t ev = rd32(sc(0x40));
+    CHECK(ev != 0);
+    call_method(ev, MF_EVENT_GetType, {sc(0x44)});
+    CHECK_EQ(rd32(sc(0x44)), 111u); // MESessionTopologyStatus
+    static const uint8_t kTopologyStatus[16] = {0x8d, 0x01, 0xc5, 0x30, 0x53, 0x9a, 0x4b, 0x45,
+                                                0xad, 0x9e, 0x6d, 0x5f, 0x8f, 0xa7, 0xc4, 0x3b};
+    put_guid(sc(0x50), kTopologyStatus); // a GUID spans 0x50..0x5f
+    wr32(sc(0xa0), 0);
+    CHECK_EQ(call_method(ev, MF_ATTR_GetUINT32, {sc(0x50), sc(0xa0)}), S_OK);
+    CHECK_EQ(rd32(sc(0xa0)), 100u); // MF_TOPOSTATUS_READY
+
+    // And the service that handler asks for is there to be had.
+    static const uint8_t kVideoService[16] = {0x6c, 0xa8, 0x92, 0x10, 0x1a, 0xab, 0x9a, 0x45,
+                                              0xa3, 0x36, 0x83, 0x1f, 0xbc, 0x4d, 0x11, 0xff};
+    static const uint8_t kVideoControl[16] = {0xe4, 0xb1, 0x90, 0xa4, 0x84, 0xab, 0x31, 0x4d,
+                                              0xa1, 0xb2, 0x18, 0x1e, 0x03, 0xb1, 0x07, 0x7a};
+    put_guid(sc(0x60), kVideoService);
+    put_guid(sc(0x70), kVideoControl);
+    wr32(sc(0x80), 0);
+    CHECK_EQ(call_shim(tramp("mf.dll", "MFGetService"), {session, sc(0x60), sc(0x70), sc(0x80)}),
+             S_OK);
+    CHECK(rd32(sc(0x80)) != 0);
+    CHECK_EQ(call_method(session, MF_SESSION_Close, {}), S_OK);
 }
 
 static void test_media_foundation_session() {
@@ -11164,6 +11261,7 @@ int main() {
         {"colour control", test_color_control},
         {"FourCC is a format error", test_fourcc_is_a_pixel_format_error},
         {"Media Foundation session", test_media_foundation_session},
+        {"Media Foundation topology ready", test_media_foundation_topology_ready},
         {"dx_reset", test_reset},
     };
     for (auto &t : tests) {
