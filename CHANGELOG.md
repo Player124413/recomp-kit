@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `RECOMP_TRACE_GDI` also reports keyed `BltFast` calls with the key range and
+  the source rectangle, and counts the ones whose rectangle is empty. A sprite
+  sheet indexed through a table that never loaded still blits, still reports
+  success and still writes nothing: the rectangle is the only thing that says
+  so, and "the text is missing" looks identical whether the glyphs are absent,
+  transparent or one pixel wide.
+
 - A media session presents through the window seam, not the DirectDraw one.
   `host_present` stages a guest-sized copy and leaves publishing to the
   DirectDraw recorder's frame sealing - and while a movie plays the game is not

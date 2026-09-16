@@ -2607,6 +2607,24 @@ void Surface_BltFast(X86 *c) {
     // BltFast clips nothing in DirectDraw; a blit off the edge is a caller
     // error. Clip anyway rather than corrupt the heap, and say so once.
     int32_t w = sr[2] - sr[0], h = sr[3] - sr[1];
+    if (recomp_env("TRACE_GDI")) {
+        // A sprite sheet drawn through an empty source rectangle copies nothing
+        // and reports success: the glyph table it indexes never loaded. A key
+        // that covers the sprite itself does the same with a valid rectangle.
+        static uint32_t degenerate = 0, total = 0, keyed = 0;
+        ++total;
+        if (w <= 0 || h <= 0)
+            ++degenerate;
+        if ((trans & DDBLTFAST_SRCCOLORKEY) && src->has_ckey_src) {
+            ++keyed;
+            if (keyed <= 6)
+                LOGW("ddraw: keyed BltFast src=%ux%ux%u key=%08x..%08x rect=%d,%d %dx%d",
+                     src->width, src->height, src->bpp, src->ckey_src_lo, src->ckey_src_hi, sr[0],
+                     sr[1], w, h);
+        }
+        if ((total % 2000) == 0)
+            LOGW("ddraw: BltFast %u calls, %u empty rect, %u keyed", total, degenerate, keyed);
+    }
     if (x < 0 || y < 0 || x + w > (int32_t)dst->width || y + h > (int32_t)dst->height) {
         int32_t maxw = (int32_t)dst->width - x, maxh = (int32_t)dst->height - y;
         if (x < 0 || y < 0 || maxw <= 0 || maxh <= 0) {

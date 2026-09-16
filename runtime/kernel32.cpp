@@ -785,6 +785,8 @@ void k_ReadFile(X86 *c) {
         return;
     }
     int64_t n = os_fd_read(o->fd, g_mem + buf, want);
+    if (recomp_env("TRACE_FILES"))
+        LOGW("file: read handle=%08x want=%u got=%lld", arg(c, 0), want, (long long)n);
     if (n < 0) {
         set_last_error(ERROR_ACCESS_DENIED_);
         if (pread)
@@ -3480,6 +3482,9 @@ void k_MultiByteToWideChar(X86 *c) {
     uint32_t n = need < (uint32_t)dstlen ? need : (uint32_t)dstlen;
     for (uint32_t i = 0; i < n; ++i)
         wr16(dst + 2 * i, (uint16_t)(uint8_t)(i < s.size() ? s[i] : 0));
+    if (recomp_env("TRACE_FILES") && srclen > 256)
+        LOGW("file: MultiByteToWideChar cp=%u srclen=%d dstlen=%d -> %u", arg(c, 0), srclen,
+             dstlen, n);
     set_eax(c, n);
 }
 
@@ -4059,15 +4064,17 @@ void create_file_named(X86 *c, const std::string &name) {
 }
 
 void get_file_attributes_named(X86 *c, const std::string &name) {
-    if (recomp_env("TRACE_FILES"))
-        LOGW("file: attrs \"%s\" -> \"%s\"", name.c_str(), win32_host_path(name).c_str());
     std::string host = win32_host_path(name);
     OsStat st{};
     if (host.empty() || os_stat(host.c_str(), &st) != 0) {
+        if (recomp_env("TRACE_FILES"))
+            LOGW("file: attrs \"%s\" -> NOT FOUND (host \"%s\")", name.c_str(), host.c_str());
         set_last_error(ERROR_FILE_NOT_FOUND_);
         set_eax(c, 0xffffffffu);
         return;
     }
+    if (recomp_env("TRACE_FILES"))
+        LOGW("file: attrs \"%s\" -> ok size=%lld", name.c_str(), (long long)st.size);
     set_eax(c, attrs_for(st));
 }
 
