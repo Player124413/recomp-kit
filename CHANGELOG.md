@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `RECOMP_WATCH=<hex address>[:<length>]` reports every guest write that
+  touches those bytes, and `RECOMP_WATCH_FRAME=1` reports a guest call that
+  returns with EBP changed. A routine that loses the frame pointer corrupts
+  nothing and crashes nowhere: its caller simply reads its own locals from
+  somewhere else afterwards, and the damage surfaces as a wrong value in an
+  unrelated place, which is the hardest kind of fault to work backwards from.
+  The frame report names the call and the EIP the callee left off at, so the
+  routine that did it is read off the log rather than deduced. Both are off by
+  default; unarmed they cost one compare that is never taken.
+
 - A configured entry point is never withdrawn again. This file's own policy
   says a `[translate] entry_points` address is established code, and `resolve`
   duly adopts it - but `extend_finally_body` then read a PUSH of that address

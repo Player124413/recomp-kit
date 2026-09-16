@@ -80,17 +80,36 @@ static inline uint64_t rd64(uint32_t a) {
     memcpy(&v, g_mem + a, 8);
     return v;
 }
+/* A guest-memory watchpoint.  RECOMP_WATCH=<hex address>[:<length>] reports
+ * every write that touches those bytes together with the host backtrace, which
+ * names the generated function and so the guest routine doing the writing.
+ * This is the instrument for a stray write: the corrupted value says what the
+ * damage is, never who did it, and the writer is usually nowhere near the
+ * reader.  Unarmed - which is always, unless the switch is set - g_watch_len is
+ * zero and a write costs one compare the branch predictor never takes. */
+extern uint32_t g_watch_base;
+extern uint32_t g_watch_len;
+void recomp_watch_hit(uint32_t addr, uint32_t n, uint64_t value);
+static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
+    if (g_watch_len != 0 && a < g_watch_base + g_watch_len && g_watch_base < a + n)
+        recomp_watch_hit(a, n, v);
+}
+
 static inline void wr8(uint32_t a, uint8_t v) {
     g_mem[a] = v;
+    recomp_watch(a, 1, v);
 }
 static inline void wr16(uint32_t a, uint16_t v) {
     memcpy(g_mem + a, &v, 2);
+    recomp_watch(a, 2, v);
 }
 static inline void wr32(uint32_t a, uint32_t v) {
     memcpy(g_mem + a, &v, 4);
+    recomp_watch(a, 4, v);
 }
 static inline void wr64(uint32_t a, uint64_t v) {
     memcpy(g_mem + a, &v, 8);
+    recomp_watch(a, 8, v);
 }
 static inline float rdf32(uint32_t a) {
     float v;
@@ -218,6 +237,14 @@ typedef struct X86 X86;
 /* Indirect CALL: dispatch `target` to a translated function, an import shim,
  * or recomp_unknown_call.  Generated into build/recomp/gen/table.c. */
 void recomp_call(X86 *c, uint32_t target);
+
+/* RECOMP_WATCH_FRAME=1 reports a guest call that returns with EBP changed.
+ * A routine that loses the frame pointer corrupts nothing and crashes nowhere:
+ * its caller simply reads its locals from somewhere else afterwards, and the
+ * damage surfaces as a wrong value far away. Off, this costs one register copy
+ * and one compare per call, both of which the optimiser folds away. */
+extern uint32_t recomp_frame_watch;
+void recomp_frame_changed(X86 *c, uint32_t target, uint32_t before, uint32_t after);
 extern const int recomp_profile_enabled;
 void recomp_profile_push(uint32_t index);
 void recomp_profile_pop(void);

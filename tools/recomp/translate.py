@@ -4632,13 +4632,16 @@ def main():
                  "#else\n"
                  "#define CALL_FN(a) do {\\\n"
                  "    uint32_t i_ = FIDX(a);\\\n"
+                 "    uint32_t ebp_ = recomp_frame_watch ? c->r[5] : 0u;\\\n"
                  "    if (recomp_profile_enabled) { recomp_call(c, %sfunc_addrs[i_]); break; }\\\n"
                  "    if (__builtin_expect(__atomic_load_n(&%shooked[i_],"
                  " __ATOMIC_ACQUIRE) != 0u, 0))\\\n"
                  "        %shook_ptrs[i_](c, i_);\\\n"
                  "    else FN(a)(c);\\\n"
+                 "    if (recomp_frame_watch && c->r[5] != ebp_)\\\n"
+                 "        recomp_frame_changed(c, %sfunc_addrs[i_], ebp_, c->r[5]);\\\n"
                  "} while (0)\n"
-                 "#endif\n" % (P, P, P, P))
+                 "#endif\n" % (P, P, P, P, P))
         for i, a in enumerate(entry_names):
             fh.write("#define FIDX_%08x %du\n" % (a, i))
         # Both spellings are declared: fn_ADDR because the chunk defines it,
@@ -4816,7 +4819,15 @@ int recomp_thunk_target_kind(uint32_t target)
     return (recomp_is_call_return(target) || recomp_module_is_call_return(target)) ? 2 : 0;
 }
 
+static void recomp_call_inner(X86 *c, uint32_t target);
 void recomp_call(X86 *c, uint32_t target)
+{
+    uint32_t ebp_ = recomp_frame_watch ? c->r[5] : 0u;
+    recomp_call_inner(c, target);
+    if (recomp_frame_watch && c->r[5] != ebp_)
+        recomp_frame_changed(c, target, ebp_, c->r[5]);
+}
+static void recomp_call_inner(X86 *c, uint32_t target)
 {
     int32_t i = recomp_lookup(target);
     if (i >= 0) {

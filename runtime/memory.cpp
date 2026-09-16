@@ -4,6 +4,9 @@
 #include "loader.h"
 
 #include "../platform/os.h"
+#if defined(__APPLE__) || defined(__linux__)
+#include <execinfo.h>
+#endif
 #include <algorithm>
 #include <map>
 #include <stdio.h>
@@ -13,6 +16,96 @@
 #include <string>
 
 uint8_t *g_mem = nullptr;
+
+// ---------------------------------------------------------------------------
+// The guest-memory watchpoint declared in x86.h. A stray write is only ever
+// seen through the damage it does, somewhere else, later; this reports the
+// write itself. The host backtrace names the generated function, which is the
+// guest routine doing the writing - the one thing the corrupted value cannot
+// say. Armed from RECOMP_WATCH=<hex address>[:<length>], default length 4.
+// ---------------------------------------------------------------------------
+uint32_t recomp_frame_watch = 0;
+
+uint32_t g_watch_base = 0;
+uint32_t g_watch_len = 0;
+
+namespace {
+struct WatchArm {
+    WatchArm() {
+        recomp_frame_watch = recomp_env("WATCH_FRAME") ? 1u : 0u;
+        const char *s = recomp_env("WATCH");
+        if (!s || !*s)
+            return;
+        char *end = nullptr;
+        const unsigned long long base = strtoull(s, &end, 16);
+        unsigned long long len = 4;
+        if (end && *end == ':') {
+            const unsigned long long given = strtoull(end + 1, nullptr, 16);
+            if (given)
+                len = given;
+        }
+        if (base >= GUEST_SIZE)
+            return;
+        if (len == 0 || len > GUEST_SIZE - base)
+            len = GUEST_SIZE - base;
+        g_watch_base = (uint32_t)base;
+        g_watch_len = (uint32_t)len;
+    }
+};
+WatchArm g_watch_arm;
+
+// The host call stack names the generated function - fn_00xxxxxx - and that
+// name IS the guest address of the routine doing the writing, which is the
+// whole point. One line per write: a watched address in a reused stack slot is
+// written thousands of times, and a report long enough to read is a report too
+// slow to reach the moment worth reading.
+const char *watch_writer() {
+#if defined(__APPLE__) || defined(__linux__)
+    static char out[128];
+    void *frames[32];
+    const int n = backtrace(frames, 32);
+    char **names = backtrace_symbols(frames, n);
+    if (!names)
+        return "?";
+    out[0] = 0;
+    for (int i = 1; i < n; ++i) {
+        const char *fn = strstr(names[i], "fn_00");
+        if (!fn)
+            continue;
+        size_t k = 0;
+        while (k + 1 < sizeof out && fn[k] && fn[k] != ' ')
+            ++k;
+        snprintf(out, sizeof out, "%.*s", (int)k, fn);
+        break;
+    }
+    free(names);
+    return out[0] ? out : "?";
+#else
+    return "(no backtrace)";
+#endif
+}
+} // namespace
+
+extern "C" void recomp_frame_changed(X86 *c, uint32_t target, uint32_t before, uint32_t after) {
+    // Rate-limited: a routine that does this does it on every call, and the
+    // first few name it as well as thousands would. EIP is where the callee
+    // left off: a routine that escapes through an indirect jump its own body
+    // does not cover returns from there without running its epilogue, and that
+    // address is the whole diagnosis.
+    static uint32_t said = 0;
+    if (said++ < 64)
+        LOGW("frame: %08x returned with EBP %08x, was %08x (left at eip=%08x)", target, after,
+             before, c ? c->eip : 0u);
+}
+
+extern "C" void recomp_watch_hit(uint32_t addr, uint32_t n, uint64_t value) {
+    // Report every write, not just the first: what matters is which of them
+    // was the last one before the damage was read back, and a legitimate
+    // writer and a stray one look identical one at a time.
+    static uint32_t hits = 0;
+    LOGW("watch: %08x %u = %llx by %s (hit %u)", addr, n, (unsigned long long)value,
+         watch_writer(), ++hits);
+}
 
 // ---------------------------------------------------------------------------
 // Logging helpers (declared in guest.h; kept here so every translation unit in
