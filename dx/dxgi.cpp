@@ -4,6 +4,7 @@
 #include "host_api.h"
 #include "../runtime/display_seam.h"
 #include "../runtime/win32.h"
+#include <algorithm>
 #include <cstring>
 
 namespace {
@@ -73,9 +74,18 @@ void present(X86 *c) {
         com_ret(c, E_INVALIDARG);
         return;
     }
-    if (!(arg(c, 2) & 1))
+    const uint32_t sync = arg(c, 1), flags = arg(c, 2);
+    if (!(flags & 1))
         dx11::present(*back, com_this_arg(c)->id, s->swap.OutputWindow,
                       s->fullscreen); // DXGI_PRESENT_TEST does not display
+    // A sync interval returns at the vertical blank, and a renderer that asks
+    // for one paces its whole loop by that return. Returning at once let a
+    // game present eight hundred times a second: its main thread never left
+    // the render loop to pump input, and eight megabytes of staging a call
+    // outran the GPU by hundreds of megabytes a second. DXGI_PRESENT_TEST and
+    // DXGI_PRESENT_DO_NOT_WAIT ask not to.
+    if (sync && !(flags & 9))
+        host_present_wait_refresh(int(std::min<uint32_t>(sync, 4)));
     LOGV("D3DPresent %ux%u", back->texture.Width, back->texture.Height);
     com_ret(c, S_OK);
 }

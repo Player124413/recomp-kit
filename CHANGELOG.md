@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- `IDXGISwapChain::Present` honours its sync interval: the guest thread sleeps
+  to the presenter's next refresh boundary, as a Present returns at the
+  vertical blank on Windows. A renderer that asks for one paces its whole loop
+  by that return, and returning at once let a game present eight hundred times
+  a second - its main thread never left the render loop to pump input, which
+  played as lag, and eight megabytes of staging a call outran the GPU by
+  hundreds of megabytes a second. `DXGI_PRESENT_TEST` and
+  `DXGI_PRESENT_DO_NOT_WAIT` still return at once, and so does a headless
+  presenter, so smokes run as fast as they did.
+
+- The Metal device drains an autorelease pool in every entry point. Its
+  callers are the presenter's worker and the guest thread, and neither runs a
+  run loop; Metal hands out command buffers, encoders and drawables
+  autoreleased, so on those threads nothing ever let go of them. A drawable is
+  a 23 MB IOSurface at 3024x1898, and they piled up at a frame a refresh:
+  vmmap showed 54 GB of `IOAccelerator` regions on a process forty seconds
+  old, most of it paged out, which is the "unchecked memory growth" and a
+  good part of the lag. With a pool per call the graphics footprint holds at
+  about 250 MB.
+
 - The software Direct3D 11 rasterizer copies texel rows where it can. A
   triangle with one 1/w at every vertex has screen-linear texture coordinates,
   and when those put a texel centre under every pixel centre - both formats

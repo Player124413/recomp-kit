@@ -327,3 +327,6 @@ void host_present_set_capture_factory(HostCaptureFactory factory);
 
 // Complete a standalone GDI window frame, with no DirectDraw frame dependency.
 extern "C" void host_present_seal_window(void);
+// Guest thread: sleep to the presenter's next refresh boundary, `intervals`
+// refreshes on. Nothing to wait for on a headless presenter.
+extern "C" void host_present_wait_refresh(int intervals);

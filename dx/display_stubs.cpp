@@ -22,4 +22,8 @@ extern "C" {
 // by implementing it, and when the file holds nothing but this comment the
 // interface is done.
 
+// The presenter's refresh wait: a build without a presenter has no display
+// to wait for, so a Present with a sync interval returns at once.
+__attribute__((weak)) void host_present_wait_refresh(int) {}
+
 } // extern "C"
