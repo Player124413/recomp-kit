@@ -54,9 +54,30 @@ CompositeRect whole_rect(const CompositorInput &in, bool integer) {
     const double w = in.guest_w * scale, h = in.guest_h * scale;
     return {(in.drawable_w - w) / 2, (in.drawable_h - h) / 2, w, h};
 }
+// Enhanced gameplay with Wide view off on a drawable wider than the guest's
+// aspect. Its world was projected for the guest's width, so it is shown boxed
+// at that aspect, with its HUD and input mapped through the same box, the way
+// Classic shows it.
+bool boxed_scene(const CompositorInput &in) {
+    return in.narrow && in.cls == HOST_SCREEN_GAMEPLAY && !in.legacy && !in.classic &&
+           int64_t(in.drawable_w) * in.guest_h > int64_t(in.drawable_h + 1) * in.guest_w;
+}
 CompositeRect pixel_rect(CompositeRect r) {
     const double x = std::round(r.x), y = std::round(r.y);
     return {x, y, std::round(r.x + r.w) - x, std::round(r.y + r.h) - y};
+}
+// The 640x480 settings page at the UI scale, but never larger than the
+// drawable: a saved scale that overflows would push the page's own UI scale
+// row off screen. A drawable under 640x480 fits the page instead.
+CompositeRect settings_page_rect(const CompositorInput &in) {
+    auto page = in;
+    page.guest_w = 640;
+    page.guest_h = 480;
+    const int fits = std::min(in.drawable_w / 640, in.drawable_h / 480);
+    if (fits < 1)
+        return pixel_rect(whole_rect(page, false));
+    page.scale_override = std::min(compositor_ui_scale(in.drawable_h, 480, in.scale_override), fits);
+    return pixel_rect(whole_rect(page, true));
 }
 CompositeRect mapped_element_rect(const CompositorInput &in, const UiElement &e,
                                   const Registry &registry) {
@@ -64,7 +85,7 @@ CompositeRect mapped_element_rect(const CompositorInput &in, const UiElement &e,
         std::lock_guard lock(pointer_mutex);
         if (pointer_valid) {
             double sx, sy;
-            if (!in.legacy && !in.classic && in.cls == HOST_SCREEN_GAMEPLAY)
+            if (!in.legacy && !in.classic && in.cls == HOST_SCREEN_GAMEPLAY && !boxed_scene(in))
                 sx = sy = compositor_ui_scale(in.drawable_h, in.guest_h, in.scale_override);
             else {
                 const auto whole =
@@ -75,7 +96,7 @@ CompositeRect mapped_element_rect(const CompositorInput &in, const UiElement &e,
             return {double(pointer_x), double(pointer_y), e.w * sx, e.h * sy};
         }
     }
-    if (in.legacy || in.classic || in.cls != HOST_SCREEN_GAMEPLAY) {
+    if (in.legacy || in.classic || in.cls != HOST_SCREEN_GAMEPLAY || boxed_scene(in)) {
         const auto whole = whole_rect(in, !in.legacy && !in.classic && in.cls == HOST_SCREEN_MENU);
         const double sx = whole.w / in.guest_w, sy = whole.h / in.guest_h;
         return {whole.x + e.x * sx, whole.y + e.y * sy, e.w * sx, e.h * sy};
@@ -321,13 +342,8 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     };
     if (in->legacy) {
         draw(pass, *in, in->legacy_frame, pixel_rect(whole_rect(*in, false)), full_uv, Opaque);
-        if (in->settings_page) {
-            auto page = *in;
-            page.guest_w = 640;
-            page.guest_h = 480;
-            draw(pass, page, in->settings_page, pixel_rect(whole_rect(page, true)), full_uv,
-                 Straight);
-        }
+        if (in->settings_page)
+            draw(pass, *in, in->settings_page, settings_page_rect(*in), full_uv, Straight);
         finish();
         return;
     }
@@ -335,7 +351,7 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     const auto registry = registry_snapshot();
     if (in->cls == HOST_SCREEN_GAMEPLAY)
         draw(pass, *in, in->world,
-             in->classic ? pixel_rect(whole_rect(*in, false))
+             in->classic || boxed_scene(*in) ? pixel_rect(whole_rect(*in, false))
                          : CompositeRect{0, 0, double(in->drawable_w), double(in->drawable_h)},
              full_uv, Opaque);
     for (const auto *e : elements) {
@@ -374,12 +390,8 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
             }
         }
     }
-    if (in->settings_page) {
-        auto page = *in;
-        page.guest_w = 640;
-        page.guest_h = 480;
-        draw(pass, page, in->settings_page, pixel_rect(whole_rect(page, true)), full_uv, Straight);
-    }
+    if (in->settings_page)
+        draw(pass, *in, in->settings_page, settings_page_rect(*in), full_uv, Straight);
     finish();
 }
 
@@ -404,7 +416,8 @@ LayoutSnapshot compositor_layout_snapshot(const CompositorInput *in) {
     result.scale_override = in->scale_override;
     result.legacy = in->legacy;
     result.classic = in->classic;
-    if (in->legacy || in->classic || in->cls != HOST_SCREEN_GAMEPLAY ||
+    result.narrow = in->narrow;
+    if (in->legacy || in->classic || in->cls != HOST_SCREEN_GAMEPLAY || boxed_scene(*in) ||
         !std::isfinite(result.scene.scale_x) || result.scene.scale_x <= 0 ||
         !std::isfinite(result.scene.scale_y) || result.scene.scale_y <= 0 ||
         !std::isfinite(result.scene.offset_x) || !std::isfinite(result.scene.offset_y) ||
@@ -460,6 +473,7 @@ LayoutSnapshot compositor_resize_layout(const LayoutSnapshot &layout, int w, int
     in.scale_override = layout.scale_override;
     in.legacy = layout.legacy;
     in.classic = layout.classic;
+    in.narrow = layout.narrow;
     in.scene = layout.scene;
     in.scene.scale_x *= double(w) / layout.drawable_w;
     in.scene.offset_x *= double(w) / layout.drawable_w;

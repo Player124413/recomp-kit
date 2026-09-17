@@ -399,6 +399,7 @@ struct Service : std::enable_shared_from_this<Service> {
         // This frame was produced with the old mode. Apply live rendering
         // changes only after taking its snapshot, for the next producer frame.
         f->input.classic = mods_display_classic() != 0;
+        f->input.narrow = mods_display_wide() == 0;
         mods_display_transition(epoch, cls);
         // CPU-only Classic classes use the entire guest surface, including
         // menu backgrounds that Enhanced extracts as individual UI records.

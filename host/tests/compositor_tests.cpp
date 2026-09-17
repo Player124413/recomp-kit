@@ -168,6 +168,32 @@ static void test_class_layout_and_cursor() {
     rect(in, 5, 601, 441, 80, 80);
 }
 
+static void test_narrow_scene_boxed() {
+    // Wide view off on a 16:9 drawable: the 4:3 scene, its HUD and its input
+    // mapping share one pillarboxed rectangle, as in Classic.
+    UiFrame ui{{element(7, 40, 40, 40, 40)}, 640, 480};
+    auto in = input(&ui, 1920, 1080);
+    rect(in, 7, 80, 80, 80, 80); // Enhanced: anchored at the integer UI scale
+    in.narrow = true;
+    rect(in, 7, 330, 90, 90, 90);
+    auto layout = compositor_layout_snapshot(&in);
+    CHECK(layout.narrow);
+    CHECK_EQ(layout.scene.scale_x, 2.25f);
+    CHECK_EQ(layout.scene.scale_y, 2.25f);
+    CHECK_EQ(layout.scene.offset_x, 240.f);
+    CHECK_EQ(layout.scene.offset_y, 0.f);
+    auto resized = compositor_resize_layout(layout, 3840, 2160);
+    CHECK_EQ(resized.scene.scale_x, 4.5f);
+    CHECK_EQ(resized.scene.offset_x, 480.f);
+    // A drawable no wider than the guest's aspect is not boxed.
+    in.drawable_w = 1440;
+    rect(in, 7, 80, 80, 80, 80);
+    // Menus, FMV and Classic keep their own framing.
+    in.drawable_w = 1920;
+    in.cls = HOST_SCREEN_MENU;
+    CHECK(!compositor_layout_snapshot(&in).elements.empty());
+}
+
 static void test_ids_and_empty_inputs() {
     UiFrame ui{{element(3, 0, 0, 1, 1), element(1, 0, 0, 1, 1), element(2, 0, 0, 1, 1)}, 640, 480};
     uint64_t ids[3] = {99, 99, 99};
@@ -521,6 +547,15 @@ static void test_classic_framing_and_settings_overlay() {
     out = compose(in);
     pixel(out, 10, 10, 255, 0, 0);
     pixel(out, 11, 10, 0, 0, 255);
+    // A UI scale the drawable cannot hold is capped for the page: at 3 on
+    // 1920x1080 the page is drawn at 2, whole, centred.
+    in.drawable_w = 1920;
+    in.drawable_h = 1080;
+    in.scale_override = 3;
+    out = compose(in);
+    pixel(out, 320 + 20, 60 + 20, 255, 0, 0);
+    pixel(out, 320 + 21, 60 + 21, 255, 0, 0);
+    pixel(out, 320 + 22, 60 + 20, 0, 0, 255);
 }
 
 int main() {
@@ -534,6 +569,7 @@ int main() {
         {"selected resolution layout", test_selected_resolution_layout},
         {"registry bottom right at 4x", test_registry_override_places_bottom_right_at_4x},
         {"class layout and cursor", test_class_layout_and_cursor},
+        {"narrow scene boxed", test_narrow_scene_boxed},
         {"ids and empty inputs", test_ids_and_empty_inputs},
         {"scene reuse policy and leases", test_scene_reuse_policy_without_gpu},
         {"scene reuse resolution changes", test_scene_reuse_resolution_changes},
