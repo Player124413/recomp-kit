@@ -1967,6 +1967,14 @@ static void test_router_toggles_only() {
     for (const DrawControl &d : v.controls)
         CHECK(d.kind == Kind::Toggle);
 
+    // Portrait: the controls strip is not filled behind two lone tabs.
+    Screen portrait = s;
+    portrait.controls_area = Rect{0, 400, 1180, 420};
+    CHECK(make_view(l, r, portrait, 1.0).controls_area.empty());
+    r.set_toggles_only(false, rec);
+    CHECK(!make_view(l, r, portrait, 1.0).controls_area.empty());
+    r.set_toggles_only(true, rec);
+
     r.set_toggles_only(false, rec);
     center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y);
     CHECK(r.finger_down(5, x, y, 40, rec));

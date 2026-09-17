@@ -41,8 +41,10 @@ void open_pad(SDL_JoystickID id) {
     vpad().set_controller_connected(true);
 }
 
-// Opens the first attached pad, if any, when none is open.
-void open_any() {
+// Opens the first attached pad, if any, when none is open. `skip` is an
+// instance SDL may still list although it is going away (the one whose
+// SDL_EVENT_GAMEPAD_REMOVED is being handled); 0 skips nothing.
+void open_any(SDL_JoystickID skip) {
     if (g_pad)
         return;
     int count = 0;
@@ -50,7 +52,8 @@ void open_any() {
     if (!ids)
         return;
     for (int i = 0; i < count && !g_pad; ++i)
-        open_pad(ids[i]);
+        if (ids[i] != skip)
+            open_pad(ids[i]);
     SDL_free(ids);
 }
 
@@ -79,8 +82,9 @@ void gamepad_handle_event(const SDL_Event &e) {
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (g_pad && e.gdevice.which == g_id) {
+            const SDL_JoystickID gone = g_id;
             close_pad();
-            open_any();
+            open_any(gone);
         }
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
@@ -102,12 +106,17 @@ void gamepad_handle_event(const SDL_Event &e) {
 }
 
 void gamepad_poll() {
-    // A pad attached before the game loop ran (the launcher drains its own
-    // events) never reaches gamepad_handle_event; look once for it.
-    static bool scanned = false;
-    if (!scanned) {
-        scanned = true;
-        open_any();
+    // A pad whose SDL_EVENT_GAMEPAD_ADDED went somewhere else (the launcher
+    // drains its own events) never reaches gamepad_handle_event, so while
+    // nothing is open, look for one every kScanIntervalMs.
+    if (!g_pad) {
+        constexpr uint64_t kScanIntervalMs = 2000;
+        static uint64_t next_scan_ms = 0;
+        const uint64_t now_ms = SDL_GetTicks();
+        if (now_ms >= next_scan_ms) {
+            next_scan_ms = now_ms + kScanIntervalMs;
+            open_any(0);
+        }
     }
     if (!g_pad)
         return;

@@ -53,8 +53,11 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
     v.dw = s.dw;
     v.dh = s.dh;
     v.opacity = opacity;
-    v.controls_area = s.controls_area;
     const bool toggles_only = r.toggles_only();
+    // An auto-hidden layout draws its tabs and nothing else: the portrait
+    // controls strip has no controls left to sit under.
+    if (!toggles_only)
+        v.controls_area = s.controls_area;
     for (int g = 0; g < int(l.groups.size()); ++g) {
         const Group &grp = l.groups[g];
         if (grp.visible && grp.has_grid && !toggles_only)
