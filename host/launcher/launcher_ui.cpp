@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace launcher {
 
@@ -60,6 +62,15 @@ const Color kButton{52, 60, 78, 255};
 const Color kButtonHot{70, 82, 108, 255};
 const Color kButtonOff{36, 40, 50, 255};
 const Color kFocus{240, 200, 90, 255};
+
+// A path as the player would say it: under the home folder as "~/...".
+std::string display(const std::string &path) {
+    const char *home = getenv("HOME");
+    const size_t n = home ? strlen(home) : 0;
+    if (n > 1 && path.compare(0, n, home) == 0 && (path.size() == n || path[n] == '/'))
+        return "~" + path.substr(n);
+    return path;
+}
 
 std::string shorten(const std::string &s, size_t max) {
     if (s.size() <= max)
@@ -185,7 +196,7 @@ void Launcher::rebuild() {
                 info_.can_pick_folder);
             for (size_t i = 0; i < found_.size() && i < 4; ++i)
                 if (found_[i] != status_.root)
-                    add(kUseCandidate + int(i), "Use " + shorten(found_[i], 44));
+                    add(kUseCandidate + int(i), "Use " + shorten(display(found_[i]), 44));
             if (status_.state == State::Ready && status_.root != info_.import_root)
                 add(kCopyIntoApp, "Copy into app storage");
         } else {
@@ -196,7 +207,7 @@ void Launcher::rebuild() {
                 add(kImportZip, have ? "Import again from a ZIP..." : "Import game ZIP...");
             for (size_t i = 0; i < found_.size() && i < 3; ++i)
                 if (found_[i] != status_.root)
-                    add(kUseCandidate + int(i), "Import " + shorten(found_[i], 40));
+                    add(kUseCandidate + int(i), "Import " + shorten(display(found_[i]), 40));
         }
         add(kManage, "Manage...");
         if (!spec_.store_url.empty() && status_.state == State::NotFound)
@@ -300,15 +311,23 @@ void Launcher::begin_import(const Picked &picked) {
     auto cancel = cancel_;
     Platform *platform = &platform_;
     const Spec spec = spec_;
-    platform_.run_in_background([shared, cancel, platform, spec, source, dest]() {
-        ImportOutcome out = import_game(spec, *source, dest, [&](const Progress &p) {
-            {
-                std::lock_guard<std::mutex> lock(shared->m);
-                shared->progress = p;
-            }
-            platform->import_activity(true, &p);
-            return !cancel->load();
-        });
+    const bool move = platform_.movable(picked);
+    const std::string leftover = move ? picked.path : std::string();
+    platform_.run_in_background([shared, cancel, platform, spec, source, dest, move, leftover]() {
+        ImportOutcome out = import_game(
+            spec, *source, dest,
+            [&](const Progress &p) {
+                {
+                    std::lock_guard<std::mutex> lock(shared->m);
+                    shared->progress = p;
+                }
+                platform->import_activity(true, &p);
+                return !cancel->load();
+            },
+            move);
+        // What a move leaves behind (excluded files, empty folders) goes too.
+        if (move && out.result == ImportResult::Done && !leftover.empty())
+            remove_tree(leftover);
         std::lock_guard<std::mutex> lock(shared->m);
         shared->outcome = out;
         shared->importing = false;
@@ -343,6 +362,11 @@ void Launcher::tick() {
     platform_.release(importing_);
     importing_ = Picked{};
     evaluate(info_.import_root);
+    // A moved folder is gone; a new one may have appeared.
+    found_.clear();
+    for (const std::string &c : platform_.candidates(spec_))
+        if (std::find(found_.begin(), found_.end(), c) == found_.end())
+            found_.push_back(c);
     switch (outcome.result) {
     case ImportResult::Done:
         platform_.protect_import(info_.import_root);
@@ -627,7 +651,7 @@ void Launcher::draw(Canvas &c, int s) {
     case State::Ready:
         accent = kReady;
         headline = "Ready to play";
-        detail = status_.root;
+        detail = display(status_.root);
         if (countdown_ > 0) {
             headline = "Starting in " + std::to_string(int(countdown_ + 0.999)) + "...";
             detail = (info_.touch ? "Touch the screen" : "Press any key") +
@@ -637,7 +661,7 @@ void Launcher::draw(Canvas &c, int s) {
     case State::WrongVersion:
         accent = kWarn;
         headline = "Wrong version of " + spec_.executable;
-        detail = status_.exe + "\nFound SHA-256 " + status_.digest + "\nNeeded " + spec_.sha256;
+        detail = display(status_.exe) + "\nFound SHA-256 " + status_.digest + "\nNeeded " + spec_.sha256;
         break;
     case State::Incomplete: {
         accent = kWarn;
@@ -645,7 +669,7 @@ void Launcher::draw(Canvas &c, int s) {
         std::string missing;
         for (const std::string &m : status_.missing)
             missing += (missing.empty() ? "" : ", ") + m;
-        detail = status_.root + "\nMissing: " + missing;
+        detail = display(status_.root) + "\nMissing: " + missing;
         break;
     }
     case State::NotFound:
@@ -691,7 +715,7 @@ void Launcher::draw(Canvas &c, int s) {
         py += c.paragraph(px, py, pw, detail, 2 * s, kDim);
         if (screen_ == Screen::Manage)
             py += 4 * s + c.paragraph(px, py + 4 * s, pw,
-                                      "Saves and settings: " + info_.profile_dir +
+                                      "Saves and settings: " + display(info_.profile_dir) +
                                           "\nThey are kept when the game data is deleted or imported again.",
                                       2 * s, kDim);
     }

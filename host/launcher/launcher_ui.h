@@ -58,6 +58,9 @@ class Platform {
     // An import starts, advances or ends: keep the device awake, keep the
     // process alive (Android), show a notification.
     virtual void import_activity(bool /*active*/, const Progress *) {}
+    // Whether an import from `p` may move its files and remove what is left:
+    // a folder the player copied into app storage.
+    virtual bool movable(const Picked &) { return false; }
     // A finished import: e.g. keep it out of device backups (iPadOS).
     virtual void protect_import(const std::string &) {}
     // The import from `p` ended, whatever the result (security-scoped access).

@@ -244,6 +244,21 @@ void test_cancel_and_resume() {
     CHECK(exists(dest + "/.stamp"));
 }
 
+void test_move_import() {
+    const Spec s = spec();
+    const std::string src = fresh("move-src");
+    make_install(src + "/copied");
+    const std::string dest = fresh("move-dest") + "/game";
+    auto source = folder_source(src);
+    ImportOutcome out = import_game(s, *source, dest, nullptr, true);
+    CHECK(out.result == ImportResult::Done);
+    CHECK(out.files_copied == 5);
+    CHECK(exists(dest + "/levels/deep/two.lvl"));
+    CHECK(!exists(src + "/copied/levels/deep/two.lvl")); // moved, not copied
+    CHECK(exists(src + "/copied/binkw32.dll"));          // excluded files stay
+    CHECK(check(s, dest).state == State::Ready);
+}
+
 void test_failures() {
     Spec s = spec();
     // No executable at all.
@@ -398,6 +413,7 @@ struct FakePlatform : Platform {
     PlatformInfo pi;
     std::vector<Picked> next;
     std::vector<std::string> cands;
+    bool move_all = false;
     std::string opened_url, opened_folder;
     int activity_on = 0, activity_off = 0, protected_count = 0, released = 0, exported = 0;
     PlatformInfo info() override { return pi; }
@@ -419,6 +435,7 @@ struct FakePlatform : Platform {
     }
     void protect_import(const std::string &) override { ++protected_count; }
     void release(const Picked &) override { ++released; }
+    bool movable(const Picked &) override { return move_all; }
     void export_ready(const Picked &) override { ++exported; }
     void run_in_background(std::function<void()> work) override { work(); }
 };
@@ -606,9 +623,13 @@ void test_ui_mobile() {
     l.start("");
     CHECK(l.status().state == State::NotFound);
     CHECK(has_button(l, kUseCandidate));
+    fp.move_all = true;
     l.activate(kUseCandidate);
     l.tick();
     CHECK(l.status().state == State::Ready);
+    CHECK(!exists(dir + "/Documents/My Copy")); // moved in, and the rest removed
+    fp.move_all = false;
+    make_install(dir + "/Documents/My Copy");
 
     // A failing import says why; cancelling says it can continue.
     write_file(dir + "/empty/readme.txt", "nothing here");
@@ -653,6 +674,7 @@ int main() {
         {"find and check", test_find_and_check},
         {"folder import", test_folder_import},
         {"cancel and resume", test_cancel_and_resume},
+        {"move import", test_move_import},
         {"failures", test_failures},
         {"zip import", test_zip_import},
         {"folders and profile", test_folders_and_profile},

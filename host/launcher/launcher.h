@@ -71,6 +71,9 @@ class Source {
     // Streams one file's bytes to `sink`, which returns false to stop.
     virtual bool read(const Entry &e, const std::function<bool(const uint8_t *, size_t)> &sink,
                       std::string *error) = 0;
+    // Moves the entry's file to `target` without copying it (same volume);
+    // false when the source cannot, and the caller copies instead.
+    virtual bool move_to(const Entry &, const std::string &) { return false; }
 };
 std::unique_ptr<Source> folder_source(const std::string &root);
 // A ZIP by path, or by an open descriptor the source then owns (Android's
@@ -100,8 +103,11 @@ struct ImportOutcome {
 // killed import resumes. Each file is written as <name>.part and renamed. The
 // stamp is removed first and written last, after the imported executable
 // hashes to spec.sha256. `progress` returns false to cancel.
+// `move` takes files out of the source instead of copying them where the
+// source can (a folder the player already put in app storage).
 ImportOutcome import_game(const Spec &spec, Source &source, const std::string &dest,
-                          const std::function<bool(const Progress &)> &progress = nullptr);
+                          const std::function<bool(const Progress &)> &progress = nullptr,
+                          bool move = false);
 
 // Removes `dest` and everything under it; true when nothing is left.
 bool remove_tree(const std::string &dest);
