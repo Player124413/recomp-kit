@@ -209,6 +209,7 @@ if(TARGET recomp_gen)
   pop_host(recomp_app GEN UI_LAYER OPT 2
     SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
             ${HOST}/controls/controls_host.cpp ${HOST}/controls/gamepad_sdl.cpp
+            ${HOST}/controls/vpad_host_api.cpp
             ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
