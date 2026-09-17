@@ -770,10 +770,19 @@ class Image(object):
         The five-byte JMP is code; what follows is either a landing block or
         a bounded count/type/handler table. Stubs and blocks may be absent
         from every exported listing.
+
+        The same prologue - PUSH handler, PUSH FS:[0], MOV FS:[0],ESP - is
+        what every compiler writes, and only Delphi's handler is a JMP stub.
+        MSVC pushes the address of a CRT function (__except_handler3), whose
+        first byte is not E9, and nothing here is recovered from it: that
+        dialect has no landings to find, so it yields none rather than
+        refusing the image. A stub that IS a JMP but jumps outside code is
+        malformed, and still does.
         """
+        if not self.is_exec(stub) or self.rd8(stub) != 0xe9:
+            return [], None
         displacement = self.rd32(stub + 1)
-        if (not self.is_exec(stub) or self.rd8(stub) != 0xe9
-                or displacement is None
+        if (displacement is None
                 or not self.is_exec((stub + 5 + displacement) & 0xffffffff)):
             raise TranslateError("SEH stub %08x is not a JMP rel32 to code" % stub)
         n = self.rd32(stub + 5)
