@@ -266,6 +266,79 @@ struct X86 {
 };
 typedef struct X86 X86;
 
+/* ----------------------------------------------------------------- SSE */
+
+/* An XMM register holds dwords (see struct X86), so a scalar double or float
+ * in its low lanes is read and written through these. Scalar SSE arithmetic
+ * leaves the lanes above its result alone, which is why nothing here clears
+ * them. */
+static inline double xmm_f64(const X86 *c, int reg) {
+    uint64_t bits = (uint64_t)c->xmm[reg][0] | ((uint64_t)c->xmm[reg][1] << 32);
+    double v;
+    memcpy(&v, &bits, 8);
+    return v;
+}
+static inline void xmm_set_f64(X86 *c, int reg, double v) {
+    uint64_t bits;
+    memcpy(&bits, &v, 8);
+    c->xmm[reg][0] = (uint32_t)bits;
+    c->xmm[reg][1] = (uint32_t)(bits >> 32);
+}
+static inline float xmm_f32(const X86 *c, int reg) {
+    float v;
+    memcpy(&v, &c->xmm[reg][0], 4);
+    return v;
+}
+static inline void xmm_set_f32(X86 *c, int reg, float v) {
+    memcpy(&c->xmm[reg][0], &v, 4);
+}
+
+/* SQRTSD and SQRTSS of a negative operand return the "indefinite" quiet NaN,
+ * which has its sign bit set; the host's sqrt returns a positive NaN and sets
+ * errno. Everything else is the same operation in the same rounding mode. */
+/* The sign is tested as a bit rather than by comparing, because a compiler
+ * that may assume a NaN's payload is unspecified folds the comparison away
+ * and leaves the host's own sqrt to produce its own NaN - which on ARM is the
+ * positive one. */
+static inline double recomp_sse_sqrt(double v) {
+    uint64_t bits;
+    memcpy(&bits, &v, 8);
+    if ((bits >> 63) && (bits << 1) != 0) { /* negative, and not -0.0 */
+        uint64_t indefinite = 0xfff8000000000000ull;
+        double r;
+        memcpy(&r, &indefinite, 8);
+        return r;
+    }
+    return sqrt(v);
+}
+static inline float recomp_sse_sqrtf(float v) {
+    uint32_t bits;
+    memcpy(&bits, &v, 4);
+    if ((bits >> 31) && (bits << 1) != 0) {
+        uint32_t indefinite = 0xffc00000u;
+        float r;
+        memcpy(&r, &indefinite, 4);
+        return r;
+    }
+    return sqrtf(v);
+}
+
+/* COMISD/UCOMISD and their single-precision forms: the one place SSE writes
+ * the guest's flags. Unordered - either operand a NaN - sets ZF, PF and CF
+ * together, and the rest of EFLAGS is cleared either way. The difference
+ * between the two forms is only which NaNs raise an exception, and this kit
+ * raises none. */
+static inline void recomp_comis(X86 *c, double a, double b) {
+    c->eflags_of = c->eflags_af = c->eflags_sf = 0;
+    if (a != a || b != b) {
+        c->eflags_zf = c->eflags_pf = c->eflags_cf = 1;
+    } else {
+        c->eflags_pf = 0;
+        c->eflags_zf = a == b;
+        c->eflags_cf = a < b;
+    }
+}
+
 /* ------------------------------------------------- runtime call-outs
  * Implemented in generated table.c (recomp_call) or by runtime/.
  */

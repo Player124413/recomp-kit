@@ -236,6 +236,18 @@ def fbstp_setup(rng):
             "mem": [(SCRATCH + 0x210, struct.pack("<i", value))]}
 
 
+def sse_scalar_setup(rng):
+    """Two doubles worth dividing and comparing, and an integer to convert.
+    The second is never zero, and both are plain values: this checks the
+    translation, not what the host does with a NaN."""
+    a = rng.uniform(-1e6, 1e6)
+    b = rng.choice([rng.uniform(1.0, 1e3), -rng.uniform(1.0, 1e3), a])
+    return {"regs": dict(rand_regs(rng), ESI=SCRATCH + 0x300, EDI=SCRATCH + 0x100,
+                         EDX=rng.randrange(-10000, 10000) & 0xFFFFFFFF),
+            "mem": [(SCRATCH + 0x300, struct.pack("<dd", a, b)),
+                    (SCRATCH + 0x100, b"\x00" * 0x100)]}
+
+
 CASES = [
     # A listing that misdecodes data as code can produce the port string
     # forms. A user-mode guest never reaches one, so what matters is that the
@@ -280,6 +292,96 @@ CASES = [
                                    EDX=0x10),
                       "mem": [(SCRATCH + 0x300, bytes(range(0x10, 0x20))),
                               (SCRATCH + 0x100, b"\x00" * 0x180)]}),
+    # Wine's own i386 DLLs, and every MSVC runtime since about 2005, use SSE2
+    # for things that have nothing to do with floating point: memset builds
+    # its fill pattern with PUNPCK and stores it with MOVUPS, and locale code
+    # moves a pair of dwords through MOVD/PUNPCKLDQ. None of it asks CPUID
+    # first. The lanes land in memory, which is where both engines are read.
+    Case("SSE2 lane, unpack and shuffle forms", 0x0D02F800,
+         [(0, "MOVUPS XMM0,xmmword ptr [ESI]"),
+          (3, "MOVUPS XMM1,xmmword ptr [ESI + 0x10]"),
+          (7, "MOVAPD XMM2,XMM0"),
+          (11, "PUNPCKLDQ XMM2,XMM1"),
+          (15, "MOVUPS xmmword ptr [EDI],XMM2"),
+          (18, "MOVAPD XMM3,XMM0"),
+          (22, "PUNPCKLQDQ XMM3,XMM1"),
+          (26, "MOVUPS xmmword ptr [EDI + 0x10],XMM3"),
+          (30, "MOVAPD XMM4,XMM0"),
+          (34, "PXOR XMM4,XMM1"),
+          (38, "MOVUPS xmmword ptr [EDI + 0x20],XMM4"),
+          (42, "MOVAPD XMM5,XMM0"),
+          (46, "PCMPEQD XMM5,XMM1"),
+          (50, "MOVUPS xmmword ptr [EDI + 0x30],XMM5"),
+          (54, "MOVDDUP XMM6,XMM1"),
+          (58, "MOVUPS xmmword ptr [EDI + 0x40],XMM6"),
+          (62, "MOVAPD XMM7,XMM0"),
+          (66, "SHUFPS XMM7,XMM1,0x93"),
+          (70, "MOVUPS xmmword ptr [EDI + 0x50],XMM7"),
+          (74, "MOVAPD XMM2,XMM0"),
+          (78, "MOVHPD XMM2,qword ptr [ESI + 0x8]"),
+          (83, "MOVUPS xmmword ptr [EDI + 0x60],XMM2"),
+          (87, "MOVLPD qword ptr [EDI + 0x70],XMM1"),
+          (92, "RET")],
+         "0f 10 06 0f 10 4e 10 66 0f 28 d0 66 0f 62 d1 0f 11 17 66 0f 28 d8 66 0f 6c d9 "
+         "0f 11 5f 10 66 0f 28 e0 66 0f ef e1 0f 11 67 20 66 0f 28 e8 66 0f 76 e9 "
+         "0f 11 6f 30 f2 0f 12 f1 0f 11 77 40 66 0f 28 f8 0f c6 f9 93 0f 11 7f 50 "
+         "66 0f 28 d0 66 0f 16 56 08 0f 11 57 60 66 0f 13 4f 70 c3",
+         lambda rng: {"regs": dict(rand_regs(rng), ESI=SCRATCH + 0x300, EDI=SCRATCH + 0x100),
+                      "mem": [(SCRATCH + 0x300, bytes(rng.randrange(256) for _ in range(0x20))),
+                              (SCRATCH + 0x100, b"\x00" * 0x100)]}),
+    # The scalar double forms the same runtimes use for ordinary arithmetic,
+    # and the one SSE form that writes the guest's flags.
+    Case("SSE2 scalar double arithmetic, conversions and COMISD", 0x0D02FC00,
+         [(0, "MOVSD XMM0,qword ptr [ESI]"),
+          (4, "MOVSD XMM1,qword ptr [ESI + 0x8]"),
+          (9, "MOVAPD XMM2,XMM0"),
+          (13, "ADDSD XMM2,XMM1"),
+          (17, "MOVSD qword ptr [EDI],XMM2"),
+          (21, "MOVAPD XMM2,XMM0"),
+          (25, "SUBSD XMM2,XMM1"),
+          (29, "MOVSD qword ptr [EDI + 0x8],XMM2"),
+          (34, "MOVAPD XMM2,XMM0"),
+          (38, "MULSD XMM2,XMM1"),
+          (42, "MOVSD qword ptr [EDI + 0x10],XMM2"),
+          (47, "MOVAPD XMM2,XMM0"),
+          (51, "DIVSD XMM2,XMM1"),
+          (55, "MOVSD qword ptr [EDI + 0x18],XMM2"),
+          (60, "SQRTSD XMM3,XMM1"),
+          (64, "MOVSD qword ptr [EDI + 0x20],XMM3"),
+          (69, "CVTSI2SD XMM4,EDX"),
+          (73, "MOVSD qword ptr [EDI + 0x28],XMM4"),
+          (78, "CVTTSD2SI EAX,XMM0"),
+          (82, "CVTSD2SS XMM5,XMM0"),
+          (86, "MOVSS dword ptr [EDI + 0x30],XMM5"),
+          (91, "CVTSS2SD XMM6,XMM5"),
+          (95, "MOVSD qword ptr [EDI + 0x38],XMM6"),
+          (100, "COMISD XMM0,XMM1"),
+          (104, "RET")],
+         "f2 0f 10 06 f2 0f 10 4e 08 66 0f 28 d0 f2 0f 58 d1 f2 0f 11 17 66 0f 28 d0 "
+         "f2 0f 5c d1 f2 0f 11 57 08 66 0f 28 d0 f2 0f 59 d1 f2 0f 11 57 10 66 0f 28 d0 "
+         "f2 0f 5e d1 f2 0f 11 57 18 f2 0f 51 d9 f2 0f 11 5f 20 f2 0f 2a e2 f2 0f 11 67 28 "
+         "f2 0f 2c c0 f2 0f 5a e8 f3 0f 11 6f 30 f3 0f 5a f5 f2 0f 11 77 38 66 0f 2f c1 c3",
+         sse_scalar_setup),
+    # A conversion's other operand is as often memory or a general register
+    # as it is an XMM one, CWDE turns up in the same runtimes, and a guest
+    # that reads MXCSR gets the one rounding mode this kit models.
+    Case("SSE conversions through memory, CWDE and MXCSR", 0x0D02F000 + 0x600,
+         [(0, "CVTTSD2SI EAX,qword ptr [ESI]"),
+          (4, "MOV dword ptr [EDI],EAX"),
+          (6, "CVTSI2SD XMM0,dword ptr [ESI + 0x10]"),
+          (11, "MOVSD qword ptr [EDI + 0x8],XMM0"),
+          (16, "MOVSX ECX,AX"),
+          (19, "CWDE"),
+          (20, "MOV dword ptr [EDI + 0x10],EAX"),
+          (23, "STMXCSR dword ptr [EDI + 0x18]"),
+          (27, "RET")],
+         "f2 0f 2c 06 89 07 f2 0f 2a 46 10 f2 0f 11 47 08 0f bf c8 98 89 47 10 0f ae 5f 18 c3",
+         lambda rng: {"regs": dict(rand_regs(rng), ESI=SCRATCH + 0x300, EDI=SCRATCH + 0x100),
+                      "mem": [(SCRATCH + 0x300,
+                               struct.pack("<d", rng.uniform(-1e6, 1e6))
+                               + struct.pack("<q", 0)
+                               + struct.pack("<i", rng.randrange(-100000, 100000))),
+                              (SCRATCH + 0x100, b"\x00" * 0x40)]}),
     Case("Port string forms store the port read and advance", 0x0D02D000,
          [(0, "INSD ES:EDI,DX"), (1, "INSD.REP ES:EDI,DX"), (3, "OUTSD ESI,DX"),
           (4, "RET")],

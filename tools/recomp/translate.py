@@ -339,6 +339,13 @@ ST_RE = re.compile(r"^ST([0-7])$")
 XMM_RE = re.compile(r"^XMM([0-7])$")
 
 
+def names_an_xmm(ins):
+    """MOVSD and CMPSD name a string instruction and an SSE scalar one, and
+    only the operands tell them apart: the string forms take ES:EDI and ESI,
+    the SSE forms an XMM register."""
+    return any(XMM_RE.match(o) for o in ins.ops)
+
+
 def parse_reg(text):
     """Return (index, size, part) or None."""
     if text in REG32:
@@ -1596,7 +1603,8 @@ class Translator(object):
             delta, frame, saved = state
             m = ins.mnem
             try:
-                ops = [parse_operand(o) for o in ins.ops] if m not in self.STRING_MNEM else []
+                ops = ([parse_operand(o) for o in ins.ops]
+                       if m not in self.STRING_MNEM or names_an_xmm(ins) else [])
             except TranslateError:
                 # An operand this translator cannot even spell is the strongest
                 # unmodelled form there is, and the rule above already covers
@@ -2419,7 +2427,7 @@ class Translator(object):
                              "INSB", "INSW", "INSD", "OUTSB", "OUTSW", "OUTSD"))
 
     def _emit(self, fn, i, ins, m, nxt, live):
-        if m in self.STRING_MNEM:
+        if m in self.STRING_MNEM and not names_an_xmm(ins):
             # Ghidra prints the implicit ES:EDI / ESI operands; they carry no
             # information the mnemonic does not already imply.
             return self.emit_string(ins, m)
@@ -2575,6 +2583,15 @@ class Translator(object):
         if m == "CBW":
             return ["c->r[0] = (c->r[0] & 0xffff0000u) | "
                     "((uint32_t)(int32_t)(int8_t)c->r[0] & 0xffffu);"]
+        if m == "CWDE":
+            return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
+        if m in ("LDMXCSR", "STMXCSR"):
+            # The SSE control word. This kit models one rounding mode and
+            # masks every exception, which is what a guest sets it to; a store
+            # hands back exactly that.
+            if m == "STMXCSR":
+                return [write_op(ops[0], 32, "0x1f80u")]
+            return [";"]
 
         # ------------------------------------------------------- arith ----
         if m in ("ADD", "ADC", "SUB", "SBB", "CMP"):
@@ -2811,6 +2828,148 @@ class Translator(object):
         # compiler supports, so there is no feature test to fail - while the
         # AVX forms beside them are gated on a CPUID bit this kit does not
         # set, and stay traps nobody reaches.
+        # Lane-wise integer, logical and unpack forms. Every one of them has
+        # the same shape: both operands are read in full before either lane of
+        # the destination is written, because a destination is commonly also
+        # the source and these are not sequences of independent moves.
+        SSE_LANE_OPS = {"PXOR": "^", "XORPD": "^", "XORPS": "^", "PAND": "&", "ANDPD": "&",
+                        "ANDPS": "&", "POR": "|", "ORPD": "|", "ORPS": "|"}
+        SSE_LANE_FORMS = ("PANDN", "ANDNPD", "ANDNPS", "PCMPEQD", "PUNPCKLDQ", "PUNPCKHDQ",
+                          "PUNPCKLQDQ", "UNPCKLPD", "UNPCKHPD", "MOVDDUP", "MOVLPD", "MOVLPS",
+                          "MOVHPD", "MOVHPS", "SHUFPS", "SHUFPD", "MOVAPD", "MOVUPD")
+        if m in SSE_LANE_OPS or m in SSE_LANE_FORMS:
+            dst, src = ops[0], ops[1]
+
+            def lane(op, i):
+                if op.kind == "xmm":
+                    return "c->xmm[%d][%d]" % (op.reg, i)
+                return "rd32(%s + %du)" % (addr_expr(op), 4 * i)
+
+            def put(op, i, value):
+                if op.kind == "xmm":
+                    return "c->xmm[%d][%d] = %s;" % (op.reg, i, value)
+                return "wr32(%s + %du, %s);" % (addr_expr(op), 4 * i, value)
+
+            # d0_..d3_ and s0_..s3_ hold the operands as they were on entry.
+            # A half-width form reads only the half it uses.
+            halves = 2 if m in ("MOVLPD", "MOVLPS", "MOVHPD", "MOVHPS") else 4
+            L.extend("uint32_t d%d_ = %s;" % (i, lane(dst, i)) for i in range(halves))
+            L.extend("uint32_t s%d_ = %s;" % (i, lane(src, i)) for i in range(halves))
+            d = lambda i: "d%d_" % i
+            sv = lambda i: "s%d_" % i
+
+            if m in SSE_LANE_OPS:
+                L.extend(put(dst, i, "%s %s %s" % (d(i), SSE_LANE_OPS[m], sv(i)))
+                         for i in range(4))
+            elif m in ("PANDN", "ANDNPD", "ANDNPS"):
+                L.extend(put(dst, i, "(~%s) & %s" % (d(i), sv(i))) for i in range(4))
+            elif m == "PCMPEQD":
+                L.extend(put(dst, i, "%s == %s ? 0xffffffffu : 0u" % (d(i), sv(i)))
+                         for i in range(4))
+            elif m in ("MOVAPD", "MOVUPD"):   # MOVAPS and MOVUPS under another name
+                L.extend(put(dst, i, sv(i)) for i in range(4))
+            elif m == "PUNPCKLDQ":            # d0 s0 d1 s1
+                L.extend([put(dst, 0, d(0)), put(dst, 1, sv(0)),
+                          put(dst, 2, d(1)), put(dst, 3, sv(1))])
+            elif m == "PUNPCKHDQ":            # d2 s2 d3 s3
+                L.extend([put(dst, 0, d(2)), put(dst, 1, sv(2)),
+                          put(dst, 2, d(3)), put(dst, 3, sv(3))])
+            elif m in ("PUNPCKLQDQ", "UNPCKLPD"):   # d0 d1 s0 s1
+                L.extend([put(dst, 2, sv(0)), put(dst, 3, sv(1))])
+            elif m == "UNPCKHPD":                   # d2 d3 s2 s3
+                L.extend([put(dst, 0, d(2)), put(dst, 1, d(3)),
+                          put(dst, 2, sv(2)), put(dst, 3, sv(3))])
+            elif m == "MOVDDUP":                    # s0 s1 s0 s1
+                L.extend([put(dst, 0, sv(0)), put(dst, 1, sv(1)),
+                          put(dst, 2, sv(0)), put(dst, 3, sv(1))])
+            elif m in ("MOVLPD", "MOVLPS", "MOVHPD", "MOVHPS"):
+                # One 64-bit half moves; the other half keeps what it had.
+                half = 0 if m in ("MOVLPD", "MOVLPS") else 2
+                if dst.kind == "xmm":
+                    L.extend(put(dst, half + i, sv(i)) for i in range(2))
+                else:
+                    L.extend(put(dst, i, "c->xmm[%d][%d]" % (src.reg, half + i))
+                             for i in range(2))
+            elif m == "SHUFPS":
+                # Lanes 0 and 1 come from the destination, 2 and 3 from the source.
+                sel = parse_imm(ins.ops[2])
+                L.extend([put(dst, 0, d(sel & 3)), put(dst, 1, d((sel >> 2) & 3)),
+                          put(dst, 2, sv((sel >> 4) & 3)), put(dst, 3, sv((sel >> 6) & 3))])
+            else:  # SHUFPD: one double from each operand
+                sel = parse_imm(ins.ops[2])
+                lo, hi = 2 * (sel & 1), 2 * ((sel >> 1) & 1)
+                L.extend([put(dst, 0, d(lo)), put(dst, 1, d(lo + 1)),
+                          put(dst, 2, sv(hi)), put(dst, 3, sv(hi + 1))])
+            return L
+
+        # Scalar double and single forms. The host's double and float are the
+        # same IEEE formats in the same rounding mode, and scalar SSE leaves
+        # the lanes above its result alone, which is why nothing here clears
+        # them except a load from memory, where the hardware does.
+        SSE_SCALAR_MATH = {"ADDSD": "+", "SUBSD": "-", "MULSD": "*", "DIVSD": "/",
+                           "ADDSS": "+", "SUBSS": "-", "MULSS": "*", "DIVSS": "/"}
+        SSE_SCALAR_FORMS = ("MOVSD", "MOVSS", "SQRTSD", "SQRTSS", "MINSD", "MAXSD",
+                            "MINSS", "MAXSS", "CVTSI2SD", "CVTSI2SS", "CVTTSD2SI",
+                            "CVTTSS2SI", "CVTSD2SS", "CVTSS2SD", "COMISD", "UCOMISD",
+                            "COMISS", "UCOMISS")
+        # Only MOVSD and MOVSS are shared with another instruction; the rest
+        # of these mnemonics are SSE whatever their operands are, and a
+        # conversion's source or destination is often memory or a register.
+        if (m in SSE_SCALAR_MATH
+                or (m in SSE_SCALAR_FORMS
+                    and (m not in ("MOVSD", "MOVSS") or names_an_xmm(ins)))):
+            dst, src = ops[0], ops[1]
+            # Which host type this form works in. The conversions name both,
+            # so they spell their own operands out instead.
+            single = m.endswith("SS") and m not in ("CVTSD2SS",)
+
+            def scalar(op, as_single):
+                if op.kind == "xmm":
+                    return "xmm_f32(c, %d)" % op.reg if as_single else "xmm_f64(c, %d)" % op.reg
+                return "rdf32(%s)" % addr_expr(op) if as_single else "rdf64(%s)" % addr_expr(op)
+
+            def store_scalar(op, value, as_single):
+                if op.kind == "xmm":
+                    return ("xmm_set_f32(c, %d, %s);" if as_single else "xmm_set_f64(c, %d, %s);") \
+                        % (op.reg, value)
+                return ("wrf32(%s, %s);" if as_single else "wrf64(%s, %s);") \
+                    % (addr_expr(op), value)
+
+            if m in SSE_SCALAR_MATH:
+                L.append(store_scalar(dst, "%s %s %s" % (scalar(dst, single), SSE_SCALAR_MATH[m],
+                                                         scalar(src, single)), single))
+            elif m in ("SQRTSD", "SQRTSS"):
+                L.append(store_scalar(dst, "%s(%s)" % ("recomp_sse_sqrtf" if single
+                                                       else "recomp_sse_sqrt",
+                                                       scalar(src, single)), single))
+            elif m in ("MINSD", "MAXSD", "MINSS", "MAXSS"):
+                # The hardware returns its second operand when either is a NaN
+                # or both are zero, which is what this spelling does.
+                t = "float" if single else "double"
+                keep = "<" if m in ("MINSD", "MINSS") else ">"
+                L.append("{ %s a_ = %s, b_ = %s; %s }"
+                         % (t, scalar(dst, single), scalar(src, single),
+                            store_scalar(dst, "b_ %s a_ ? a_ : b_" % keep, single)))
+            elif m in ("COMISD", "UCOMISD", "COMISS", "UCOMISS"):
+                L.append("recomp_comis(c, %s, %s);" % (scalar(dst, single), scalar(src, single)))
+            elif m in ("CVTSI2SD", "CVTSI2SS"):
+                L.append(store_scalar(dst, "(%s)(int32_t)%s" % ("float" if single else "double",
+                                                                read_op(src, 32)), single))
+            elif m in ("CVTTSD2SI", "CVTTSS2SI"):
+                L.append(write_op(dst, 32, "(uint32_t)(int32_t)%s" % scalar(src, single)))
+            elif m == "CVTSD2SS":
+                L.append(store_scalar(dst, "(float)%s" % scalar(src, False), True))
+            elif m == "CVTSS2SD":
+                L.append(store_scalar(dst, "(double)%s" % scalar(src, True), False))
+            else:  # MOVSD, MOVSS between registers or memory
+                L.append(store_scalar(dst, scalar(src, single), single))
+                if dst.kind == "xmm" and src.kind != "xmm":
+                    # A load clears what is above the value; a move between
+                    # registers keeps it.
+                    L.extend("c->xmm[%d][%d] = 0u;" % (dst.reg, i)
+                             for i in range(1 if single else 2, 4))
+            return L
+
         if m in ("MOVUPS", "MOVAPS", "MOVDQU", "MOVDQA", "MOVQ", "MOVD", "PSHUFD"):
             def lane(op, i):
                 if op.kind == "xmm":
@@ -4793,7 +4952,7 @@ def main():
     with open(os.path.join(args.out, "table.c"), "w") as fh:
         fh.write("/* generated by tools/recomp/translate.py -- do not edit */\n")
         fh.write('#include <stdio.h>\n#include <stdlib.h>\n#include "funcs.h"\n#include "thunks.h"\n'
-                 '#include "discovery.h"\n\n')
+                 '#include "discovery.h"\n#include "interp.h"\n\n')
         if AUX_MODULE is None:
             fh.write("/* Baseline and differential hosts retain exact guest timing. */\n"
                      "__attribute__((weak)) uint32_t recomp_visual_animation_tick(uint32_t tick) { return tick; }\n\n")
@@ -4957,9 +5116,11 @@ void recomp_jump(X86 *c, uint32_t target)
 void recomp_unknown_jump(X86 *c, uint32_t target)
 {
     if (recomp_run_thunk(c, target)) return;
-    /* The address is code the translation does not carry; record it for
-     * --discovered before the process ends, which atexit will not see. */
+    /* The address is code the translation does not carry: record it for
+     * --discovered, then let the interpreter carry the run past the gap so
+     * one run can report every gap it reaches rather than the first. */
     discovery_note("jump", target, c->eip);
+    if (interp_call(c, target)) return;
     discovery_write();
     fprintf(stderr, "recomp: no block entry for indirect jump to 0x%08x from 0x%08x\\n",
             target, c->eip);
