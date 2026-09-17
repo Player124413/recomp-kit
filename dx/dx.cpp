@@ -588,6 +588,7 @@ void dx_register_shims() {
     d3dcompiler_register();
     d3dx10_register();
     dinput_register();
+    xinput_register();
     dsound_register();
     dshow_register();
     qmixer_register();

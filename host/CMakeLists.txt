@@ -258,6 +258,7 @@ pop_host(host_tests UI_LAYER
           ${POP_AUDIO_SOURCES}
           ${POP_ROOT}/dx/com.cpp ${POP_ROOT}/dx/host_api.cpp
           ${POP_ROOT}/dx/display_stubs.cpp ${POP_ROOT}/dx/dinput.cpp
+          ${POP_ROOT}/dx/dinput_joystick.cpp
           ${POP_ROOT}/dx/d3d11.cpp ${POP_ROOT}/dx/dxgi.cpp
           ${POP_ROOT}/dx/d3dcompiler.cpp ${POP_ROOT}/dx/d3dx10.cpp
   LIBS recomp_platform recomp_runtime gpu_backend gpu_fake

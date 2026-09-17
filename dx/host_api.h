@@ -296,6 +296,43 @@ void host_input_state(HostInputState *out);
 void host_input_pointer_correction(int32_t *dx, int32_t *dy);
 
 // ---------------------------------------------------------------------------
+// The virtual gamepad. Merges every source the host feeds it (touch overlay,
+// a real controller) into one pad and hands it to the DirectInput joystick
+// and XInput shims (dx/dinput_joystick.cpp, dx/xinput.cpp). Strong
+// definitions live in host/controls/vpad_host_api.cpp, over
+// host/controls/vpad.{h,cpp}'s PadState; this header only fixes the ABI
+// between the two sides, same as the display section above.
+// ---------------------------------------------------------------------------
+typedef struct HostPadState {
+    uint16_t buttons; /* controls::PadBit */
+    uint8_t hat;      /* controls::PadHat */
+    uint8_t reserved;
+    int16_t lx, ly, rx, ry; /* -32767..32767, +y down */
+    uint8_t l2, r2;         /* 0..255 */
+} HostPadState;
+typedef struct HostPadEvent {
+    uint32_t sequence;
+    uint8_t kind;
+    uint8_t index;
+    int32_t value;
+} HostPadEvent;
+/* 0 off, 1 mapped, 2 native (RECOMP_CONTROLS_PAD). Weak default: 0. */
+int host_pad_mode(void);
+/* Bit 0: serve DirectInput joystick; bit 1: serve XInput. Weak default: 0. */
+int host_pad_native_apis(void);
+/* The merged pad. Returns a packet number that changes with the state. Weak
+ * default: 0, zeroed. */
+uint32_t host_pad_state(HostPadState *out);
+/* The oldest edge newer than `after`. Weak default: 0 (none). */
+int host_pad_next_event(uint32_t after, HostPadEvent *out);
+/* Rumble request, 0..65535 each. Weak default: no-op. */
+void host_pad_rumble(uint16_t low, uint16_t high);
+/* Axis and button order for the DirectInput device (RECOMP_CONTROLS_NATIVE_*).
+ * Weak defaults: the spec order. */
+const char *host_pad_native_axes(void);
+const char *host_pad_native_buttons(void);
+
+// ---------------------------------------------------------------------------
 // How the guest has been reaching its surfaces.
 //
 // Every counter is a way the guest can touch a surface's pixels, and which of
