@@ -142,6 +142,13 @@ MOD_TEST_SUITE(keypad_settings_round_trip) {
     MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 1);
     MOD_CHECK_EQ(mods_keypad_set(KEYPAD_SIZE_ROW, 7), POP_OK); // clamped into the range
     MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
+    // Shown/hidden turns over either way; size stops at its ends.
+    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_RIGHT_ROW, +1), POP_OK);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 0);
+    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_RIGHT_ROW, +1), POP_OK);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 1);
+    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_SIZE_ROW, +1), POP_OK);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
     MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_LEFT_ROW, -1), POP_OK);
     MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
     int64_t v = -1;
