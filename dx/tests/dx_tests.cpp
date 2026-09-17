@@ -25,6 +25,7 @@
 #include "fixtures/tone_mp3.h"
 #include "fixtures/quad_shaders.h"
 #include "../d3d11.h"
+#include "guest_abi.h"
 #include <cmath>
 
 #include <algorithm>
@@ -531,7 +532,6 @@ void host_input_state(HostInputState *out) {
 // ---------------------------------------------------------------------------
 // Test harness
 // ---------------------------------------------------------------------------
-static int g_checks = 0, g_failures = 0;
 
 static void check(bool ok, const char *what, const char *file, int line) {
     ++g_checks;
@@ -551,109 +551,6 @@ static void check(bool ok, const char *what, const char *file, int line) {
                     (unsigned long long)va, (unsigned long long)vb);                               \
         }                                                                                          \
     } while (0)
-
-// The guest CPU the tests drive shims with.
-static X86 g_cpu;
-static uint32_t g_stack_top = 0;
-
-static void cpu_reset() {
-    memset(&g_cpu, 0, sizeof g_cpu);
-    g_cpu.eflags_misc = 0x202;
-    g_cpu.fpu_cw = 0x037f;
-    g_cpu.fpu_tag = 0xffff;
-    g_cpu.r[R_ESP] = g_stack_top;
-}
-
-// Calls a shim or a COM vtable slot exactly as recompiled code does: push the
-// arguments right to left, push a return address, then dispatch. Returns EAX
-// and asserts the callee popped precisely its own arguments.
-static uint32_t call_shim(uint32_t target, std::initializer_list<uint32_t> args) {
-    uint32_t esp = g_cpu.r[R_ESP];
-    std::vector<uint32_t> a(args);
-    for (size_t i = a.size(); i-- > 0;) {
-        esp -= 4;
-        wr32(esp, a[i]);
-    }
-    esp -= 4;
-    const uint32_t RET = 0x00401000u;
-    wr32(esp, RET);
-    g_cpu.r[R_ESP] = esp;
-    uint32_t before = esp;
-
-    if (!imports_dispatch(&g_cpu, target)) {
-        fprintf(stderr, "FAIL: %08x is not a shim trampoline\n", target);
-        ++g_failures;
-        g_cpu.r[R_ESP] = before + 4 + 4 * (uint32_t)a.size();
-        return 0;
-    }
-    ++g_checks;
-    uint32_t expected = before + 4 + 4 * (uint32_t)a.size();
-    if (g_cpu.r[R_ESP] != expected) {
-        ++g_failures;
-        fprintf(stderr,
-                "FAIL: %s left ESP at %08x, expected %08x "
-                "(a wrong argc in the vtable)\n",
-                imports_describe(target) ? imports_describe(target) : "shim", g_cpu.r[R_ESP],
-                expected);
-        g_cpu.r[R_ESP] = expected;
-    }
-    ++g_checks;
-    if (g_cpu.eip != RET) {
-        ++g_failures;
-        fprintf(stderr, "FAIL: shim did not return to the pushed address\n");
-    }
-    return g_cpu.r[R_EAX];
-}
-
-// A COM method: `this` is the first argument and the slot comes from the
-// object's own vtable, so this exercises the real guest indirection.
-static uint32_t call_method(uint32_t iface_ptr, uint32_t slot,
-                            std::initializer_list<uint32_t> rest = {}) {
-    uint32_t vtbl = rd32(iface_ptr + COM_OFF_vtbl);
-    uint32_t target = rd32(vtbl + slot * 4);
-    std::vector<uint32_t> a;
-    a.push_back(iface_ptr);
-    for (uint32_t v : rest)
-        a.push_back(v);
-    uint32_t esp = g_cpu.r[R_ESP];
-    for (size_t i = a.size(); i-- > 0;) {
-        esp -= 4;
-        wr32(esp, a[i]);
-    }
-    esp -= 4;
-    const uint32_t RET = 0x00401000u;
-    wr32(esp, RET);
-    g_cpu.r[R_ESP] = esp;
-    uint32_t before = esp;
-    if (!imports_dispatch(&g_cpu, target)) {
-        fprintf(stderr, "FAIL: vtable slot %u holds %08x, not a trampoline\n", slot, target);
-        ++g_failures;
-        return 0;
-    }
-    ++g_checks;
-    uint32_t expected = before + 4 + 4 * (uint32_t)a.size();
-    if (g_cpu.r[R_ESP] != expected) {
-        ++g_failures;
-        fprintf(stderr, "FAIL: %s left ESP at %08x, expected %08x\n",
-                imports_describe(target) ? imports_describe(target) : "method", g_cpu.r[R_ESP],
-                expected);
-        g_cpu.r[R_ESP] = expected;
-    }
-    return g_cpu.r[R_EAX];
-}
-
-// The trampoline for a DLL export. imports_resolve allocates one on demand
-// for any registered shim, which is what the loader would otherwise do when it
-// patched the IAT; these tests never load the PE.
-static uint32_t tramp(const char *dll, const char *name) {
-    return imports_resolve(dll, name);
-}
-
-// Scratch guest memory for out-parameters.
-static uint32_t g_scratch = 0;
-static uint32_t sc(uint32_t off) {
-    return g_scratch + off;
-}
 
 // ---------------------------------------------------------------------------
 // SDK record sizes, derived here from the published field lists rather than
@@ -6322,6 +6219,20 @@ static void test_dinput() {
     CHECK_EQ((int32_t)rd32(mstate + DIMS_OFF_lX), 7);
     CHECK_EQ((int32_t)rd32(mstate + DIMS_OFF_lY), (uint64_t)(int64_t)-3);
     CHECK_EQ(rd8(mstate + DIMS_OFF_rgbButtons + 0), 0x80);
+
+    // DIDEVCAPS in both sizes: the DirectX 3 record (24 bytes) ends with
+    // dwPOVs and carries the same counts as the DirectX 5 one (44).
+    uint32_t caps = sc(0x600);
+    for (uint32_t size : {44u, 24u}) {
+        gm_zero(caps, 48);
+        wr32(caps, size);
+        CHECK_EQ(call_method(ms, 3 /* GetCapabilities */, {caps}), DI_OK);
+        CHECK_EQ(rd32(caps + DIDC_OFF_dwDevType), DIDEVTYPE_MOUSE);
+        CHECK_EQ(rd32(caps + DIDC_OFF_dwAxes), 3u);
+        CHECK_EQ(rd32(caps + DIDC_OFF_dwButtons), 4u);
+    }
+    wr32(caps, 16);
+    CHECK_EQ(call_method(ms, 3 /* GetCapabilities */, {caps}), DIERR_INVALIDPARAM);
 
     // The same motion arrived as buffered events. GetDeviceState polled once,
     // so those events are already queued.

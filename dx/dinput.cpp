@@ -266,7 +266,7 @@ void Device_GetCapabilities(X86 *c) {
     }
     wr32(out + DIDC_OFF_dwFlags, DIDC_ATTACHED);
     wr32(out + DIDC_OFF_dwDevType, d->dev_type);
-    if (size >= DIDEVCAPS_SIZE) {
+    if (size >= DIDEVCAPS_DX3_SIZE) {
         wr32(out + DIDC_OFF_dwAxes, d->dev_type == DIDEVTYPE_MOUSE ? 3u : 0u);
         wr32(out + DIDC_OFF_dwButtons, d->dev_type == DIDEVTYPE_MOUSE ? 4u : 256u);
         wr32(out + DIDC_OFF_dwPOVs, 0);

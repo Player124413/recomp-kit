@@ -436,7 +436,7 @@ void joy_write_device_instance(uint32_t at, uint32_t size, bool wide, uint32_t d
 uint32_t joy_get_capabilities(ComObj *d, uint32_t out, uint32_t size) {
     wr32(out + DIDC_OFF_dwFlags, DIDC_ATTACHED);
     wr32(out + DIDC_OFF_dwDevType, joy_devtype(d->di_version));
-    if (size >= DIDEVCAPS_SIZE) {
+    if (size >= DIDEVCAPS_DX3_SIZE) {
         wr32(out + DIDC_OFF_dwAxes, JOY_AXES);
         wr32(out + DIDC_OFF_dwButtons, JOY_BUTTONS);
         wr32(out + DIDC_OFF_dwPOVs, JOY_POVS);
@@ -654,17 +654,25 @@ uint32_t joy_get_device_state(ComObj *d, uint32_t size, uint32_t out) {
 // Drains the host's edge queue after last_sequence, up to the caller's count,
 // as DIDEVICEOBJECTDATA records at the caller's stride. Edges with no object
 // in the data format are consumed without a record.
+//
+// The records are gathered first and the guest buffer is checked for exactly
+// that many before anything is written, as the mouse path does, so a bad
+// buffer fails whole instead of leaving partial records without a count.
 uint32_t joy_get_device_data(ComObj *d, uint32_t objsize, uint32_t out, uint32_t inout,
                              uint32_t flags) {
+    struct Record {
+        uint32_t ofs, data, sequence;
+    };
     uint32_t want = rd32(inout);
     bool peek = (flags & DIGDD_PEEK) != 0;
     uint32_t hr = DI_OK;
     uint32_t seq = d->last_sequence;
-    uint32_t n = 0;
-    uint32_t now = host_millis();
+    std::vector<Record> records;
     HostPadEvent e;
     bool first = true;
-    while (n < want && host_pad_next_event(seq, &e)) {
+    // A call with want == 0 never enters this loop, so it never reports the
+    // overflow; the next call that reads does.
+    while (records.size() < want && host_pad_next_event(seq, &e)) {
         // The host no longer holds the edge right after the last one this
         // device delivered: some were lost.
         if (first && e.sequence > d->last_sequence + 1)
@@ -680,20 +688,23 @@ uint32_t joy_get_device_data(ComObj *d, uint32_t objsize, uint32_t out, uint32_t
         for (uint32_t i = 0; i < objs.size(); ++i)
             if (objs[i].ofs == ofs)
                 gofs = guest_ofs(d, i);
-        if (gofs == 0xFFFFFFFFu)
-            continue;
-        if (out) {
-            uint32_t a = out + n * objsize;
-            if (!gm_fits(a, objsize))
-                return DIERR_INVALIDPARAM;
-            wr32(a + DIDOD_OFF_dwOfs, gofs);
-            wr32(a + DIDOD_OFF_dwData, data);
+        if (gofs != 0xFFFFFFFFu)
+            records.push_back(Record{gofs, data, e.sequence});
+    }
+    uint32_t n = (uint32_t)records.size();
+    if (out) {
+        if (!gm_fits_n(out, n, objsize))
+            return DIERR_INVALIDPARAM;
+        uint32_t now = host_millis();
+        for (uint32_t i = 0; i < n; ++i) {
+            uint32_t a = out + i * objsize;
+            wr32(a + DIDOD_OFF_dwOfs, records[i].ofs);
+            wr32(a + DIDOD_OFF_dwData, records[i].data);
             wr32(a + DIDOD_OFF_dwTimeStamp, now);
-            wr32(a + DIDOD_OFF_dwSequence, e.sequence);
+            wr32(a + DIDOD_OFF_dwSequence, records[i].sequence);
             if (objsize >= DIDEVICEOBJECTDATA_DX8_SIZE)
                 wr32(a + DIDOD_OFF_uAppData, 0);
         }
-        ++n;
     }
     wr32(inout, n);
     if (!peek)

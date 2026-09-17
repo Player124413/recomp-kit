@@ -94,7 +94,7 @@ static inline uint32_t didft_instance(uint32_t type) {
 }
 
 static const uint32_t DIDEVTYPE_JOYSTICK = 4u;
-static const uint32_t DIDEVTYPEJOYSTICK_GAMEPAD = 8u;
+static const uint32_t DIDEVTYPEJOYSTICK_GAMEPAD = 4u;
 static const uint32_t DI8DEVCLASS_ALL = 0u;
 static const uint32_t DI8DEVCLASS_GAMECTRL = 4u;
 static const uint32_t DI8DEVTYPE_GAMEPAD = 0x15u;

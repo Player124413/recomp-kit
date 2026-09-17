@@ -6,14 +6,16 @@
 // weak defaults for this binary only. Every other host callback keeps its
 // weak default: nothing here draws or plays sound.
 //
-// Calls go through the real guest path, as in dx_tests.cpp: arguments are
-// pushed on the guest stack and the shim is reached through imports_dispatch,
-// so a wrong argc in a vtable shows up as a stack mismatch.
+// Calls go through the real guest path (guest_abi.h, shared with
+// dx_tests.cpp): arguments are pushed on the guest stack and the shim is
+// reached through imports_dispatch, so a wrong argc in a vtable shows up as a
+// stack mismatch.
 #include "../com.h"
 #include "../dinput_joystick.h"
 #include "../dx.h"
 #include "../host_api.h"
 #include "../../runtime/memory.h"
+#include "guest_abi.h"
 
 #include <initializer_list>
 #include <stdio.h>
@@ -23,7 +25,6 @@
 // ---------------------------------------------------------------------------
 // Test harness
 // ---------------------------------------------------------------------------
-static int g_failures = 0;
 #define CHECK(c)                                                                                   \
     do {                                                                                           \
         if (!(c)) {                                                                                \
@@ -109,69 +110,6 @@ const char *host_pad_native_buttons(void) {
 }
 } // extern "C"
 
-// ---------------------------------------------------------------------------
-// Guest ABI helpers, as in dx_tests.cpp
-// ---------------------------------------------------------------------------
-static X86 g_cpu;
-static uint32_t g_stack_top = 0;
-static uint32_t g_scratch = 0;
-
-static void cpu_reset() {
-    memset(&g_cpu, 0, sizeof g_cpu);
-    g_cpu.eflags_misc = 0x202;
-    g_cpu.fpu_cw = 0x037f;
-    g_cpu.fpu_tag = 0xffff;
-    g_cpu.r[R_ESP] = g_stack_top;
-}
-
-// Pushes `args` right to left plus a return address, dispatches `target`, and
-// checks the callee popped exactly its own arguments. Returns EAX.
-static uint32_t dispatch(uint32_t target, const std::vector<uint32_t> &args) {
-    uint32_t esp = g_cpu.r[R_ESP];
-    for (size_t i = args.size(); i-- > 0;) {
-        esp -= 4;
-        wr32(esp, args[i]);
-    }
-    esp -= 4;
-    const uint32_t RET = 0x00401000u;
-    wr32(esp, RET);
-    g_cpu.r[R_ESP] = esp;
-    uint32_t expected = esp + 4 + 4 * (uint32_t)args.size();
-    if (!imports_dispatch(&g_cpu, target)) {
-        fprintf(stderr, "FAIL: %08x is not a shim trampoline\n", target);
-        ++g_failures;
-        g_cpu.r[R_ESP] = expected;
-        return 0;
-    }
-    if (g_cpu.r[R_ESP] != expected) {
-        ++g_failures;
-        fprintf(stderr, "FAIL: %s left ESP at %08x, expected %08x\n",
-                imports_describe(target) ? imports_describe(target) : "shim", g_cpu.r[R_ESP],
-                expected);
-        g_cpu.r[R_ESP] = expected;
-    }
-    return g_cpu.r[R_EAX];
-}
-
-static uint32_t call_shim(uint32_t target, std::initializer_list<uint32_t> args) {
-    return dispatch(target, std::vector<uint32_t>(args));
-}
-
-// A COM method through the object's own guest vtable; `this` goes first.
-static uint32_t call_method(uint32_t iface, uint32_t slot, std::initializer_list<uint32_t> rest) {
-    std::vector<uint32_t> a{iface};
-    a.insert(a.end(), rest.begin(), rest.end());
-    return dispatch(rd32(rd32(iface + COM_OFF_vtbl) + slot * 4), a);
-}
-
-static uint32_t tramp(const char *dll, const char *name) {
-    return imports_resolve(dll, name);
-}
-
-static uint32_t sc(uint32_t off) {
-    return g_scratch + off;
-}
-
 static void put_guid(uint32_t at, const uint8_t g[16]) {
     for (uint32_t i = 0; i < 16; ++i)
         wr8(at + i, g[i]);
@@ -225,8 +163,10 @@ enum {
     // DIPROPRANGE: DIPROPHEADER (16) + lMin + lMax.
     SDK_DIPROPRANGE = 24,
     SDK_DIPROPDWORD = 20,
-    // DIDEVCAPS (DirectX 5): 11 dwords.
+    // DIDEVCAPS (DirectX 5): 11 dwords. DIDEVCAPS_DX3 stops after dwPOVs:
+    // dwSize dwFlags dwDevType dwAxes dwButtons dwPOVs.
     SDK_DIDEVCAPS = 44,
+    SDK_DIDEVCAPS_DX3 = 24,
     SDK_DIDEVICEOBJECTDATA = 16,
 };
 
@@ -254,6 +194,7 @@ static void test_joy_sdk_layouts() {
     CHECK_EQ(DIPROPRANGE_SIZE, SDK_DIPROPRANGE);
     CHECK_EQ(DIPROPDWORD_SIZE, SDK_DIPROPDWORD);
     CHECK_EQ(DIDEVCAPS_SIZE, SDK_DIDEVCAPS);
+    CHECK_EQ(DIDEVCAPS_DX3_SIZE, SDK_DIDEVCAPS_DX3);
     CHECK_EQ(DIDEVICEOBJECTDATA_SIZE, SDK_DIDEVICEOBJECTDATA);
     CHECK(!memcmp(GUID_Joystick_, kGuidJoystick, 16));
 }
@@ -290,8 +231,8 @@ static void test_joy_pure_helpers() {
     CHECK(!joy_enum_matches(3, 0x0800));    // DI8DEVCLASS_KEYBOARD
     CHECK(!joy_enum_matches(0x14, 0x0800)); // DI8DEVTYPE_JOYSTICK
 
-    CHECK_EQ(joy_devtype(0x0500), 0x0804u); // DIDEVTYPE_JOYSTICK, GAMEPAD subtype
-    CHECK_EQ(joy_devtype(0x0700), 0x0804u);
+    CHECK_EQ(joy_devtype(0x0500), 0x0404u); // DIDEVTYPE_JOYSTICK, GAMEPAD subtype
+    CHECK_EQ(joy_devtype(0x0700), 0x0404u);
     CHECK_EQ(joy_devtype(0x0800), 0x0215u); // DI8DEVTYPE_GAMEPAD, STANDARD subtype
 
     const std::vector<JoyObject> &objs = joy_objects();
@@ -369,7 +310,7 @@ static void test_joy_enum_devices() {
     CHECK_EQ(call_method(di, DI_EnumDevices, {4 /* DIDEVTYPE_JOYSTICK */, cb, 0, 1}), DI_OK);
     CHECK_EQ(g_enum_calls, 1u);
     CHECK(!strcmp(g_enum_name, "Recomp Virtual Pad"));
-    CHECK_EQ(g_enum_devtype, 0x0804u);
+    CHECK_EQ(g_enum_devtype, 0x0404u);
     CHECK(!memcmp(g_enum_instance, GUID_RecompPadInstance_, 16));
 
     // All devices: mouse, keyboard and the pad.
@@ -537,16 +478,29 @@ static void test_joy_device_state() {
     wr32(caps, SDK_DIDEVCAPS);
     CHECK_EQ(call_method(dev, DID_GetCapabilities, {caps}), DI_OK);
     CHECK_EQ(rd32(caps + 4), 1u);
-    CHECK_EQ(rd32(caps + 8), 0x0804u);
+    CHECK_EQ(rd32(caps + 8), 0x0404u);
     CHECK_EQ(rd32(caps + 12), 6u);
     CHECK_EQ(rd32(caps + 16), 13u);
     CHECK_EQ(rd32(caps + 20), 1u);
+    // The DirectX 3 record carries the same counts; any other size is refused.
+    gm_zero(caps, SDK_DIDEVCAPS);
+    wr32(caps, SDK_DIDEVCAPS_DX3);
+    wr32(caps + SDK_DIDEVCAPS_DX3, 0xC0FFEEu);
+    CHECK_EQ(call_method(dev, DID_GetCapabilities, {caps}), DI_OK);
+    CHECK_EQ(rd32(caps + 4), 1u);
+    CHECK_EQ(rd32(caps + 8), 0x0404u);
+    CHECK_EQ(rd32(caps + 12), 6u);
+    CHECK_EQ(rd32(caps + 16), 13u);
+    CHECK_EQ(rd32(caps + 20), 1u);
+    CHECK_EQ(rd32(caps + SDK_DIDEVCAPS_DX3), 0xC0FFEEu); // nothing past the record
+    wr32(caps, 16);
+    CHECK_EQ(call_method(dev, DID_GetCapabilities, {caps}), DIERR_INVALIDPARAM);
 
     // Device info names the pad.
     uint32_t info = sc(0x800);
     wr32(info, 580);
     CHECK_EQ(call_method(dev, DID_GetDeviceInfo, {info}), DI_OK);
-    CHECK_EQ(rd32(info + 36), 0x0804u);
+    CHECK_EQ(rd32(info + 36), 0x0404u);
     CHECK_EQ(rd8(info + 300), (uint32_t)'R');
 }
 
@@ -638,6 +592,14 @@ static void test_joy_device_data() {
     pad_edge(0, 0, 0); // cross up
     uint32_t out = sc(0x400), inout = sc(0x60);
     const uint32_t N = SDK_DIDEVICEOBJECTDATA;
+
+    // A buffer that runs off the end of the guest arena fails whole: no
+    // record, the count untouched, and the edges still waiting.
+    uint32_t tail = (uint32_t)(GUEST_SIZE - N - 4);
+    wr32(inout, 8);
+    CHECK_EQ(call_method(dev, DID_GetDeviceData, {N, tail, inout, 0}), DIERR_INVALIDPARAM);
+    CHECK_EQ(rd32(inout), 8u);
+    CHECK_EQ(rd32(tail), 0u);
 
     // Peek reports without consuming.
     wr32(inout, 8);

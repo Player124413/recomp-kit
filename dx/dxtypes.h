@@ -596,10 +596,12 @@ enum { DSBCAPS_SIZE = 20 };
 // ---------------------------------------------------------------------------
 static const uint32_t DIRECTINPUT_VERSION_5 = 0x0500u;
 
-// DIDEVCAPS / DIDEVCAPS_DX3 (the DX5 record is 44 bytes, DX3 is 16).
+// DIDEVCAPS / DIDEVCAPS_DX3. DX3 is dwSize dwFlags dwDevType dwAxes
+// dwButtons dwPOVs (24 bytes); DX5 adds five force-feedback and revision
+// dwords (44 bytes).
 enum {
     DIDEVCAPS_SIZE = 44,
-    DIDEVCAPS_DX3_SIZE = 16,
+    DIDEVCAPS_DX3_SIZE = 24,
     DIDC_OFF_dwSize = 0x00,
     DIDC_OFF_dwFlags = 0x04,
     DIDC_OFF_dwDevType = 0x08,
