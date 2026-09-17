@@ -78,6 +78,10 @@ add_executable(launcher_tests ${HOST}/tests/launcher_tests.cpp ${POP_ROOT}/mods/
 target_include_directories(launcher_tests PRIVATE ${POP_ROOT} ${POP_ROOT}/runtime ${POP_ROOT}/third_party/lua
                                                   ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(launcher_tests PRIVATE ${POP_WARN_WERROR})
+if(WIN32)
+  # fopen and getenv, as the POSIX hosts use them.
+  target_compile_definitions(launcher_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 target_link_libraries(launcher_tests PRIVATE launcher_core recomp_miniz recomp_platform)
 pop_optimize(launcher_tests 1)
 pop_test_binary(launcher_tests)

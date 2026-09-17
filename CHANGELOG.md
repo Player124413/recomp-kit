@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Launcher: a long title shrinks to fit (and is cut short only below the body
+  size), a path wraps after a slash, Up and Down keep the column when the
+  buttons are in two, a screen too short for its text keeps the buttons on
+  it, and the Manage screen drops the import instructions. The launcher tests
+  build on Windows.
+
 - The launcher offers only folders holding the whole game: a folder with the
   executable but without every `[setup] required_dirs` entry (an unpacked
   patch in Downloads, say) is no longer listed.

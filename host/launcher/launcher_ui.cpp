@@ -584,24 +584,31 @@ void Launcher::key(Key k) {
         return;
     const int n = int(buttons_.size());
     dirty_ = true;
+    // The nearest enabled button `step` places away, wrapping.
+    const auto move = [&](int step) {
+        for (int i = 1; i <= n; ++i) {
+            const int j = ((focus_ + step * i) % n + n) % n;
+            if (buttons_[size_t(j)].enabled) {
+                focus_ = j;
+                break;
+            }
+        }
+    };
+    const int row = std::min(columns_, n);
     switch (k) {
     case Key::Up:
+        move(-row);
+        break;
     case Key::Left:
     case Key::Previous:
-        for (int i = 1; i <= n; ++i)
-            if (buttons_[size_t((focus_ - i + n) % n)].enabled) {
-                focus_ = (focus_ - i + n) % n;
-                break;
-            }
+        move(-1);
         break;
     case Key::Down:
+        move(row);
+        break;
     case Key::Right:
     case Key::Next:
-        for (int i = 1; i <= n; ++i)
-            if (buttons_[size_t((focus_ + i) % n)].enabled) {
-                focus_ = (focus_ + i) % n;
-                break;
-            }
+        move(1);
         break;
     case Key::Activate:
         activate(buttons_[size_t(focus_)].id);
@@ -657,9 +664,11 @@ void Launcher::layout(int w, int h, int s, int top) {
         columns = 2;
         bw = std::min((w - 48 * s) / 2, 360 * s);
     }
+    columns_ = columns;
     const int rows = (n + columns - 1) / columns;
     const int total = rows * (bh + gap) - gap;
-    const int y0 = std::max(top, bottom - total);
+    // Under the text when there is room, else as low as they fit.
+    const int y0 = std::max(0, std::min(std::max(top, bottom - total), bottom - total));
     const int x0 = (w - (columns * bw + (columns - 1) * 16 * s)) / 2;
     for (int i = 0; i < n; ++i)
         buttons_[size_t(i)].rect = {x0 + (i % columns) * (bw + 16 * s),
@@ -673,8 +682,16 @@ void Launcher::draw(Canvas &c, int s) {
     const int margin = 16 * s;
     c.clear(kBackground);
     int y = margin;
-    c.text(margin, y, spec_.title, 3 * s, kText);
-    y += Canvas::text_height(3 * s) + 8 * s;
+    // The title as large as fits between the margins, down to the body size.
+    int ts = 3 * s;
+    while (ts > 2 * s && Canvas::text_width(spec_.title, ts) > w - 2 * margin)
+        --ts;
+    std::string title = spec_.title;
+    const size_t fits = size_t(std::max(4, (w - 2 * margin) / (6 * ts)));
+    if (title.size() > fits)
+        title = title.substr(0, fits - 3) + "...";
+    c.text(margin, y, title, ts, kText);
+    y += Canvas::text_height(ts) + 8 * s;
 
     int py = y + 10 * s;
     const int px = margin + 10 * s, pw = w - 2 * margin - 20 * s;
@@ -750,7 +767,9 @@ void Launcher::draw(Canvas &c, int s) {
         c.fill({margin, y, 6 * s, 30 * s}, accent);
         c.text(px, py, headline, 2 * s, accent);
         py += Canvas::text_height(2 * s) + 8 * s;
-        py += c.paragraph(px, py, pw, detail, 2 * s, kDim);
+        // Manage keeps the folder, not the how-to-import text the main screen has.
+        if (screen_ != Screen::Manage || status_.state != State::NotFound)
+            py += c.paragraph(px, py, pw, detail, 2 * s, kDim);
         if (screen_ == Screen::Manage)
             py +=
                 4 * s +
@@ -760,6 +779,11 @@ void Launcher::draw(Canvas &c, int s) {
                             2 * s, kDim);
     }
     layout(w, c.height(), s, py + 14 * s);
+    // Text too tall for the screen goes under the buttons, which stay reachable.
+    if (!buttons_.empty() && buttons_.front().rect.y < py + 14 * s) {
+        const int band = buttons_.front().rect.y - 8 * s;
+        c.fill({0, band, w, c.height() - band}, kBackground);
+    }
 
     for (size_t i = 0; i < buttons_.size(); ++i) {
         const Button &b = buttons_[i];

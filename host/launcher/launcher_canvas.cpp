@@ -81,8 +81,11 @@ std::vector<std::string> Canvas::wrap(const std::string &s, int width, int size)
             s.substr(start, newline == std::string::npos ? std::string::npos : newline - start);
         while (para.size() > per_line) {
             size_t cut = para.rfind(' ', per_line);
-            if (cut == std::string::npos || cut == 0)
-                cut = per_line;
+            if (cut == std::string::npos || cut == 0) {
+                // A path: after a slash rather than inside a name.
+                const size_t slash = para.rfind('/', per_line - 1);
+                cut = slash != std::string::npos && slash > 0 ? slash + 1 : per_line;
+            }
             lines.push_back(para.substr(0, cut));
             para = para.substr(cut + (para[cut] == ' ' ? 1 : 0));
         }

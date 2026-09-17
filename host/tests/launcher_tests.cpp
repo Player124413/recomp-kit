@@ -583,6 +583,22 @@ void test_ui_desktop() {
             CHECK(b.rect.w > 0 && b.rect.x >= 0 && b.rect.y >= 0 &&
                   b.rect.x + b.rect.w <= c.width() && b.rect.y + b.rect.h <= c.height());
     }
+    // A short, wide screen puts the buttons in two columns; Down keeps the column.
+    c.resize(2856, 800, true);
+    l.draw(c, 4);
+    {
+        const std::vector<Button> bs = l.buttons();
+        CHECK(bs.size() >= 4 && bs[1].rect.y == bs[0].rect.y);
+        const int from = l.focus();
+        l.key(Key::Down);
+        CHECK(l.focus() != from && bs[size_t(l.focus())].rect.x == bs[size_t(from)].rect.x);
+        l.key(Key::Up);
+        CHECK(l.focus() == from);
+        l.key(Key::Right);
+        CHECK(bs[size_t(l.focus())].rect.y == bs[size_t(from)].rect.y || l.focus() == from + 1);
+        l.key(Key::Left);
+        CHECK(l.focus() == from);
+    }
     const Button quit = l.buttons().back();
     CHECK(quit.id == kQuit);
     l.pointer(quit.rect.x + 2, quit.rect.y + 2, true);
@@ -614,6 +630,27 @@ void test_ui_mobile() {
     CHECK(l.screen() == Screen::Main);
     CHECK(has_button(l, kPlay) && has_button(l, kImportFolder));
     CHECK(fp.protected_count == 1 && fp.released == 1);
+
+    // A phone in landscape: every screen's buttons stay on it, whatever the text.
+    {
+        FakePlatform tall = fp;
+        tall.pi.drop_hint = std::string(400, 'x');
+        tall.pi.import_root = dir + "/elsewhere/game";
+        tall.pi.profile_dir = dir + "/" + std::string(300, 'p');
+        Launcher small(s, tall);
+        small.start("");
+        CHECK(small.status().state == State::NotFound);
+        Canvas c;
+        c.resize(2856, 1280, true);
+        for (int id : {0, int(kManage)}) {
+            if (id)
+                small.activate(id);
+            small.draw(c, 4);
+            CHECK(!small.buttons().empty());
+            for (const Button &b : small.buttons())
+                CHECK(b.rect.y >= 0 && b.rect.y + b.rect.h <= c.height());
+        }
+    }
 
     // A device that cannot run the game still imports; Play explains why not.
     Launcher cannot(s, fp);
@@ -696,6 +733,33 @@ void test_ui_mobile() {
 
 } // namespace
 
+void test_ui_text_fits() {
+    // Paths wrap after a slash, not inside a folder name.
+    const std::vector<std::string> lines =
+        Canvas::wrap("/Users/player/Documents/profile", 12 * 6, 1);
+    CHECK((lines == std::vector<std::string>{"/Users/", "player/", "Documents/", "profile"}));
+
+    // A long title keeps the right margin clear, at any width.
+    Spec s = spec();
+    s.title = "Siege of Avalon: Anthology of Long Titles";
+    FakePlatform fp;
+    fp.pi.profile_dir = fresh("ui-title") + "/profile";
+    Launcher l(s, fp);
+    l.start("");
+    Canvas c;
+    for (int w : {640, 1280, 2420}) {
+        const int scale = std::max(1, std::min(w / 480, 1668 / 300));
+        c.resize(w, 1668, false);
+        l.draw(c, scale);
+        const int margin = 16 * scale;
+        int lit = 0;
+        for (int y = margin; y < margin + 24 * scale; ++y)
+            for (int x = w - margin; x < w; ++x)
+                lit += c.pixels()[(y * w + x) * 4] > 0x80;
+        CHECK(lit == 0);
+    }
+}
+
 int main() {
     const char *base = getenv("RECOMP_LAUNCHER_TEST_DIR");
     g_scratch = std::string(base && *base ? base : "build/recomp") + "/launcher-test";
@@ -721,6 +785,7 @@ int main() {
         {"detection", test_detection},
         {"launcher screen, desktop", test_ui_desktop},
         {"launcher screen, mobile", test_ui_mobile},
+        {"launcher text fits", test_ui_text_fits},
     };
     for (const Test &t : tests) {
         const int before = g_failures;
