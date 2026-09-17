@@ -124,6 +124,57 @@ new mechanism. What stands between that and using Wine's DLLs in practice is
 the translator's instruction coverage, not the loader or the module design.
 SSE2 is the first thing to add.
 
+## Result 3: run, discover, regenerate
+
+Static discovery misses code - a function only reached through a pointer
+nothing resolves, a jump-table slot no listing owns, a block Ghidra ended
+early - and until now the way back was to read a run's report and copy
+addresses into `game.toml` by hand, which is what the notes in Siege's and
+NFSMW's `game.toml` are. The loop closes that by itself:
+
+```sh
+# 1. a translation with a gap in it: pretend the listing never named bench()
+tools/build.py --game-dir <here> --regenerate --target headless --forget 00405000
+# 2. run it, recording what it reached that the translation does not carry
+RECOMP_DISCOVERY=discovery.txt RECOMP_EXE=<here>/original/sample.exe \
+    build/recomp/pop_headless
+# 3. regenerate with that file, and build again
+tools/build.py --game-dir <here> --regenerate --target headless \
+    --forget 00405000 --discovered discovery.txt
+```
+
+Pass 1 translates 8 of 9 functions, and the run says
+
+```
+[recomp] call to unknown target 00405000 (ESP=0effffb4, return=0040108d, ...): returning 0
+```
+
+leaving `discovery.txt`:
+
+```
+00405000 call 0040108d 1
+```
+
+Pass 2 reports `--discovered discovery.txt: 1 address from a run`, translates
+9 of 9, and the run completes with `bench.match 1` and an empty discovery
+file: nothing left to find. The file is written as each address is first
+reached, not at exit, because a run that ends in `abort()` - which this one
+does, on msvcrt's SSE2 - would otherwise write nothing.
+
+`--forget` stands in for the listing gap, because none of the real games
+regenerate on this machine right now (Pharaoh and Populous both stop at
+`SEH stub ... is not a JMP rel32 to code`, with their own pinned kit as well
+as this branch, so their exported listings are stale). On a game the gap is
+real and the loop is the same three commands.
+
+**A gap costs more than the missing function.** The translator rewrites a
+literal call to a dropped block as `recomp_unknown_call(c, addr); return;` -
+the caller returns there and then. In pass 1 the sample prints
+`sample.begin` and nothing else from that function: the call returned zero
+*and* the rest of `experiment_interp` never ran. A run therefore under-reports
+what is missing, which is the argument for doing this in a loop until the file
+comes back empty, and for the interpreter filling the gap rather than a zero.
+
 ## Open: a crash this sample found in translated code
 
 Rewriting `experiment_interp` to call each path three times and keep the

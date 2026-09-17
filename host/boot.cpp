@@ -1,6 +1,7 @@
 // boot.cpp - see boot.h. Extracted verbatim in behaviour from the headless
 // host, which was the first program to need every part of it.
 #include "boot.h"
+#include "../runtime/discovery.h"
 #include "../runtime/layout.h"
 #include "page_overlay.h"
 
@@ -690,6 +691,12 @@ void boot_print_undeliverable(FILE *out) {
             unknown.size(), unknown.size() == 1 ? "" : "s");
     for (const UnknownCall &u : unknown)
         fprintf(out, "    target %08x  called from the instruction before %08x\n", u.target, u.ret);
+    // With RECOMP_DISCOVERY set, these addresses are also on disk in the form
+    // tools/recomp/translate.py --discovered reads, so the next regeneration
+    // carries the code this run reached. See runtime/discovery.h.
+    if (recomp_env("DISCOVERY"))
+        fprintf(out, "  %u of them recorded in %s for --discovered\n", discovery_count(),
+                recomp_env("DISCOVERY"));
 }
 
 void boot_print_import_stats(FILE *out, bool abnormal) {

@@ -305,7 +305,7 @@ def publish_generated(build_root, translate):
 
 
 def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modules=(),
-                   allow_unmodelled=None):
+                   allow_unmodelled=None, discovered=None, forget=None):
     """Translate the image into `stage`, then each auxiliary module (game.toml
     [modules.aux.<key>]) into `stage/aux-<key>`, which cmake/Translate.cmake
     compiles into its own library. A module is translated under the same
@@ -318,6 +318,10 @@ def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modul
         command += ["--allow-table-gaps", allow_table_gaps]
     if allow_unmodelled:
         command += ["--allow-unmodelled", allow_unmodelled]
+    if discovered:
+        command += ["--discovered", str(discovered)]
+    if forget:
+        command += ["--forget", forget]
     subprocess.run(command, cwd=ROOT, check=True)
     for key in aux_modules:
         out = Path(stage) / ("aux-" + key)
@@ -352,6 +356,12 @@ def parse_args(argv, system=None):
     parser.add_argument("--regenerate", action="store_true", help="Regenerate and compile translated C")
     parser.add_argument("--allow-table-gaps", metavar="REASON", default=None,
                         help="Accept jump-table sites the translator cannot decode (passed to translate.py)")
+    parser.add_argument("--forget", metavar="ADDR[,ADDR...]", default=None,
+                        help="translate as if the listing had never named these functions "
+                             "(tools/recomp/translate.py --forget): an experiment, not a build")
+    parser.add_argument("--discovered", metavar="FILE", default=None, type=Path,
+                        help="a file a run wrote with RECOMP_DISCOVERY: the addresses it "
+                             "reached that the translation did not carry become entry points")
     parser.add_argument("--allow-unmodelled", metavar="REASON", default=None,
                         help="Translate instructions the translator cannot model into a trap at "
                              "their own address (passed to translate.py)")
@@ -411,7 +421,8 @@ def main():
                                   lambda stage: run_translator(stage, args.game_dir, args.build_root,
                                                                args.allow_table_gaps,
                                                                [m["key"] for m in cfg["aux_modules"]],
-                                                               args.allow_unmodelled))
+                                                               args.allow_unmodelled,
+                                                               args.discovered, args.forget))
             # Generated sources include the adjacent runtime header. Refresh
             # it under the same lock even when their translation is unchanged.
             header = args.build_root / "recomp/gen/x86.h"

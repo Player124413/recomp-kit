@@ -5,6 +5,7 @@
 #include "profile.h"
 #include "mods_seam.h"
 #include "intrinsics.h"
+#include "discovery.h"
 #include "interp.h"
 #include "win32.h"
 #include "thunks.h"
@@ -218,6 +219,9 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
                  c->r[R_ESI], c->r[R_EDI]) &&
         unknown_calls().size() < 256)
         unknown_calls().push_back(UnknownCall{target, ret});
+    // Every undeliverable call is an address the run proves is code, so it is
+    // also what a regeneration wants back (see discovery.h).
+    discovery_note("call", target, ret);
     return_as_if_ret(c);
 }
 

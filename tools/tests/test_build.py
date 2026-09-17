@@ -197,6 +197,14 @@ def test_acceptances_reach_each_auxiliary_module(tmp_path, monkeypatch):
     assert calls[1][calls[1].index("--allow-unmodelled") + 1] == "SSE in the math library"
 
 
+def test_discovered_reaches_the_translator(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(build.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    build.run_translator(tmp_path / "stage", tmp_path, tmp_path / "build",
+                         discovered=tmp_path / "discovery.txt")
+    assert calls[0][calls[0].index("--discovered") + 1] == str(tmp_path / "discovery.txt")
+
+
 def test_no_table_gap_flag_by_default(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(build.subprocess, "run", lambda cmd, **kw: calls.append(cmd))

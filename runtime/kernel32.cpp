@@ -838,7 +838,12 @@ void k_WriteFile(X86 *c) {
     uint32_t h = arg(c, 0), buf = arg(c, 1), want = arg(c, 2), pwrote = arg(c, 3);
     HObj *o = handle_any(h);
     if (o && o->kind == H_STD) {
-        fwrite(g_mem + buf, 1, want, o->fd == 2 ? stderr : stdout);
+        FILE *to = o->fd == 2 ? stderr : stdout;
+        fwrite(g_mem + buf, 1, want, to);
+        // A guest that writes to its console and then ends the process - an
+        // abort in the runtime, ExitProcess - has said something worth
+        // keeping, so it is not left in a buffer.
+        fflush(to);
         if (pwrote)
             wr32(pwrote, want);
         set_eax(c, 1);

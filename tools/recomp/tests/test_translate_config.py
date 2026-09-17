@@ -34,6 +34,19 @@ class ConfigureTests(unittest.TestCase):
         translate.configure(cfg)
         self.assertEqual(translate.EXTRA_ENTRY_POINTS, frozenset({0x4ab000, 0x4ac000}))
 
+    def test_discovered_file_is_read_as_addresses(self):
+        """runtime/discovery.cpp's format: address, kind, the instruction that
+        named it, how many times it was reached; comments and blanks ignored."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "discovery.txt"
+            path.write_text("# a comment\n\n00994fe8 call 0080dbb4 3\n"
+                            "00c2bd8c jump 00c2e98b 1  # trailing\n")
+            self.assertEqual(translate.read_discovered(path), [0x994fe8, 0xc2bd8c])
+            path.write_text("not an address\n")
+            with self.assertRaises(translate.TranslateError):
+                translate.read_discovered(path)
+
     def test_configure_sets_paths_and_volatile_reads(self):
         stub = (ROOT / "games/stub").resolve()
         cfg = game_config.load(stub)
