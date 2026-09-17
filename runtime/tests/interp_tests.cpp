@@ -55,6 +55,16 @@ extern "C" void recomp_call(X86 *c, uint32_t target) {
     }
 }
 
+// NATIVE is the one "translated" entry the table knows, so a JMP to it is a
+// tail call the interpreter hands back rather than decoding into.
+extern "C" int recomp_thunk_target_kind(uint32_t target) {
+    return target == NATIVE ? 1 : 0;
+}
+
+extern "C" void recomp_jump(X86 *c, uint32_t target) {
+    recomp_call(c, target);
+}
+
 static void put(uint32_t at, const std::vector<uint8_t> &b) {
     memcpy(g_mem + at, b.data(), b.size());
 }
@@ -139,6 +149,23 @@ static void test_bank_routine() {
     CHECK(rd32(block + 0x14 + 0x5c) == 7); // the byte the first run stored
 }
 
+// A lone JMP to a translated entry - the shape of a compiler's thunk, and of
+// the jump-table slots a listing misses - is dispatched, not decoded through.
+static void test_tail_call_out() {
+    uint32_t stack = STACK - 0x40;
+    put(CODE, {0xe9, 0, 0, 0, 0}); // jmp NATIVE
+    wr32(CODE + 1, NATIVE - (CODE + 5));
+    X86 c = fresh();
+    c.r[R_ESP] = stack;
+    wr32(stack, RETURN);     // the caller's return address
+    wr32(stack + 4, 0x1234); // its cdecl argument, which NATIVE reads
+    uint32_t before = g_native_calls;
+    CHECK(interp_call(&c, CODE) == 1);
+    CHECK(g_native_calls == before + 1);
+    CHECK(c.r[R_EAX] == 0x1234 + 1);
+    CHECK(c.eip == RETURN);
+}
+
 static void test_refusals() {
     // An instruction outside the set: nothing runs.
     put(CODE, {0x56, 0xd9, 0x46, 0x04, 0x5e, 0xc3}); // push esi; fld [esi+4]; pop esi; ret
@@ -211,6 +238,7 @@ int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "--run"))
         return run_hex(argv[2]);
     test_bank_routine();
+    test_tail_call_out();
     test_refusals();
     printf("interp: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;

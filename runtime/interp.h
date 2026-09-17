@@ -16,6 +16,11 @@
 #pragma once
 #include "x86.h"
 
+// Generated table.c is C and calls interp_call from recomp_unknown_jump.
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Non-zero when the routine at `target` was run; [ESP] held the return
 // address, which the routine's RET popped. Zero when it could not be decoded;
 // then nothing ran and the guest state is unchanged.
@@ -23,3 +28,7 @@ int interp_call(X86 *c, uint32_t target);
 
 // Why the last interp_call returned zero, for the log.
 const char *interp_last_error(void);
+
+#ifdef __cplusplus
+}
+#endif

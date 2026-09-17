@@ -169,10 +169,12 @@ void recomp_shim_call(X86 *c, uint32_t target) {
 void recomp_unknown_call(X86 *c, uint32_t target) {
     if (recomp_run_thunk(c, target))
         return;
-    // Code the guest built or copied into its heap at run time, which no
-    // translation covers, runs in the interpreter when every instruction in
-    // it decodes.
-    if (!loader_in_image(target) && interp_call(c, target))
+    // Code no translation covers runs in the interpreter when every
+    // instruction in it decodes: code the guest built or copied into its heap
+    // at run time, and code inside the image that discovery missed. The
+    // second kind is a translator gap, so the run keeps going and reports it
+    // (see discovery.h) instead of returning a zero into whatever asked.
+    if (interp_call(c, target))
         return;
     if (target == GUEST_RETURN_SENTINEL) {
         recomp_callback_return(c);

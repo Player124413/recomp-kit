@@ -1,6 +1,8 @@
 // interp.cpp - see interp.h.
 #include "interp.h"
 
+#include "thunks.h"
+
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -30,6 +32,9 @@ enum Op : uint8_t {
     RET,
     JMP,
     JCC,
+    // A JMP whose target is a translated entry: a tail call out of this
+    // routine, which the address table places rather than this interpreter.
+    JMPOUT,
 };
 
 // A register or memory operand. kind 0: none, 1: register, 2: memory,
@@ -380,6 +385,11 @@ std::shared_ptr<Routine> build(uint32_t start) {
                      (n >> 8) & 0xff, (n >> 16) & 0xff, n >> 24);
             return nullptr;
         }
+        if (in.op == JMP && !in.indirect && recomp_thunk_target_kind(in.target) == 1)
+            // Compiler-made thunks (a lone JMP) and tail calls leave the
+            // routine for code that is translated; hand those to the table
+            // instead of decoding on into whatever follows.
+            in.op = JMPOUT;
         r->at[a] = (uint32_t)r->code.size();
         r->code.push_back(in);
         if ((in.op == JMP || in.op == JCC) && !in.indirect) {
@@ -392,7 +402,7 @@ std::shared_ptr<Routine> build(uint32_t start) {
                 furthest = in.target;
         }
         a += in.len;
-        if ((in.op == RET || in.op == JMP) && a > furthest)
+        if ((in.op == RET || in.op == JMP || in.op == JMPOUT) && a > furthest)
             break;
     }
     // Every branch keeps its target's index, so taking one is an assignment
@@ -753,6 +763,10 @@ void run(X86 *c, const Routine &r) {
             c->eip = pop(c);
             c->r[R_ESP] += in.ret_pop;
             return;
+        case JMPOUT:
+            flags_settle(c, f);
+            recomp_jump(c, in.target);
+            return;
         case JMP:
             next = code + in.target_index;
             break;
@@ -767,7 +781,7 @@ void run(X86 *c, const Routine &r) {
 
 } // namespace
 
-int interp_call(X86 *c, uint32_t target) {
+extern "C" int interp_call(X86 *c, uint32_t target) {
     g_error[0] = 0;
     std::shared_ptr<Routine> r = routine_at(target);
     if (!r)
@@ -785,6 +799,6 @@ int interp_call(X86 *c, uint32_t target) {
     return 1;
 }
 
-const char *interp_last_error(void) {
+extern "C" const char *interp_last_error(void) {
     return g_error;
 }
