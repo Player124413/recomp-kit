@@ -53,6 +53,8 @@ class Platform {
     virtual std::unique_ptr<Source> open(const Picked &p, std::string *error);
     // Folders that may hold the game.
     virtual std::vector<std::string> candidates(const Spec &spec) = 0;
+    // Something the app was opened with (Android "Open with" on a ZIP), once.
+    virtual bool initial_pick(Picked *) { return false; }
     virtual void open_folder(const std::string &) {}
     virtual void open_url(const std::string &) {}
     // An import starts, advances or ends: keep the device awake, keep the
