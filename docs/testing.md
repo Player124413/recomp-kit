@@ -17,6 +17,11 @@ Native suites are CTest entries with labels: `nogame` runs everywhere and in CI,
 real Metal and audio device (the offline audio render is not what a hosted CI
 runner produces), `mods` needs the translated archive and the entity snapshot `tools/test.py --mods` captures. Run
 one directly with `.venv/bin/ctest --test-dir build/cmake/macos -L nogame` or `-R dx_tests`.
+Two suites cover the on-screen controls, both `nogame`: `controls_tests` for the
+layout model, geometry, routing, virtual pad, mapped binding, raster primitives
+and editor (including the old keypad geometry as a regression oracle), and
+`pad_tests` for the DirectInput joystick and the three XInput DLLs, which lives
+beside `dx_tests` because it defines the `host_pad_*` callbacks strongly.
 Every `tools/test.py` mode takes `--game-dir /abs/path/to/<game>`; without it
 the kit's stub game is used and the `game`-labelled suites report a skip.
 
