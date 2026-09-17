@@ -9,6 +9,19 @@ target_link_libraries(host_common PUBLIC recomp_runtime)
 target_compile_options(host_common PRIVATE ${POP_WARN_HOST})
 pop_optimize(host_common 1)
 
+# The launcher's portable core (host/launcher/): finding, checking and
+# importing the player's game. miniz reads and writes ZIPs.
+add_library(recomp_miniz OBJECT ${POP_ROOT}/third_party/miniz/miniz.c)
+target_include_directories(recomp_miniz PUBLIC ${POP_ROOT}/third_party/miniz)
+set_target_properties(recomp_miniz PROPERTIES POSITION_INDEPENDENT_CODE ON)
+pop_optimize(recomp_miniz 2)
+add_library(launcher_core OBJECT ${HOST}/launcher/launcher.cpp ${HOST}/launcher/launcher_canvas.cpp
+                                 ${HOST}/launcher/launcher_ui.cpp)
+target_include_directories(launcher_core PUBLIC ${POP_ROOT})
+target_compile_options(launcher_core PRIVATE ${POP_WARN_STRICT})
+set_target_properties(launcher_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+pop_optimize(launcher_core 1)
+
 # Compiling Objective-C++ under ARC, as every script did; a no-op for C++.
 if(APPLE)
   set(POP_OBJC_ARC $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
@@ -60,6 +73,16 @@ pop_optimize(keypad_tests 1)
 pop_test_binary(keypad_tests)
 add_test(NAME keypad_tests COMMAND keypad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
+
+add_executable(launcher_tests ${HOST}/tests/launcher_tests.cpp ${POP_ROOT}/mods/font6x8.cpp)
+target_include_directories(launcher_tests PRIVATE ${POP_ROOT} ${POP_ROOT}/runtime ${POP_ROOT}/third_party/lua
+                                                  ${CMAKE_BINARY_DIR}/generated)
+target_compile_options(launcher_tests PRIVATE ${POP_WARN_WERROR})
+target_link_libraries(launcher_tests PRIVATE launcher_core recomp_miniz recomp_platform)
+pop_optimize(launcher_tests 1)
+pop_test_binary(launcher_tests)
+add_test(NAME launcher_tests COMMAND launcher_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(launcher_tests PROPERTIES LABELS nogame)
 
 add_executable(ui_layer_tests ${HOST}/ui_layer.cpp ${HOST}/tests/test_frame_builder.cpp ${HOST}/tests/ui_layer_tests.cpp)
 target_compile_options(ui_layer_tests PRIVATE ${POP_WARN_WERROR})
@@ -114,12 +137,18 @@ set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${
                         ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp ${HOST}/d3d_render.cpp
                         ${HOST}/indexed_frame.cpp)
 
-# The host's platform file: desktop or iPadOS (host/sdl/platform_ui.h).
+# The host's platform file: desktop or iPadOS (host/sdl/platform_ui.h), and
+# the launcher's (host/launcher/launcher_sdl.h; iPadOS keeps its own in
+# platform_ui_ios.mm).
+set(POP_LAUNCHER_SOURCES $<TARGET_OBJECTS:launcher_core> $<TARGET_OBJECTS:recomp_miniz>
+                         ${HOST}/launcher/launcher_config.cpp ${HOST}/launcher/launcher_sdl.cpp)
 if(IOS)
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_ios.mm)
-  list(APPEND FW_METAL "-framework UIKit")
+  list(APPEND FW_METAL "-framework UIKit" "-framework UniformTypeIdentifiers")
+elseif(ANDROID)
+  set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp ${HOST}/launcher/launcher_platform_android.cpp)
 else()
-  set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp)
+  set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp ${HOST}/launcher/launcher_platform_desktop.cpp)
 endif()
 
 if(TARGET recomp_gen)
@@ -147,7 +176,7 @@ if(TARGET recomp_gen)
   endif()
 
   pop_host(recomp_app GEN UI_LAYER OPT 2
-    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI}
+    SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
             ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}

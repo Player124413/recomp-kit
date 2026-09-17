@@ -26,6 +26,7 @@
 #include "../boot.h"
 #include "../d3d_render.h"
 #include "../game_path.h"
+#include "../launcher/launcher_sdl.h"
 #include "../gpu/gpu_factory.h"
 #include "../input.h"
 #include "../input_gate.h"
@@ -1265,63 +1266,6 @@ std::string classic_modes_path() {
     return p.empty() ? "tools/recomp/baseline/classic-modes.json" : p;
 }
 
-struct DialogResult {
-    bool done = false;
-    std::string path; // empty: cancelled or failed
-};
-
-void SDLCALL on_dialog(void *userdata, const char *const *files, int) {
-    auto *r = static_cast<DialogResult *>(userdata);
-    if (files && files[0])
-        r->path = files[0];
-    else if (!files)
-        fprintf(stderr, RECOMP_APP_NAME ": file dialog failed: %s\n", SDL_GetError());
-    r->done = true;
-}
-
-// The picker: a native dialog for D3DPopTB.exe, the hash check, and the
-// saved path. Loops on a wrong file until the player quits.
-bool pick_game_exe(std::string *out) {
-    for (;;) {
-        DialogResult r;
-        const SDL_DialogFileFilter filters[] = {
-            {RECOMP_GAME_NAME " executable (" RECOMP_EXECUTABLE ")", "exe"}};
-        SDL_ShowOpenFileDialog(on_dialog, &r, g_window, filters, 1, nullptr, false);
-        while (!r.done) {
-            SDL_Event e;
-            while (SDL_PollEvent(&e))
-                if (e.type == SDL_EVENT_QUIT)
-                    return false;
-            SDL_Delay(10);
-        }
-        if (r.path.empty()) {
-            fprintf(stderr, RECOMP_APP_NAME
-                    ": no game selected. Pass --exe <path to " RECOMP_EXECUTABLE "> "
-                    "to skip the dialog.\n");
-            return false;
-        }
-        std::string digest;
-        if (game_path_is_supported(r.path, &digest)) {
-            if (!game_path_save(r.path))
-                fprintf(stderr, RECOMP_APP_NAME ": could not remember the game path\n");
-            *out = r.path;
-            return true;
-        }
-        const SDL_MessageBoxButtonData buttons[] = {
-            {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Choose again"},
-            {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit"}};
-        std::string text = "This is not the supported build of " RECOMP_EXECUTABLE ".\n\nExpected "
-                           "SHA-256:\n" +
-                           std::string(LOADER_EXPECTED_SHA256) + "\n\nThis file:\n" +
-                           (digest.empty() ? std::string("(unreadable)") : digest);
-        SDL_MessageBoxData box{
-            SDL_MESSAGEBOX_ERROR, g_window, RECOMP_GAME_NAME, text.c_str(), 2, buttons, nullptr};
-        int choice = 0;
-        if (!SDL_ShowMessageBox(&box, &choice) || choice == 0)
-            return false;
-    }
-}
-
 void post_drawable_size() {
     int bw, bh, dw, dh;
     window_sizes(&bw, &bh, &dw, &dh);
@@ -1380,15 +1324,8 @@ int main(int argc, char **argv) {
         if (!profile || !*profile)
             os_setenv("RECOMP_PROFILE_DIR", (data_root + "/profile").c_str());
         game = game_path_resolve(nullptr, data_root.c_str());
-        if (game.exe.empty())
-            game_error =
-                "Missing game data: expected " + data_root +
-                "/game/" RECOMP_EXECUTABLE
-                ". From the game checkout run tools/build.py --target android --push-game. "
-                "It stages the included files in build/android/game, then runs: "
-                "adb push build/android/game \"" +
-                data_root + "/\"";
-        else
+        // Missing data is the launcher's to explain and import.
+        if (!game.exe.empty())
             SDL_Log("[android] game data: %s", game.exe.c_str());
     }
 #else
@@ -1445,8 +1382,29 @@ int main(int argc, char **argv) {
         return 3;
     }
     fprintf(stderr, "GPU backend: %s\n", gpu::default_backend_name());
-    if (game.exe.empty() && !pick_game_exe(&game.exe))
-        return 2;
+    // The launcher: when the game is missing or not the supported build, or the
+    // player asked for it. Mobile shows it briefly even when the game is ready,
+    // so a touch can open it.
+    {
+        const bool mobile = !platform_ui_pointer_capture_supported();
+        const bool asked = launcher::requested(argc, argv);
+        if (game.exe.empty() || asked || mobile) {
+            auto platform = launcher::make_platform(g_window);
+            launcher::RunOptions options;
+            options.known = game.exe;
+            options.auto_play = !game.exe.empty() && !asked && mobile ? 1.5 : 0;
+            if (const char *dump = recomp_env("LAUNCHER_DUMP"))
+                options.dump_path = dump;
+            if (const char *keys = recomp_env("LAUNCHER_KEYS"))
+                options.keys = keys;
+            const std::string chosen = launcher::run(g_window, g_gpu.get(), g_surface, *platform, options);
+            if (chosen.empty())
+                return 2;
+            if (chosen != game.exe && !game_path_save(chosen))
+                fprintf(stderr, RECOMP_APP_NAME ": could not remember the game path\n");
+            game.exe = chosen;
+        }
+    }
     std::string exe = game.exe;
 
     // The renderer first: the presenter shares its device, so a present
