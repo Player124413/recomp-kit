@@ -211,4 +211,60 @@ HostPadState to_host(const PadState &s) {
     return h;
 }
 
+namespace {
+float unit_axis(int16_t v, float lo) {
+    return std::clamp(float(v) / 32767.0f, lo, 1.0f);
+}
+
+// A stick pair inside the radial dead zone reads as centred; outside it
+// passes through unscaled (the game applies its own curve).
+void stick_pair(int16_t x, int16_t y, float *ox, float *oy) {
+    constexpr float kDeadZone = 0.08f;
+    const float fx = unit_axis(x, -1.0f), fy = unit_axis(y, -1.0f);
+    if (std::hypot(fx, fy) < kDeadZone) {
+        *ox = *oy = 0;
+        return;
+    }
+    *ox = fx;
+    *oy = fy;
+}
+} // namespace
+
+PadState pad_from_sdl(const bool buttons[kSdlPadButtonCount], const int16_t axes[kSdlAxisCount]) {
+    static const struct {
+        int sdl;
+        uint16_t bit;
+    } kButtons[] = {
+        {kSdlPadSouth, kPadCross},     {kSdlPadEast, kPadCircle},      {kSdlPadWest, kPadSquare},
+        {kSdlPadNorth, kPadTriangle},  {kSdlPadBack, kPadSelect},      {kSdlPadGuide, kPadPs},
+        {kSdlPadStart, kPadStart},     {kSdlPadLeftStick, kPadL3},     {kSdlPadRightStick, kPadR3},
+        {kSdlPadLeftShoulder, kPadL1}, {kSdlPadRightShoulder, kPadR1},
+    };
+    static const struct {
+        int sdl;
+        uint8_t bit;
+    } kHat[] = {
+        {kSdlPadDpadUp, kHatUp},
+        {kSdlPadDpadDown, kHatDown},
+        {kSdlPadDpadLeft, kHatLeft},
+        {kSdlPadDpadRight, kHatRight},
+    };
+    PadState p;
+    for (const auto &b : kButtons)
+        if (buttons[b.sdl])
+            p.buttons |= b.bit;
+    for (const auto &h : kHat)
+        if (buttons[h.sdl])
+            p.hat |= h.bit;
+    stick_pair(axes[kSdlAxisLeftX], axes[kSdlAxisLeftY], &p.lx, &p.ly);
+    stick_pair(axes[kSdlAxisRightX], axes[kSdlAxisRightY], &p.rx, &p.ry);
+    p.l2 = unit_axis(axes[kSdlAxisLeftTrigger], 0.0f);
+    p.r2 = unit_axis(axes[kSdlAxisRightTrigger], 0.0f);
+    if (p.l2 > 0.5f)
+        p.buttons |= kPadL2;
+    if (p.r2 > 0.5f)
+        p.buttons |= kPadR2;
+    return p;
+}
+
 } // namespace controls

@@ -6,8 +6,11 @@
 #include "../../platform/os.h"
 #include "../../runtime/layout.h"
 #include "../present.h"
+#include "../sdl/platform_ui.h"
 #include "binding.h"
 #include "game_config.h"
+#include "gamepad_sdl.h"
+#include "haptics.h"
 #include "layout_fallback.h"
 #include "layout_store.h"
 #include "overlay.h"
@@ -30,6 +33,15 @@ Layout g_layout;
 Router g_router;
 Screen g_screen;
 bool g_keyboard_absent = false;
+bool g_controller_present = false;
+
+// RECOMP_CONTROLS_TRACE: log the merged pad on every change, and each
+// auto-hide decision.
+// Read on first use, after the host has applied its environment file.
+bool trace() {
+    static const bool on = recomp_env("CONTROLS_TRACE") != nullptr;
+    return on;
+}
 
 // The mapped binding: RECOMP_CONTROLS_PAD == 1 drives it from the shared
 // virtual pad every pump; the other pad modes (off, native) leave it unused.
@@ -73,6 +85,7 @@ Form g_loaded_form = Form::Tablet;
 double g_file_scale = 1.0;
 int g_size = -1;
 bool g_enabled = false;
+LayoutContent g_content = LayoutContent::Keys; // g_layout's, for auto-hide
 
 bool g_published = false;
 bool g_published_wanted = false;
@@ -128,10 +141,21 @@ class HostSink : public ControlsSink {
     void group_visibility_changed() override {
         mods_controls_set_hidden_groups(hidden_bits(g_layout));
     }
-    void tap() override {} // haptics arrive in Task 13
+    // A light tick on each press, when the haptics row is on.
+    void tap() override {
+        if (mods_controls_value(CONTROLS_HAPTICS_ROW))
+            platform_ui_haptic_tap();
+    }
 };
 
 HostSink g_sink;
+
+// The guest's rumble (vpad().request_rumble, from XInputSetState) drives the
+// controller's motors when one is connected, else the device's own.
+RumbleRouter g_rumble(RumbleOutputs{
+    [](uint16_t low, uint16_t high, uint32_t ms) { (void)gamepad_rumble(low, high, ms); },
+    [](uint16_t low, uint16_t high) { platform_ui_device_rumble(low, high); },
+});
 
 // Loads `name` for `form` into g_layout, releasing whatever the router and
 // the mapped binding held against the old one first -- a rotation swaps the
@@ -169,6 +193,7 @@ void reload(const std::string &name, Form form) {
                 name.c_str());
     }
     g_layout = std::move(fresh);
+    g_content = layout_content(g_layout);
     g_file_scale = g_layout.scale;
     g_have_layout = true;
     g_router.set_layout(&g_layout, g_sink);
@@ -216,9 +241,8 @@ void host_pointer_moved(double x, double y) {
 }
 
 void host_set_wanted(bool keyboard_absent, bool controller_present) {
-    (void)controller_present; // Task 12
-    static const bool force = recomp_env("KEYPAD") != nullptr;
-    g_keyboard_absent = keyboard_absent || force;
+    g_keyboard_absent = keyboard_absent;
+    g_controller_present = controller_present;
 }
 
 bool host_finger_down(int64_t id, double px, double py, uint64_t now) {
@@ -277,10 +301,28 @@ void host_pump(uint64_t now) {
             apply_hidden_bits(g_layout, bits);
     }
 
-    const bool enabled = g_keyboard_absent && !name.empty() && g_have_layout;
+    // Desktop shows the controls only under RECOMP_KEYPAD, which also counts
+    // the keyboard as absent there (it is always attached). A connected
+    // controller still hides a pad layout, forced or not: layout_wanted's
+    // `forced` stays false here, so a desktop run can check that auto-hide.
+    static const bool forced = recomp_env("KEYPAD") != nullptr;
+    const bool enabled = (platform_ui_touch_device() || forced) && !name.empty() && g_have_layout;
     if (enabled != g_enabled || g_router.enabled() != enabled) {
         g_enabled = enabled;
         g_router.set_enabled(enabled, g_sink);
+    }
+    // An auto-hidden layout keeps only its toggles, so the player can switch.
+    const bool shown =
+        enabled && layout_wanted(g_content, !(g_keyboard_absent || forced), g_controller_present,
+                                 mods_controls_value(CONTROLS_PAD_WITH_CONTROLLER_ROW) != 0, false);
+    const bool toggles_only = enabled && !shown;
+    if (g_router.toggles_only() != toggles_only) {
+        g_router.set_toggles_only(toggles_only, g_sink);
+        if (trace())
+            fprintf(stderr, "[controls] layout \"%s\" %s (keyboard %s, controller %s)\n",
+                    name.c_str(), toggles_only ? "hidden, toggles only" : "shown",
+                    g_keyboard_absent ? "absent" : "present",
+                    g_controller_present ? "present" : "absent");
     }
     vpad().set_source(kPadSourceTouch, g_router.pad());
 
@@ -298,6 +340,27 @@ void host_pump(uint64_t now) {
             g_sink.action(name);
     }
 #endif
+
+    {
+        // Serial first: the values read after it are at least as new.
+        const uint64_t serial = vpad().rumble_serial();
+        uint16_t low = 0, high = 0;
+        vpad().rumble(&low, &high);
+        g_rumble.update(serial, low, high,
+                        rumble_sink(gamepad_connected(), platform_ui_touch_device()), now);
+    }
+
+    if (trace()) {
+        static PadState last;
+        const PadState pad = vpad().state();
+        if (pad != last) {
+            last = pad;
+            fprintf(
+                stderr,
+                "[controls] pad buttons %04x hat %x l %.2f,%.2f r %.2f,%.2f triggers %.2f,%.2f\n",
+                pad.buttons, pad.hat, pad.lx, pad.ly, pad.rx, pad.ry, pad.l2, pad.r2);
+        }
+    }
 
     publish();
 }

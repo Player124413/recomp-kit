@@ -33,6 +33,7 @@
 #include "../input_gate.h"
 #include "../input_touch.h"
 #include "../controls/controls_host.h"
+#include "../controls/gamepad_sdl.h"
 #include "../../mods/mods_internal.h"
 #include "../midi.h"
 #include "../present.h"
@@ -1107,6 +1108,13 @@ void handle_event(const SDL_Event &event) {
         }
         break;
     }
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        controls::gamepad_handle_event(event);
+        break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
     case SDL_EVENT_QUIT:
         // The guest closes itself: WM_CLOSE runs its own shutdown path, and
@@ -1183,8 +1191,10 @@ void after_events() {
         g_touch.frames_presented(host_present_count());
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
-        // The controls follow the hardware keyboard (attached: none shown) and
-        // the settings rows; the view is published only when it changed.
+        // The controls follow the hardware keyboard (attached: key layouts
+        // hidden), a physical controller (connected: pad layouts hidden and
+        // its state fed to the pad) and the settings rows; the view is
+        // published only when it changed.
         // The controls going away (a keyboard arriving, unless RECOMP_KEYPAD
         // forces them) lets go of every finger, as the keypad did.
         static const bool force = recomp_env("KEYPAD") != nullptr;
@@ -1197,7 +1207,8 @@ void after_events() {
         const HostGameRect game = game_rect_for(screen.dw, screen.dh);
         controls::host_set_screen(screen, controls::Rect{game.x, game.y, game.w, game.h},
                                   screen.dh - (screen.safe.y + screen.safe.h));
-        controls::host_set_wanted(absent, false);
+        controls::gamepad_poll();
+        controls::host_set_wanted(absent, controls::gamepad_connected());
         controls::host_pump(SDL_GetTicksNS());
     }
     // A shell-launched process does not always come forward on its own, and a
@@ -1508,7 +1519,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[host] could not enter %s\n", host_layout().checkout_root.c_str());
 
     platform_ui_init_hints();
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_Init failed: %s\n", SDL_GetError());
         return 3;
     }

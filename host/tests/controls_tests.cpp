@@ -16,6 +16,8 @@
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
 
+#include <SDL3/SDL_gamepad.h>
+
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -2383,6 +2385,303 @@ static void test_small_key_label_fits() {
     CHECK(text > 0);
 }
 
+// --- Physical controllers, auto-hide and rumble routing ---------------------
+
+// pad_from_sdl spells SDL's gamepad enums out to stay SDL-free; keep them honest.
+static_assert(int(kSdlPadSouth) == int(SDL_GAMEPAD_BUTTON_SOUTH) &&
+              int(kSdlPadEast) == int(SDL_GAMEPAD_BUTTON_EAST) &&
+              int(kSdlPadWest) == int(SDL_GAMEPAD_BUTTON_WEST) &&
+              int(kSdlPadNorth) == int(SDL_GAMEPAD_BUTTON_NORTH) &&
+              int(kSdlPadBack) == int(SDL_GAMEPAD_BUTTON_BACK) &&
+              int(kSdlPadGuide) == int(SDL_GAMEPAD_BUTTON_GUIDE) &&
+              int(kSdlPadStart) == int(SDL_GAMEPAD_BUTTON_START) &&
+              int(kSdlPadLeftStick) == int(SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+              int(kSdlPadRightStick) == int(SDL_GAMEPAD_BUTTON_RIGHT_STICK) &&
+              int(kSdlPadLeftShoulder) == int(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) &&
+              int(kSdlPadRightShoulder) == int(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) &&
+              int(kSdlPadDpadUp) == int(SDL_GAMEPAD_BUTTON_DPAD_UP) &&
+              int(kSdlPadDpadDown) == int(SDL_GAMEPAD_BUTTON_DPAD_DOWN) &&
+              int(kSdlPadDpadLeft) == int(SDL_GAMEPAD_BUTTON_DPAD_LEFT) &&
+              int(kSdlPadDpadRight) == int(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) &&
+              int(kSdlPadButtonCount) == int(SDL_GAMEPAD_BUTTON_TOUCHPAD) + 1);
+static_assert(int(kSdlAxisLeftX) == int(SDL_GAMEPAD_AXIS_LEFTX) &&
+              int(kSdlAxisLeftY) == int(SDL_GAMEPAD_AXIS_LEFTY) &&
+              int(kSdlAxisRightX) == int(SDL_GAMEPAD_AXIS_RIGHTX) &&
+              int(kSdlAxisRightY) == int(SDL_GAMEPAD_AXIS_RIGHTY) &&
+              int(kSdlAxisLeftTrigger) == int(SDL_GAMEPAD_AXIS_LEFT_TRIGGER) &&
+              int(kSdlAxisRightTrigger) == int(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) &&
+              int(kSdlAxisCount) == int(SDL_GAMEPAD_AXIS_COUNT));
+
+// SDL's standard mapping onto the pad: face buttons by position, the
+// dpad onto the hat, sticks scaled with a small radial dead zone, and
+// triggers scaled with the l2/r2 bit past half travel.
+static void test_pad_from_sdl() {
+    bool buttons[kSdlPadButtonCount] = {};
+    int16_t axes[kSdlAxisCount] = {};
+    PadState p = pad_from_sdl(buttons, axes);
+    CHECK(p == PadState());
+
+    buttons[kSdlPadSouth] = true;
+    p = pad_from_sdl(buttons, axes);
+    CHECK(p.buttons == kPadCross);
+    buttons[kSdlPadSouth] = false;
+
+    // One of each remaining button, checked together.
+    const int sdl[] = {kSdlPadEast,         kSdlPadWest,       kSdlPadNorth,
+                       kSdlPadBack,         kSdlPadGuide,      kSdlPadStart,
+                       kSdlPadLeftStick,    kSdlPadRightStick, kSdlPadLeftShoulder,
+                       kSdlPadRightShoulder};
+    const uint16_t bits[] = {kPadCircle, kPadSquare, kPadTriangle, kPadSelect, kPadPs,
+                             kPadStart,  kPadL3,     kPadR3,       kPadL1,     kPadR1};
+    for (size_t i = 0; i < sizeof sdl / sizeof sdl[0]; ++i) {
+        bool one[kSdlPadButtonCount] = {};
+        one[sdl[i]] = true;
+        CHECK(pad_from_sdl(one, axes).buttons == bits[i]);
+    }
+
+    buttons[kSdlPadDpadLeft] = true;
+    p = pad_from_sdl(buttons, axes);
+    CHECK(p.hat == kHatLeft && p.buttons == 0);
+    buttons[kSdlPadDpadLeft] = false;
+    buttons[kSdlPadDpadUp] = buttons[kSdlPadDpadRight] = true;
+    CHECK(pad_from_sdl(buttons, axes).hat == (kHatUp | kHatRight));
+    buttons[kSdlPadDpadUp] = buttons[kSdlPadDpadRight] = false;
+    buttons[kSdlPadDpadDown] = true;
+    CHECK(pad_from_sdl(buttons, axes).hat == kHatDown);
+    buttons[kSdlPadDpadDown] = false;
+
+    axes[kSdlAxisLeftX] = 32767;
+    p = pad_from_sdl(buttons, axes);
+    CHECK(p.lx == 1.0f && p.ly == 0.0f);
+    axes[kSdlAxisLeftX] = -32768; // clamped
+    CHECK(pad_from_sdl(buttons, axes).lx == -1.0f);
+    axes[kSdlAxisLeftX] = 0;
+
+    // Inside the 0.08 radial dead zone both axes read 0; past it they pass through.
+    axes[kSdlAxisRightX] = 1500;
+    axes[kSdlAxisRightY] = 1500; // |(0.046, 0.046)| = 0.065
+    p = pad_from_sdl(buttons, axes);
+    CHECK(p.rx == 0.0f && p.ry == 0.0f);
+    axes[kSdlAxisRightY] = 16384;
+    p = pad_from_sdl(buttons, axes);
+    CHECK(std::fabs(p.rx - 1500 / 32767.0f) < 1e-5f && std::fabs(p.ry - 0.5f) < 1e-3f);
+    axes[kSdlAxisRightX] = axes[kSdlAxisRightY] = 0;
+
+    axes[kSdlAxisLeftTrigger] = 20000;
+    p = pad_from_sdl(buttons, axes);
+    CHECK(std::fabs(p.l2 - 0.6104f) < 1e-3f);
+    CHECK(p.buttons == kPadL2);
+    axes[kSdlAxisLeftTrigger] = 10000; // under half: analog only
+    p = pad_from_sdl(buttons, axes);
+    CHECK(p.l2 > 0.3f && p.l2 < 0.31f && p.buttons == 0);
+    axes[kSdlAxisLeftTrigger] = 0;
+    axes[kSdlAxisRightTrigger] = 32767;
+    p = pad_from_sdl(buttons, axes);
+    CHECK(p.r2 == 1.0f && p.buttons == kPadR2);
+    axes[kSdlAxisRightTrigger] = -5; // below zero clamps to released
+    CHECK(pad_from_sdl(buttons, axes).r2 == 0.0f);
+}
+
+// The auto-hide rule: key layouts hide under a keyboard, pad layouts under
+// a controller (unless the player keeps them), mixed ones only when both
+// are present, and forcing always shows.
+static void test_layout_wanted_truth_table() {
+    for (int bits = 0; bits < 16; ++bits) {
+        const bool kb = bits & 1, pad = bits & 2, keep = bits & 4, forced = bits & 8;
+        CHECK(layout_wanted(LayoutContent::Keys, kb, pad, keep, forced) == (forced || !kb));
+        CHECK(layout_wanted(LayoutContent::Pad, kb, pad, keep, forced) == (forced || !pad || keep));
+        CHECK(layout_wanted(LayoutContent::Mixed, kb, pad, keep, forced) ==
+              (forced || !kb || !pad || keep));
+    }
+}
+
+// layout_content reads the kinds of control a layout carries; toggles and
+// actions are neither keys nor pad. Only "keys" is a built-in on this
+// branch, so the pad and mixed cases are built by hand like the built-ins.
+static void test_layout_content() {
+    const Layout keys = keys_layout();
+    CHECK(layout_content(keys) == LayoutContent::Keys);
+    const Layout pad = pad_layout();
+    CHECK(layout_content(pad) == LayoutContent::Pad);
+    Layout mixed = keys;
+    mixed.groups.push_back(pad.groups[0]);
+    CHECK(layout_content(mixed) == LayoutContent::Mixed);
+    for (const char *name : {"pad", "pad+keys"}) {
+        const char *text = builtin_layout(name, Form::Tablet);
+        if (!text)
+            continue;
+        Layout l;
+        std::string err;
+        CHECK(parse_layout(text, &l, &err));
+        CHECK(layout_content(l) ==
+              (std::string(name) == "pad" ? LayoutContent::Pad : LayoutContent::Mixed));
+    }
+    // Only toggles or actions: nothing to hide it for, as with keys.
+    Layout tabs;
+    tabs.groups.push_back(keys.groups[2]);
+    CHECK(layout_content(tabs) == LayoutContent::Keys);
+}
+
+// A hidden layout keeps only its toggles: keys are not hit (the finger goes
+// to the game), a toggle still is, and make_view draws only the toggles.
+static void test_router_toggles_only() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    double x, y;
+    center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y);
+    CHECK(r.finger_down(1, x, y, 0, rec)); // held while the mode switches on
+    rec.calls.clear();
+    r.set_toggles_only(true, rec);
+    CHECK(r.toggles_only());
+    CHECK((rec.calls == std::vector<std::string>{"k44-"}));
+    CHECK(!r.owns(1));
+    rec.calls.clear();
+
+    CHECK(!r.finger_down(2, x, y, 10, rec));
+    CHECK(rec.calls.empty());
+    // A grid gap is no longer claimed either.
+    const Rect left = group_rect(l, 0, s);
+    const Rect k0 = control_rect(l, 0, 0, s);
+    CHECK(!r.finger_down(3, k0.x + k0.w + 1, k0.y + 1, 10, rec));
+    (void)left;
+
+    center(l, 2, 0, s, &x, &y);
+    CHECK(r.finger_down(4, x, y, 20, rec));
+    CHECK((rec.calls == std::vector<std::string>{"vis", "tap"}));
+    CHECK(r.finger_up(4, 30, rec));
+
+    ControlsView v = make_view(l, r, s, 1.0);
+    CHECK(v.controls.size() == 3); // two HIDE tabs and the layout-cycle tab
+    CHECK(v.backdrops.empty());
+    for (const DrawControl &d : v.controls)
+        CHECK(d.kind == Kind::Toggle);
+
+    // Portrait: the controls strip is not filled behind the lone tabs.
+    Screen portrait = s;
+    portrait.controls_area = Rect{0, 400, 1180, 420};
+    CHECK(make_view(l, r, portrait, 1.0).controls_area.empty());
+    r.set_toggles_only(false, rec);
+    CHECK(!make_view(l, r, portrait, 1.0).controls_area.empty());
+    r.set_toggles_only(true, rec);
+
+    r.set_toggles_only(false, rec);
+    center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y);
+    CHECK(r.finger_down(5, x, y, 40, rec));
+    v = make_view(l, r, s, 1.0);
+    CHECK(v.controls.size() > 2);
+}
+
+// Trigger edges carry the trigger's 0..32767 value, never a signed one: the
+// DirectInput joystick reads axis edges 4 and 5 that way.
+static void test_vpad_trigger_edges() {
+    Vpad v;
+    PadState p;
+    p.l2 = 1.0f;
+    p.r2 = 0.5f;
+    v.set_source(kPadSourceController, p);
+    PadEdge e{};
+    uint32_t after = 0;
+    int seen = 0;
+    while (v.next_edge(after, &e)) {
+        after = e.sequence;
+        if (e.kind == 2 && e.index == 4) {
+            CHECK(e.value == 32767);
+            ++seen;
+        } else if (e.kind == 2 && e.index == 5) {
+            CHECK(e.value == 16384);
+            ++seen;
+        }
+    }
+    CHECK(seen == 2);
+    v.set_source(kPadSourceController, PadState());
+    seen = 0;
+    while (v.next_edge(after, &e)) {
+        after = e.sequence;
+        if (e.kind == 2 && (e.index == 4 || e.index == 5)) {
+            CHECK(e.value == 0);
+            ++seen;
+        }
+    }
+    CHECK(seen == 2);
+}
+
+// Records what a RumbleRouter drives: "c:low,high,ms" and "d:low,high".
+struct RumbleLog {
+    std::vector<std::string> calls;
+    RumbleOutputs outputs() {
+        RumbleOutputs o;
+        o.controller = [this](uint16_t low, uint16_t high, uint32_t ms) {
+            calls.push_back("c:" + std::to_string(low) + "," + std::to_string(high) + "," +
+                            std::to_string(ms));
+        };
+        o.device = [this](uint16_t low, uint16_t high) {
+            calls.push_back("d:" + std::to_string(low) + "," + std::to_string(high));
+        };
+        return o;
+    }
+};
+
+using Calls = std::vector<std::string>;
+
+static void test_rumble_router_controller_refresh() {
+    RumbleLog log;
+    RumbleRouter r(log.outputs());
+    const uint64_t ms = 1000000;
+    r.update(0, 0, 0, RumbleSink::Controller, 0); // nothing requested yet
+    CHECK(log.calls.empty());
+    r.update(1, 100, 200, RumbleSink::Controller, 0);
+    CHECK((log.calls == Calls{"c:100,200,1000"}));
+    r.update(1, 100, 200, RumbleSink::Controller, 499 * ms);
+    CHECK(log.calls.size() == 1);
+    r.update(1, 100, 200, RumbleSink::Controller, 500 * ms); // refreshed every 500 ms
+    CHECK(log.calls.size() == 2 && log.calls[1] == "c:100,200,1000");
+    r.update(2, 300, 0, RumbleSink::Controller, 600 * ms); // a new value goes out at once
+    CHECK(log.calls.size() == 3 && log.calls[2] == "c:300,0,1000");
+    log.calls.clear();
+    r.update(3, 0, 0, RumbleSink::Controller, 700 * ms); // zero stops both sinks
+    CHECK((log.calls == Calls{"c:0,0,0", "d:0,0"}));
+    log.calls.clear();
+    r.update(3, 0, 0, RumbleSink::Controller, 5000 * ms); // and nothing refreshes
+    CHECK(log.calls.empty());
+}
+
+static void test_rumble_router_device_refresh() {
+    RumbleLog log;
+    RumbleRouter r(log.outputs());
+    const uint64_t s = 1000000000ull;
+    r.update(1, 0, 65535, RumbleSink::Device, 0);
+    CHECK((log.calls == Calls{"d:0,65535"}));
+    r.update(1, 0, 65535, RumbleSink::Device, 29 * s);
+    CHECK(log.calls.size() == 1);
+    r.update(1, 0, 65535, RumbleSink::Device, 30 * s); // re-issued every 30 s
+    CHECK(log.calls.size() == 2 && log.calls[1] == "d:0,65535");
+    // Nowhere to rumble: the device stops.
+    log.calls.clear();
+    r.update(1, 0, 65535, RumbleSink::None, 31 * s);
+    CHECK((log.calls == Calls{"d:0,0"}));
+    log.calls.clear();
+    r.update(1, 0, 65535, RumbleSink::None, 90 * s);
+    CHECK(log.calls.empty());
+}
+
+// A controller arriving mid-rumble takes it over: the device stops first,
+// then the controller starts; leaving hands it back the other way.
+static void test_rumble_router_sink_change() {
+    RumbleLog log;
+    RumbleRouter r(log.outputs());
+    r.update(1, 500, 600, RumbleSink::Device, 0);
+    log.calls.clear();
+    r.update(1, 500, 600, RumbleSink::Controller, 10);
+    CHECK((log.calls == Calls{"d:0,0", "c:500,600,1000"}));
+    log.calls.clear();
+    r.update(1, 500, 600, RumbleSink::Device, 20);
+    CHECK((log.calls == Calls{"c:0,0,0", "d:500,600"}));
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--dump") == 0) {
         dump_builtins(argv[2]);
@@ -2460,6 +2759,14 @@ int main(int argc, char **argv) {
     test_make_view_pad_revision();
     test_layer_revisions_are_per_group();
     test_small_key_label_fits();
+    test_pad_from_sdl();
+    test_layout_wanted_truth_table();
+    test_layout_content();
+    test_router_toggles_only();
+    test_vpad_trigger_edges();
+    test_rumble_router_controller_refresh();
+    test_rumble_router_device_refresh();
+    test_rumble_router_sink_change();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

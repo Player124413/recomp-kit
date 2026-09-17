@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <mutex>
 
+#include "../../dx/host_api.h"
+
 namespace controls {
 
 // bit = 1 << int(PadButton) (layout.h's PadButton enum order).
@@ -126,26 +128,53 @@ class Vpad {
 // (Task 10 on) write to it; the DirectInput/XInput adapters read it.
 Vpad &vpad();
 
-#ifndef RECOMP_HOST_PAD_STATE_DEFINED
-#define RECOMP_HOST_PAD_STATE_DEFINED
-// Mirrors dx/host_api.h's HostPadState, which lives on another branch that
-// hasn't merged here yet. Replace this definition with
-// `#include "../../dx/host_api.h"` once the tracks merge, and drop the guard.
-struct HostPadState {
-    uint16_t buttons;
-    uint8_t hat;
-    uint8_t reserved;
-    int16_t lx, ly, rx, ry;
-    uint8_t l2, r2;
-};
-#endif
-
-// Scales a PadState to the wire format the host_pad_* adapters (added after
-// the merge above) send the guest: sticks to the full int16 range (* 32767,
+// Scales a PadState to the wire format the host_pad_* adapters
+// (vpad_host_api.cpp) send the guest: sticks to the full int16 range (* 32767,
 // rounded), triggers to a byte (* 255, rounded). Y is NOT flipped here —
 // PadState and HostPadState both keep +y down (screen convention); it is
 // the XInput adapter (dx/xinput.cpp, Task 12) that flips ly/ry to XInput's
 // +y up convention on its way out.
 HostPadState to_host(const PadState &s);
+
+// SDL_GamepadButton and SDL_GamepadAxis values, spelled out so pad_from_sdl
+// stays SDL-free (controls_tests.cpp checks them against SDL's enums).
+// kSdlPadButtonCount stops after the touchpad button; the rest are unused.
+enum SdlPadButton : int {
+    kSdlPadSouth = 0,
+    kSdlPadEast = 1,
+    kSdlPadWest = 2,
+    kSdlPadNorth = 3,
+    kSdlPadBack = 4,
+    kSdlPadGuide = 5,
+    kSdlPadStart = 6,
+    kSdlPadLeftStick = 7,
+    kSdlPadRightStick = 8,
+    kSdlPadLeftShoulder = 9,
+    kSdlPadRightShoulder = 10,
+    kSdlPadDpadUp = 11,
+    kSdlPadDpadDown = 12,
+    kSdlPadDpadLeft = 13,
+    kSdlPadDpadRight = 14,
+    kSdlPadButtonCount = 21,
+};
+enum SdlPadAxis : int {
+    kSdlAxisLeftX = 0,
+    kSdlAxisLeftY = 1,
+    kSdlAxisRightX = 2,
+    kSdlAxisRightY = 3,
+    kSdlAxisLeftTrigger = 4,
+    kSdlAxisRightTrigger = 5,
+    kSdlAxisCount = 6,
+};
+
+// A physical controller's state, read through SDL's standard mapping, as a
+// PadState. `buttons` is indexed by SdlPadButton (kSdlPadButtonCount
+// entries), `axes` by SdlPadAxis (kSdlAxisCount entries). Face buttons map
+// by position (south = cross, east = circle, west = square, north =
+// triangle), back/guide/start to select/ps/start, the dpad to the hat.
+// Sticks are v / 32767 clamped to [-1, 1], zeroed as a pair inside a 0.08
+// radial dead zone; SDL's +y is already down. Triggers are v / 32767 clamped
+// to [0, 1], and past 0.5 also set the l2/r2 bit.
+PadState pad_from_sdl(const bool buttons[kSdlPadButtonCount], const int16_t axes[kSdlAxisCount]);
 
 } // namespace controls

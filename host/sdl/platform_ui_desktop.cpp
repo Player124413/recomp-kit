@@ -198,6 +198,14 @@ bool platform_ui_keypad_wanted() {
 #endif
 }
 
+bool platform_ui_touch_device() {
+#ifdef __ANDROID__
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool platform_ui_pointer_capture_supported() {
 #ifdef __ANDROID__
     return false;
