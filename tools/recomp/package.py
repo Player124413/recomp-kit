@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import game_config  # noqa: E402
+import copy_layouts  # noqa: E402
 
 SUFFIX = {"macos": "macos-arm64", "linux": "linux-x64", "windows": "windows-x64"}
 
@@ -34,6 +35,8 @@ def stage_resources(dest, cc, game_dir, build_root):
     symbols = build_root / "recomp/symbols.json"
     if symbols.is_file():
         shutil.copy(symbols, resources / "symbols.json")
+    # The game's shipped on-screen control layouts, when it has any (spec section 5).
+    copy_layouts.copy_layouts(game_dir, resources / "controls")
     core = game_dir / "mods/core"
     if core.is_dir():
         subprocess.run([sys.executable, str(ROOT / "tools/recomp/build_core.py"), "--source", str(core),

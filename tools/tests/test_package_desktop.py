@@ -67,6 +67,41 @@ def test_linux_archive_contents(tmp_path, monkeypatch, machine, arch):
         assert tar.getmember("StubRecomp/StubRecomp").mode == stat.S_IMODE(exe.stat().st_mode)
 
 
+def test_stage_bundles_the_games_control_layouts(tmp_path):
+    """layouts/*.json (top level only) lands at resources/controls; other files don't."""
+    exe = tmp_path / "recomp_app"
+    exe.write_bytes(b"\x7fELF")
+    game_dir = tmp_path / "game"
+    layouts = game_dir / "layouts"
+    layouts.mkdir(parents=True)
+    (layouts / "pad.json").write_text('{"version": 1, "name": "pad"}')
+    (layouts / "pad.phone-portrait.json").write_text('{"version": 1, "name": "pad"}')
+    (layouts / "readme.txt").write_text("not a layout")
+    cfg = {"game": {"app_name": "StubRecomp", "name": "Stub Game", "executable": "STUB.EXE"}}
+    with patch("platform.machine", return_value="x86_64"):
+        out = package_desktop.stage(exe, cfg, tmp_path / "out", system="Linux", game_dir=game_dir)
+    controls = out / "resources/controls"
+    assert (controls / "pad.json").read_text() == (layouts / "pad.json").read_text()
+    assert (controls / "pad.phone-portrait.json").read_text() == (layouts / "pad.phone-portrait.json").read_text()
+    assert not (controls / "readme.txt").exists()
+    assert {p.name for p in controls.iterdir()} == {"pad.json", "pad.phone-portrait.json"}
+    with tarfile.open(tmp_path / "out/StubRecomp-linux-x86_64.tar.gz") as tar:
+        names = set(tar.getnames())
+        assert "StubRecomp/resources/controls/pad.json" in names
+        assert "StubRecomp/resources/controls/pad.phone-portrait.json" in names
+        assert not any(n.endswith("readme.txt") for n in names)
+
+
+def test_stage_without_layouts_creates_no_controls_directory(tmp_path):
+    exe = tmp_path / "recomp_app"
+    exe.write_bytes(b"\x7fELF")
+    game_dir = tmp_path / "game"
+    game_dir.mkdir()
+    cfg = {"game": {"app_name": "StubRecomp", "name": "Stub Game", "executable": "STUB.EXE"}}
+    out = package_desktop.stage(exe, cfg, tmp_path / "out", system="Linux", game_dir=game_dir)
+    assert not (out / "resources/controls").exists()
+
+
 def test_windows_folder(tmp_path):
     exe = tmp_path / "recomp_app.exe"
     exe.write_bytes(b"MZ")
@@ -172,13 +207,14 @@ def test_build_packages_only_successful_desktop_apps(tmp_path, monkeypatch, syst
         binary.write_bytes(b"fake native binary")
         calls.append("built")
 
-    def fake_stage(app_binary, config, out_dir, system=None, build_dir=None):
+    def fake_stage(app_binary, config, out_dir, system=None, build_dir=None, game_dir=None):
         assert calls == ["built"]
         assert app_binary == binary and app_binary.is_file()
         assert config == cfg
         assert out_dir == tmp_path / "build/package"
         assert system in {"Linux", "Windows"}
         assert build_dir == tmp_path / "build/cmake" / system.lower()
+        assert game_dir == tmp_path
         calls.append("packaged")
         return out_dir / "StubRecomp"
 
