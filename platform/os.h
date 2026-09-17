@@ -76,6 +76,14 @@ int os_mkdtemp(char *template_path);
 const char *os_temp_dir(void);
 // "/dev/null" or "NUL".
 const char *os_null_device(void);
+// Bytes a new file may still take on the volume holding `path` (an existing
+// file or directory). 0 or -1.
+int os_free_space(const char *path, uint64_t *bytes_out);
+// Sets a file's modification (and access) time, in seconds since the epoch.
+int os_set_mtime(const char *path, int64_t mtime);
+// A string value from the Windows registry. `key` starts with "HKLM\" or
+// "HKCU\" and is read from the 64- and then the 32-bit view. -1 elsewhere.
+int os_registry_read(const char *key, const char *value, char *buf, size_t cap);
 // Per-user data directory for `app` (not created): ~/Library/Application Support/<app>,
 // %APPDATA%\<app>, $XDG_DATA_HOME/<app> or ~/.local/share/<app>. 0 or -1.
 int os_user_data_dir(const char *app, char *buf, size_t cap);

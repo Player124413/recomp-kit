@@ -302,6 +302,57 @@ const char *os_null_device(void) {
     return "NUL";
 }
 
+int os_free_space(const char *path, uint64_t *bytes_out) {
+    ULARGE_INTEGER available;
+    if (!bytes_out || !GetDiskFreeSpaceExW(widen(path).c_str(), &available, nullptr, nullptr))
+        return -1;
+    *bytes_out = available.QuadPart;
+    return 0;
+}
+int os_set_mtime(const char *path, int64_t mtime) {
+    HANDLE h = CreateFileW(widen(path).c_str(), FILE_WRITE_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return -1;
+    ULARGE_INTEGER u;
+    u.QuadPart = uint64_t(mtime) * 10000000ull + 116444736000000000ull;
+    FILETIME ft{u.LowPart, u.HighPart};
+    const BOOL ok = SetFileTime(h, nullptr, &ft, &ft);
+    CloseHandle(h);
+    return ok ? 0 : -1;
+}
+int os_registry_read(const char *key, const char *value, char *buf, size_t cap) {
+    if (!key || !value || !buf || !cap)
+        return -1;
+    HKEY root = nullptr;
+    const char *path = nullptr;
+    if (strncmp(key, "HKLM\\", 5) == 0) {
+        root = HKEY_LOCAL_MACHINE;
+        path = key + 5;
+    } else if (strncmp(key, "HKCU\\", 5) == 0) {
+        root = HKEY_CURRENT_USER;
+        path = key + 5;
+    } else
+        return -1;
+    for (REGSAM view : {KEY_WOW64_64KEY, KEY_WOW64_32KEY}) {
+        wchar_t data[4096];
+        DWORD size = sizeof data;
+        LSTATUS st = RegGetValueW(root, widen(path).c_str(), widen(value).c_str(),
+                                  RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | (view == KEY_WOW64_64KEY
+                                                                              ? RRF_SUBKEY_WOW6464KEY
+                                                                              : RRF_SUBKEY_WOW6432KEY),
+                                  nullptr, data, &size);
+        if (st != ERROR_SUCCESS)
+            continue;
+        const std::string out = narrow(data);
+        if (out.size() + 1 > cap)
+            return -1;
+        memcpy(buf, out.c_str(), out.size() + 1);
+        return 0;
+    }
+    return -1;
+}
 int os_user_data_dir(const char *app, char *buf, size_t cap) {
     wchar_t w[MAX_PATH + 1];
     DWORD n = GetEnvironmentVariableW(L"APPDATA", w, MAX_PATH + 1);

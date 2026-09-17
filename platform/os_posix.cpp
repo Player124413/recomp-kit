@@ -16,6 +16,7 @@
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -179,6 +180,22 @@ const char *os_null_device(void) {
     return "/dev/null";
 }
 
+int os_free_space(const char *path, uint64_t *bytes_out) {
+    struct statvfs vfs;
+    if (!bytes_out || statvfs(path, &vfs) != 0)
+        return -1;
+    *bytes_out = uint64_t(vfs.f_bavail) * uint64_t(vfs.f_frsize);
+    return 0;
+}
+int os_set_mtime(const char *path, int64_t mtime) {
+    struct timeval times[2];
+    times[0].tv_sec = times[1].tv_sec = (time_t)mtime;
+    times[0].tv_usec = times[1].tv_usec = 0;
+    return utimes(path, times);
+}
+int os_registry_read(const char *, const char *, char *, size_t) {
+    return -1;
+}
 int os_user_data_dir(const char *app, char *buf, size_t cap) {
     const char *home = getenv("HOME");
     char base[4096];
