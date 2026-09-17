@@ -76,7 +76,9 @@ set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
 add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                               ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
-                              ${HOST}/tests/controls_tests.cpp ${HOST}/tests/keypad_legacy_oracle.cpp)
+                              ${HOST}/controls/router.cpp ${HOST}/keypad_layout.cpp
+                              ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
+                              ${HOST}/tests/keypad_legacy_oracle.cpp)
 target_include_directories(controls_tests PRIVATE ${POP_ROOT})
 target_compile_options(controls_tests PRIVATE ${POP_WARN_WERROR})
 target_link_libraries(controls_tests PRIVATE recomp_platform)

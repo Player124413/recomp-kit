@@ -4,6 +4,7 @@
 #include "../controls/json.h"
 #include "../controls/layout.h"
 #include "../controls/layout_store.h"
+#include "../controls/router.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
 
@@ -11,6 +12,8 @@
 #include <filesystem>
 #include <stdio.h>
 #include <string.h>
+#include <string>
+#include <vector>
 
 static int g_failures = 0;
 #define CHECK(c)                                                                                   \
@@ -255,6 +258,287 @@ static void test_layout_store() {
     std::filesystem::remove_all(root, ec);
 }
 
+// --- Router: fingers, keys, modifiers, toggles ----------------------------
+
+// Records every call as a short string: "k44+", "k44-", "a:settings",
+// "sw:next", "vis", "tap".
+struct Rec : ControlsSink {
+    std::vector<std::string> calls;
+    void key(int scancode, bool down) override {
+        calls.push_back("k" + std::to_string(scancode) + (down ? "+" : "-"));
+    }
+    void action(const std::string &name) override {
+        calls.push_back("a:" + name);
+    }
+    void switch_layout(const std::string &target) override {
+        calls.push_back("sw:" + target);
+    }
+    void group_visibility_changed() override {
+        calls.push_back("vis");
+    }
+    void tap() override {
+        calls.push_back("tap");
+    }
+};
+
+static Layout keys_layout() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("keys", Form::Tablet), &l, &err));
+    return l;
+}
+
+static int find_key(const Layout &l, int group, int scancode) {
+    const Group &g = l.groups[group];
+    for (size_t i = 0; i < g.controls.size(); ++i)
+        if (g.controls[i].kind == Kind::Key && g.controls[i].scancode == scancode)
+            return int(i);
+    return -1;
+}
+
+// The middle of a control's current rect: recompute this right before a
+// finger_down when the control (a toggle tab, in particular) may have moved
+// since an earlier press changed the layout's visibility.
+static void center(const Layout &l, int group, int control, const Screen &s, double *x, double *y) {
+    const Rect r = control_rect(l, group, control, s);
+    CHECK(!r.empty());
+    *x = r.x + r.w / 2.0;
+    *y = r.y + r.h / 2.0;
+}
+
+static void test_router_space_key() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    const uint32_t gen0 = r.generation();
+
+    double x, y;
+    center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y); // Space lives on the right half
+    Rec rec;
+    CHECK(r.finger_down(1, x, y, 0, rec));
+    CHECK((rec.calls == std::vector<std::string>{"k44+", "tap"}));
+    CHECK(r.generation() != gen0);
+    const uint32_t gen1 = r.generation();
+    rec.calls.clear();
+
+    CHECK(r.finger_up(1, 10, rec));
+    CHECK((rec.calls == std::vector<std::string>{"k44-"}));
+    CHECK(r.generation() != gen1);
+}
+
+static void test_router_latched_shift() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+
+    double sx, sy, ax, ay;
+    center(l, 0, find_key(l, 0, kScanLShift), s, &sx, &sy);
+    center(l, 0, find_key(l, 0, kScanA), s, &ax, &ay);
+
+    Rec rec;
+    uint32_t gen = r.generation();
+    CHECK(r.finger_down(1, sx, sy, 0, rec)); // Shift down
+    CHECK((rec.calls == std::vector<std::string>{"k225+", "tap"}));
+    CHECK(r.lit() == 0); // Held, not latched yet
+    CHECK(r.generation() != gen);
+    gen = r.generation();
+    rec.calls.clear();
+
+    CHECK(r.finger_up(1, 100ull * 1000000ull, rec)); // a 100 ms tap latches
+    CHECK(rec.calls.empty());                        // Held->Latched crosses no Off boundary
+    CHECK(r.lit() == 1);
+    CHECK(r.generation() != gen);
+    gen = r.generation();
+    rec.calls.clear();
+
+    CHECK(r.finger_down(2, ax, ay, 200ull * 1000000ull, rec));
+    CHECK((rec.calls == std::vector<std::string>{"k4+", "tap"}));
+    CHECK(r.generation() != gen);
+    gen = r.generation();
+    rec.calls.clear();
+
+    CHECK(r.finger_up(2, 250ull * 1000000ull, rec)); // A lifts: the latch releases too
+    CHECK((rec.calls == std::vector<std::string>{"k4-", "k225-"}));
+    CHECK(r.lit() == 0);
+    CHECK(r.generation() != gen);
+}
+
+static void test_router_left_tab_toggle() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    Rec rec;
+    uint32_t gen = r.generation();
+
+    double x, y;
+    center(l, 2, 0, s, &x, &y); // the tabs group's first toggle targets "left"
+    CHECK(r.finger_down(1, x, y, 0, rec));
+    CHECK((rec.calls == std::vector<std::string>{"vis", "tap"}));
+    CHECK(!l.groups[0].visible);
+    CHECK(r.generation() != gen);
+    gen = r.generation();
+    rec.calls.clear();
+
+    CHECK(r.finger_up(1, 0, rec)); // the toggle is claimed and does nothing more
+    CHECK(rec.calls.empty());
+
+    center(l, 2, 0, s, &x, &y); // the tab moved: its group is hidden now
+    CHECK(r.finger_down(2, x, y, 0, rec));
+    CHECK((rec.calls == std::vector<std::string>{"vis", "tap"}));
+    CHECK(l.groups[0].visible);
+    CHECK(r.generation() != gen);
+}
+
+static void test_router_gap_is_claimed_silently() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    const Rect box = group_rect(l, 0, s);
+    Rec rec;
+    CHECK(r.finger_down(1, box.x + 1, box.y + 1, 0, rec)); // the half-gap at the box's corner
+    CHECK(rec.calls.empty());
+    CHECK(r.owns(1));
+}
+
+static void test_router_game_area_not_claimed() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    Rec rec;
+    CHECK(!r.finger_down(1, s.dw / 2.0, s.dh / 2.0, 0, rec));
+    CHECK(rec.calls.empty());
+    CHECK(!r.owns(1));
+}
+
+static void test_router_cancel_does_not_release_latch() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    Rec rec;
+
+    double sx, sy, ax, ay;
+    center(l, 0, find_key(l, 0, kScanLShift), s, &sx, &sy);
+    CHECK(r.finger_down(1, sx, sy, 0, rec));
+    CHECK(r.finger_up(1, 50ull * 1000000ull, rec)); // latches Shift
+    CHECK(r.lit() == 1);
+    rec.calls.clear();
+
+    center(l, 0, find_key(l, 0, kScanA), s, &ax, &ay);
+    CHECK(r.finger_down(2, ax, ay, 100ull * 1000000ull, rec));
+    rec.calls.clear();
+    const uint32_t gen = r.generation();
+
+    CHECK(r.finger_cancel(2, rec));
+    CHECK((rec.calls == std::vector<std::string>{"k4-"}));
+    CHECK(r.lit() == 1); // key_lifted never runs on a cancel: the latch survives
+    CHECK(!r.owns(2));
+    CHECK(r.generation() != gen);
+}
+
+static void test_router_two_fingers_shift_held_and_a() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    Rec rec;
+
+    double sx, sy, ax, ay;
+    center(l, 0, find_key(l, 0, kScanLShift), s, &sx, &sy);
+    center(l, 0, find_key(l, 0, kScanA), s, &ax, &ay);
+
+    CHECK(r.finger_down(1, sx, sy, 0, rec)); // Shift: finger stays down (chording)
+    CHECK((rec.calls == std::vector<std::string>{"k225+", "tap"}));
+    rec.calls.clear();
+
+    CHECK(r.finger_down(2, ax, ay, 10ull * 1000000ull, rec));
+    CHECK((rec.calls == std::vector<std::string>{"k4+", "tap"}));
+    rec.calls.clear();
+
+    CHECK(r.finger_up(2, 20ull * 1000000ull, rec)); // A lifts; Shift is Held, not Latched
+    CHECK((rec.calls == std::vector<std::string>{"k4-"}));
+    rec.calls.clear();
+
+    CHECK(r.finger_up(1, 300ull * 1000000ull, rec)); // held well past the tap window
+    CHECK((rec.calls == std::vector<std::string>{"k225-"}));
+}
+
+static void test_router_set_enabled_false_releases_and_blocks() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    Rec rec;
+
+    double ax, ay;
+    center(l, 0, find_key(l, 0, kScanA), s, &ax, &ay);
+    CHECK(r.finger_down(1, ax, ay, 0, rec));
+    rec.calls.clear();
+    const uint32_t gen = r.generation();
+
+    r.set_enabled(false, rec);
+    CHECK((rec.calls == std::vector<std::string>{"k4-"}));
+    CHECK(!r.enabled());
+    CHECK(!r.owns(1));
+    CHECK(r.generation() != gen);
+
+    Rec rec2;
+    CHECK(!r.finger_down(2, ax, ay, 0, rec2)); // disabled: hits nothing
+    CHECK(rec2.calls.empty());
+}
+
+static void test_router_cancel_all_releases_everything() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    r.set_layout(&l);
+    r.set_screen(s);
+    Rec rec;
+
+    double sx, sy, ax, ay;
+    center(l, 0, find_key(l, 0, kScanLShift), s, &sx, &sy);
+    center(l, 0, find_key(l, 0, kScanA), s, &ax, &ay);
+    CHECK(r.finger_down(1, sx, sy, 0, rec));
+    CHECK(r.finger_down(2, ax, ay, 0, rec));
+    rec.calls.clear();
+    const uint32_t gen = r.generation();
+
+    r.cancel_all(rec);
+    CHECK((rec.calls == std::vector<std::string>{"k4-", "k225-"}));
+    CHECK(!r.owns(1) && !r.owns(2));
+    CHECK(r.lit() == 0);
+    CHECK(r.generation() != gen);
+}
+
+static void test_router_set_layout_null_disables_hit_testing() {
+    Router r;
+    r.set_screen(screen(1180, 820, 1.0));
+    r.set_layout(nullptr);
+    CHECK(r.layout() == nullptr);
+    Rec rec;
+    CHECK(!r.finger_down(1, 10, 10, 0, rec));
+    CHECK(rec.calls.empty());
+}
+
+static void test_router_state_out_of_range_is_zero() {
+    Router r;
+    const ControlState &cs = r.state(5, 5);
+    CHECK(!cs.pressed && cs.knob_x == 0 && cs.knob_y == 0 && cs.hat == 0);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -263,6 +547,17 @@ int main() {
     test_builtin_keys_matches_the_old_keypad();
     test_form_for();
     test_layout_store();
+    test_router_space_key();
+    test_router_latched_shift();
+    test_router_left_tab_toggle();
+    test_router_gap_is_claimed_silently();
+    test_router_game_area_not_claimed();
+    test_router_cancel_does_not_release_latch();
+    test_router_two_fingers_shift_held_and_a();
+    test_router_set_enabled_false_releases_and_blocks();
+    test_router_cancel_all_releases_everything();
+    test_router_set_layout_null_disables_hit_testing();
+    test_router_state_out_of_range_is_zero();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;
