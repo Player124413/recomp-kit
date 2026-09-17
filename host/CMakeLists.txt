@@ -160,7 +160,7 @@ set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                          ${HOST}/controls/router.cpp ${HOST}/controls/vpad.cpp
                          ${HOST}/controls/binding.cpp ${HOST}/controls/overlay_view.cpp
                          ${HOST}/controls/overlay.cpp ${HOST}/controls/raster.cpp
-                         ${HOST}/controls/overlay_paint.cpp
+                         ${HOST}/controls/overlay_paint.cpp ${HOST}/controls/haptics.cpp
                          ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp)
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
                         ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${POP_CONTROLS_SOURCES}

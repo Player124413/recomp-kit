@@ -8,6 +8,8 @@
 #include "../sdl/platform_ui.h"
 #include "binding.h"
 #include "game_config.h"
+#include "gamepad_sdl.h"
+#include "haptics.h"
 #include "layout_fallback.h"
 #include "layout_store.h"
 #include "overlay.h"
@@ -140,10 +142,21 @@ class HostSink : public ControlsSink {
     void group_visibility_changed() override {
         mods_controls_set_hidden_groups(hidden_bits(g_layout));
     }
-    void tap() override {} // haptics arrive in Task 13
+    // A light tick on each press, when the haptics row is on.
+    void tap() override {
+        if (mods_controls_value(CONTROLS_HAPTICS_ROW))
+            platform_ui_haptic_tap();
+    }
 };
 
 HostSink g_sink;
+
+// The guest's rumble (vpad().request_rumble, from XInputSetState) drives the
+// controller's motors when one is connected, else the device's own.
+RumbleRouter g_rumble(RumbleOutputs{
+    [](uint16_t low, uint16_t high, uint32_t ms) { (void)gamepad_rumble(low, high, ms); },
+    [](uint16_t low, uint16_t high) { platform_ui_device_rumble(low, high); },
+});
 
 // Loads `name` for `form` into g_layout, releasing whatever the router held
 // against the old one first. "" (the Hidden choice) or a failed load leaves
@@ -318,6 +331,15 @@ void host_pump(uint64_t now) {
             g_sink.action(name);
     }
 #endif
+
+    {
+        // Serial first: the values read after it are at least as new.
+        const uint64_t serial = vpad().rumble_serial();
+        uint16_t low = 0, high = 0;
+        vpad().rumble(&low, &high);
+        g_rumble.update(serial, low, high,
+                        rumble_sink(gamepad_connected(), platform_ui_touch_device()), now);
+    }
 
     if (trace()) {
         static PadState last;
