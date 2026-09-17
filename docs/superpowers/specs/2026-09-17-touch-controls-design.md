@@ -1,10 +1,12 @@
 # Touch controls design: a data-driven on-screen gamepad and keyboard
 
 Date: 2026-09-17
-Status: proposed
-Parent spec: `2026-09-13-recomp-kit-design.md`; supersedes the fixed tables,
-the "no per-game key list" decision and the "iPhone layouts and portrait"
-non-goal of `2026-09-13-keypad-design.md`
+Status: built on branch `touch-controls` (all six steps of section 11).
+This document describes what the branch does, not what was first proposed:
+where the build settled somewhere else, the built behaviour is what is
+written here, with a sentence of reasoning.
+Parent spec: `2026-09-13-recomp-kit-design.md`; supersedes
+`2026-09-13-keypad-design.md` in full
 
 ## 1. Goal
 
@@ -65,13 +67,35 @@ and desktops are all covered.
   - `stick`: `left` or `right`, with `mode` `floating` (the default) or
     `fixed`. A floating stick recentres on the first touch inside its
     zone; a fixed stick stays where it is drawn. Output is the offset from
-    centre divided by the radius, clamped to the unit circle, with a radial
+    centre divided by `radius`, clamped to the unit circle, with a radial
     dead zone (default 0.15) rescaled so output starts at 0.
+
+    A stick has two sizes, because the area a thumb may land in is not the
+    distance the knob travels. `Control.radius` is the knob travel (and the
+    drawn base radius); the control's `w`/`h` are its *zone*, the rectangle
+    the hit test uses and a floating base is clamped inside. `"zone": [w, h]`
+    sets the zone, and it defaults to `2 * radius`. Without the split a
+    floating stick would be a no-op, since its zone would be exactly the
+    base it recentres inside.
   - `toggle`: shows or hides a named group, switches to a named layout, or
-    cycles to the next layout (`"target": "next"`).
+    cycles to the next layout (`"target": "next"`). `label_off` is the text
+    drawn while its target group is hidden (`label` is the text while it is
+    shown), so one control reads HIDE/KEYS as the keypad tabs do.
+    `stack_on: "<group>"` parks the toggle directly on top of that group
+    while the group is visible, and at the group's anchor edge while it is
+    not, which is how a tab follows the half it opens. A stacked toggle
+    cannot be moved vertically in the editor; its y comes from the group.
   - `action`: a host action (`settings`, `system_keyboard`, `edit_layout`).
 - **Group**: a named set of controls that toggles together (the two keypad
-  halves are groups `left` and `right`).
+  halves are groups `left` and `right`). A group is either
+  - a **grid group** (`"grid": {"cols", "rows", "key", "gap"}`), which has
+    its own anchor and offset and lays its controls out by `col`/`row`/`span`
+    in a fixed box. A grid group is drawn on a backdrop, and it claims the
+    gaps between its keys (section 6), as the keypad halves do; or
+  - a plain group, whose controls each carry their own anchor and offset.
+    Its rectangle is just the union of its controls, it has no backdrop and
+    it claims no gaps. The pad layouts are built from plain groups, so the
+    game stays touchable between the buttons.
 - **Layout**: a named list of groups. Exactly one layout is active. The
   built-in and default game layouts are `pad`, `keys` and `pad+keys`, and a
   toggle control in each cycles between them.
@@ -92,18 +116,31 @@ screen of its form factor.
 ```json
 {
   "version": 1,
-  "name": "pad",
+  "name": "pad+keys",
   "opacity": 0.7,
+  "scale": 1.0,
+  "safe_inset": true,
   "groups": [
     { "id": "main", "visible": true, "controls": [
       { "kind": "stick", "stick": "left", "mode": "floating",
-        "anchor": "bottom-left", "x": 40, "y": 40, "radius": 70 },
+        "anchor": "bottom-left", "x": 40, "y": 40,
+        "radius": 44, "zone": [140, 140] },
       { "kind": "button", "button": "cross",
         "anchor": "bottom-right", "x": 90, "y": 40, "size": 56 },
-      { "kind": "key", "scancode": "F5", "label": "SAVE",
-        "anchor": "top-right", "x": 20, "y": 20, "w": 64, "h": 36 },
       { "kind": "toggle", "target": "next", "label": "KEYS",
-        "anchor": "top-center", "x": 0, "y": 8, "w": 64, "h": 24 }
+        "anchor": "bottom", "x": 0, "y": 8, "w": 64, "h": 20 }
+    ]},
+    { "id": "left", "visible": true,
+      "grid": { "cols": 6, "rows": 4, "key": 36, "gap": 4 },
+      "anchor": "bottom-left", "x": 8, "y": 8,
+      "controls": [
+        { "kind": "key", "scancode": "F5", "label": "SAVE",
+          "col": 0, "row": 0, "span": 2 }
+      ]},
+    { "id": "left-tab", "visible": true, "controls": [
+      { "kind": "toggle", "target": "left", "label": "HIDE",
+        "label_off": "KEYS", "stack_on": "left",
+        "anchor": "bottom-left", "x": 8, "y": 0, "w": 44, "h": 18 }
     ]}
   ]
 }
@@ -111,8 +148,13 @@ screen of its form factor.
 
 - `anchor` is one of the four corners, the four edge midpoints or `center`.
   `x`/`y` are the inset from that anchor to the control's matching point.
-- Size is `size` for round or square controls, or `w`/`h`. Sticks use
-  `radius`.
+  In a grid group the group carries the anchor and offset, and each control
+  carries `col`, `row` and `span` instead.
+- Size is `size` for round or square controls, or `w`/`h`. A stick's knob
+  travel is `radius` and its touch zone is `zone` (see section 4).
+- `scale` multiplies sizes but not offsets, and the `size` setting
+  multiplies it again. `safe_inset` (default true) decides whether anchors
+  resolve inside the screen's safe area or against the whole drawable.
 - `scancode` is a name from the existing `KeypadScan` table ("A", "F5",
   "LShift"). `label` defaults to the key name.
 - **Portrait anchoring.** In `phone-portrait` the anchors refer to the
@@ -130,11 +172,20 @@ match wins:
 1. `<profile>/controls/<name>.<form>.json`, then
    `<profile>/controls/<name>.json`: the player's edited copies.
 2. `<game data>/controls/<name>.<form>.json`, then `<name>.json`: shipped
-   by the game repo (its `layouts/` directory, bundled by
-   `tools/build.py`).
+   by the game repo (its `layouts/` directory, copied into the app by
+   `tools/copy_layouts.py`, which `tools/build.py` and
+   `tools/package_desktop.py` call).
 3. Kit built-ins for `keys`, `pad` and `pad+keys`, one for each of the
    three form factors. The tablet `keys` built-in reproduces today's split
-   keypad exactly.
+   keypad exactly. A layout with no file for the running form factor falls
+   back to the tablet one.
+
+**Android.** An APK has no readable resource directory, so resources are
+read from the app's data folder: `tools/build.py` copies `layouts/` into
+the APK under `assets/controls`, the activity unpacks the assets into the
+app's external files directory on first run, and the Android entry point
+points `RECOMP_RESOURCES_DIR` at that folder. Every bundled resource, not
+only layouts, is reachable that way.
 
 The editor saves to the form-specific name, so an edit on a phone in
 portrait does not change the landscape layout.
@@ -143,11 +194,23 @@ portrait does not change the landscape layout.
 
 | Key | Values |
 |---|---|
-| `host.controls/layout` | Active layout name, stored as its index in the sorted list of discovered layouts |
+| `host.controls/layout` | The active layout's index in the discovered-layout list. One index past the last name is the **Hidden** slot: nothing is drawn. |
+| `host.controls/size` | 0, 1 or 2 — small, normal, large: the scale factors below |
 | `host.controls/opacity` | 20–100 (%), default 100 |
 | `host.controls/haptics` | 0/1, default 1 |
 | `host.controls/pad_with_controller` | 0 auto-hide (default), 1 always show |
 | `host.controls/snap` | 0/1, editor snapping, default 1 |
+| `host.controls/hidden` | A bit per group of the active layout, hidden by its toggle (16 bits) |
+
+The layout row's maximum is dynamic: the host discovers the layout names
+and hands them to `mods_controls_set_names` before `mods_controls_init`
+runs, and the declared range is re-set whenever the names change.
+
+"Edit controls" is a row of the same page but is never declared or
+persisted; it opens the editor (section 9). The native Options Display tab
+shows layout, size, opacity, haptics and Edit controls; `pad_with_controller`
+and `snap` are on the F10 fallback page (and snap also on the editor's
+toolbar), because the Display tab holds eight rows.
 
 The existing `host.keypad/left`, `/right` and `/size` values migrate on
 first run:
@@ -172,10 +235,12 @@ migration the `host.keypad/*` keys are no longer written.
   - A hit claims the finger for that control until it lifts or is
     cancelled.
   - A miss goes to `TouchMapper` as today.
-  - The space between controls inside a group's bounding box is claimed
-    and does nothing, as the keypad's gaps do now.
-  - In portrait, every touch in the controls area is claimed, so the
-    gesture mapper only sees touches on the game image.
+  - The space between the keys of a visible **grid** group is claimed and
+    does nothing, as the keypad's gaps do now. A plain group claims nothing
+    but its controls, so the game stays reachable between the pad's
+    buttons.
+  - In portrait, the router claims every touch in the controls area, so
+    the gesture mapper only sees touches on the game image.
 - **Finger motion** goes to the control that owns the finger. Sticks and
   the dpad use it; keys and buttons ignore it, so a finger that slides off
   still holds.
@@ -202,9 +267,12 @@ entry points.
 
 ### 7.2 The vpad
 
-`host/controls/vpad.{h,cpp}` holds an atomic snapshot and an edge queue.
-The input thread writes both; the game thread reads the snapshot when it
-polls and drains the queue for buffered reads. Sources:
+`host/controls/vpad.{h,cpp}` holds a state snapshot and an edge queue,
+both under one mutex rather than lock-free. The input thread writes them;
+the game thread reads the snapshot when it polls and drains the queue for
+buffered reads. A pad poll happens a few hundred times a second at most,
+and the state is wider than one word, so a lock-free design would have
+bought nothing but a harder invariant. Sources:
 
 - On-screen `button`, `dpad` and `stick` controls.
 - The first physical controller, opened through `SDL_Gamepad` with
@@ -224,6 +292,13 @@ each axis the value with the larger magnitude wins.
   ("Recomp Virtual Pad", with fixed instance and product GUIDs) for the
   joystick classes and filters (`DI8DEVCLASS_GAMECTRL`, `DIEDFL_ATTACHEDONLY`).
   DirectInput 7 and older callers see `DIDEVTYPE_JOYSTICK`.
+
+  **DirectInput 8.** The kit's `main` serves DirectInput up to version 7
+  only, because no game on `main` asks for 8. The version 8 class and type
+  matching is written and unit-tested all the same, in
+  `joy_enum_matches(devtype_filter, di_version)`, so the NFSMW branch — which
+  does add `IDirectInput8` — calls it from its own `EnumDevices` without a
+  second implementation.
 - **`CreateDevice`** accepts that instance GUID and `GUID_Joystick`.
 - **Data formats.** `SetDataFormat` accepts `DIJOYSTATE`, `DIJOYSTATE2` and
   any custom format whose objects map to the objects below.
@@ -264,8 +339,14 @@ New `dx/xinput.cpp` registers import tables for `xinput1_3.dll`,
   start→START, L3/R3→thumbs, dpad→DPAD.
 - Sticks are scaled to ±32767 with Y up. Triggers are scaled to 0–255.
 - PS has no public XInput bit and is not reported.
-- XInput is served with `pad = "native"` only; otherwise the DLLs are
-  not served, so a game takes its no-controller path.
+- **The DLLs are always registered**, whatever `pad` is. With
+  `pad != "native"` every entry point answers
+  `ERROR_DEVICE_NOT_CONNECTED` (and `XInputSetState` does nothing), so the
+  game still takes its no-controller path. Leaving the imports unregistered
+  was worse: a static import nothing has registered gets a generic stub
+  whose argument count is wrong, which corrupts the stack on a `__stdcall`
+  return, and a real Windows machine always has an XInput redistributable
+  to import from.
 
 ### 7.5 `mapped`: keys and mouse
 
@@ -308,8 +389,10 @@ Those values are also the kit defaults for any entry a game leaves out.
   `kTouchPanStep` per tick at full deflection.
 - **`wheel`** sends wheel notches at a rate that grows with deflection.
 - **Player overrides.** The editor saves overrides for single entries to
-  `<profile>/controls/binding.json`, which is read on top of the
-  `game.toml` table.
+  `<profile>/controls/binding.txt`, read on top of the `game.toml` table.
+  The file is the same `k=v;k=v` syntax as the generated table and the
+  `RECOMP_CONTROLS_MAPPED` switch, not JSON: one parser, one format to
+  test. It holds only the entries the player changed.
 - **Generated config.** `tools/gen_game_config.py` turns `[controls]` into
   the generated config header and replaces `RECOMP_TOUCH_KEYPAD_DEFAULT`.
   `[touch] keypad` is still read as an old spelling of `default_layout`
@@ -341,9 +424,12 @@ Those values are also the kit defaults for any entry a game leaves out.
 
 `host/controls/overlay.{h,cpp}` replaces `keypad_overlay`:
 
-- **Raster and upload.** It rasterizes each visible control to a CPU canvas
-  at drawable size. The canvas is re-uploaded only when the layout, size,
-  opacity or lit/pressed state changes.
+- **Raster and upload.** Drawing is split into **layers**, one per layout
+  group plus one for the portrait controls area, each a premultiplied RGBA
+  texture covering only what that layer draws. Each layer carries a
+  revision hashed from its own contents, and only the layers whose revision
+  changed are re-rasterized and re-uploaded. One canvas for the whole
+  drawable would mean repainting megabytes on every key press.
 - **Blending.** The presenter blends the canvas where it blends the keypad
   today. `host_present_set_keypad` becomes
   `host_present_set_controls(ControlsView)`.
@@ -401,9 +487,20 @@ reference pixels.
 
 Reached from the F10 page ("Edit controls") or an `edit_layout` action.
 
-- **Opening:** the game pauses through the same pause the settings page
-  uses. The frame is dimmed and a 10 pt grid is drawn while snapping is
-  on.
+- **Opening:** the editor **freezes input**, it does not pause the
+  simulation. Every held key, button and stick is released as it opens, and
+  nothing a finger does afterwards reaches the guest. The game keeps
+  running behind the dimmed frame, as it does behind the F10 page, which
+  does not pause it either. A physical controller in `native` mode also
+  keeps reaching the guest while the editor is open: the editor intercepts
+  touch, not the pad path.
+- **Toolbar band.** While the editor is open, a band along the top of the
+  anchor area is reserved for the toolbar and the anchor area shrinks by
+  it, so no control can sit under the toolbar. Top- and centre-anchored
+  controls therefore draw slightly lower while editing than in play; that
+  is the accepted trade-off for the toolbar never covering what is being
+  edited.
+- The frame is dimmed and a 10 pt grid is drawn while snapping is on.
 - **Moving and resizing:**
   - Drag moves a control. On drop its anchor becomes the nearest corner,
     edge or centre, so it stays in place across screen sizes.
@@ -425,10 +522,11 @@ Reached from the F10 page ("Edit controls") or an `edit_layout` action.
   - Pad buttons and sticks in mapped mode: the targets from 7.5.
   - Pad buttons in native mode: the pad button list.
 - **Saving:** Done writes `<profile>/controls/<name>.<form>.json` (and
-  `binding.json` if changed) through a temporary file and a rename, then
-  leaves the editor. Reset deletes the file.
+  `binding.txt` if changed) through a temporary file and a rename, then
+  leaves the editor. After a rename-save the old user file is deleted.
+  Reset deletes the file.
 - **Input while editing:** the editor's own hit test runs first, so
-  controls never fire while being edited.
+  controls never fire while being edited (see "Opening" above).
 - **Desktop:** the mouse drives the editor, and the scroll wheel resizes.
 
 ## 10. Components
@@ -442,9 +540,10 @@ Reached from the F10 page ("Edit controls") or an `edit_layout` action.
 | `host/controls/binding.{h,cpp}` | Mapped-mode table, defaults, overrides, evaluation. SDL-free. |
 | `host/controls/gamepad_sdl.cpp` | `SDL_Gamepad` open, close, hot-plug → vpad; rumble out. |
 | `host/controls/haptics.{h,cpp}` + `host/sdl/platform_ui_*` | Rumble and tap per platform. |
-| `host/controls/raster.{h,cpp}` | Anti-aliased shaded shape primitives. |
-| `host/controls/overlay.{h,cpp}` | Draw controls; replaces `keypad_overlay`. |
-| `host/controls/editor.{h,cpp}` | Edit mode state, toolbar, picker, snapping, save and reset. |
+| `host/controls/raster.{h,cpp}`, `pad_art.{h,cpp}` | Anti-aliased shaded shape primitives, and the DualSense-styled control art drawn with them. |
+| `host/controls/overlay.{h,cpp}`, `overlay_view.cpp`, `overlay_paint.{h,cpp}` | `make_view` (SDL-free, unit-tested) resolves what to draw; `Overlay` rasterizes the per-group layers and blends them. Replaces `keypad_overlay`. |
+| `host/controls/editor.{h,cpp}`, `editor_actions.{h,cpp}` | Edit mode state, toolbar, picker, snapping; save, reset and the file writes they ask for. |
+| `host/controls/layout_store.{h,cpp}`, `controls_host.{h,cpp}` | Layout discovery across the three sources, and the host-side glue that owns the router, the overlay and the settings. |
 | `host/keypad_layout.*`, `keypad_modifiers.*` | Scan names and modifier machine kept; half tables move into `builtin_layouts.cpp`. |
 | `host/present*.{h,cpp}` | `host_present_set_controls`, `host_present_game_rect`, portrait placement. |
 | `host/sdl/main.cpp`, `host/input_gate.cpp` | Wiring; pointer mapping through the game rectangle. |
@@ -453,7 +552,7 @@ Reached from the F10 page ("Edit controls") or an `edit_layout` action.
 | `dx/xinput.cpp` | XInput DLLs (7.4). |
 | `host/Info-ios.plist.in`, `cmake/IosBundle.cmake`, `platform/android/...` | Orientation (8.2). |
 | `tools/gen_game_config.py`, `games/stub/game.toml`, `tools/build.py` | `[controls]`, bundling `layouts/`. |
-| `host/tests/controls_*_tests.cpp`, `dx/tests/{dinput_joystick,xinput}_tests.cpp` | Section 12. |
+| `host/tests/controls_tests.cpp`, `dx/tests/pad_tests.cpp` | Section 12. `controls_tests` holds every SDL-free `controls::` suite (including the old keypad geometry as a regression oracle); `pad_tests` holds the DirectInput joystick and XInput suites, which need the `host_pad_*` callbacks defined strongly and so cannot live in `dx_tests`. |
 
 ## 11. Build order
 
