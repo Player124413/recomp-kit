@@ -8626,6 +8626,20 @@ static void test_display_settings_bridge() {
     g_page_draws = false;
     CHECK(!host_page_rgba(&page));
     CHECK(page.empty());
+    // A window present - a D3D11 renderer's, a film's - carries the open page
+    // like a DirectDraw frame does; it used to seal without it, so F10 opened
+    // a page nobody could see.
+    host_present_test_begin();
+    g_page_draws = true;
+    const uint8_t window_rgba[4] = {1, 2, 3, 255};
+    host_present_stage_rgba(window_rgba, 1, 1);
+    host_present_seal_window();
+    CHECK_EQ(host_present_settings_pages(), 1u);
+    g_page_draws = false;
+    host_present_stage_rgba(window_rgba, 1, 1);
+    host_present_seal_window();
+    CHECK_EQ(host_present_settings_pages(), 1u); // a hidden page rides on nothing
+    host_present_stop();
     host_page_set_enabled(false);
     in.classic = true;
     LayoutSnapshot layout = compositor_layout_snapshot(&in);

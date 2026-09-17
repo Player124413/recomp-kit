@@ -167,6 +167,7 @@ struct Service : std::enable_shared_from_this<Service> {
     std::shared_ptr<Target> cached_target;
     uint8_t last_pixel = 0;
     uint64_t unique = 0, repeats = 0, drops = 0, waits = 0, last_id = 0;
+    uint64_t settings_pages = 0; // sealed frames that carried the settings page
     double cached_sealed_ts = 0;
     uint64_t epoch = 0;
     bool class_known = false;
@@ -1232,6 +1233,28 @@ void host_present_track_command(gpu::CommandBuffer cb) {
 }
 // Seal guest-owned frame state and extract UI before publishing to the presentation worker.
 // Only immutable snapshots cross that boundary; guest surface leases are resolved here.
+// The open settings page rides on the frame about to be sealed, drawn by the
+// compositor in host UI space. Every seal path takes it: a window present - a
+// D3D11 renderer, a film - as much as a DirectDraw frame, or F10 opens a page
+// nobody sees.
+void attach_settings_page(const std::shared_ptr<Service> &s) {
+    std::vector<uint8_t> page;
+    if (!host_page_rgba(&page))
+        return;
+    std::lock_guard lock(s->mutex);
+    if (!s->writing)
+        return;
+    ++s->settings_pages;
+    if (s->fake)
+        return;
+    auto texture = s->composite(640, 480, gpu::Format::RGBA8);
+    if (texture) {
+        s->device->upload(texture->texture, {0, 0, 640, 480}, page.data(), 640 * 4);
+        s->writing->settings_page = texture;
+        s->writing->input.settings_page = texture->texture;
+    }
+}
+
 extern "C" void host_frame_seal() {
     auto s = active.load();
     if (!s)
@@ -1296,18 +1319,7 @@ extern "C" void host_frame_seal() {
             }
         }
     }
-    std::vector<uint8_t> page;
-    if (host_page_rgba(&page)) {
-        std::lock_guard lock(s->mutex);
-        if (s->writing && !s->fake) {
-            auto texture = s->composite(640, 480, gpu::Format::RGBA8);
-            if (texture) {
-                s->device->upload(texture->texture, {0, 0, 640, 480}, page.data(), 640 * 4);
-                s->writing->settings_page = texture;
-                s->writing->input.settings_page = texture->texture;
-            }
-        }
-    }
+    attach_settings_page(s);
     s->seal(f.id, host_frame_class(f), host_frame_had_draws(f) != 0);
 #ifdef POPM_PRESENT_HAS_UI_LAYER
     s->previous_ui_epoch = s->epoch;
@@ -1336,6 +1348,7 @@ PRESENT_COUNTER(host_present_unique_completed, unique)
 PRESENT_COUNTER(host_present_repeats, repeats)
 PRESENT_COUNTER(host_present_drops, drops)
 PRESENT_COUNTER(host_present_waits, waits)
+PRESENT_COUNTER(host_present_settings_pages, settings_pages)
 PRESENT_COUNTER(host_present_faults, faults)
 PRESENT_COUNTER(host_present_scene_reused, history.scene_reused)
 PRESENT_COUNTER(host_present_transition_epoch, epoch)
@@ -1634,5 +1647,6 @@ extern "C" void host_present_seal_window() {
         return;
     // A separate sequence avoids collisions with DirectDraw's frame leases.
     static uint64_t next = uint64_t(1) << 63;
+    attach_settings_page(s);
     s->seal(next++, HOST_SCREEN_MENU, false);
 }

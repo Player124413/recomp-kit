@@ -250,6 +250,10 @@ extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) 
         ReportLock held;
         ++g_present_count;
     }
+    // The settings page's input is registered on the first frame a host draws;
+    // a program that only ever presents windows (a D3D11 renderer, the VCL)
+    // reaches no other present, and F10 would open nothing.
+    host_page_overlay(nullptr, w, h, 32, w * 4, nullptr);
     host_present_stage_rgba(rgba.data(), w, h);
     host_present_seal_window();
 }

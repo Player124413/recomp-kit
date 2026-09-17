@@ -254,6 +254,8 @@ uint64_t host_present_unique_completed(void);
 uint64_t host_present_repeats(void);
 uint64_t host_present_drops(void);
 uint64_t host_present_waits(void);
+// Sealed frames that carried the open settings page.
+uint64_t host_present_settings_pages(void);
 // Distinct fault reasons since service start, including completion fallback.
 uint64_t host_present_faults(void);
 uint64_t host_present_scene_reused(void);

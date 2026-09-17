@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The settings page works for a program that only presents windows - a D3D11
+  renderer, the VCL, a film. Such a frame never registered the page's input
+  (only `host_present` did), so F10 did nothing, and it sealed without the page
+  texture (only `host_frame_seal` attached it), so a page opened any other way
+  was never drawn. `host_display_present_window` now registers the input, and
+  both seal paths attach the page through one helper; `host_tests` checks a
+  window seal carries it.
+
 - The SDL host closes the audio device before `SDL_Quit`
   (`host_audio_shutdown`). The mixer's sink is a static, so the process's exit
   handlers destroyed it after SDL had torn its audio down, and
