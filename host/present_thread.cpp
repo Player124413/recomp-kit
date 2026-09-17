@@ -5,7 +5,6 @@
 #include "present_frame.h"
 #include "present_test.h"
 #include "performance_overlay.h"
-#include "keypad_overlay.h"
 #include "d3d_render.h"
 #include "input_gate.h"
 #include "../dx/passes.h"
@@ -47,8 +46,8 @@ extern "C" __attribute__((weak)) void host_present_mode(int *w, int *h, int *bpp
 }
 
 static std::atomic<bool> g_present_suspended{false};
-static std::mutex g_present_keypad_mutex;
-static KeypadView g_present_keypad; // wanted = false until the host publishes
+static std::mutex g_present_controls_mutex;
+static controls::ControlsView g_present_controls; // wanted = false until the host publishes
 
 namespace {
 // The refresh rate of the offscreen presenter's synthetic display link.
@@ -195,7 +194,7 @@ struct Service : std::enable_shared_from_this<Service> {
                 int(f.completion_fallback), int(f.released));
     }
     PerformanceOverlay performance_overlay;
-    KeypadOverlay keypad_overlay;
+    controls::Overlay controls_overlay;
     std::array<LayoutSnapshot, 3> layouts;
     unsigned layout_slot = 0;
     bool layout_valid = false;
@@ -781,10 +780,10 @@ struct Service : std::enable_shared_from_this<Service> {
                 performance_overlay.draw(device, cb, drawable, drawable_desc.width,
                                          drawable_desc.height, snapshot, ts, mods_display_overlay(),
                                          mods_display_fps());
-                const KeypadView keypad = host_present_keypad();
-                if (keypad.wanted)
-                    keypad_overlay.draw(device, cb, drawable, drawable_desc.width,
-                                        drawable_desc.height, keypad);
+                const controls::ControlsView controls_view = host_present_controls();
+                if (controls_view.wanted)
+                    controls_overlay.draw(device, cb, drawable, drawable_desc.width,
+                                          drawable_desc.height, controls_view);
             }
             host_stats_note_phase(
                 HOST_PHASE_COMPOSITE,
@@ -1650,13 +1649,13 @@ void host_present_suspend(bool suspended) {
     });
 }
 
-void host_present_set_keypad(const KeypadView &view) {
-    std::lock_guard lock(g_present_keypad_mutex);
-    g_present_keypad = view;
+void host_present_set_controls(const controls::ControlsView &view) {
+    std::lock_guard lock(g_present_controls_mutex);
+    g_present_controls = view;
 }
-KeypadView host_present_keypad(void) {
-    std::lock_guard lock(g_present_keypad_mutex);
-    return g_present_keypad;
+controls::ControlsView host_present_controls(void) {
+    std::lock_guard lock(g_present_controls_mutex);
+    return g_present_controls;
 }
 bool host_present_suspended(void) {
     return g_present_suspended.load();

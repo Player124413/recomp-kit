@@ -32,11 +32,8 @@
 #include "../input.h"
 #include "../input_gate.h"
 #include "../input_touch.h"
-#include "../keypad_layout.h"
-#include "../keypad_modifiers.h"
-#include "../../mods/controls_settings.h"
-
-#include <map>
+#include "../controls/controls_host.h"
+#include "../../mods/mods_internal.h"
 #include "../midi.h"
 #include "../present.h"
 #include "../window_presentation.h"
@@ -816,75 +813,33 @@ void push_touch_key(int scancode, bool down) {
     push_touch_action_now(a);
 }
 
-// Fingers that landed on the keypad hold a key until they lift; they never
-// reach the gesture mapper. Modifiers go through the latch machine.
-std::map<int64_t, int> g_keypad_fingers; // finger -> scancode (0: a gap or a tab)
-bool g_keypad_wanted = false;            // no hardware keyboard attached
-KeypadModifiers g_keypad_modifiers;
-
-KeypadView keypad_view() {
-    int bw, bh, dw, dh;
-    window_sizes(&bw, &bh, &dw, &dh);
-    KeypadView v;
-    v.wanted = g_keypad_wanted;
-    // Temporary adapter (Task 6): the router that reads the layout's own
-    // hidden groups directly lands in Task 7, which removes this. An empty
-    // layout name is the Hidden choice, which hides both halves regardless
-    // of the per-group bits, matching the old RECOMP_TOUCH_KEYPAD_HIDDEN.
-    const bool layout_hidden = mods_controls_layout_name().empty();
-    v.left = !layout_hidden && !(mods_controls_hidden_groups() & 1);
-    v.right = !layout_hidden && !(mods_controls_hidden_groups() & 2);
-    v.size = mods_controls_value(CONTROLS_SIZE_ROW);
-    v.lit = g_keypad_modifiers.lit();
-    v.scale = bw > 0 ? double(dw) / bw : 1.0;
-    return v;
-}
-void publish_keypad() {
-    host_present_set_keypad(keypad_view());
-}
-void push_modifier_events(const std::vector<KeypadKeyEvent> &events) {
-    for (const KeypadKeyEvent &e : events)
-        push_touch_key(e.scancode, e.down);
-}
-KeypadHit keypad_hit_at(const SDL_TouchFingerEvent &f) {
-    int bw, bh, dw, dh;
-    window_sizes(&bw, &bh, &dw, &dh);
-    return keypad_hit(keypad_view(), dw, dh, f.x * dw, f.y * dh);
-}
-// A keypad finger is gone (lifted or taken by the system): release what it held.
-void keypad_finger_gone(int64_t finger, bool cancelled) {
-    auto held = g_keypad_fingers.find(finger);
-    if (held == g_keypad_fingers.end())
+// The on-screen controls' hooks.
+void toggle_system_keyboard() {
+    if (!g_window)
         return;
-    const int sc = held->second;
-    g_keypad_fingers.erase(held);
-    std::vector<KeypadKeyEvent> events;
-    if (keypad_is_modifier(sc)) {
-        if (cancelled)
-            g_keypad_modifiers.cancel(sc, &events);
-        else
-            g_keypad_modifiers.release(sc, SDL_GetTicksNS(), &events);
-    } else if (sc) {
-        push_touch_key(sc, false);
-        if (!cancelled)
-            g_keypad_modifiers.key_lifted(SDL_GetTicksNS(), &events);
-    }
-    push_modifier_events(events);
-    publish_keypad();
+    if (SDL_TextInputActive(g_window))
+        SDL_StopTextInput(g_window);
+    else
+        SDL_StartTextInput(g_window);
 }
+void open_settings_page() {
+    (void)mods_page_open(nullptr);
+}
+
 // Focus loss or backgrounding: every finger is gone, every key and modifier up.
 void touch_release_all() {
     std::vector<TouchAction> actions;
     g_touch.cancel_all(&actions);
     push_touch_actions(actions);
-    for (const auto &held : g_keypad_fingers)
-        if (held.second && !keypad_is_modifier(held.second))
-            push_touch_key(held.second, false);
-    g_keypad_fingers.clear();
-    std::vector<KeypadKeyEvent> events;
-    g_keypad_modifiers.cancel_all(&events);
-    push_modifier_events(events);
-    publish_keypad();
+    controls::host_release_all();
+}
+
+// A finger's position in drawable pixels, where the controls are laid out.
+void finger_to_drawable(const SDL_TouchFingerEvent &f, double *px, double *py) {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    *px = f.x * dw;
+    *py = f.y * dh;
 }
 
 TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
@@ -1038,10 +993,8 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_FINGER_CANCELED: {
         // The system took the finger (a gesture, a call): whatever it held lets go.
         const int64_t finger = (int64_t)event.tfinger.fingerID;
-        if (g_keypad_fingers.count(finger)) {
-            keypad_finger_gone(finger, true);
+        if (controls::host_finger_cancel(finger))
             break;
-        }
         std::vector<TouchAction> actions;
         g_touch.finger_cancel(finger, &actions);
         push_touch_actions(actions);
@@ -1053,37 +1006,22 @@ void handle_event(const SDL_Event &event) {
         std::vector<TouchAction> actions;
         const uint64_t now = SDL_GetTicksNS();
         const int64_t finger = (int64_t)event.tfinger.fingerID;
-        if (g_keypad_fingers.count(finger)) {
-            // A keypad finger: its key releases when it lifts; motion is ignored.
-            if (event.type == SDL_EVENT_FINGER_UP)
-                keypad_finger_gone(finger, false);
-            break;
-        }
+        // A finger the on-screen controls own never reaches the gesture mapper.
+        double px = 0, py = 0;
+        finger_to_drawable(event.tfinger, &px, &py);
         if (event.type == SDL_EVENT_FINGER_DOWN) {
-            const KeypadHit hit = keypad_hit_at(event.tfinger);
-            if (hit.kind == KeypadHit::Toggle) {
-                // Temporary adapter (Task 6); Task 7 removes it.
-                mods_controls_set_hidden_groups(mods_controls_hidden_groups() ^ (1 << hit.side));
-                g_keypad_fingers[finger] = 0; // the tab's finger presses nothing more
-                publish_keypad();
+            if (controls::host_finger_down(finger, px, py, now))
                 break;
-            }
-            if (hit.kind == KeypadHit::Key) {
-                g_keypad_fingers[finger] = hit.scancode;
-                std::vector<KeypadKeyEvent> events;
-                if (keypad_is_modifier(hit.scancode))
-                    g_keypad_modifiers.press(hit.scancode, now, &events);
-                else if (hit.scancode)
-                    push_touch_key(hit.scancode, true);
-                push_modifier_events(events);
-                publish_keypad();
-                break;
-            }
             g_touch.finger_down(touch_point(event.tfinger), now, &actions);
-        } else if (event.type == SDL_EVENT_FINGER_UP)
+        } else if (event.type == SDL_EVENT_FINGER_UP) {
+            if (controls::host_finger_up(finger, now))
+                break;
             g_touch.finger_up(touch_point(event.tfinger), now, &actions);
-        else
+        } else {
+            if (controls::host_finger_motion(finger, px, py, now))
+                break;
             g_touch.finger_motion(touch_point(event.tfinger), now, &actions);
+        }
         push_touch_actions(actions);
         static bool text_input = false;
         if (g_touch.text_input_wanted() != text_input) {
@@ -1142,6 +1080,23 @@ int service(double seconds) {
     return host_idle_wait_result(before, host_input_notify_count());
 }
 
+// The drawable, its scale and its safe area in drawable pixels, for the
+// on-screen controls.
+controls::Screen controls_screen() {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    controls::Screen s;
+    s.dw = dw;
+    s.dh = dh;
+    s.scale = bw > 0 ? double(dw) / bw : 1.0;
+    s.safe = {0, 0, dw, dh};
+    SDL_Rect safe;
+    if (g_window && SDL_GetWindowSafeArea(g_window, &safe))
+        s.safe = {int(lround(safe.x * s.scale)), int(lround(safe.y * s.scale)),
+                  int(lround(safe.w * s.scale)), int(lround(safe.h * s.scale))};
+    return s;
+}
+
 // The housekeeping every turn does once the events are in.
 void after_events() {
     {
@@ -1152,17 +1107,17 @@ void after_events() {
         g_touch.frames_presented(host_present_count());
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
-        // The keypad follows the hardware keyboard: attached, no keypad. It is
-        // republished every pump: the settings page can change its rows and the
-        // view is cheap to compare on the worker side.
-        static const bool force = recomp_env("KEYPAD") != nullptr;
-        const bool want = force || platform_ui_keypad_wanted();
-        if (want != g_keypad_wanted) {
-            g_keypad_wanted = want;
-            if (!want)
-                touch_release_all();
-        }
-        publish_keypad();
+        // The controls follow the hardware keyboard (attached: none shown) and
+        // the settings rows; the view is published only when it changed.
+        // A keyboard arriving lets go of every finger, as the keypad did.
+        static bool keyboard_absent = false;
+        const bool absent = platform_ui_keypad_wanted();
+        if (keyboard_absent && !absent)
+            touch_release_all();
+        keyboard_absent = absent;
+        controls::host_set_screen(controls_screen());
+        controls::host_set_wanted(absent, false);
+        controls::host_pump(SDL_GetTicksNS());
     }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
@@ -1572,6 +1527,16 @@ int main(int argc, char **argv) {
     // which wait on an event rather than polling. Installed here rather than
     // referenced from input.cpp, which links none of the shims.
     host_input_set_notify(dinput_host_input_changed);
+    // Before the first presented frame, where mods_page_init reads the
+    // layout names this registers.
+    {
+        controls::HostHooks hooks;
+        hooks.key = push_touch_key;
+        hooks.touch_actions = push_touch_actions;
+        hooks.system_keyboard = toggle_system_keyboard;
+        hooks.open_settings = open_settings_page;
+        controls::host_init(hooks);
+    }
 
     SDL_ShowWindow(g_window);
     SDL_RaiseWindow(g_window);

@@ -239,12 +239,6 @@ void host_present_stop(void); // only after the guest scheduler has stopped
 // no drawable and presents nothing: what an iOS app must do in the background.
 void host_present_suspend(bool suspended);
 bool host_present_suspended(void);
-// The on-screen keypad (host/keypad_layout.h) the worker draws over every
-// presented frame. The host publishes what to show; the worker reads it once
-// per frame.
-#include "keypad_layout.h"
-void host_present_set_keypad(const KeypadView &view);
-KeypadView host_present_keypad(void);
 void host_frame_seal(void);
 void host_present_first_write(void);
 void host_present_stage_rgba(const uint8_t *rgba, int w, int h);
@@ -265,6 +259,15 @@ int host_metric_throughput(double *min_bucket, double *elapsed_s);
 void host_present_tick_for_test(double ts);
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+// The on-screen controls (host/controls/overlay.h) the worker draws over every
+// presented frame. The host publishes what to show; the worker reads it once
+// per frame.
+#include "controls/overlay.h"
+void host_present_set_controls(const controls::ControlsView &view);
+controls::ControlsView host_present_controls(void);
 #endif
 
 #ifdef __cplusplus

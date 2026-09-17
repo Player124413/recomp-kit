@@ -76,7 +76,8 @@ set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
 add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                               ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
-                              ${HOST}/controls/router.cpp ${HOST}/keypad_layout.cpp
+                              ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
+                              ${HOST}/keypad_layout.cpp
                               ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
                               ${HOST}/tests/keypad_legacy_oracle.cpp)
 target_include_directories(controls_tests PRIVATE ${POP_ROOT})
@@ -150,9 +151,15 @@ endfunction()
 set(POP_AUDIO_SOURCES ${HOST}/audio/mixer.cpp ${HOST}/audio/sdl_sink.cpp ${HOST}/audio/midi_synth.cpp
                       ${HOST}/audio_math.cpp ${HOST}/audio_capture.cpp)
 set(POP_CORE_LIBS recomp_platform recomp_runtime recomp_snapshot recomp_dx recomp_mods lua host_common gpu_backend)
+# The on-screen controls the presenter draws (controls_host.cpp is the app's own).
+set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
+                         ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
+                         ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
+                         ${HOST}/controls/overlay.cpp ${HOST}/controls/raster.cpp
+                         ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp)
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
-                        ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${HOST}/keypad_overlay.cpp
-                        ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp ${HOST}/d3d_render.cpp
+                        ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${POP_CONTROLS_SOURCES}
+                        ${HOST}/d3d_render.cpp
                         ${HOST}/gpu2d.cpp
                         ${HOST}/indexed_frame.cpp)
 
@@ -196,6 +203,7 @@ if(TARGET recomp_gen)
 
   pop_host(recomp_app GEN UI_LAYER OPT 2
     SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
+            ${HOST}/controls/controls_host.cpp
             ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}

@@ -4,6 +4,7 @@
 #include "../controls/json.h"
 #include "../controls/layout.h"
 #include "../controls/layout_store.h"
+#include "../controls/overlay.h"
 #include "../controls/router.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
@@ -639,6 +640,121 @@ static void test_router_state_out_of_range_is_zero() {
     CHECK(!cs.pressed && cs.knob_x == 0 && cs.knob_y == 0 && cs.hat == 0);
 }
 
+// --- Overlay view: what the presenter draws -------------------------------
+
+static int count_kind(const ControlsView &v, Kind k) {
+    int n = 0;
+    for (const DrawControl &d : v.controls)
+        n += d.kind == k;
+    return n;
+}
+
+// The keys built-in on an iPad-sized drawable: every key and both tabs, the
+// latched Shift lit, and a backdrop behind each visible half.
+static void test_make_view_keys() {
+    Layout l = keys_layout();
+    const Screen s = screen(2360, 1640, 2.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    double x, y;
+    center(l, 0, find_key(l, 0, kScanLShift), s, &x, &y);
+    CHECK(r.finger_down(1, x, y, 0, rec));
+    CHECK(r.finger_up(1, 100ull * 1000000ull, rec)); // a short tap latches Shift
+    CHECK(r.lit() == 1);
+
+    ControlsView v = make_view(l, r, s, 1.0);
+    CHECK(v.dw == 2360 && v.dh == 1640);
+    const int left_keys = int(l.groups[0].controls.size());
+    CHECK(left_keys + int(l.groups[1].controls.size()) == 77);
+    CHECK(count_kind(v, Kind::Key) == 77);
+    CHECK(count_kind(v, Kind::Toggle) == 2);
+    int lit = 0;
+    for (const DrawControl &d : v.controls)
+        if (d.lit) {
+            ++lit;
+            CHECK(d.label == "Shift");
+        }
+    CHECK(lit == 1);
+    CHECK(v.backdrops.size() == 2);
+    if (v.backdrops.size() == 2)
+        for (int g = 0; g < 2; ++g) {
+            const Rect a = v.backdrops[g], b = group_rect(l, g, s);
+            CHECK(a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h);
+        }
+    for (const DrawControl &d : v.controls)
+        if (d.kind == Kind::Toggle)
+            CHECK(d.group_visible && d.label == "HIDE" && d.label_off == "KEYS");
+
+    // The revision follows what is drawn.
+    const uint64_t rev = v.revision;
+    CHECK(make_view(l, r, s, 1.0).revision == rev);
+    CHECK(make_view(l, r, s, 0.5).revision != rev);
+
+    // Hide the left half: its keys go, its tab stays and reads KEYS.
+    l.groups[0].visible = false;
+    v = make_view(l, r, s, 1.0);
+    CHECK(v.revision != rev);
+    CHECK(count_kind(v, Kind::Key) == 77 - left_keys);
+    CHECK(count_kind(v, Kind::Toggle) == 2);
+    CHECK(v.backdrops.size() == 1);
+    int hidden_tabs = 0;
+    for (const DrawControl &d : v.controls)
+        if (d.kind == Kind::Toggle && !d.group_visible)
+            ++hidden_tabs;
+    CHECK(hidden_tabs == 1);
+    CHECK(v.controls.size() == size_t(77 - left_keys + 2));
+}
+
+// At the default size the drawn rects are exactly the old keypad's.
+static void test_make_view_matches_the_old_keypad() {
+    Layout l = keys_layout();
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    for (double sc : {1.0, 2.0}) {
+        const Screen s = screen(int(1180 * sc), int(820 * sc), sc);
+        r.set_screen(s);
+        for (int shown = 1; shown >= 0; --shown) {
+            l.groups[0].visible = l.groups[1].visible = shown != 0;
+            const ControlsView v = make_view(l, r, s, 1.0);
+            size_t at = 0;
+            for (int side = 0; side < 2; ++side) {
+                const KeypadRect half =
+                    legacy_keypad_half_rect(KeypadSide(side), 1, sc, s.dw, s.dh);
+                if (shown) {
+                    int n = 0;
+                    const KeypadKey *keys = legacy_keypad_keys(KeypadSide(side), &n);
+                    for (int i = 0; i < n && at < v.controls.size(); ++i, ++at) {
+                        const KeypadRect old =
+                            legacy_keypad_key_rect(KeypadSide(side), keys[i], 1, sc, s.dw, s.dh);
+                        const Rect now = v.controls[at].rect;
+                        CHECK(now.x == old.x && now.y == old.y && now.w == old.w && now.h == old.h);
+                        CHECK(v.controls[at].label == keys[i].label);
+                    }
+                    CHECK(v.backdrops.size() == 2 && v.backdrops[side].x == half.x &&
+                          v.backdrops[side].y == half.y && v.backdrops[side].w == half.w &&
+                          v.backdrops[side].h == half.h);
+                } else {
+                    CHECK(v.backdrops.empty());
+                }
+            }
+            for (int side = 0; side < 2 && at < v.controls.size(); ++side, ++at) {
+                const DrawControl &tab = v.controls[at];
+                const KeypadRect old =
+                    legacy_keypad_tab_rect(KeypadSide(side), shown != 0, 1, sc, s.dw, s.dh);
+                CHECK(tab.kind == Kind::Toggle);
+                CHECK(tab.rect.x == old.x && tab.rect.y == old.y && tab.rect.w == old.w &&
+                      tab.rect.h == old.h);
+                CHECK(tab.group_visible == (shown != 0));
+                CHECK(tab.label == "HIDE" && tab.label_off == "KEYS");
+            }
+            CHECK(at == v.controls.size());
+        }
+    }
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -662,6 +778,8 @@ int main() {
     test_router_two_fingers_same_key_first_lift_releases();
     test_router_set_layout_null_disables_hit_testing();
     test_router_state_out_of_range_is_zero();
+    test_make_view_keys();
+    test_make_view_matches_the_old_keypad();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;
