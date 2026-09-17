@@ -1829,7 +1829,7 @@ static Layout editor_pad() {
     return l;
 }
 
-static void tap(Editor &e, double x, double y, int64_t id = 1) {
+static void tap(Editor &e, double x, double y, int64_t id = 7) {
     e.finger_down(id, x, y);
     e.finger_up(id);
 }
@@ -2203,6 +2203,222 @@ static void test_editor_done_reset_and_layout_names() {
     CHECK(!e.is_open());
 }
 
+static void test_editor_tools_mid_gesture() {
+    Screen s = editor_screen();
+    {
+        // Finger 1 holds the cross, finger 2 taps Delete, then touches empty space.
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+        Rect cross = cross_rect(e, s);
+        std::vector<Rect> before;
+        for (int c = 1; c < 4; ++c)
+            before.push_back(control_rect(e.layout(), 2, c, s));
+        e.finger_down(1, cross.x + 60, cross.y + 60);
+        e.finger_motion(1, cross.x + 30, cross.y + 60);
+        tap_tool(e, Tool::Delete);
+        CHECK(e.selected_group() == -1);
+        CHECK(e.layout().groups[2].controls.size() == 3);
+        CHECK(e.guides().empty());
+        e.finger_down(2, 1180, 700);
+        e.finger_motion(2, 1000, 700);
+        e.finger_motion(1, cross.x - 300, cross.y - 300);
+        e.finger_up(2);
+        e.finger_up(1);
+        for (int c = 1; c < 4; ++c) {
+            Rect r = control_rect(e.layout(), 2, c - 1, s);
+            CHECK(r.x == before[c - 1].x && r.y == before[c - 1].y && r.w == before[c - 1].w);
+        }
+        CHECK(e.selected_group() == -1);
+    }
+    {
+        // Add during a drag: the drag is committed and ends; the new control stays put.
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, false);
+        Rect cross = cross_rect(e, s);
+        e.finger_down(1, cross.x + 60, cross.y + 60);
+        e.finger_motion(1, cross.x + 60 - 1000, cross.y + 60);
+        Rect moved = cross_rect(e, s);
+        tap_tool(e, Tool::Add);
+        CHECK(e.layout().groups[2].controls[0].anchor == Anchor::Bottom);
+        CHECK(pick(e, "dpad"));
+        const int g = e.selected_group();
+        CHECK(g == int(e.layout().groups.size()) - 1);
+        Rect added = control_rect(e.layout(), g, 0, s);
+        e.finger_motion(1, 100, 100);
+        e.finger_down(2, 1500, 300); // would pinch if the drag were still live
+        e.finger_motion(2, 1800, 300);
+        e.finger_up(2);
+        e.finger_up(1);
+        Rect after = control_rect(e.layout(), g, 0, s);
+        CHECK(after.x == added.x && after.y == added.y && after.w == added.w);
+        Rect c2 = cross_rect(e, s);
+        CHECK(c2.x == moved.x && c2.y == moved.y);
+        CHECK(std::abs(added.x + added.w / 2 - 1180) <= 1);
+    }
+    {
+        // close() drops the gesture and pending results.
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+        Rect cross = cross_rect(e, s);
+        e.finger_down(1, cross.x + 60, cross.y + 60);
+        tap_tool(e, Tool::Done);
+        e.close();
+        CHECK(!e.take_save());
+        CHECK(e.selected_group() == -1 && e.picker().empty() && e.guides().empty());
+        e.finger_motion(1, 0, 0);
+        e.finger_up(1);
+    }
+}
+
+static void test_editor_reanchor_every_side() {
+    Screen s = editor_screen();
+    struct Case {
+        double cx, cy;
+        Anchor want;
+    } cases[] = {
+        {300, 800, Anchor::Left},    {1180, 200, Anchor::Top},    {1180, 1400, Anchor::Bottom},
+        {300, 200, Anchor::TopLeft}, {1180, 800, Anchor::Center}, {300, 1400, Anchor::BottomLeft},
+    };
+    for (const Case &k : cases) {
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, false);
+        Rect r = cross_rect(e, s);
+        e.finger_down(1, r.x + 60, r.y + 60);
+        e.finger_motion(1, k.cx, k.cy);
+        Rect moved = cross_rect(e, s);
+        e.finger_up(1);
+        const Control &c = e.layout().groups[2].controls[0];
+        CHECK(c.anchor == k.want);
+        Rect after = cross_rect(e, s);
+        CHECK(after.x == moved.x && after.y == moved.y);
+        CHECK(after.x + 60 == int(k.cx) && after.y + 60 == int(k.cy));
+    }
+}
+
+static void test_editor_picker_scroll_is_not_a_tap() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    CHECK(!e.mapped_changed());
+    tap_rect(e, cross_rect(e, s));
+    tap_tool(e, Tool::Bind);
+    CHECK(e.picker().size() == 12);
+    std::string first = e.picker().front().value;
+    Rect row = e.picker().front().rect;
+    e.finger_down(3, row.x + 10, row.y + 10);
+    e.finger_motion(3, row.x + 10, row.y + 10 - 100);
+    e.finger_up(3);
+    CHECK(!e.picker().empty());
+    CHECK(e.picker().front().value != first);
+    CHECK(!e.mapped_changed());
+    CHECK(e.mapped().buttons[int(PadButton::Cross)].type == Target::Mouse);
+    CHECK(pick(e, "wheel_up"));
+    CHECK(e.mapped_changed());
+    CHECK(e.mapped().buttons[int(PadButton::Cross)].type == Target::Wheel);
+
+    // Native: a button bind leaves the table untouched.
+    Editor n;
+    n.set_screen(s);
+    n.open(editor_pad(), Form::Tablet, MappedTable{}, true, true);
+    tap_rect(n, cross_rect(n, s));
+    tap_tool(n, Tool::Bind);
+    CHECK(pick(n, "circle"));
+    CHECK(!n.mapped_changed());
+}
+
+static void test_editor_pinch_keeps_aspect_and_area() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    // L1 is 100x50 at the top-left: growing is capped where w hits 240,
+    // shrinking where h hits 24; the result stays in the area.
+    Rect r = control_rect(e.layout(), 3, 0, s);
+    double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
+    e.finger_down(1, cx, cy);
+    e.finger_down(2, cx + 40, cy);
+    e.finger_motion(2, cx + 400, cy);
+    const Control &c = e.layout().groups[3].controls[0];
+    CHECK(c.w == 240 && c.h == 120);
+    Rect big = control_rect(e.layout(), 3, 0, s);
+    CHECK(big.x >= 0 && big.y >= 0);
+    e.finger_motion(2, cx + 1, cy);
+    CHECK(e.layout().groups[3].controls[0].h == 24);
+    CHECK(e.layout().groups[3].controls[0].w == 48);
+    e.finger_up(2);
+    e.finger_up(1);
+}
+
+static void test_editor_custom_group_beside_a_grid_custom() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kTinyLayout, &l, &err));
+    l.groups[0].id = "custom";
+    e.open(l, Form::Tablet, MappedTable{}, false, false);
+    tap_tool(e, Tool::Add);
+    CHECK(pick(e, "dpad"));
+    CHECK(e.layout().groups.back().id == "custom-2");
+    CHECK(!e.layout().groups.back().has_grid);
+    tap_tool(e, Tool::Add);
+    CHECK(pick(e, "action"));
+    CHECK(e.layout().groups.size() == 3);
+    CHECK(e.layout().groups.back().controls.size() == 2);
+}
+
+static void test_editor_layout_switch_and_delete() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.set_names({"pad", "keys", "pad+keys", "mine"});
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    std::string name;
+    // Built-in: delete is refused.
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "delete"));
+    CHECK(!e.take_delete(&name));
+    // Switch lists every other name.
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "switch"));
+    bool has_self = false, has_mine = false;
+    for (const auto &it : e.picker()) {
+        has_self |= it.value == "pad";
+        has_mine |= it.value == "mine";
+    }
+    CHECK(!has_self && has_mine);
+    CHECK(pick(e, "mine"));
+    CHECK(e.take_switch(&name));
+    CHECK(name == "mine");
+    CHECK(!e.take_switch(&name));
+
+    // A user layout can be deleted; a rename replaces its old name.
+    Layout mine = editor_pad();
+    mine.name = "mine";
+    e.open(mine, Form::Tablet, MappedTable{}, false, true);
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "delete"));
+    CHECK(e.take_delete(&name));
+    CHECK(name == "mine");
+    CHECK(!e.take_delete(&name));
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "rename"));
+    CHECK(e.take_rename(&name));
+    e.text("ours");
+    e.text_done();
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "switch"));
+    for (const auto &it : e.picker())
+        CHECK(it.value != "mine" && it.value != "ours");
+    CHECK(e.picker().size() == 3);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -2274,6 +2490,12 @@ int main() {
     test_editor_bind_native_button();
     test_editor_grid_key_moves_its_group();
     test_editor_done_reset_and_layout_names();
+    test_editor_tools_mid_gesture();
+    test_editor_reanchor_every_side();
+    test_editor_picker_scroll_is_not_a_tap();
+    test_editor_pinch_keeps_aspect_and_area();
+    test_editor_custom_group_beside_a_grid_custom();
+    test_editor_layout_switch_and_delete();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

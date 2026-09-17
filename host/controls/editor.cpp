@@ -147,27 +147,56 @@ void Editor::open(const Layout &layout, Form form, const MappedTable &mapped, bo
     mapped_changed_ = false;
     native_ = native;
     snap_ = snap;
+    reset_transient();
+    layout_toolbar();
+}
+
+void Editor::close() {
+    open_ = false;
+    reset_transient();
+}
+
+// Everything but the edited layout, the binding table and the settings:
+// selection, gestures, picker and every pending result.
+void Editor::reset_transient() {
     sel_group_ = sel_control_ = -1;
     guides_.clear();
     close_picker();
     fingers_.clear();
     dragging_ = drag_moved_ = pinching_ = false;
+    drag_rect0_ = Rect{};
+    pinch_d0_ = 0;
+    pinch_base_ = Control{};
+    pinch_key0_ = 0;
     outside_finger_ = -1;
     save_ = reset_ = cancel_ = false;
     rename_pending_ = renaming_ = false;
     rename_text_.clear();
-    layout_toolbar();
+    switch_pending_ = delete_pending_ = false;
+    switch_name_.clear();
     changed();
 }
 
-void Editor::close() {
-    open_ = false;
-    close_picker();
-    fingers_.clear();
-    dragging_ = pinching_ = false;
+// Ends a drag or pinch in progress, committing a moved drag's re-anchor
+// first (the selection is still the one being dragged). Fingers stay down
+// but are inert until they lift. Called before anything that changes the
+// selection or the layout outside the gesture itself.
+void Editor::end_gesture() {
+    if (dragging_ && drag_moved_ && selection_valid())
+        set_moving_rect(moving_rect(), true);
+    if (dragging_ || pinching_ || !guides_.empty())
+        changed();
+    dragging_ = drag_moved_ = pinching_ = false;
+    drag_rect0_ = Rect{};
+    pinch_d0_ = 0;
+    pinch_base_ = Control{};
+    pinch_key0_ = 0;
     guides_.clear();
-    renaming_ = rename_pending_ = false;
-    changed();
+}
+
+bool Editor::selection_valid() const {
+    return sel_group_ >= 0 && sel_group_ < int(layout_.groups.size()) && sel_control_ >= 0 &&
+           sel_control_ < int(layout_.groups[sel_group_].controls.size());
 }
 
 void Editor::set_screen(const Screen &s) {
@@ -269,6 +298,7 @@ void Editor::close_picker() {
 void Editor::select(int group, int control) {
     if (group == sel_group_ && control == sel_control_)
         return;
+    end_gesture();
     sel_group_ = group;
     sel_control_ = control;
     changed();
@@ -312,7 +342,7 @@ Rect Editor::moving_rect() const {
 // Rewrites the selection's x/y (and, with `reanchor`, its anchor, picked by
 // the centre's third of the anchor area) so it lands exactly on `r`.
 void Editor::set_moving_rect(const Rect &r, bool reanchor) {
-    if (sel_group_ < 0 || sel_control_ < 0)
+    if (!selection_valid())
         return;
     Rect area = anchor_area(layout_, screen_);
     double scale = screen_.scale > 0 ? screen_.scale : 1.0;
@@ -395,8 +425,21 @@ Rect Editor::snap_rect(Rect r) {
     return r;
 }
 
+// Keeps only the guides that still touch an edge or the centre of `r`
+// (the final clamp can move a snapped rect off its line).
+void Editor::drop_stale_guides(const Rect &r) {
+    auto on = [](int line, int pos, int size) {
+        return line == pos || line == pos + size / 2 || line == pos + size;
+    };
+    guides_.erase(std::remove_if(guides_.begin(), guides_.end(),
+                                 [&](const Rect &g) {
+                                     return g.w == 1 ? !on(g.x, r.x, r.w) : !on(g.y, r.y, r.h);
+                                 }),
+                  guides_.end());
+}
+
 void Editor::scale_selection(const Control &base, double key0, double factor) {
-    if (sel_group_ < 0 || sel_control_ < 0 || !(factor > 0))
+    if (!selection_valid() || !(factor > 0))
         return;
     Rect before = moving_rect();
     int cx = before.x + before.w / 2, cy = before.y + before.h / 2;
@@ -406,6 +449,10 @@ void Editor::scale_selection(const Control &base, double key0, double factor) {
         Control &c = layout_.groups[sel_group_].controls[sel_control_];
         if (base.w <= 0 || base.h <= 0)
             return;
+        // Clamp the factor, not each side, so the aspect ratio holds.
+        double lo = std::max(kSizeMin / base.w, kSizeMin / base.h);
+        double hi = std::min(kSizeMax / base.w, kSizeMax / base.h);
+        factor = lo > hi ? lo : std::clamp(factor, lo, hi);
         c.w = clamp_step(base.w * factor, kSizeMin, kSizeMax);
         c.h = clamp_step(base.h * factor, kSizeMin, kSizeMax);
         if (c.kind == Kind::Stick)
@@ -414,7 +461,7 @@ void Editor::scale_selection(const Control &base, double key0, double factor) {
     Rect after = moving_rect();
     after.x = cx - after.w / 2;
     after.y = cy - after.h / 2;
-    set_moving_rect(after, false);
+    set_moving_rect(clamp_into(after, anchor_area(layout_, screen_)), false);
     changed();
 }
 
@@ -451,7 +498,7 @@ void Editor::finger_down(int64_t id, double px, double py) {
     }
 
     // A second finger while the first holds the selection: pinch.
-    if (fingers_.size() == 1 && dragging_ && !pinching_) {
+    if (fingers_.size() == 1 && dragging_ && !pinching_ && selection_valid()) {
         if (drag_moved_) {
             set_moving_rect(moving_rect(), true);
             drag_moved_ = false;
@@ -508,7 +555,7 @@ void Editor::finger_motion(int64_t id, double px, double py) {
         }
         return;
     }
-    if (!dragging_ || i != 0)
+    if (!dragging_ || i != 0 || !selection_valid())
         return;
     double dx = px - fingers_[0].x0, dy = py - fingers_[0].y0;
     if (!drag_moved_ && std::hypot(dx, dy) < pt(kSlopPt))
@@ -519,6 +566,7 @@ void Editor::finger_motion(int64_t id, double px, double py) {
     r.x += int(std::lround(dx));
     r.y += int(std::lround(dy));
     r = clamp_into(snap_rect(clamp_into(r, area)), area);
+    drop_stale_guides(r);
     set_moving_rect(r, false);
     changed();
 }
@@ -564,8 +612,9 @@ void Editor::finger_up(int64_t id) {
 }
 
 void Editor::wheel(double notches) {
-    if (!open_ || sel_group_ < 0 || sel_control_ < 0 || notches == 0)
+    if (!open_ || !selection_valid() || notches == 0)
         return;
+    end_gesture();
     const Group &g = layout_.groups[sel_group_];
     const Control &c = g.controls[sel_control_];
     double size = selection_is_grid() ? g.grid.key : c.w;
@@ -575,6 +624,7 @@ void Editor::wheel(double notches) {
 }
 
 void Editor::run_tool(Tool t) {
+    end_gesture();
     switch (t) {
     case Tool::Add: {
         std::vector<PickerItem> items;
@@ -605,6 +655,8 @@ void Editor::run_tool(Tool t) {
         std::vector<PickerItem> items;
         add_item(&items, "Duplicate", "duplicate");
         add_item(&items, "Rename", "rename");
+        add_item(&items, "Switch", "switch");
+        add_item(&items, "Delete", "delete");
         open_picker(Picker::Layout, t, std::move(items));
         break;
     }
@@ -625,6 +677,7 @@ void Editor::choose(const PickerItem &item) {
     Picker kind = picker_;
     Tool from = picker_tool_;
     close_picker();
+    end_gesture();
     const std::string &v = item.value;
     if (kind == Picker::Add && v == "button") {
         std::vector<PickerItem> items;
@@ -645,10 +698,24 @@ void Editor::choose(const PickerItem &item) {
         } else if (v == "rename" && !is_builtin(layout_.name)) {
             rename_pending_ = renaming_ = true;
             rename_text_.clear();
+        } else if (v == "switch") {
+            std::vector<PickerItem> items;
+            for (const std::string &n : names_)
+                if (n != layout_.name)
+                    add_item(&items, n, n);
+            if (!items.empty())
+                open_picker(Picker::Switch, from, std::move(items));
+        } else if (v == "delete" && !is_builtin(layout_.name)) {
+            delete_pending_ = true;
         }
         return;
     }
-    if (kind != Picker::Bind || sel_group_ < 0 || sel_control_ < 0)
+    if (kind == Picker::Switch) {
+        switch_pending_ = true;
+        switch_name_ = v;
+        return;
+    }
+    if (kind != Picker::Bind || !selection_valid())
         return;
     Control &c = layout_.groups[sel_group_].controls[sel_control_];
     std::string err;
@@ -688,7 +755,7 @@ void Editor::choose(const PickerItem &item) {
 
 // Opens the Bind picker for the selection's kind (nothing to bind: no picker).
 void Editor::bind_items() {
-    if (sel_group_ < 0 || sel_control_ < 0)
+    if (!selection_valid())
         return;
     const Control &c = layout_.groups[sel_group_].controls[sel_control_];
     std::vector<PickerItem> items;
@@ -770,13 +837,25 @@ void Editor::add_control(const std::string &what) {
     } else {
         return;
     }
+    // The first of "custom", "custom-2", ... that is not a grid group.
     int group = -1;
-    for (size_t g = 0; g < layout_.groups.size(); ++g)
-        if (layout_.groups[g].id == "custom" && !layout_.groups[g].has_grid)
-            group = int(g);
+    std::string id = "custom";
+    for (int n = 2; group < 0; ++n) {
+        bool grid = false;
+        for (size_t g = 0; g < layout_.groups.size(); ++g)
+            if (layout_.groups[g].id == id) {
+                if (layout_.groups[g].has_grid)
+                    grid = true;
+                else if (group < 0)
+                    group = int(g);
+            }
+        if (group >= 0 || !grid)
+            break;
+        id = "custom-" + std::to_string(n);
+    }
     if (group < 0) {
         Group g;
-        g.id = "custom";
+        g.id = id;
         layout_.groups.push_back(std::move(g));
         group = int(layout_.groups.size()) - 1;
     }
@@ -787,7 +866,7 @@ void Editor::add_control(const std::string &what) {
 
 // Removes the selection; a non-grid group left empty goes with it.
 void Editor::delete_selection() {
-    if (sel_group_ < 0 || sel_control_ < 0)
+    if (!selection_valid())
         return;
     Group &g = layout_.groups[sel_group_];
     g.controls.erase(g.controls.begin() + sel_control_);
@@ -799,7 +878,7 @@ void Editor::delete_selection() {
 
 // Stick: floating 0.10 -> 0.15 -> 0.25 -> fixed 0.10 -> 0.15 -> 0.25 -> floating 0.10.
 void Editor::cycle_stick() {
-    if (sel_group_ < 0 || sel_control_ < 0)
+    if (!selection_valid())
         return;
     Control &c = layout_.groups[sel_group_].controls[sel_control_];
     if (c.kind != Kind::Stick)
@@ -841,8 +920,10 @@ void Editor::text_done() {
         return;
     renaming_ = rename_pending_ = false;
     if (usable_name(rename_text_)) {
+        std::replace(names_.begin(), names_.end(), layout_.name, rename_text_);
+        if (std::find(names_.begin(), names_.end(), rename_text_) == names_.end())
+            names_.push_back(rename_text_);
         layout_.name = rename_text_;
-        names_.push_back(rename_text_);
         changed();
     }
     rename_text_.clear();
@@ -862,6 +943,22 @@ bool Editor::take_cancel() {
 
 void Editor::cancel() {
     cancel_ = true;
+}
+
+bool Editor::take_switch(std::string *name) {
+    if (!std::exchange(switch_pending_, false))
+        return false;
+    if (name)
+        *name = switch_name_;
+    return true;
+}
+
+bool Editor::take_delete(std::string *name) {
+    if (!std::exchange(delete_pending_, false))
+        return false;
+    if (name)
+        *name = layout_.name;
+    return true;
 }
 
 bool Editor::take_rename(std::string *current) {

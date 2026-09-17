@@ -49,7 +49,10 @@ class Editor {
     void set_names(std::vector<std::string> names);
 
     // Pointer input in drawable pixels. A second finger while one rests on
-    // the selected control pinches it.
+    // the selected control pinches it. Any tool, picker choice or selection
+    // change ends a drag or pinch; its fingers stay inert until they lift.
+    // A toggle with stack_on sits on its target group, so a drag can move
+    // it sideways only.
     void finger_down(int64_t id, double px, double py);
     void finger_motion(int64_t id, double px, double py);
     void finger_up(int64_t id);
@@ -85,7 +88,8 @@ class Editor {
         return picker_box_;
     }
     // Snap guide lines (1-px-wide rects) while a drag is snapped. The 10 pt
-    // grid is measured from anchor_area()'s origin; the view draws it there.
+    // grid's origin is the anchor_area() corner (top-left); the view draws
+    // it from there.
     const std::vector<Rect> &guides() const {
         return guides_;
     }
@@ -98,6 +102,12 @@ class Editor {
     bool take_reset();  // Reset: host deletes the user copy, reloads, reopens
     bool take_cancel(); // back gesture (cancel()): host closes without saving
     void cancel();
+    // Layout > Switch chose another layout: the host saves nothing, loads
+    // *name and reopens the editor on it.
+    bool take_switch(std::string *name);
+    // Layout > Delete on a user layout (built-ins refuse it): the host
+    // deletes *name's user copy for form(), then reloads and reopens.
+    bool take_delete(std::string *name);
     // Rename was chosen for a non-built-in layout: the host starts text
     // input; *current receives the layout's current name.
     bool take_rename(std::string *current);
@@ -109,7 +119,7 @@ class Editor {
     }
 
   private:
-    enum class Picker { None, Add, AddButton, Bind, Layout };
+    enum class Picker { None, Add, AddButton, Bind, Layout, Switch };
     struct Finger {
         int64_t id;
         double x0, y0, x, y;
@@ -127,6 +137,10 @@ class Editor {
     void close_picker();
     void choose(const PickerItem &item);
     void run_tool(Tool t);
+    void reset_transient();
+    void end_gesture();
+    bool selection_valid() const;
+    void drop_stale_guides(const Rect &r);
     void select(int group, int control);
     int hit(double px, double py, int *control) const;
     bool selection_is_grid() const;
@@ -178,6 +192,8 @@ class Editor {
     double pinch_key0_ = 0;
 
     bool save_ = false, reset_ = false, cancel_ = false;
+    bool switch_pending_ = false, delete_pending_ = false;
+    std::string switch_name_;
     bool rename_pending_ = false, renaming_ = false;
     std::string rename_text_;
     uint32_t generation_ = 1;
