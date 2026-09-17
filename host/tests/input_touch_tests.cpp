@@ -317,8 +317,8 @@ static void test_two_finger_tap_is_right_click_three_is_f10_four_toggles_keyboar
     m.finger_up({1, 0, 0}, 50 * MS, &out);
     m.finger_up({2, 10, 0}, 50 * MS, &out);
     // Placed between the fingers, then pressed and released as a right click.
-    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place &&
-          out[0].x == 5 && out[0].y == 0);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place && out[0].x == 5 &&
+          out[0].y == 0);
     out.clear();
     m.tick(110 * MS, &out);
     CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].button == 1 &&
