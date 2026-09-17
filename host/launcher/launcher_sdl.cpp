@@ -148,7 +148,7 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
     presenter.device = device;
     presenter.window = window;
     if (!presenter.open(native_surface, std::max(1, dw), std::max(1, dh))) {
-        fprintf(stderr, "[launcher] no swapchain for the window\n");
+        fprintf(stderr, "[launcher] no swapchain for the window: %s\n", SDL_GetError());
         return "";
     }
     Canvas canvas;
