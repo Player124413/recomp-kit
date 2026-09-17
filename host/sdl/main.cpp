@@ -891,12 +891,22 @@ void handle_event(const SDL_Event &event) {
         post_drawable_size();
         break;
     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+        // The green button or the View menu: the player chose fullscreen, so
+        // it becomes the setting instead of being undone on the next frame.
+        if (!g_fullscreen_transition) {
+            g_wanted_window_mode = 2;
+            (void)mods_display_set(DISPLAY_WINDOW, 2);
+        }
         g_fullscreen_transition = false;
         g_window_mode = 2;
         post_drawable_size();
         update_platform_pointer_capture();
         break;
     case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+        if (!g_fullscreen_transition && g_wanted_window_mode == 2) {
+            g_wanted_window_mode = 0;
+            (void)mods_display_set(DISPLAY_WINDOW, 0);
+        }
         g_fullscreen_transition = false;
         g_window_mode = 0;
         post_drawable_size();
