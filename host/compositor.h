@@ -32,7 +32,7 @@ struct LayoutSnapshot {
     int drawable_w = 0, drawable_h = 0, guest_w = 0, guest_h = 0, ui_scale = 1;
     HostScreenClass cls = HOST_SCREEN_MENU;
     int scale_override = 0;
-    bool legacy = false, classic = false;
+    bool legacy = false, classic = false, narrow = false;
 };
 struct CompositorInput;
 LayoutSnapshot compositor_layout_snapshot(const CompositorInput *in);
@@ -57,6 +57,9 @@ struct CompositorInput {
     gpu::Texture legacy_frame;
     gpu::Texture settings_page; // immutable host-rendered 640x480 page, alpha outside panel
     bool classic = false; // guest-resolution layered scene, aspect-preserving whole-frame mapping
+    // Wide view off: the scene was projected at the guest's aspect, so on a
+    // wider drawable it is boxed at that aspect with its HUD and input.
+    bool narrow = false;
 };
 
 // Encode only: never commits, waits or presents. The caller supplies an open
