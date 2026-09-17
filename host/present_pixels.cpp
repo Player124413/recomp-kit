@@ -125,6 +125,22 @@ extern "C" void host_present_expand_rgb565(const uint8_t *src, int w, int h, int
     }
 }
 
+extern "C" void host_present_expand_xrgb8888(const uint8_t *src, int w, int h, int pitch,
+                                             uint8_t *out) {
+    if (!src || !out || w <= 0 || h <= 0)
+        return;
+    for (int y = 0; y < h; ++y) {
+        const uint8_t *row = src + (size_t)y * (size_t)pitch;
+        uint8_t *o = out + (size_t)y * (size_t)w * 4;
+        for (int x = 0; x < w; ++x) {
+            o[4 * x + 0] = row[4 * x + 2];
+            o[4 * x + 1] = row[4 * x + 1];
+            o[4 * x + 2] = row[4 * x + 0];
+            o[4 * x + 3] = 255;
+        }
+    }
+}
+
 extern "C" struct HostFit host_present_fit(double dw, double dh, int gw, int gh) {
     HostFit fit = {0, 0, dw, dh, 1.0};
     if (gw <= 0 || gh <= 0 || dw <= 0 || dh <= 0)

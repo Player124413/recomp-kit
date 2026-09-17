@@ -19,11 +19,34 @@ else()
   set(SDL_RENDER OFF CACHE BOOL "" FORCE)
 endif()
 set(SDL_GPU OFF CACHE BOOL "" FORCE)
+if(EMSCRIPTEN)
+  set(SDL_PTHREADS ON CACHE BOOL "" FORCE) # the game runs on a thread of its own
+endif()
 FetchContent_Declare(SDL3
   GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
   GIT_TAG release-3.4.16
   GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(SDL3)
+
+# glslang compiles the Direct3D 9 renderer's GLSL to SPIR-V at run time
+# (host/gpu/vulkan/d3d9_vulkan.cpp): every platform that renders on Vulkan.
+set(RECOMP_D9_VULKAN OFF)
+if(NOT IOS AND NOT EMSCRIPTEN)
+  set(RECOMP_D9_VULKAN ON)
+  set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+  set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+  set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+  set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+  set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+  set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+  set(ENABLE_CTEST OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(glslang
+    GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
+    GIT_TAG 16.6.0
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(glslang)
+endif()
 
 # pop_link_sdl(<target>): link SDL3 statically and give the target its headers.
 function(pop_link_sdl target)

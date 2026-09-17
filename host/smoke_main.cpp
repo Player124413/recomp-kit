@@ -40,6 +40,8 @@
 #include "present.h"
 #include "d3d_render.h"
 #include "gpu/gpu_factory.h"
+#include "../dx/host_d9.h"
+#include "../runtime/display_seam.h"
 #include "../runtime/guest.h"
 #include "../runtime/loader.h"
 #include "../runtime/win32.h"
@@ -176,6 +178,18 @@ void write_dump(const char *name) {
     uint32_t space_w, space_h;
     pointer_space(&space_w, &space_h);
     char path[1024];
+    if (recomp_env("D3D9_PROBE_DUMPS"))
+        host_d9_probe_next_frame(name);
+    // A Direct3D 9 device on the GPU presents no CPU pixels; read its frame back.
+    uint32_t gw = 0, gh = 0;
+    if (host_d9_read_presented(nullptr, 0, &gw, &gh) || (gw && gh)) {
+        std::vector<uint8_t> rgb((size_t)gw * gh * 3);
+        if (host_d9_read_presented(rgb.data(), (uint32_t)rgb.size(), &gw, &gh)) {
+            g_last_rgb.swap(rgb);
+            g_last_w = (int)gw;
+            g_last_h = (int)gh;
+        }
+    }
     if (g_last_w && g_last_h) {
         snprintf(path, sizeof path, "%s/smoke_%s_present.ppm", host_dump_dir(), name);
         if (host_write_ppm(path, g_last_rgb.data(), g_last_w, g_last_h)) {
@@ -648,6 +662,11 @@ enum {
     WM_RBUTTONUP_ = 0x0205,
     WM_MBUTTONDOWN_ = 0x0207,
     WM_MBUTTONUP_ = 0x0208,
+    WM_ACTIVATE_ = 0x0006,
+    WM_SETFOCUS_ = 0x0007,
+    WM_KILLFOCUS_ = 0x0008,
+    WM_PAINT_ = 0x000f,
+    WM_ACTIVATEAPP_ = 0x001c,
 };
 
 uint32_t make_lparam(int32_t x, int32_t y) {
@@ -1341,6 +1360,16 @@ void run_step(const HostScriptStep &step) {
         post(step.down ? WM_KEYDOWN_ : WM_KEYUP_, m.vk, lparam);
         break;
     }
+    case HOST_SCRIPT_FOCUS:
+        // What the windowed host posts when the window gains or loses focus.
+        post(WM_ACTIVATEAPP_, step.down ? 1 : 0, 0);
+        post(WM_ACTIVATE_, step.down ? 1 : 0, 0);
+        post(step.down ? WM_SETFOCUS_ : WM_KILLFOCUS_, 0, 0);
+        if (step.down)
+            post(WM_PAINT_, 0, 0);
+        else
+            host_gate_release_all();
+        break;
     case HOST_SCRIPT_DUMP:
         write_dump(step.name);
         break;
@@ -2010,8 +2039,6 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
     boot_clock_advance();
     if (!pixels || w <= 0 || h <= 0 || (bpp != 8 && bpp != 16 && bpp != 32))
         return;
-    // The page goes on a copy this host owns, never on the guest's surface.
-    host_page_overlay(nullptr, w, h, bpp, pitch, palette);
     const uint8_t *frame = (const uint8_t *)pixels;
     std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4);
     if (bpp == 8)
@@ -2462,6 +2489,7 @@ int main(int argc, char **argv) {
                 return 2;
             }
         }
+        host_display_set_screen(drawable_w, drawable_h);
         host_present_start_offscreen(drawable_w, drawable_h);
         g_touch_drawable_w = drawable_w;
         g_touch_drawable_h = drawable_h;
@@ -2480,7 +2508,10 @@ int main(int argc, char **argv) {
         options.report = report;
         // A smoke run is not allowed to hang: the script's own end closes it,
         // and these are the backstops for a guest that will not go.
+        // RECOMP_SMOKE_SECONDS raises the limit for slow renderers (software Vulkan).
         options.deadline_seconds = 180.0;
+        if (const char *s = recomp_env("SMOKE_SECONDS"); s && atof(s) > 0)
+            options.deadline_seconds = atof(s);
         options.deadline_grace = 20.0;
         options.close_unwind_grace = 10.0;
 

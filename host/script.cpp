@@ -337,6 +337,15 @@ int host_script_parse(const char *text, HostScriptStep *out, int max, char *erro
                 return fail(line_number, "key needs down or up", dir);
             step.op = HOST_SCRIPT_KEY;
             snprintf(step.name, sizeof step.name, "%s", name);
+        } else if (equal_nocase(verb, "focus")) {
+            char *state = word(&cursor);
+            if (state && equal_nocase(state, "on"))
+                step.down = 1;
+            else if (state && equal_nocase(state, "off"))
+                step.down = 0;
+            else
+                return fail(line_number, "focus needs on or off", state);
+            step.op = HOST_SCRIPT_FOCUS;
         } else if (equal_nocase(verb, "simdump")) {
             char *name = word(&cursor);
             if (!name)

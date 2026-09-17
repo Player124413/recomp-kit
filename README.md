@@ -153,6 +153,38 @@ lines), copied in with `xcrun devicectl device copy to --domain-type
 appDataContainer --domain-identifier <bundle id>`. `tools/ios_logs.py` pulls
 the app's Documents (saves) back to the Mac.
 
+## Run in a browser
+
+Requires the Emscripten SDK (`source emsdk_env.sh`) and a macOS or Linux
+build already regenerated, or `--stub`.
+
+```sh
+.venv/bin/python tools/build.py --target web
+.venv/bin/python kit/tools/web_launcher.py --game-dir "$PWD" --out build/web-site \
+    --web-build <game id>=build/web/recomp --serve 8000
+```
+
+`--target web` builds the `web` preset (WebGPU, pthreads, WasmFS) and writes
+`build/web-site`: the launcher page with the game's build in `<game id>/`.
+Serve it from localhost or over HTTPS with `Cross-Origin-Opener-Policy:
+same-origin` and `Cross-Origin-Embedder-Policy: require-corp`; `--serve`
+does that for local testing. The launcher imports the player's copy of the
+game into the browser's private storage, and Play opens the game page, which
+asks for a WebGPU device (tested in Chrome on macOS).
+The game runs on a worker; the browser's main thread owns SDL, WebGPU and the
+presenter. `RECOMP_*` switches go in the page's query string
+(`<game id>/?RECOMP_D3D9_STATS=1`). Reading a render target back is not
+supported in the browser.
+
+## Other platforms and GPU APIs
+
+Direct3D 9 renders on Metal (macOS, iOS), Vulkan (Linux, Windows, and macOS
+through MoltenVK with `RECOMP_GPU_BACKEND=vulkan`) and WebGPU (the
+web), all from one shader generator. Windows builds cross-compile on macOS or
+Linux with llvm-mingw: set `LLVM_MINGW_ROOT` and pass
+`--preset windows-cross` (or `windows-cross-stub`) to `tools/build.py`; the
+executable lands in `build/windows/recomp/`.
+
 ## Check a change
 
 ```sh

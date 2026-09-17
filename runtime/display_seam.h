@@ -10,6 +10,9 @@ extern "C" {
 int32_t host_display_anchor(uint64_t id, int8_t h, int8_t v, int clear);
 uint32_t host_display_elements(uint64_t *ids, uint32_t max);
 float host_display_aspect(void);
+/* The screen the window lives on, in pixels; 0 when unknown. */
+int host_display_screen(int32_t *w, int32_t *h);
+void host_display_set_screen(int32_t w, int32_t h);
 uint64_t host_display_epoch(void);
 int host_display_offer_mode(int w, int h, int bpp);
 void host_display_request_window(int mode); /* queued; 0 windowed, 1 borderless, 2 fullscreen */

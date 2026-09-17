@@ -981,8 +981,30 @@ void host_present_start(void *native_surface, int w, int h) {
         abort();
     }
     s->frame_period = s->device->refresh_period(s->chain);
+#ifdef __EMSCRIPTEN__
+    // The browser's main loop owns the GPU and calls host_present_pump once
+    // per animation frame: no worker, no pacer.
+    (void)0;
+#else
     s->start_pacer();
     s->worker = std::thread([s] { s->run(); });
+#endif
+}
+// One presenter turn on the calling thread: for hosts whose GPU belongs to a
+// loop they do not own (the browser's main thread).
+void host_present_pump(void) {
+    auto s = active.load();
+    if (!s)
+        return;
+    const double ts = s->device ? s->device->now_seconds() : 0.0;
+    {
+        std::lock_guard lock(s->mutex);
+        if (s->stop)
+            return;
+        s->last_link_tick = s->timestamp = ts;
+        s->tick_pending = false;
+    }
+    s->tick(ts);
 }
 void host_present_start_offscreen(int w, int h) {
     auto s = begin(false, true, true);
@@ -1157,10 +1179,12 @@ extern "C" void host_present_stage_rgba(const uint8_t *rgba, int w, int h) {
         t.test_pixels.assign(rgba, rgba + size_t(w) * h * 4);
     else {
         t.device = s->device;
-        if (!t.pixels || t.pixels_w != w || t.pixels_h != h) {
+        if (!t.pixels || t.pixels_w != w || t.pixels_h != h ||
+            t.pixels_format != gpu::Format::RGBA8) {
             if (t.pixels)
                 s->device->destroy(t.pixels);
             t.pixels = s->texture(w, h);
+            t.pixels_format = gpu::Format::RGBA8;
             t.pixels_w = w;
             t.pixels_h = h;
         }
@@ -1200,6 +1224,18 @@ bool host_present_stage_texture(gpu::Texture src, int w, int h, gpu::CommandBuff
     s->guest_h = h;
     s->writing->staged_pixels = true;
     s->device->blit(cb, src, {0, 0, w, h}, t.pixels, 0, 0);
+    return true;
+}
+// The drawable the presenter composes into, in pixels. False before one exists.
+bool host_present_drawable(int *w, int *h) {
+    auto s = active.load();
+    if (!s)
+        return false;
+    std::lock_guard lock(s->mutex);
+    if (s->drawable_w <= 0 || s->drawable_h <= 0)
+        return false;
+    *w = s->drawable_w;
+    *h = s->drawable_h;
     return true;
 }
 void host_present_set_input(const CompositorInput *input) {

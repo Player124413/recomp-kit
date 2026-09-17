@@ -39,6 +39,7 @@
 #include <map>
 #include "../midi.h"
 #include "../present.h"
+#include "../../runtime/display_seam.h"
 #include "../window_presentation.h"
 #include "keymap.h"
 #include "platform_ui.h"
@@ -50,6 +51,12 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h> // on iOS this supplies the UIKit entry point and renames main
+#ifdef __EMSCRIPTEN__
+#include "../gpu/d3d9_backend.h"
+#include <emscripten/emscripten.h>
+#include <emscripten/wasmfs.h>
+#include <thread>
+#endif
 #include <SDL3/SDL_vulkan.h>
 
 #include <math.h>
@@ -251,7 +258,13 @@ void apply_focus(bool focused, uint32_t modifier_flags);
 
 // True when the event was held back rather than applied.
 bool queue_or_apply(const PendingInput &e) {
-    if (sched_in_idle_slice()) {
+#ifdef __EMSCRIPTEN__
+    // The browser's main thread handles events; the game applies them.
+    const bool queue = true;
+#else
+    const bool queue = sched_in_idle_slice();
+#endif
+    if (queue) {
         {
             std::lock_guard<std::mutex> held(g_pending_input_m);
             g_pending_input.push_back(e);
@@ -1095,6 +1108,9 @@ void handle_event(const SDL_Event &event) {
         // The guest closes itself: WM_CLOSE runs its own shutdown path, and
         // the window stays up until it is done so the last frame does not
         // vanish mid-teardown.
+        if (!g_close_requested)
+            fprintf(stderr, "[host] %s: asking the game to close\n",
+                    event.type == SDL_EVENT_QUIT ? "quit requested" : "window close requested");
         g_close_requested = true;
         break;
     default:
@@ -1389,7 +1405,156 @@ void post_drawable_size() {
 
 // ---------------------------------------------------------------------------
 
+#ifdef __EMSCRIPTEN__
+// ---------------------------------------------------------------------------
+// The web. The browser's main thread may not block, and it alone owns the
+// canvas, the input events and WebGPU, so the game runs on a thread of its
+// own and the main thread drives everything else from requestAnimationFrame:
+// events into the input queue, the game's queued Direct3D 9 work onto the
+// GPU, and one presenter turn. The page (tools/web) imports the game into the
+// origin-private file system and passes its path as --exe.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string g_web_exe;
+std::atomic<bool> g_web_guest_done{false};
+int g_web_dw = 0, g_web_dh = 0;
+
+void web_tick() {
+    deliver_pending_input();
+}
+
+int web_idle_wait(double seconds) {
+    {
+        std::lock_guard<std::mutex> held(g_pending_input_m);
+        if (!g_pending_input.empty())
+            return 1;
+    }
+    const double wait = std::min(std::max(seconds, 0.0), 0.004);
+    if (wait > 0)
+        os_sleep_us((uint64_t)(wait * 1e6));
+    std::lock_guard<std::mutex> held(g_pending_input_m);
+    return g_pending_input.empty() ? 0 : 1;
+}
+
+void web_frame() {
+    host_d9_frame(true);
+    service(0.0);
+    after_events();
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    if (dw > 0 && dh > 0 && (dw != g_web_dw || dh != g_web_dh)) {
+        g_web_dw = dw;
+        g_web_dh = dh;
+        host_present_resize(dw, dh);
+        host_display_set_screen(dw, dh);
+    }
+    host_d9_pump();
+    host_present_pump();
+    host_d9_frame(false);
+    if (g_web_guest_done.load())
+        emscripten_cancel_main_loop();
+}
+
+// The game's thread: the game's files are read from here, never from the
+// main thread, which may not wait for the file system.
+void web_guest() {
+    backend_t opfs = wasmfs_create_opfs_backend();
+    if (!opfs || wasmfs_create_directory("/opfs", 0777, opfs) != 0)
+        fprintf(stderr, RECOMP_APP_NAME ": the browser's private file system is unavailable\n");
+    std::string dir = g_web_exe.substr(0, g_web_exe.find_last_of('/'));
+    if (!dir.empty() && os_chdir(dir.c_str()) != 0)
+        fprintf(stderr, "[host] could not enter %s\n", dir.c_str());
+    BootOptions options;
+    options.name = "web";
+    options.exe = g_web_exe.c_str();
+    options.activate = true;
+    options.tick = web_tick;
+    sched_set_input_queue(input_pending, drain_input);
+    options.idle_wait = web_idle_wait;
+    options.report = report;
+    options.deadline_seconds = 0.0;
+    if (!boot_load(options)) {
+        fprintf(stderr, RECOMP_APP_NAME ": %s\n", loader_error());
+        g_web_guest_done.store(true);
+        return;
+    }
+    printf(RECOMP_APP_NAME ": %s, entry %08x\n", loader_exe_path().c_str(), loader_entry_point());
+    fflush(stdout);
+    host_midi_startup(win32_midi_soundfont_path().c_str());
+    boot_run();
+    g_web_guest_done.store(true);
+}
+
+int web_main(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (strncmp(argv[i], "--exe=", 6) == 0)
+            g_web_exe = argv[i] + 6;
+        else if (strcmp(argv[i], "--exe") == 0 && i + 1 < argc)
+            g_web_exe = argv[++i];
+    }
+    if (g_web_exe.empty()) {
+        fprintf(stderr, RECOMP_APP_NAME ": the page gave no --exe\n");
+        return 2;
+    }
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        fprintf(stderr, RECOMP_APP_NAME ": SDL_Init failed: %s\n", SDL_GetError());
+        return 3;
+    }
+    g_gpu = gpu::create_default_device();
+    if (!g_gpu) {
+        fprintf(stderr, RECOMP_APP_NAME ": this browser gave the page no WebGPU device\n");
+        return 3;
+    }
+    g_window = SDL_CreateWindow(RECOMP_GAME_NAME, g_mode_w, g_mode_h,
+                                SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!g_window) {
+        fprintf(stderr, RECOMP_APP_NAME ": SDL_CreateWindow failed: %s\n", SDL_GetError());
+        return 3;
+    }
+    g_surface = gpu::native_surface_for_window(g_window);
+    fprintf(stderr, "GPU backend: %s\n", gpu::default_backend_name());
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    if (dw <= 0 || dh <= 0) {
+        dw = 1280;
+        dh = 720;
+    }
+    g_web_dw = dw;
+    g_web_dh = dh;
+    host_display_set_screen(dw, dh);
+
+    D3DRenderer *renderer = new D3DRenderer(g_gpu.get());
+    if (!renderer->ok())
+        return 3;
+    D3DRenderer::setShared(renderer);
+    host_present_set_device(g_gpu.get());
+    mods_display_live_defaults();
+    mods_display_default_overlay(platform_ui_default_overlay());
+    mods_display_load_modes(classic_modes_path().c_str());
+    host_present_on_mode_change(on_mode_change);
+    host_input_set_notify(dinput_host_input_changed);
+    host_present_start(g_surface, dw, dh);
+    if (!host_d9_web_start(g_gpu.get()))
+        fprintf(stderr,
+                RECOMP_APP_NAME ": no WebGPU Direct3D 9 renderer; the game draws on the CPU\n");
+
+    const char *capture = recomp_env("HOST_AUDIO_CAPTURE");
+    if (capture && *capture)
+        host_audio_capture_begin(capture);
+
+    std::thread(web_guest).detach();
+    emscripten_set_main_loop(web_frame, 0, false);
+    return 0; // the runtime stays alive for the main loop and the game's thread
+}
+
+} // namespace
+#endif
+
 int main(int argc, char **argv) {
+#ifdef __EMSCRIPTEN__
+    return web_main(argc, argv);
+#endif
     // --version and --probe-layout answer before SDL or the GPU come up, so a
     // packaged build can be checked on a machine with neither a display nor
     // the game.

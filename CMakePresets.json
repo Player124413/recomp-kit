@@ -96,6 +96,39 @@
       }
     },
     {
+      "name": "windows-cross",
+      "inherits": "base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/llvm-mingw.cmake",
+      "cacheVariables": {
+        "RECOMP_VIDEO": "OFF"
+      }
+    },
+    {
+      "name": "windows-cross-stub",
+      "inherits": "windows-cross",
+      "cacheVariables": {
+        "POP_TRANSLATE": "STUB"
+      }
+    },
+    {
+      "name": "web",
+      "inherits": "base",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "RECOMP_VIDEO": "OFF",
+        "CMAKE_C_FLAGS": "-pthread",
+        "CMAKE_CXX_FLAGS": "-pthread",
+        "CMAKE_EXE_LINKER_FLAGS": "-pthread"
+      }
+    },
+    {
+      "name": "web-stub",
+      "inherits": "web",
+      "cacheVariables": {
+        "POP_TRANSLATE": "STUB"
+      }
+    },
+    {
       "name": "android",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build/cmake/android",

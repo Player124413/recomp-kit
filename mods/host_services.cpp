@@ -293,6 +293,16 @@ void mods_fill_host_api(PopModApi *api) {
     api->ui_elements = [](const PopModApi *, uint64_t *ids, uint32_t max) {
         return host_display_elements(ids, max);
     };
+    api->screen_size = [](const PopModApi *, uint32_t *w, uint32_t *h) -> PopModStatus {
+        int32_t sw = 0, sh = 0;
+        if (!w || !h)
+            return POP_E_INVAL;
+        if (!host_display_screen(&sw, &sh))
+            return POP_E_NOTFOUND;
+        *w = uint32_t(sw);
+        *h = uint32_t(sh);
+        return POP_OK;
+    };
     api->host_aspect = [](const PopModApi *api) {
         // Wide View controls horizontal expansion. Keep core.display's
         // resolution/sky callbacks alive even when that option is off.

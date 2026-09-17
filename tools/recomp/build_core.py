@@ -12,6 +12,34 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def target_system(cc):
+    """The system `cc` builds for, from its target triple: a cross compiler's
+    plugins follow the target, not the machine building them. None when the
+    compiler does not say."""
+    try:
+        result = subprocess.run([str(cc), "-dumpmachine"], capture_output=True, text=True)
+    except OSError:
+        return None
+    triple = result.stdout.strip().lower()
+    if not triple:
+        return None
+    if "mingw" in triple or "windows" in triple:
+        return "Windows"
+    if "darwin" in triple or "apple" in triple:
+        return "Darwin"
+    if "linux" in triple or "android" in triple:
+        return "Linux"
+    return None
+
+
+def is_mingw(cc):
+    try:
+        result = subprocess.run([str(cc), "-dumpmachine"], capture_output=True, text=True)
+    except OSError:
+        return False
+    return "mingw" in result.stdout.lower()
+
+
 def plugin_extension(system=None):
     """The shared-library suffix the mod loader expects on this platform."""
     system = system or platform.system()
@@ -56,6 +84,9 @@ def compile_flags(cc, name, scratch, env, system=None):
                   "-Wl,-install_name,@rpath/" + name]
         if linker_accepts(cc, "-Wl,-reproducible", scratch, env):
             flags.append("-Wl,-reproducible")
+    elif system == "Windows" and is_mingw(cc):
+        # lld in MinGW mode takes GNU spellings: no timestamp, no debug info.
+        flags += ["-shared", "-fuse-ld=lld", "-Wl,--no-insert-timestamp", "-s"]
     elif system == "Windows":
         # /debug:none: without it lld-link still writes a CodeView debug
         # directory naming a PDB under the random staging path, with a GUID
@@ -84,7 +115,7 @@ def install(source, dest, cc, api_include, system=None):
     manifest's plugin exists, then replace `dest` by rename. Raises CalledProcessError on a
     compile failure and FileNotFoundError on a missing plugin; `dest` is untouched either way.
     Returns the number of plugins built."""
-    system = system or platform.system()
+    system = system or target_system(cc) or platform.system()
     source, dest = Path(source), Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=dest.name + ".stage.", dir=dest.parent))

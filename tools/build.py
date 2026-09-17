@@ -24,6 +24,7 @@ import game_config  # noqa: E402
 import buildlock  # noqa: E402
 import package_desktop  # noqa: E402
 import stage_game_files  # noqa: E402
+import web_launcher  # noqa: E402
 
 # What each --target builds. `plugins` is every mod plugin the game ships.
 TARGETS = {
@@ -35,9 +36,12 @@ TARGETS = {
     "plugins": ["plugins"],
     "ios": ["recomp_app"],
     "android": ["recomp_app"],
+    "web": ["recomp_app"],
 }
 MACOS_ONLY = {"ios"}
-NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios", "android"}
+NEEDS_GEN = {"app", "smoke", "headless", "fixture", "gen", "ios", "android", "web"}
+# Targets with presets of their own, whatever the host system.
+OWN_PRESET = {"ios", "android", "web"}
 
 
 def default_preset(system=None):
@@ -46,8 +50,8 @@ def default_preset(system=None):
 
 
 def preset_name(preset, config, stub=False, target=None):
-    """Debug, stub and mobile builds use separate presets and binary directories."""
-    if target in {"ios", "android"}:
+    """Debug, stub, mobile and web builds use separate presets and binary directories."""
+    if target in OWN_PRESET:
         return target + "-stub" if stub else target
     if stub:
         return preset + "-stub"
@@ -341,6 +345,14 @@ def texture_pack(game_dir, build_root):
                         "--output", str(detail.parent)], cwd=ROOT, check=True)
 
 
+def web_site(game_dir, build_root, preset, cfg):
+    """The launcher page with this game's web build beside it, ready to serve."""
+    site = Path(build_root) / (preset + "-site")
+    web_launcher.build([game_dir], site)
+    web_launcher.copy_web_build(cfg["game"]["id"], Path(build_root) / preset / "recomp", site)
+    return site
+
+
 def parse_args(argv, system=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--regenerate", action="store_true", help="Regenerate and compile translated C")
@@ -379,6 +391,8 @@ def parse_args(argv, system=None):
         parser.error("%s has no mods/CMakeLists.txt; nothing to build for --target plugins" % args.game_dir)
     if args.target in MACOS_ONLY and (system or platform.system()) != "Darwin":
         parser.error("The iOS packager runs on macOS")
+    if args.target == "web" and not os.environ.get("EMSDK"):
+        parser.error("--target web needs the Emscripten SDK's environment (source emsdk_env.sh)")
     if args.jobs < 1:
         parser.error("--jobs must be at least 1")
     args.build_root = build_root_for(args.game_dir)
@@ -432,6 +446,9 @@ def main():
                     texture_pack(args.game_dir, args.build_root)
                 configure(preset, defines, build_dir=build_dir)
                 build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
+                if args.target == "web":
+                    site = web_site(args.game_dir, args.build_root, preset, cfg)
+                    print("Web site in %s (serve it with tools/web_launcher.py --serve)" % site)
                 if args.target == "android":
                     apk = android_apk(args.build_root, cfg, gen_dir=build_dir)
                     if not args.no_install:

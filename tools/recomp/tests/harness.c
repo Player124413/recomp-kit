@@ -1,3 +1,4 @@
+#define RECOMP_GUEST_MEMORY_OWNER 1 /* defines and maps g_mem */
 /* Test-only host for the generated code: owns g_mem, stubs the runtime
  * call-outs that runtime/ will provide for real, and exposes
  * run(addr, X86*) plus the memory base so a ctypes driver can drive one

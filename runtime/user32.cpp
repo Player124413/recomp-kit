@@ -197,12 +197,16 @@ namespace user32 {
 // ---------------------------------------------------------------------------
 // Classes and windows
 // ---------------------------------------------------------------------------
-void register_class_named(X86 *c, bool wide) {
+// WNDCLASSA and WNDCLASSEXA hold the same fields in the same order; the Ex
+// form puts cbSize in front of them and hIconSm behind, so one reader with a
+// field offset serves both. `shift` is 4 for the Ex form.
+void register_class_named(X86 *c, bool wide, uint32_t shift) {
     uint32_t p = arg(c, 0);
     if (!p) {
         set_eax(c, 0);
         return;
     }
+    p += shift;
     WndClass wc;
     wc.style = rd32(p + 0);
     wc.wndproc = rd32(p + 4);
@@ -232,7 +236,11 @@ void register_class_named(X86 *c, bool wide) {
 }
 
 void u_RegisterClassA(X86 *c) {
-    register_class_named(c, false);
+    register_class_named(c, false, 0);
+}
+
+void u_RegisterClassExA(X86 *c) {
+    register_class_named(c, false, 4);
 }
 
 void u_UnregisterClassA(X86 *c) {
@@ -1506,6 +1514,134 @@ void win32_uncover_display(X86 *c, uint32_t hwnd) {
         user32::set_window_pos(c, win, 0, b[0], b[1], b[2], b[3], 0x14);
 }
 
+void u_AdjustWindowRect(X86 *c) {
+    // Same as the Ex form: no non-client area, so the client rectangle the
+    // guest passed in is already the window rectangle.
+    log_once("AdjustWindowRect", "AdjustWindowRect: no non-client area is modelled");
+    set_eax(c, 1);
+}
+
+// One window is ever active and focused: the game's main window.
+void u_GetActiveWindow(X86 *c) {
+    set_eax(c, g_main_hwnd);
+}
+void u_GetForegroundWindow(X86 *c) {
+    set_eax(c, g_main_hwnd);
+}
+void u_SetActiveWindow(X86 *c) {
+    set_eax(c, host_main_window());
+}
+void u_SetForegroundWindow(X86 *c) {
+    set_eax(c, 1);
+}
+void u_SetFocus(X86 *c) {
+    set_eax(c, find_window(arg(c, 0)) ? g_main_hwnd : 0);
+}
+void u_GetMenu(X86 *c) {
+    set_eax(c, 0);
+}
+void u_IsIconic(X86 *c) {
+    set_eax(c, 0);
+}
+void u_WaitMessage(X86 *c) {
+    // A blocking wait in the original; here a scheduling checkpoint so the
+    // service threads run, then return as if a message arrived.
+    sched_checkpoint();
+    set_eax(c, 1);
+}
+
+// Clipboard: nothing is shared with the host clipboard.
+void u_OpenClipboard(X86 *c) {
+    set_eax(c, 1);
+}
+void u_CloseClipboard(X86 *c) {
+    set_eax(c, 1);
+}
+void u_IsClipboardFormatAvailable(X86 *c) {
+    set_eax(c, 0);
+}
+void u_GetClipboardData(X86 *c) {
+    set_eax(c, 0);
+}
+
+// Mouse capture: only the handle is remembered. The host already delivers
+// pointer input to the one window whether the button is over it or not.
+uint32_t g_capture_hwnd = 0;
+void u_SetCapture(X86 *c) {
+    uint32_t prev = g_capture_hwnd;
+    g_capture_hwnd = arg(c, 0);
+    set_eax(c, prev);
+}
+void u_ReleaseCapture(X86 *c) {
+    g_capture_hwnd = 0;
+    set_eax(c, 1);
+}
+
+// Virtual-key codes against set-1 scan codes on a US layout.
+struct VkScan {
+    uint8_t vk, scan;
+};
+const VkScan kVkScan[] = {
+    {0x1B, 0x01}, {'1', 0x02}, {'2', 0x03}, {'3', 0x04}, {'4', 0x05}, {'5', 0x06}, {'6', 0x07},
+    {'7', 0x08}, {'8', 0x09}, {'9', 0x0A}, {'0', 0x0B}, {0xBD, 0x0C}, {0xBB, 0x0D}, {0x08, 0x0E},
+    {0x09, 0x0F}, {'Q', 0x10}, {'W', 0x11}, {'E', 0x12}, {'R', 0x13}, {'T', 0x14}, {'Y', 0x15},
+    {'U', 0x16}, {'I', 0x17}, {'O', 0x18}, {'P', 0x19}, {0xDB, 0x1A}, {0xDD, 0x1B}, {0x0D, 0x1C},
+    {0x11, 0x1D}, {'A', 0x1E}, {'S', 0x1F}, {'D', 0x20}, {'F', 0x21}, {'G', 0x22}, {'H', 0x23},
+    {'J', 0x24}, {'K', 0x25}, {'L', 0x26}, {0xBA, 0x27}, {0xDE, 0x28}, {0xC0, 0x29}, {0x10, 0x2A},
+    {0xDC, 0x2B}, {'Z', 0x2C}, {'X', 0x2D}, {'C', 0x2E}, {'V', 0x2F}, {'B', 0x30}, {'N', 0x31},
+    {'M', 0x32}, {0xBC, 0x33}, {0xBE, 0x34}, {0xBF, 0x35}, {0xA1, 0x36}, {0x6A, 0x37}, {0x12, 0x38},
+    {0x20, 0x39}, {0x14, 0x3A}, {0x70, 0x3B}, {0x71, 0x3C}, {0x72, 0x3D}, {0x73, 0x3E}, {0x74, 0x3F},
+    {0x75, 0x40}, {0x76, 0x41}, {0x77, 0x42}, {0x78, 0x43}, {0x79, 0x44}, {0x90, 0x45}, {0x91, 0x46},
+    {0x24, 0x47}, {0x26, 0x48}, {0x21, 0x49}, {0x6D, 0x4A}, {0x25, 0x4B}, {0x0C, 0x4C}, {0x27, 0x4D},
+    {0x6B, 0x4E}, {0x23, 0x4F}, {0x28, 0x50}, {0x22, 0x51}, {0x2D, 0x52}, {0x2E, 0x53}, {0x7A, 0x57},
+    {0x7B, 0x58}, {0xA0, 0x2A}, {0xA2, 0x1D}, {0xA3, 0x1D}, {0xA4, 0x38}, {0xA5, 0x38},
+};
+// (uCode, uMapType[, dwhkl]): 0 VK to scan, 1 scan to VK, 2 VK to character,
+// 3 scan to VK distinguishing left and right.
+uint32_t map_virtual_key(uint32_t code, uint32_t type) {
+    switch (type) {
+    case 0:
+        for (const VkScan &e : kVkScan)
+            if (e.vk == code)
+                return e.scan;
+        return 0;
+    case 1:
+    case 3:
+        for (const VkScan &e : kVkScan)
+            if (e.scan == code) {
+                if (type == 1 && e.vk == 0xA1)
+                    return 0x10;
+                return type == 3 && e.vk == 0x10 ? 0xA0 : e.vk;
+            }
+        return 0;
+    case 2:
+        if ((code >= '0' && code <= '9') || (code >= 'A' && code <= 'Z') || code == ' ' ||
+            code == 0x0D || code == 0x08 || code == 0x09 || code == 0x1B)
+            return code;
+        switch (code) {
+        case 0xBA: return ';';
+        case 0xBB: return '=';
+        case 0xBC: return ',';
+        case 0xBD: return '-';
+        case 0xBE: return '.';
+        case 0xBF: return '/';
+        case 0xC0: return '`';
+        case 0xDB: return '[';
+        case 0xDC: return '\\';
+        case 0xDD: return ']';
+        case 0xDE: return '\'';
+        }
+        if (code >= 0x60 && code <= 0x69)
+            return '0' + (code - 0x60);
+        return 0;
+    default:
+        return 0;
+    }
+}
+void u_MapVirtualKeyA(X86 *c) {
+    set_eax(c, map_virtual_key(arg(c, 0), arg(c, 1)));
+}
+
 const ImportShim g_user32_shims[] = {
     {"USER32.dll", "RegisterClassA", 1, u_RegisterClassA},
     {"USER32.dll", "UnregisterClassA", 2, u_UnregisterClassA},
@@ -1572,5 +1708,27 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "ShowCursor", 1, u_ShowCursor},
     {"USER32.dll", "ClipCursor", 1, u_ClipCursor},
     {"USER32.dll", "GetClipCursor", 1, u_GetClipCursor},
+    {"USER32.dll", "RegisterClassExA", 1, u_RegisterClassExA},
+    {"USER32.dll", "AdjustWindowRect", 3, u_AdjustWindowRect},
+    {"USER32.dll", "SetCapture", 1, u_SetCapture},
+    {"USER32.dll", "ReleaseCapture", 0, u_ReleaseCapture},
+    {"USER32.dll", "GetDesktopWindow", 0, nullptr},
+    {"USER32.dll", "MapVirtualKeyA", 2, u_MapVirtualKeyA},
+    {"USER32.dll", "MapVirtualKeyExA", 3, u_MapVirtualKeyA},
+    {"USER32.dll", "ToUnicode", 6, nullptr},
+    {"USER32.dll", "SendInput", 3, nullptr},
+    {"USER32.dll", "PostThreadMessageA", 4, nullptr},
+    {"USER32.dll", "GetForegroundWindow", 0, u_GetForegroundWindow},
+    {"USER32.dll", "WaitMessage", 0, u_WaitMessage},
+    {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},
+    {"USER32.dll", "SetFocus", 1, u_SetFocus},
+    {"USER32.dll", "GetMenu", 1, u_GetMenu},
+    {"USER32.dll", "IsIconic", 1, u_IsIconic},
+    {"USER32.dll", "SetForegroundWindow", 1, u_SetForegroundWindow},
+    {"USER32.dll", "SetActiveWindow", 1, u_SetActiveWindow},
+    {"USER32.dll", "OpenClipboard", 1, u_OpenClipboard},
+    {"USER32.dll", "CloseClipboard", 0, u_CloseClipboard},
+    {"USER32.dll", "IsClipboardFormatAvailable", 1, u_IsClipboardFormatAvailable},
+    {"USER32.dll", "GetClipboardData", 1, u_GetClipboardData},
 };
 const size_t g_user32_shim_count = sizeof(g_user32_shims) / sizeof(g_user32_shims[0]);

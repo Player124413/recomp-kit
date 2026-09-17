@@ -9,6 +9,10 @@ struct HostLayout {
     std::string resources_dir; // "" when nothing was found
     std::string profile_dir;   // settings, saves, game-path.txt
     std::string checkout_root; // "" outside a checkout
+    // A developer run's outputs: the executable's own recomp/ directory when
+    // it runs from one (a second build root, such as a cross build's), else
+    // <checkout>/build/recomp.
+    std::string build_dir;
     bool developer = false;    // checkout_root is set
 };
 const HostLayout &host_layout();
@@ -17,7 +21,7 @@ const HostLayout &host_layout();
 // "" when unknown.
 std::string host_resource(const char *rel);
 // A file the host writes during a run (the emulated registry, the run
-// record): <checkout>/build/recomp/<name> in developer mode, else
+// record): <build_dir>/<name> in developer mode, else
 // <profile_dir>/<name>.
 std::string host_state_file(const char *name);
 // Test seam: recompute from this executable path and the current environment
