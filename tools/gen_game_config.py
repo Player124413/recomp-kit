@@ -60,6 +60,9 @@ def render_header(cfg):
     if builtin not in ("populous", "none"):
         raise ValueError('[mods] builtin must be "populous" or "none", not %r' % builtin)
     lines.append("#define RECOMP_MODS_BUILTIN_POPULOUS %d" % (1 if builtin == "populous" else 0))
+    # One bit per settings-page row, in game_config.SETTINGS_ROWS order.
+    mask = sum(1 << i for i, row in enumerate(game_config.SETTINGS_ROWS) if row in cfg["settings"]["rows"])
+    lines.append("#define RECOMP_SETTINGS_ROWS 0x%03xu" % mask)
     for key, value in sorted(cfg.get("hooks", {}).items()):
         macro = "RECOMP_HOOK_" + key.upper()
         if isinstance(value, list):

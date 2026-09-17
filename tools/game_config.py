@@ -15,6 +15,12 @@ REQUIRED_GAME_KEYS = ("id", "name", "app_name", "bundle_id", "executable", "sha2
                       "image_base", "entry_point", "guest_root", "developer_exe")
 
 HEAP_BASE_DEFAULT = 0x01000000
+
+# The settings page's rows, in mods/display_settings.h DisplayRow order; the
+# keypad's three rows are one entry. [settings] rows names the ones a game
+# shows. Without the key a game shows every row.
+SETTINGS_ROWS = ("rendering", "ui_scale", "wide_view", "window", "resolution", "frame_limit",
+                 "performance_overlay", "textures", "filtering", "keypad")
 HEAP_END = 0x0e000000        # runtime/x86.h GUEST_HEAP_END; the mods' heap starts there
 GUEST_SIZE_DEFAULT = 0x10000000   # runtime/x86.h GUEST_SIZE: the arena, 256 MB unless a module needs more
 AUX_REQUIRED_KEYS = ("name", "path", "sha256", "base", "size")
@@ -61,6 +67,12 @@ def load(game_dir):
     touch.setdefault("keypad", "auto")
     if touch["keypad"] not in ("auto", "hidden"):
         raise ValueError('%s: [touch] keypad must be "auto" or "hidden", not %r' % (source, touch["keypad"]))
+    settings = cfg.setdefault("settings", {})
+    rows = settings.setdefault("rows", list(SETTINGS_ROWS))
+    unknown = [row for row in rows if row not in SETTINGS_ROWS]
+    if not isinstance(rows, list) or unknown:
+        raise ValueError("%s: [settings] rows may name only %s, not %s"
+                         % (source, ", ".join(SETTINGS_ROWS), ", ".join(map(repr, unknown or [rows]))))
     globals_path = game_dir / translate.get("globals", "globals.toml")
     with globals_path.open("rb") as fh:
         cfg["globals"] = tomllib.load(fh).get("globals", {})

@@ -1,6 +1,7 @@
 #include "display_settings.h"
 #include "options_menu.h"
 #include "mods_internal.h"
+#include "game_config.h"
 #include "../dx/host_api.h"
 #include <atomic>
 #include <algorithm>
@@ -57,6 +58,21 @@ void mods_display_default_overlay(int mode) {
         return;
     desired[DISPLAY_OVERLAY] = std::clamp(mode, 0, 2);
 }
+namespace {
+#ifdef POPM_TESTING
+unsigned listed_rows = (2u << DISPLAY_KEYPAD_BIT) - 1;
+#else
+const unsigned listed_rows = RECOMP_SETTINGS_ROWS;
+#endif
+} // namespace
+bool mods_settings_row_listed(int bit) {
+    return bit >= 0 && bit <= DISPLAY_KEYPAD_BIT && (listed_rows >> bit & 1);
+}
+#ifdef POPM_TESTING
+void mods_settings_rows_for_test(unsigned mask) {
+    listed_rows = mask;
+}
+#endif
 // Declare display settings, restore saved values within their supported ranges and publish host state.
 void mods_display_init() {
     if (initialized)
@@ -69,6 +85,13 @@ void mods_display_init() {
         int64_t value = desired[i];
         mods_settings_get(MODS_OWNER_RUNTIME, keys[i], &value);
         desired[i] = int(std::clamp<int64_t>(value, 0, maximum[i]));
+        // A row this game does not list keeps its neutral value, whatever an
+        // older profile saved: Enhanced, automatic scale, wide view, the
+        // game's own pacing, the pack and 8x filtering. The saved value stays
+        // on disk for a build that lists the row again.
+        static const int neutral[DISPLAY_ROW_COUNT] = {0, 0, 1, 0, 0, 0, 0, 1, 3};
+        if (!mods_settings_row_listed(i) && i != DISPLAY_WINDOW && i != DISPLAY_OVERLAY)
+            desired[i] = neutral[i];
     }
     if (modes.empty())
         desired[DISPLAY_RENDERING] = 0;
@@ -83,6 +106,8 @@ void mods_display_init() {
 // Host controls work without game metadata. Renderer and native Options rows
 // need a nonempty symbol map that passed the loader's validation.
 bool mods_display_row_applies(DisplayRow row) {
+    if (!mods_settings_row_listed(row))
+        return false;
     switch (row) {
     case DISPLAY_WINDOW:
     case DISPLAY_FPS:
@@ -133,6 +158,8 @@ PopModStatus mods_display_set(DisplayRow row, int value) {
         return POP_E_WRONG_THREAD;
     if (row < 0 || row >= DISPLAY_ROW_COUNT)
         return POP_E_INVAL;
+    if (!mods_settings_row_listed(row))
+        return POP_E_STATE; // this game has no such row
     if (modes.empty() && !mods_options_resolution_count() &&
         ((row == DISPLAY_RENDERING && value) || row == DISPLAY_CLASSIC_MODE))
         return POP_E_STATE;
