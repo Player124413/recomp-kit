@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The portable suites pass again. The instruction harness defines the
+  runtime globals the memory writers read (the watchpoint and the DirectDraw
+  write ranges), which it had been missing since the watchpoint arrived; the
+  driver and SEH tests expect a popped-return jump to end in `recomp_return`;
+  and the adopted-epilogue case no longer also configures the epilogue as an
+  entry point, which since configured entries stopped being absorbed made it
+  test the opposite of its intent.
+
 - Window creation runs without a thread switch. The import checkpoints could
   hand the baton to another guest thread in the middle of `CreateWindowEx` and
   its creation messages, and Delphi's VCL passes the control being created to

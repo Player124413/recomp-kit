@@ -363,9 +363,10 @@ def test_finally_cleanup_and_epilogue_belong_to_establishing_body(
     for name, value in (("LISTINGS", listings), ("FUNCS_TSV", table),
                         ("BINARY", binary), ("CURATED", curated)):
         monkeypatch.setattr(T, name, str(value))
+    # The handler stub alone makes the epilogue an SEH entry. It is not also
+    # configured: a configured entry point is never absorbed into another
+    # body, which is the opposite of what these cases check.
     seeds = {entry} if recovered_owner == "config" else set()
-    if epilogue_handler is True:
-        seeds.add(epilogue)
     monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset(seeds))
     monkeypatch.setattr(T, "Image", lambda path: img)
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path), "--out", str(out), "--quiet"])
@@ -578,7 +579,7 @@ def test_except_calls_push_decoded_returns_after_short_jump(tmp_path, monkeypatc
     for ret in (cleanup + 5, cleanup + 10, epilogue):
         assert "wr32(c->r[4], %s);" % T.hexlit(ret) in block
     assert "wr32(c->r[4], %s);" % T.hexlit(cleanup + 11) not in block
-    assert "c->eip = c->r[2]; return;" in text
+    assert "c->eip = c->r[2]; recomp_return(c); return;" in text
     table_text = (out / "table.c").read_text()
     returns = table_text.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]
     assert "0x%08xu" % epilogue in returns
@@ -612,7 +613,7 @@ def test_popped_return_register_is_classified_statically(code, is_return):
     tr = T.Translator(img, {entry}, Opts())
     tr.prepare(fn)
     text = "\n".join(tr.translate(fn))
-    assert ("c->eip = c->r[2]; return;" in text) == is_return
+    assert ("c->eip = c->r[2]; recomp_return(c); return;" in text) == is_return
     assert ("recomp_jump(c, t_);" in text) != is_return
 
 
@@ -630,7 +631,7 @@ def test_popped_return_avoids_dispatch_when_continuation_is_also_an_entry(tmp_pa
     text = translate_entry_fixture(tmp_path, monkeypatch, img,
                                    blocks | {continuation: caller[5:]})
     done_text = text.split("void fn_%08x(X86 *c) {" % done, 1)[1].split("\n}", 1)[0]
-    assert "c->eip = c->r[2]; return;" in done_text
+    assert "c->eip = c->r[2]; recomp_return(c); return;" in done_text
     assert "recomp_jump" not in done_text
     table = (tmp_path / "gen/table.c").read_text()
     returns = table.split("recomp_call_returns[] = {", 1)[1].split("};", 1)[0]

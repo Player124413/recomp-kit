@@ -47,7 +47,7 @@ def test_popped_return_helper_adopts_only_an_escaping_frame(tmp_path, monkeypatc
         assert body.index("CALL_FN(%08x)" % helper) < body.index("recomp_seh_frame_adopt")
         assert "if (b_) { if (setjmp(*b_)) { recomp_seh_land(c); return; } }" in body
         assert "&& setjmp" not in body
-    assert "c->eip = c->r[2]; return;" in helper_body
+    assert "c->eip = c->r[2]; recomp_return(c); return;" in helper_body
 
 
 @pytest.mark.parametrize("zeroed", [True, False])
@@ -63,7 +63,7 @@ def test_pop_fs_register_restore_in_a_separate_helper(tmp_path, monkeypatch, zer
     text = translate_entry_fixture(tmp_path, monkeypatch, img, {restore: raw})
     body = text.split("void fn_%08x(X86 *c) {" % restore, 1)[1].split("\n}", 1)[0]
     assert ("recomp_seh_frame_leave(c)" in body) == zeroed
-    assert "c->eip = c->r[1]; return;" in body
+    assert "c->eip = c->r[1]; recomp_return(c); return;" in body
     assert "recomp_jump(c, t_)" not in body
 
 

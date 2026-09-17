@@ -12,6 +12,16 @@
 #include "intrinsics.h"
 
 uint8_t *g_mem;
+/* No watchpoint is armed and no DirectDraw lock is open here: both stay
+ * empty, and a store costs the runtime's two compares. */
+uint32_t g_watch_base, g_watch_len;
+void recomp_watch_hit(uint32_t addr, uint32_t n, uint64_t value) {
+    (void)addr;
+    (void)n;
+    (void)value;
+}
+RecompDirty g_dirty[RECOMP_DIRTY_SLOTS];
+uint32_t g_dirty_count;
 
 static uint32_t last_shim, last_unknown, last_div_error;
 static unsigned harness_checks_run;
