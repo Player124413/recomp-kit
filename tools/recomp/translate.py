@@ -3446,6 +3446,33 @@ WITHDRAWN_CALL_RE = re.compile(r"CALL_FN\(([0-9a-f]{8})\);( return;)?")
 WITHDRAWN_JUMP_RE = re.compile(r"(?:c->eip = 0x[0-9a-f]{1,8}u; )?recomp_jump\(c, 0x([0-9a-f]{1,8})u\); return;")
 
 
+def dispatch_outside(body, known):
+    """Send every literal transfer to an address this translation does not
+    carry through the runtime's own dispatch.
+
+    A module of the image's own code (--as-module) carries a few functions out
+    of thousands, and the calls and jumps between them and the rest of the
+    image are ordinary. The image's table has those addresses, so a literal
+    CALL_FN becomes recomp_call and a literal jump becomes recomp_jump. Only
+    literal spellings change; nothing else in the body does."""
+    out = []
+    for line in body:
+        def call(m):
+            target = int(m.group(1), 16)
+            if target in known:
+                return m.group(0)
+            tail = " return;" if m.group(2) else ""
+            return "recomp_call(c, 0x%08xu);%s" % (target, tail)
+
+        def jump(m):
+            target = int(m.group(1), 16)
+            if target in known:
+                return m.group(0)
+            return "recomp_jump(c, 0x%08xu); return;" % target
+        out.append(WITHDRAWN_JUMP_RE.sub(jump, WITHDRAWN_CALL_RE.sub(call, line)))
+    return out
+
+
 def retarget_withdrawn(body, pruned):
     """Turn every literal transfer to a withdrawn block into a trap.
 
@@ -3521,6 +3548,13 @@ def main():
                     help="a file RECOMP_DISCOVERY wrote: addresses a run reached that its "
                          "translation did not carry, adopted as entry points on top of "
                          "game.toml's own")
+    ap.add_argument("--as-module", default=None, metavar="NAME",
+                    help="emit this translation as a module the runtime loads rather than as "
+                         "the image's own table: prefixed symbols, a RecompModule registered "
+                         "from a constructor, and every literal call or jump to an address "
+                         "outside it dispatched through recomp_call. With --only, this is how "
+                         "code a run discovered is compiled and loaded without rebuilding the "
+                         "game (tools/lazy_static.py).")
     ap.add_argument("--module", default=None, metavar="KEY",
                     help="translate the auxiliary module [modules.aux.KEY] instead of the executable")
     args = ap.parse_args()
@@ -3528,6 +3562,13 @@ def main():
     configure(cfg)
     if args.module:
         configure_module(cfg, args.module)
+    if args.as_module:
+        if args.module:
+            raise SystemExit("--as-module translates the image; --module translates a module")
+        global SYMBOL_PREFIX, AUX_MODULE
+        SYMBOL_PREFIX = "recomp_%s_" % re.sub(r"[^A-Za-z0-9_]", "_", args.as_module)
+        AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
+                      "size": 0}  # the image's extent, filled in once it is read
     discovered = []
     if args.discovered:
         global EXTRA_ENTRY_POINTS
@@ -3560,6 +3601,11 @@ def main():
                 all_addrs.add(a)
 
     image = Image(BINARY)
+    if AUX_MODULE is not None and args.as_module:
+        # A module of the image's own code covers the image's addresses; the
+        # image's table is consulted first, so this one answers only for what
+        # it carries.
+        AUX_MODULE["size"] = image.size
     curated = read_curated(CURATED)
     # Addresses named by a dword the loader relocates: a vtable slot, a
     # function-pointer table, a stored callback.  Read once, before discovery,
@@ -4733,8 +4779,25 @@ def main():
         tr.stats["_withdrawn_retargeted"] = len(gone)
 
     ok = [fn for fn in parsed if fn.addr in bodies]
+    if args.as_module and (args.only or discovered):
+        # Discovery ran over the whole image, as it must to recover a function
+        # whole, but a module carries only the functions it was asked for:
+        # --only, or the addresses a run found (--discovered), which is the
+        # ordinary case - a listing does not name them, so only discovery
+        # reaches them. What they call is the rest of the image, which the
+        # image's own table answers; dispatch_outside() turns those literal
+        # transfers into recomp_call and recomp_jump below.
+        seeds = {int(a, 16) for a in args.only} if args.only else set(discovered)
+        ok = [fn for fn in ok if fn.addr in seeds]
+        bodies = {a: b for a, b in bodies.items() if a in seeds}
+        extra = {t: f for t, f in extra.items() if f.addr in seeds}
     entry_names = sorted(set([fn.addr for fn in ok])
                          | set(t for t, f in extra.items() if f.addr in bodies))
+    if args.as_module:
+        # A module carries a few of the image's functions, not all of them.
+        carried = set(entry_names)
+        for a in bodies:
+            bodies[a] = dispatch_outside(bodies[a], carried)
 
     # Table coverage, in two parts, both of them sound.  Every entry a table
     # decoded has to dispatch somewhere, and every statically based table site
@@ -4812,6 +4875,13 @@ def main():
     for fn in ok:
         for target, line in dangling_targets(bodies[fn.addr], known):
             dangling.append((fn.addr, target, line))
+    if dangling and args.as_module:
+        # A module carries a few of the image's functions, and the calls
+        # between them and the rest of it are ordinary. dispatch_outside()
+        # already turned those into recomp_call/recomp_jump, which the image's
+        # own table answers at run time; they are the intended spelling here
+        # rather than the gap this gate looks for.
+        dangling = []
     if dangling and args.allow_unmodelled:
         # The last shape of the same listing defect. Once recovery has
         # settled, a literal target that is still not an entry point is one
@@ -5147,7 +5217,9 @@ void recomp_unknown_jump(X86 *c, uint32_t target)
     events = {k: "%08x" % v for k, v in sorted(curated.get("events", {}).items())}
     for name, addr in events.items():
         f = by_addr.get(int(addr, 16))
-        if not f or not f["hookable"]:
+        # A module carries a few functions; the game's events belong to the
+        # image's own translation and are checked there.
+        if (not f or not f["hookable"]) and not args.as_module:
             raise TranslateError("event %s (%s) is not a hookable entry symbol"
                                  % (name, addr))
 

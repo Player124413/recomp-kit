@@ -77,6 +77,26 @@ corrects the original relative cursor, and handles edge scrolling and focus.
 guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choices;
 `mods/settings.cpp` atomically persists host/mod settings in the selected profile.
 
+## Discovery, and code a build does not carry
+
+Static discovery is a guess about where code is, and it misses some: a
+function only ever reached through a pointer nothing resolves, a jump-table
+slot no listing owns, a block Ghidra ended early. Each shows up at run time as
+a call or jump the address table cannot place.
+
+`RECOMP_DISCOVERY=<file>` writes those addresses in the form
+`tools/recomp/translate.py --discovered` reads back as entry points, so a run
+tells the next translation what it missed (`runtime/discovery.h`).
+`tools/discover.py` repeats that until a pass finds nothing new. Meanwhile
+`runtime/interp.cpp` runs what the translation lacks, so a gap costs speed
+rather than correctness.
+
+On the desktop, `tools/lazy_static.py` compiles just the discovered functions
+into a library that registers itself with the runtime's module table
+(`RECOMP_EXTRA_CODE`), which is the difference between a minute and a full
+rebuild. iOS runs no code that was not signed into the app, so there the
+addresses go into `game.toml` and the app is rebuilt.
+
 ## Current boundaries
 
 The original simulation is generated code, not a hand-rewritten gameplay engine.

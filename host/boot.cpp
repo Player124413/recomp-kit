@@ -429,6 +429,38 @@ void fault_handler(const char *name) {
 
 // ---------------------------------------------------------------------------
 
+// RECOMP_EXTRA_CODE names libraries of translated code compiled after this
+// build: what a run discovered, turned into a module by tools/lazy_static.py.
+// Each registers itself with the runtime's module table from a constructor as
+// it loads, so nothing here does more than open it. The image's own table is
+// consulted first, so a module can only answer for addresses the build did
+// not carry. Desktop only: iOS runs no code that was not signed into the app.
+void load_extra_code() {
+    const char *list = recomp_env("EXTRA_CODE");
+    if (!list || !*list)
+        return;
+    std::string paths(list);
+    size_t at = 0;
+    while (at <= paths.size()) {
+        size_t sep = paths.find(':', at); // one path, or several as a PATH
+        std::string path = paths.substr(at, sep == std::string::npos ? sep : sep - at);
+        if (!path.empty()) {
+            uint32_t before = recomp_module_count();
+            if (!os_dlopen(path.c_str()))
+                LOGW("RECOMP_EXTRA_CODE: cannot load %s: %s", path.c_str(), os_dlerror());
+            else if (recomp_module_count() == before)
+                LOGW("RECOMP_EXTRA_CODE: %s registered no translated code", path.c_str());
+            else
+                LOGW("loaded %s: %u translated function%s", path.c_str(),
+                     recomp_module_at(recomp_module_count() - 1)->func_count,
+                     recomp_module_at(recomp_module_count() - 1)->func_count == 1 ? "" : "s");
+        }
+        if (sep == std::string::npos)
+            break;
+        at = sep + 1;
+    }
+}
+
 bool boot_load(const BootOptions &opts) {
     g_opt = opts;
     g_window_next_ns = g_primary_present_ns = 0;
@@ -439,6 +471,7 @@ bool boot_load(const BootOptions &opts) {
         exe = recomp_env("EXE");
     if (!loader_load(exe))
         return false;
+    load_extra_code();
     dx_register_shims();
 
     // GetTickCount and timeGetTime keep telling the truth; installing the
