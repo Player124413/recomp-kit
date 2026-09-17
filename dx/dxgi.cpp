@@ -34,7 +34,6 @@ uint32_t swapchain(X86 *c, ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
         g_fs_w = d.BufferDesc.Width;
         g_fs_h = d.BufferDesc.Height;
         host_set_display_mode(d.BufferDesc.Width, d.BufferDesc.Height, 32);
-        host_display_request_window(2);
         // DXGI sizes a fullscreen chain's output window to the mode. A window
         // created before any mode existed has the desktop fallback's size,
         // and mouse messages are routed by window bounds: the part of the
@@ -97,8 +96,11 @@ void present(X86 *c) {
     LOGV("D3DPresent %ux%u", back->texture.Width, back->texture.Height);
     com_ret(c, S_OK);
 }
-// Fullscreen requests go through the existing queued host window seam.
-// No native window or platform API is accessed from the guest thread.
+// A fullscreen swap chain sets the guest's display mode and window bounds
+// only. The host window is the player's Display setting: a game's own
+// fullscreen switch (siege.ini ForceD3DFullscreen) would otherwise override
+// it on every chain and drop borderless. No native window or platform API is
+// accessed from the guest thread.
 void apply_mode(X86 *c, dx11::Object &s) {
     if (s.fullscreen) {
         g_fs_w = s.swap.BufferDesc.Width;
@@ -113,7 +115,6 @@ void apply_mode(X86 *c, dx11::Object &s) {
         host_set_display_mode(w, h, bpp);
         win32_uncover_display(c, s.swap.OutputWindow);
     }
-    host_display_request_window(s.fullscreen ? 2 : 0);
 }
 void swap_fullscreen(X86 *c) {
     auto *s = dx11::from(arg(c, 0), IF_DXGI_SWAP);
