@@ -5,6 +5,7 @@
 #include "../../mods/mods_internal.h"
 #include "../../platform/os.h"
 #include "../present.h"
+#include "layout_fallback.h"
 #include "layout_store.h"
 #include "overlay.h"
 #include "router.h"
@@ -40,17 +41,19 @@ bool g_published_wanted = false;
 uint64_t g_published_revision = 0;
 
 // The groups the player has hidden, as the settings row stores them: bit i
-// is groups[i].
+// is groups[i], for the first kHiddenBits groups.
+constexpr size_t kHiddenBits = 16;
+
 uint32_t hidden_bits(const Layout &l) {
     uint32_t bits = 0;
-    for (size_t i = 0; i < l.groups.size() && i < 32; ++i)
+    for (size_t i = 0; i < l.groups.size() && i < kHiddenBits; ++i)
         if (!l.groups[i].visible)
             bits |= 1u << i;
     return bits;
 }
 
 void apply_hidden_bits(Layout &l, uint32_t bits) {
-    for (size_t i = 0; i < l.groups.size() && i < 32; ++i)
+    for (size_t i = 0; i < l.groups.size() && i < kHiddenBits; ++i)
         l.groups[i].visible = (bits & (1u << i)) == 0;
 }
 
@@ -109,13 +112,20 @@ void reload(const std::string &name, Form form) {
         return;
     Layout fresh;
     std::string problem;
-    if (!g_store.load(name, form, &fresh, &problem)) {
+    bool fell_back = false;
+    if (!load_with_tablet_fallback(g_store, name, form, &fresh, &problem, &fell_back)) {
         fprintf(stderr, "[controls] no %s layout \"%s\"%s%s\n", form_name(form), name.c_str(),
                 problem.empty() ? "" : ": ", problem.c_str());
         return;
     }
     if (!problem.empty())
         fprintf(stderr, "[controls] skipped %s\n", problem.c_str());
+    static bool fallback_logged = false;
+    if (fell_back && !fallback_logged) {
+        fallback_logged = true;
+        fprintf(stderr, "[controls] no %s layout \"%s\"; using the tablet one\n", form_name(form),
+                name.c_str());
+    }
     g_layout = std::move(fresh);
     g_file_scale = g_layout.scale;
     g_have_layout = true;
@@ -126,7 +136,8 @@ void publish() {
     const bool wanted = g_have_layout && g_enabled;
     ControlsView view;
     if (wanted)
-        view = make_view(g_layout, g_router, g_screen, g_layout.opacity);
+        view = make_view(g_layout, g_router, g_screen,
+                         g_layout.opacity * mods_controls_value(CONTROLS_OPACITY_ROW) / 100.0);
     view.wanted = wanted;
     if (g_published && g_published_wanted == wanted &&
         (!wanted || g_published_revision == view.revision))
@@ -181,6 +192,12 @@ void host_release_all() {
 
 void host_pump(uint64_t now) {
     (void)now; // the binding tick arrives in Task 10
+    // The layout row means nothing until the settings are loaded (the first
+    // presented frame runs mods_page_init); draw nothing before then.
+    if (!mods_controls_initialized()) {
+        publish();
+        return;
+    }
     const std::string name = mods_controls_layout_name();
     const Form form = g_screen.dw > 0 && g_screen.dh > 0
                           ? form_for(g_screen.dw, g_screen.dh, g_screen.scale)

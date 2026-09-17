@@ -1109,12 +1109,14 @@ void after_events() {
         push_touch_actions(actions);
         // The controls follow the hardware keyboard (attached: none shown) and
         // the settings rows; the view is published only when it changed.
-        // A keyboard arriving lets go of every finger, as the keypad did.
-        static bool keyboard_absent = false;
+        // The controls going away (a keyboard arriving, unless RECOMP_KEYPAD
+        // forces them) lets go of every finger, as the keypad did.
+        static const bool force = recomp_env("KEYPAD") != nullptr;
+        static bool wanted = false;
         const bool absent = platform_ui_keypad_wanted();
-        if (keyboard_absent && !absent)
+        if (wanted && !(absent || force))
             touch_release_all();
-        keyboard_absent = absent;
+        wanted = absent || force;
         controls::host_set_screen(controls_screen());
         controls::host_set_wanted(absent, false);
         controls::host_pump(SDL_GetTicksNS());

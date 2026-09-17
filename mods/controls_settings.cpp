@@ -32,7 +32,7 @@ const int kMax[kStoredRowCount] = {0, 2, 100, 1, 1, 1};
 
 // Written by the settings page and the on-screen tab, read by the host loop
 // that lays the controls out: each value is atomic on its own.
-std::atomic<int> values[CONTROLS_ROW_COUNT] = {0, 1, 70, 1, 0, 1, 0};
+std::atomic<int> values[CONTROLS_ROW_COUNT] = {0, 1, 100, 1, 0, 1, 0};
 std::atomic<uint32_t> hidden_groups{0};
 std::atomic<bool> edit_request{false};
 std::atomic<bool> initialized{false};
@@ -78,7 +78,7 @@ void mods_controls_init(const char *default_layout) {
     const int found = index_of(want);
     values[CONTROLS_LAYOUT_ROW] = want == "hidden" ? layout_max() : found >= 0 ? found : 0;
     values[CONTROLS_SIZE_ROW] = 1;
-    values[CONTROLS_OPACITY_ROW] = 70;
+    values[CONTROLS_OPACITY_ROW] = 100;
     values[CONTROLS_HAPTICS_ROW] = 1;
     values[CONTROLS_PAD_WITH_CONTROLLER_ROW] = 0;
     values[CONTROLS_SNAP_ROW] = 1;
@@ -121,6 +121,10 @@ void mods_controls_init(const char *default_layout) {
     hidden_groups = uint32_t(std::clamp<int64_t>(hv, 0, 0xffff));
 }
 
+bool mods_controls_initialized() {
+    return initialized;
+}
+
 void mods_controls_reset() {
     initialized = false;
     {
@@ -129,7 +133,7 @@ void mods_controls_reset() {
     }
     values[CONTROLS_LAYOUT_ROW] = 0;
     values[CONTROLS_SIZE_ROW] = 1;
-    values[CONTROLS_OPACITY_ROW] = 70;
+    values[CONTROLS_OPACITY_ROW] = 100;
     values[CONTROLS_HAPTICS_ROW] = 1;
     values[CONTROLS_PAD_WITH_CONTROLLER_ROW] = 0;
     values[CONTROLS_SNAP_ROW] = 1;

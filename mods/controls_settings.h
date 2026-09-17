@@ -31,8 +31,10 @@ void mods_controls_refresh_names();
 // start over. Migrates a saved host.keypad/* profile the first time it sees one.
 void mods_controls_init(const char *default_layout);
 void mods_controls_reset();
+// True once mods_controls_init has run (and until mods_controls_reset).
+bool mods_controls_initialized();
 // layout: index into the names list (names.size() is Hidden); size 0..2;
-// opacity 20..100; haptics/pad_with_controller/snap 0..1; EDIT_ROW: 0.
+// opacity 20..100 (default 100); haptics/pad_with_controller/snap 0..1; EDIT_ROW: 0.
 int mods_controls_value(ControlsRow row);
 // names[index], or "" when the layout row is on the Hidden choice.
 std::string mods_controls_layout_name();

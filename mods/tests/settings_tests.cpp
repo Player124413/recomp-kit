@@ -141,7 +141,7 @@ MOD_TEST_SUITE(controls_settings_defaults) {
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1); // "keys" is index 1
     MOD_CHECK(mods_controls_layout_name() == "keys");
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_SIZE_ROW), 1);
-    MOD_CHECK_EQ(mods_controls_value(CONTROLS_OPACITY_ROW), 70);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_OPACITY_ROW), 100);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_HAPTICS_ROW), 1);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_PAD_WITH_CONTROLLER_ROW), 0);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_SNAP_ROW), 1);

@@ -3,6 +3,7 @@
 #include "../controls/builtin_layouts.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
+#include "../controls/layout_fallback.h"
 #include "../controls/layout_store.h"
 #include "../controls/overlay.h"
 #include "../controls/router.h"
@@ -755,6 +756,61 @@ static void test_make_view_matches_the_old_keypad() {
     }
 }
 
+// A plain key's press draws nothing new, so the revision (and the raster)
+// stays; a latched modifier lights, so it changes.
+static void test_make_view_revision_ignores_undrawn_press() {
+    Layout l = keys_layout();
+    const Screen s = screen(2360, 1640, 2.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    const uint64_t rev = make_view(l, r, s, 1.0).revision;
+    double x, y;
+    center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y);
+    CHECK(r.finger_down(1, x, y, 0, rec));
+    CHECK(make_view(l, r, s, 1.0).revision == rev);
+    CHECK(r.finger_up(1, 10, rec));
+    CHECK(make_view(l, r, s, 1.0).revision == rev);
+    center(l, 0, find_key(l, 0, kScanLShift), s, &x, &y);
+    CHECK(r.finger_down(2, x, y, 20, rec));
+    CHECK(make_view(l, r, s, 1.0).revision == rev); // held, not lit yet
+    CHECK(r.finger_up(2, 100ull * 1000000ull, rec));
+    CHECK(r.lit() == 1);
+    CHECK(make_view(l, r, s, 1.0).revision != rev);
+}
+
+// A phone form with no layout of that name anywhere uses the tablet one; a
+// form-agnostic or phone file still wins.
+static void test_tablet_fallback() {
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/controls-fallback-test-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    const std::filesystem::path root = dir;
+    std::string tiny_json = kTinyLayout;
+    write_file(root / "profile" / "mine.tablet.json", tiny_json);
+    write_file(root / "profile" / "any.json", tiny_json);
+    LayoutStore store;
+    store.set_dirs((root / "profile").string(), "");
+
+    Layout l;
+    std::string problem;
+    bool fell_back = true;
+    CHECK(load_with_tablet_fallback(store, "keys", Form::Tablet, &l, &problem, &fell_back));
+    CHECK(!fell_back);
+    CHECK(load_with_tablet_fallback(store, "keys", Form::PhoneLandscape, &l, &problem, &fell_back));
+    CHECK(fell_back && l.name == "keys");
+    CHECK(load_with_tablet_fallback(store, "mine", Form::PhonePortrait, &l, &problem, &fell_back));
+    CHECK(fell_back);
+    CHECK(load_with_tablet_fallback(store, "any", Form::PhonePortrait, &l, &problem, &fell_back));
+    CHECK(!fell_back);
+    CHECK(!load_with_tablet_fallback(store, "nope", Form::PhonePortrait, &l, &problem, &fell_back));
+    CHECK(!fell_back && problem.empty());
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -780,6 +836,8 @@ int main() {
     test_router_state_out_of_range_is_zero();
     test_make_view_keys();
     test_make_view_matches_the_old_keypad();
+    test_make_view_revision_ignores_undrawn_press();
+    test_tablet_fallback();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

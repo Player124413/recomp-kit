@@ -30,7 +30,7 @@ SDL_Window *platform_ui_create_window(const char *title, int window_w, int windo
 // always false.
 bool platform_ui_handle_lifecycle(const SDL_Event &e);
 
-// Whether the on-screen keypad (host/keypad_layout.h) should show:
+// Whether the on-screen controls (host/controls/controls_host.h) should show:
 // iOS/Android without a hardware keyboard. Desktop: never.
 bool platform_ui_keypad_wanted();
 

@@ -144,7 +144,7 @@ portrait does not change the landscape layout.
 | Key | Values |
 |---|---|
 | `host.controls/layout` | Active layout name, stored as its index in the sorted list of discovered layouts |
-| `host.controls/opacity` | 20–100 (%) |
+| `host.controls/opacity` | 20–100 (%), default 100 |
 | `host.controls/haptics` | 0/1, default 1 |
 | `host.controls/pad_with_controller` | 0 auto-hide (default), 1 always show |
 | `host.controls/snap` | 0/1, editor snapping, default 1 |

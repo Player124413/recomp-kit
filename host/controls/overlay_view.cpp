@@ -86,11 +86,13 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
         }
     }
 
+    // Only what Overlay's paint() draws: a key's press or a stick's knob that
+    // is not drawn must not re-rasterize the whole canvas. Extend this with
+    // every field a later task starts drawing.
     Hash h;
     h.num(v.dw);
     h.num(v.dh);
     h.real(v.opacity);
-    h.rect(v.controls_area);
     h.num(int64_t(v.backdrops.size()));
     for (const Rect &b : v.backdrops)
         h.rect(b);
@@ -98,16 +100,12 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
     for (const DrawControl &d : v.controls) {
         h.num(int(d.kind));
         h.rect(d.rect);
-        h.str(d.label);
-        h.num((d.pressed ? 1 : 0) | (d.lit ? 2 : 0) | (d.floating ? 4 : 0) |
-              (d.group_visible ? 8 : 0));
-        h.num(int(d.button));
-        h.real(d.knob_x);
-        h.real(d.knob_y);
-        h.real(d.base_x);
-        h.real(d.base_y);
-        h.num(d.hat);
-        h.str(d.label_off);
+        if (d.kind == Kind::Key) {
+            h.str(d.label);
+            h.num(d.lit ? 1 : 0);
+        } else if (d.kind == Kind::Toggle) {
+            h.str(d.group_visible ? d.label : d.label_off);
+        }
     }
     v.revision = h.h;
     return v;
