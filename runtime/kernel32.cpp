@@ -1609,13 +1609,16 @@ void k_InitializeCriticalSection(X86 *c) {
     set_eax(c, 0);
 }
 void k_EnterCriticalSection(X86 *c) {
+    imports_call_leaves_surfaces();
     sched_enter_critsec(arg(c, 0));
     set_eax(c, 0);
 }
 void k_TryEnterCriticalSection(X86 *c) {
+    imports_call_leaves_surfaces();
     set_eax(c, sched_try_critsec(arg(c, 0)) ? 1 : 0);
 }
 void k_LeaveCriticalSection(X86 *c) {
+    imports_call_leaves_surfaces();
     sched_leave_critsec(arg(c, 0));
     set_eax(c, 0);
 }

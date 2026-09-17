@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- A DirectDraw Unlock compares only the rows the guest wrote while its lock was
+  open. A guest Lock opens a write range over the surface's pixels
+  (`recomp_dirty`, up to four at once) that every translated store updates, and
+  Unlock narrows its diff to the rows the range saw - provided no import that
+  could write the surface ran in between. Lock, Unlock, the surface's AddRef,
+  Release, GetSurfaceDesc and IsLost, critical sections and
+  `UpdateSubresource` say they write no surface
+  (`imports_call_leaves_surfaces`); any other import falls back to the whole
+  compare. Siege of Avalon locks its 1920x1080 back buffer and a source
+  surface for every sprite it draws, and the full compare of each was the
+  largest cost on its main thread. `dx_tests` checks the narrowed diff, the
+  fallback after an import, and that with neither nothing else is compared.
+
 - The settings page works for a program that only presents windows - a D3D11
   renderer, the VCL, a film. Such a frame never registered the page's input
   (only `host_present` did), so F10 did nothing, and it sealed without the page

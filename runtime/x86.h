@@ -90,9 +90,37 @@ static inline uint64_t rd64(uint32_t a) {
 extern uint32_t g_watch_base;
 extern uint32_t g_watch_len;
 void recomp_watch_hit(uint32_t addr, uint32_t n, uint64_t value);
+
+/* The spans written inside ranges the runtime is watching for itself: a
+ * DirectDraw surface under an open Lock. Its Unlock has to find what the guest
+ * changed through the pointer it was handed, and comparing the whole surface
+ * to find a line of text is most of a frame; every store here widens the
+ * written span of each range it lands in, so the Unlock compares only that.
+ * No range is open almost always, and then this is one compare. */
+#define RECOMP_DIRTY_SLOTS 4
+typedef struct RecompDirty {
+    uint32_t base, len; /* the range */
+    uint32_t lo, hi;    /* what was written inside it; lo >= hi is nothing */
+} RecompDirty;
+extern RecompDirty g_dirty[RECOMP_DIRTY_SLOTS];
+extern uint32_t g_dirty_count;
+static inline void recomp_dirty(uint32_t a, uint32_t n) {
+    for (uint32_t i = 0; i < g_dirty_count; ++i) {
+        RecompDirty *d = &g_dirty[i];
+        if (a < d->base + d->len && a + n > d->base) {
+            if (a < d->lo)
+                d->lo = a;
+            if (a + n > d->hi)
+                d->hi = a + n;
+        }
+    }
+}
+
 static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
     if (g_watch_len != 0 && a < g_watch_base + g_watch_len && g_watch_base < a + n)
         recomp_watch_hit(a, n, v);
+    if (g_dirty_count != 0)
+        recomp_dirty(a, n);
 }
 
 static inline void wr8(uint32_t a, uint8_t v) {
@@ -123,9 +151,13 @@ static inline double rdf64(uint32_t a) {
 }
 static inline void wrf32(uint32_t a, float v) {
     memcpy(g_mem + a, &v, 4);
+    if (g_dirty_count != 0)
+        recomp_dirty(a, 4);
 }
 static inline void wrf64(uint32_t a, double v) {
     memcpy(g_mem + a, &v, 8);
+    if (g_dirty_count != 0)
+        recomp_dirty(a, 8);
 }
 
 /* 80-bit x87 extended precision.  x87 registers are `double` here (plan
@@ -178,6 +210,8 @@ static inline void wrbcd80(uint32_t a, double v) {
     if (!(fabs(r) < 1e18)) {
         static const uint8_t indefinite[10] = {0, 0, 0, 0, 0, 0, 0, 0xc0, 0xff, 0xff};
         memcpy(g_mem + a, indefinite, 10);
+        if (g_dirty_count != 0)
+            recomp_dirty(a, 10);
         return;
     }
     uint64_t m = (uint64_t)fabs(r);
@@ -191,6 +225,8 @@ static inline void wrbcd80(uint32_t a, double v) {
     if (r < 0 || (r == 0 && signbit(v)))
         out[9] = 0x80;
     memcpy(g_mem + a, out, 10);
+    if (g_dirty_count != 0)
+        recomp_dirty(a, 10);
 }
 
 /* ------------------------------------------------------------- cpu state */

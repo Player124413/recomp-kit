@@ -2710,6 +2710,88 @@ static void test_cursor_surface_learned() {
 // so what a lock wrote can only be known by comparing before with after. Every
 // such write is a record, with the payload and coverage a compositor needs to
 // replay it - not one synthetic record for the first movie frame.
+// An Unlock compares only the rows the guest's own stores touched, as long
+// as no import that might write the surface ran while the lock was open; one
+// that might sends it back to comparing the whole lock.
+static void test_lock_write_tracking() {
+    rec_reset();
+    uint32_t rt = make_render_target_for_test(64, 64, 8);
+    CHECK(rt != 0);
+    if (!rt)
+        return;
+    fill_for_test(rt, 0);
+    ComObj *o = rec_obj(rt);
+    if (!o)
+        return;
+    uint32_t desc = sc(0xa80);
+    gm_zero(desc, DDSD_SIZE);
+    wr32(desc + DDSD_OFF_dwSize, DDSD_SIZE);
+    auto record_rows = [&](int32_t *y0, int32_t *h) {
+        HostFrameHandle f = host_frame_current();
+        const uint32_t n = host_frame_record_count(f);
+        if (n == 1) {
+            const HostBlitRecord *r = host_frame_record(f, 0);
+            *y0 = r->dst_y;
+            *h = r->h;
+        }
+        return n;
+    };
+    int32_t y0 = -1, h = -1;
+
+    // Stores through the pointer, far apart: both are found, one box each.
+    reset_ddraw_for_test();
+    CHECK_EQ(call_method(rt, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    wr8(o->pixels + 20 * o->pitch + 3, 9);
+    wr8(o->pixels + 40 * o->pitch + 5, 9);
+    CHECK_EQ(call_method(rt, S_Unlock, {0}), DD_OK);
+    {
+        HostFrameHandle f = host_frame_current();
+        CHECK_EQ(host_frame_record_count(f), 2u);
+        if (host_frame_record_count(f) == 2) {
+            CHECK_EQ(host_frame_record(f, 0)->dst_y, 20);
+            CHECK_EQ(host_frame_record(f, 1)->dst_y, 40);
+        }
+    }
+
+    // A store the translated code did not make, with an import in between
+    // that might have made it: the whole lock is compared, and it is found.
+    reset_ddraw_for_test();
+    CHECK_EQ(call_method(rt, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    gm_ptr(o->pixels + 30 * o->pitch + 7)[0] = 4;
+    call_shim(tramp("KERNEL32.dll", "GetTickCount"), {});
+    CHECK_EQ(call_method(rt, S_Unlock, {0}), DD_OK);
+    CHECK_EQ(record_rows(&y0, &h), 1u);
+    CHECK_EQ(y0, 30);
+    CHECK_EQ(h, 1);
+
+    // The same store with nothing in between is not the guest's and not an
+    // import's, so nothing looks for it: only those two write a locked surface.
+    reset_ddraw_for_test();
+    CHECK_EQ(call_method(rt, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    gm_ptr(o->pixels + 50 * o->pitch + 7)[0] = 4;
+    CHECK_EQ(call_method(rt, S_Unlock, {0}), DD_OK);
+    CHECK_EQ(record_rows(&y0, &h), 0u);
+
+    // Critical sections write no surface, so they leave the narrowing on:
+    // a store is still found, and one elsewhere is still not looked for.
+    uint32_t cs = sc(0xb00);
+    gm_zero(cs, 24);
+    call_shim(tramp("KERNEL32.dll", "InitializeCriticalSection"), {cs});
+    reset_ddraw_for_test();
+    CHECK_EQ(call_method(rt, S_Lock, {0, desc, DDLOCK_WAIT, 0}), DD_OK);
+    call_shim(tramp("KERNEL32.dll", "EnterCriticalSection"), {cs});
+    wr8(o->pixels + 10 * o->pitch + 1, 3);
+    gm_ptr(o->pixels + 60 * o->pitch + 1)[0] = 3;
+    call_shim(tramp("KERNEL32.dll", "LeaveCriticalSection"), {cs});
+    CHECK_EQ(call_method(rt, S_Unlock, {0}), DD_OK);
+    CHECK_EQ(record_rows(&y0, &h), 1u);
+    CHECK_EQ(y0, 10);
+    CHECK_EQ(h, 1);
+    call_shim(tramp("KERNEL32.dll", "DeleteCriticalSection"), {cs});
+    CHECK_EQ(g_dirty_count, 0u); // every range closed with its lock
+    reset_ddraw_for_test();
+}
+
 static void test_lock_write_records() {
     rec_reset();
     uint32_t rt = make_render_target_for_test(64, 64, 8);
@@ -11499,6 +11581,7 @@ int main() {
         {"D3D11 alpha pixels", test_d3d11_alpha_pixels},
         {"D3D11 texel copy", test_d3d11_texel_copy},
         {"overlapping self-blit", test_overlapping_self_blit},
+        {"lock write tracking", test_lock_write_tracking},
         {"D3D11 scaffold", test_d3d11_scaffold},
         {"D3DX math and blob", test_d3dx_math_and_blob},
         {"vtable integrity", test_vtable_integrity},

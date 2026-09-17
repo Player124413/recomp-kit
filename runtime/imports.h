@@ -93,6 +93,13 @@ uint32_t imports_alloc_data(const char *dll, const char *name);
 uint32_t imports_data_address(const char *dll, const char *name);
 uint32_t imports_data_count();
 
+// Import calls made so far, for a caller that needs to know whether guest
+// memory may have been written behind the translated code's back: every shim
+// counts, except one that says, as its first act, that it writes no
+// DirectDraw surface (imports_call_leaves_surfaces).
+uint64_t imports_call_count();
+void imports_call_leaves_surfaces();
+
 // Trampoline for an already-known import, or 0. Does not allocate.
 uint32_t imports_trampoline_for(const char *dll, const char *name);
 // Like imports_trampoline_for but allocates on demand when the name is one of

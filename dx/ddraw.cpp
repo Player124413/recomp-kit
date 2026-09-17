@@ -18,6 +18,7 @@
 #include "host_api.h"
 #include "ddraw.h"
 #include "../runtime/memory.h"
+#include "../runtime/imports.h"
 #include "../runtime/win32.h"
 
 #include <stdlib.h>
@@ -124,12 +125,14 @@ void ddraw_note_cpu_write_impl(ComObj *s);
 uint32_t palette_now(void);
 uint32_t palette_version_for(const ComObj *dst);
 void note_palette_write(void);
-void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr);
+void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr,
+                      bool guest_pointer = false);
 bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_ptr);
 void baseline_note_revision(const ComObj *s, uint32_t was_current_at);
 void baseline_resync(const ComObj *s);
 void baseline_absorb(const ComObj *s, const int32_t r[4], uint32_t was_current_at);
 void lock_shadow_forget(const ComObj *s);
+bool dirty_close(uint32_t base, uint32_t len, uint32_t *lo, uint32_t *hi);
 // The primary the shim presents. Set when one is created and again whenever
 // one is presented, because "the display" is a live object and not an id from
 // whenever the recorder was last reset. Declared here because the present path
@@ -1324,6 +1327,12 @@ void note_palette_write(void) {
 struct LockShadow {
     std::vector<uint8_t> bytes; // the region as it was at Lock, tightly packed; empty for a baseline lock
     bool baseline = false;      // "before" is the surface's baseline, not `bytes`
+    // The guest writes this lock through a raw pointer, so its stores are
+    // counted in a dirty range (x86.h) - as long as no import that might write
+    // the surface ran in between, which `calls` is there to tell.
+    bool tracked = false;
+    uint64_t calls = 0;
+    uint32_t dirty_base = 0, dirty_len = 0; // the range it opened
     int32_t r[4] = {0, 0, 0, 0};
     int32_t row_bytes = 0;
     uint32_t bpp = 0;
@@ -1885,6 +1894,7 @@ void reset_ddraw_for_test(void) {
     generations().clear();
     palettes().clear();
     lock_shadows().clear();
+    g_dirty_count = 0; // their locks went with them
     // Not the baselines: like the retained-pointer flag they sit beside, they
     // belong to the surfaces, which outlive a recorder reset.
     g_frame_id = 1;
@@ -2124,7 +2134,15 @@ void ddraw_note_cpu_write_impl(ComObj *s) {
 
 void lock_shadow_forget(const ComObj *s) {
     if (s) {
-        lock_shadows().erase(s->id);
+        auto it = lock_shadows().find(s->id);
+        if (it != lock_shadows().end()) {
+            // Ranges its open locks were counting close with them.
+            uint32_t lo, hi;
+            for (const LockShadow &sh : it->second)
+                if (sh.tracked)
+                    dirty_close(sh.dirty_base, sh.dirty_len, &lo, &hi);
+            lock_shadows().erase(it);
+        }
         baselines().erase(s->id);
     }
 }
@@ -2266,7 +2284,33 @@ void baseline_resync(const ComObj *s) {
     b.revision = ddraw_surface_revision(s->id);
 }
 
-void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr) {
+// The dirty range for a surface's pixels, opened by a guest Lock and closed
+// by its Unlock. Four at most; a fifth lock simply is not tracked.
+bool dirty_open(const ComObj *s) {
+    if (g_dirty_count >= RECOMP_DIRTY_SLOTS)
+        return false;
+    RecompDirty &d = g_dirty[g_dirty_count++];
+    d.base = s->pixels;
+    d.len = s->pixels_bytes;
+    d.lo = 0xffffffffu;
+    d.hi = 0;
+    return true;
+}
+// Closes one range a lock opened and says what was written in it. False when
+// there is none.
+bool dirty_close(uint32_t base, uint32_t len, uint32_t *lo, uint32_t *hi) {
+    for (uint32_t i = 0; i < g_dirty_count; ++i)
+        if (g_dirty[i].base == base && g_dirty[i].len == len) {
+            *lo = g_dirty[i].lo;
+            *hi = g_dirty[i].hi;
+            g_dirty[i] = g_dirty[--g_dirty_count];
+            return true;
+        }
+    return false;
+}
+
+void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr,
+                      bool guest_pointer) {
     std::vector<LockShadow> &stack = lock_shadows()[s->id];
     stack.emplace_back();
     LockShadow &sh = stack.back();
@@ -2295,6 +2339,14 @@ void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lo
     }
     sh.baseline = true;
     sh.armed = true;
+    // Only a pointer the guest writes through with its own code. A DC lock is
+    // written by the GDI shims, which no range sees.
+    if (guest_pointer && s->pixels_bytes && dirty_open(s)) {
+        sh.tracked = true;
+        sh.calls = imports_call_count();
+        sh.dirty_base = s->pixels;
+        sh.dirty_len = s->pixels_bytes;
+    }
 }
 
 namespace {
@@ -2414,6 +2466,14 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
     }
     LockShadow sh = std::move(stack[at]);
     stack.erase(stack.begin() + (ptrdiff_t)at);
+    // What the guest wrote while this lock was open, when that is known: its
+    // range saw every store the translated code made, and no import that
+    // might write the surface ran since the Lock.
+    uint32_t written_lo = 0, written_hi = 0;
+    bool narrowed = false;
+    if (sh.tracked && dirty_close(sh.dirty_base, sh.dirty_len, &written_lo, &written_hi))
+        narrowed = imports_call_count() == sh.calls && sh.dirty_base == s->pixels &&
+                   sh.dirty_len == s->pixels_bytes;
     struct Recycle {
         LockShadow &sh;
         ~Recycle() { shadow_recycle(std::move(sh.bytes)); }
@@ -2455,9 +2515,20 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
         return memcmp(row_was(y), row_now(y), (size_t)sh.row_bytes) != 0;
     };
     int32_t band0 = 0, band1 = lh - 1;
-    while (band0 < lh && !row_differs(band0))
+    if (narrowed) {
+        if (written_lo >= written_hi)
+            return false; // nothing was written through the pointer
+        // The rows of the lock the written span touches.
+        const int64_t first = (int64_t)(written_lo - s->pixels) / (int64_t)s->pitch - sh.r[1];
+        const int64_t last = (int64_t)(written_hi - 1 - s->pixels) / (int64_t)s->pitch - sh.r[1];
+        if (last < 0 || first >= lh)
+            return false;
+        band0 = (int32_t)std::max<int64_t>(first, 0);
+        band1 = (int32_t)std::min<int64_t>(last, lh - 1);
+    }
+    while (band0 <= band1 && !row_differs(band0))
         ++band0;
-    if (band0 == lh)
+    if (band0 > band1)
         return false;
     while (band1 > band0 && !row_differs(band1))
         --band1;
@@ -3130,7 +3201,19 @@ void Surface_GetPixelFormat(X86 *c) {
     com_ret(c, DD_OK);
 }
 
+// Reference counting and the read-only queries touch no pixels, so a game
+// that holds a surface across them keeps its lock's write tracking.
+void Surface_AddRef(X86 *c) {
+    imports_call_leaves_surfaces();
+    com_AddRef(c);
+}
+void Surface_Release(X86 *c) {
+    imports_call_leaves_surfaces();
+    com_Release(c);
+}
+
 void Surface_GetSurfaceDesc(X86 *c) {
+    imports_call_leaves_surfaces();
     ComObj *s = this_surface(c);
     uint32_t out = arg(c, 1);
     if (!s || !out) {
@@ -3144,12 +3227,14 @@ void Surface_GetSurfaceDesc(X86 *c) {
 DX_STUB(Surface_Initialize, DDERR_INVALIDOBJECT) // already initialised
 
 void Surface_IsLost(X86 *c) {
+    imports_call_leaves_surfaces();
     com_ret(c, DD_OK);
 } // surfaces are never lost here
 
 // Make a surface region CPU-readable and return its guest pixel address and pitch.
 // Resolve pending rendering before exposing bytes that guest code may read or modify.
 void Surface_Lock(X86 *c) {
+    imports_call_leaves_surfaces();
     ComObj *s = this_surface(c);
     uint32_t rect_addr = arg(c, 1);
     uint32_t desc = arg(c, 2);
@@ -3216,7 +3301,7 @@ void Surface_Lock(X86 *c) {
     // stores changed. EVERY accepted lock, not only the outermost: a nested
     // lock can name a different rectangle, and one taken beneath a read-only
     // outer lock is the only record of what it wrote.
-    lock_shadow_take(s, r, arg(c, 3), p);
+    lock_shadow_take(s, r, arg(c, 3), p, true);
     if (!(arg(c, 3) & DDLOCK_READONLY))
         s->retained_pointer = true;
     ++s->lock_count;
@@ -3394,6 +3479,7 @@ void Surface_SetPalette(X86 *c) {
 // Finish a guest CPU lock and publish its writes to surface tracking and the renderer.
 // A successful unlock makes the updated bytes available to later draw and present operations.
 void Surface_Unlock(X86 *c) {
+    imports_call_leaves_surfaces();
     ComObj *s = this_surface(c);
     if (!s) {
         com_ret(c, DDERR_INVALIDOBJECT);
@@ -3558,8 +3644,8 @@ void Surface_ChangeUniquenessValue(X86 *c) {
 // interface appends its own.
 // ---------------------------------------------------------------------------
 #define SURFACE_COMMON_SLOTS                                                                       \
-    {"QueryInterface", 3, com_QueryInterface}, {"AddRef", 1, com_AddRef},                          \
-        {"Release", 1, com_Release}, {"AddAttachedSurface", 2, Surface_AddAttachedSurface},        \
+    {"QueryInterface", 3, com_QueryInterface}, {"AddRef", 1, Surface_AddRef},                      \
+        {"Release", 1, Surface_Release}, {"AddAttachedSurface", 2, Surface_AddAttachedSurface},    \
         {"AddOverlayDirtyRect", 2, Surface_AddOverlayDirtyRect}, {"Blt", 6, Surface_Blt},          \
         {"BltBatch", 4, Surface_BltBatch}, {"BltFast", 6, Surface_BltFast},                        \
         {"DeleteAttachedSurface", 3, Surface_DeleteAttachedSurface},                               \
@@ -4736,6 +4822,7 @@ void ddraw_reset() {
     g_clean_base = 0;
     // Every surface went with the arena, and their ids start over.
     baselines().clear();
+    g_dirty_count = 0;
     // The scratch block and every surface lived in the arena mem_init just
     // discarded, so the cached addresses must not be reused.
     g_scratch = 0;

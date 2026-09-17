@@ -346,6 +346,16 @@ ImportCallObserver imports_set_call_observer_get(void) {
 
 // Dispatch a guest import trampoline at a scheduler checkpoint.
 // Copy dispatch metadata before calling a shim, then restore EIP/ESP according to its calling convention.
+namespace {
+uint64_t g_import_calls = 0;
+} // namespace
+uint64_t imports_call_count() {
+    return g_import_calls;
+}
+void imports_call_leaves_surfaces() {
+    --g_import_calls;
+}
+
 bool imports_dispatch(X86 *c, uint32_t target) {
     if (!imports_is_trampoline(target))
         return false;
@@ -377,6 +387,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     char desc[512];
     snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
     ++tramps()[idx].calls;
+    ++g_import_calls;
 
     uint32_t ret_addr = rd32(c->r[R_ESP]);
     LOGV("-> %s (esp=%08x ret=%08x)", desc, c->r[R_ESP], ret_addr);

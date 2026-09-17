@@ -89,6 +89,7 @@
 #include "host_api.h"
 #include "../runtime/display_seam.h"
 #include "../runtime/memory.h"
+#include "../runtime/imports.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -506,6 +507,9 @@ void unmap_resource(X86 *c) {
     com_ret(c, S_OK);
 }
 void update_resource(X86 *c) {
+    // It writes its own texture's storage and reads the guest's buffer; no
+    // DirectDraw surface is written. A game uploads its locked back buffer so.
+    imports_call_leaves_surfaces();
     auto *ctx = dx11::from(arg(c, 0), IF_D3D11_CONTEXT);
     auto *r = dx11::get(com_this(arg(c, 1)));
     bool ok = ctx && r && r->device == ctx->device && !arg(c, 2) &&

@@ -28,6 +28,8 @@ uint32_t recomp_frame_watch = 0;
 
 uint32_t g_watch_base = 0;
 uint32_t g_watch_len = 0;
+RecompDirty g_dirty[RECOMP_DIRTY_SLOTS];
+uint32_t g_dirty_count = 0;
 
 namespace {
 struct WatchArm {
