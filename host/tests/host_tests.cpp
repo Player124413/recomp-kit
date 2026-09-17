@@ -518,6 +518,15 @@ static void test_script_parsing() {
     HostScriptStep steps[64];
     char err[256];
 
+    CHECK_EQ(host_script_parse("tap 24 8\nwait 2000\ntap 510 90\n", steps, 64, err, sizeof err), 2);
+    CHECK_EQ(steps[0].op, HOST_SCRIPT_TAP);
+    CHECK_EQ(steps[0].x, 24);
+    CHECK_EQ(steps[0].y, 8);
+    CHECK_EQ(steps[1].at_ms, 2000);
+    CHECK_EQ(steps[1].x, 510);
+    for (const char *bad : {"tap 1\n", "tap x 2\n", "tap -1 2\n", "tap 1 2 extra\n"})
+        CHECK_EQ(host_script_parse(bad, steps, 64, err, sizeof err), -1);
+
     const char *good = "# a comment, and a blank line follow\n"
                        "\n"
                        "wait 500\n"

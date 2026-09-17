@@ -125,6 +125,9 @@ std::vector<uint32_t> win32_stack_return_candidates(uint32_t esp, uint32_t bytes
 std::string win32_host_path(const std::string &guest_path, bool for_create = false);
 // Reverse mapping used by GetModuleFileNameA/GetFullPathNameA.
 std::string win32_guest_path(const std::string &host_path);
+// Query an open file without moving its guest descriptor. False for non-file
+// or closed handles and failed position queries; outputs are then unchanged.
+bool win32_file_handle_position(uint32_t handle, std::string *host_path, int64_t *offset);
 void win32_invalidate_dir_cache();
 
 // The lister reports one (name, host_path) pair per file, already merged and

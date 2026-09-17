@@ -26,6 +26,7 @@
 #include <cstdint>
 #include "game_config.h"
 #include "script.h"
+#include "script_touch.h"
 #include "smoke_dumpat.h"
 #include "landmark.h"
 #include "fixture_view.h"
@@ -767,6 +768,82 @@ uint32_t g_release_at_presents = 0;
 // milliseconds, which is shorter than the 120 the click was written to hold.
 uint32_t g_press_at_ms = 0;
 
+HostScriptTouch g_touch;
+int g_touch_drawable_w = 640, g_touch_drawable_h = 480;
+
+// Mirror SDL apply_motion / PLACE / apply_button on the scheduler baton.
+// Smoke window points equal drawable pixels; guest coordinates are mapped into
+// that window before entering the mapper, never injected as a shortcut click.
+void deliver_touch_actions(const std::vector<TouchAction> &actions) {
+    for (const TouchAction &a : actions) {
+        const int x = (int)std::lround(a.x), y = (int)std::lround(a.y);
+        host_gate_fallback_layout(g_touch_drawable_w, g_touch_drawable_h);
+        if (a.kind == TouchAction::Motion) {
+            HitResult hit;
+            if (host_gate_window_motion(x, y, 0, 0, &hit)) {
+                g_pointer_x = hit.gx;
+                g_pointer_y = hit.gy;
+                post(WM_MOUSEMOVE_, host_mouse_wparam(g_buttons, 0), make_lparam(hit.gx, hit.gy));
+            }
+            if (a.place)
+                host_gate_pointer_place(x, y);
+            printf("[smoke-tap] motion guest %d,%d present %u ms %u\n", g_pointer_x, g_pointer_y,
+                   g_presents, boot_guest_millis());
+        } else if (a.kind == TouchAction::Button) {
+            int32_t dx, dy;
+            auto hit = host_gate_window_pointer(x, y, &dx, &dy);
+            if (hit.kind == HitResult::HIT_NONE && a.down)
+                continue;
+            if (hit.kind == HitResult::HIT_NONE) {
+                hit.gx = g_pointer_x;
+                hit.gy = g_pointer_y;
+            }
+            if (!a.down && !(g_buttons & ~(1u << a.button)))
+                host_gate_end_drag();
+            const bool consumed = host_gate_button(a.button, a.down, hit.gx, hit.gy);
+            printf("[smoke-tap] button %d %s guest %d,%d consumed %d present %u ms %u\n", a.button,
+                   a.down ? "down" : "up", hit.gx, hit.gy, int(consumed), g_presents,
+                   boot_guest_millis());
+            if (consumed)
+                continue;
+            if (a.down)
+                host_gate_begin_drag(&hit);
+            g_pointer_x = hit.gx;
+            g_pointer_y = hit.gy;
+            host_input_motion(hit.gx, hit.gy, dx, dy);
+            post(WM_MOUSEMOVE_, host_mouse_wparam(g_buttons, 0), make_lparam(hit.gx, hit.gy));
+            if (a.down)
+                g_buttons |= (uint8_t)(1u << a.button);
+            else
+                g_buttons &= (uint8_t)~(1u << a.button);
+            host_input_button(a.button, a.down);
+            static const uint32_t msgs[3][2] = {{WM_LBUTTONUP_, WM_LBUTTONDOWN_},
+                                                {WM_RBUTTONUP_, WM_RBUTTONDOWN_},
+                                                {WM_MBUTTONUP_, WM_MBUTTONDOWN_}};
+            post(msgs[a.button][a.down ? 1 : 0], host_mouse_wparam(g_buttons, 0),
+                 make_lparam(hit.gx, hit.gy));
+        }
+    }
+}
+
+void start_touch(const HostScriptStep &step) {
+    LayoutSnapshot layout;
+    const bool published =
+        host_present_copy_layout(&layout) && layout.scene.scale_x > 0 && layout.scene.scale_y > 0;
+    const double scale = std::min(double(g_touch_drawable_w) / std::max(1, g_mode_w),
+                                  double(g_touch_drawable_h) / std::max(1, g_mode_h));
+    const double x = published
+                         ? (step.x + .5) * layout.scene.scale_x + layout.scene.offset_x
+                         : (step.x + .5) * scale + (g_touch_drawable_w - g_mode_w * scale) / 2;
+    const double y = published
+                         ? (step.y + .5) * layout.scene.scale_y + layout.scene.offset_y
+                         : (step.y + .5) * scale + (g_touch_drawable_h - g_mode_h * scale) / 2;
+    std::vector<TouchAction> actions;
+    g_touch.start(x, y, g_touch_drawable_w, g_touch_drawable_h,
+                  uint64_t(boot_guest_millis()) * 1000000ull, g_presents, &actions);
+    deliver_touch_actions(actions);
+}
+
 // Guest paths a `readfile` step asked for and did not get. Counted so the run
 // fails on a miss the same way an unmet expectation does: an overlay layer the
 // game's own file API cannot see is a broken overlay, not a warning.
@@ -1238,6 +1315,9 @@ void run_step(const HostScriptStep &step) {
             g_presents + host_script_input_hold_frames(kClickHoldMs, host_pinned_clock_step());
         g_press_at_ms = boot_guest_millis();
         break;
+    case HOST_SCRIPT_TAP:
+        start_touch(step);
+        break;
     case HOST_SCRIPT_BUTTON:
         // A press that stays down until the script releases it: the moves in
         // between are a drag. Nothing is scheduled, unlike a click's release.
@@ -1490,6 +1570,12 @@ void tick() {
         g_script_started = true;
         g_script_start_ms = boot_guest_millis();
     }
+    if (g_touch.active()) {
+        std::vector<TouchAction> actions;
+        g_touch.tick(uint64_t(boot_guest_millis()) * 1000000ull, g_presents, &actions);
+        deliver_touch_actions(actions);
+        return; // a touch action cannot share a turn with the next script input
+    }
     // A held button comes up on a later turn than it went down, so the guest
     // has a chance to see it down at all.
     //
@@ -1716,7 +1802,7 @@ void tick() {
             break;
     }
     // A script that ran out without saying quit still has to end the run.
-    if (g_next_step >= g_step_count && !boot_close_requested())
+    if (g_next_step >= g_step_count && !g_touch.active() && !boot_close_requested())
         boot_request_close("the script ended");
 }
 
@@ -1738,6 +1824,8 @@ extern std::atomic<bool> g_ticking;
 // owed, and a script waiting for its next step says no and lets the scheduler
 // sleep on its own deadline.
 bool script_pending() {
+    if (!g_quit_requested && !g_ticking.load(std::memory_order_acquire) && g_touch.active())
+        return g_touch.pending(uint64_t(boot_guest_millis()) * 1000000ull, g_presents);
     HostScriptDrainState st;
     memset(&st, 0, sizeof st);
     st.quit_requested = g_quit_requested ? 1 : 0;
@@ -2375,6 +2463,8 @@ int main(int argc, char **argv) {
             }
         }
         host_present_start_offscreen(drawable_w, drawable_h);
+        g_touch_drawable_w = drawable_w;
+        g_touch_drawable_h = drawable_h;
         if (recomp_env("SMOKE_DRAWABLE"))
             host_present_set_capture_factory(capture_at_seal);
         host_input_set_notify(dinput_host_input_changed);

@@ -17,6 +17,8 @@ const char *keys[] = {"rendering",        "ui_scale",    "wide_view",           
 int desired[DISPLAY_ROW_COUNT] = {0, 0, 1, 0, 0, 0, 0, 1, 3};
 std::atomic<int> classic{0}, scale{0}, wide{1}, fps{0}, overlay{0}, textures{1}, filtering{3};
 int scene_w = 0, scene_h = 0; // guest baton only
+// -1 not reported (no renderer), 0 empty, 1 replacement textures, 2 terrain detail only
+std::atomic<int> pack_contents{-1};
 const int rates[] = {0, 40, 60, 120};
 bool initialized = false, probed = false;
 std::vector<DisplayMode> modes{{640, 480, 16}};
@@ -39,6 +41,7 @@ void mods_display_reset() {
     desired[DISPLAY_FILTERING] = 3;
     textures = 1;
     filtering = 3;
+    pack_contents = -1;
     classic = 0;
     scale = 0;
     wide = 1;
@@ -229,6 +232,9 @@ extern "C" int mods_display_scene_width(int w, int h) {
 extern "C" int mods_display_fps() {
     return fps.load();
 }
+extern "C" void mods_display_texture_pack(uint32_t replacements, int terrain_detail) {
+    pack_contents = replacements ? 1 : terrain_detail ? 2 : 0;
+}
 extern "C" int mods_display_textures() {
     return textures.load();
 }
@@ -263,9 +269,18 @@ std::string mods_display_line(DisplayRow row) {
         result = std::string("Performance overlay: ") +
                  std::vector<const char *>{"off", "counters", "graph"}[desired[row]];
         break;
-    case DISPLAY_TEXTURES:
-        result = std::string("Textures: ") + (desired[row] ? "HD pack" : "original");
+    case DISPLAY_TEXTURES: {
+        // Worded by what the pack holds: a pack with only the authored
+        // terrain detail switches that, not HD textures.
+        const int pack = pack_contents.load();
+        if (pack == 2)
+            result = std::string("Terrain detail: ") + (desired[row] ? "on" : "off");
+        else if (pack == 0)
+            result = "Textures: original (no texture pack)";
+        else
+            result = std::string("Textures: ") + (desired[row] ? "HD pack" : "original");
         break;
+    }
     case DISPLAY_FILTERING:
         result = std::string("World filtering: ") +
                  std::vector<const char *>{"original", "trilinear", "4x anisotropic",

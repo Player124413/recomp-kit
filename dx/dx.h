@@ -56,6 +56,10 @@ void bink_reset();
 void fmod_reset();
 void soundlib_reset();
 
+// Close open video players while the guest heap and host audio are still alive.
+// Call after guest workers stop, before tearing down the host.
+void bink_shutdown();
+
 // The host calls this after feeding new input through host_input_state. It
 // signals the notification event of every DirectInput device that registered
 // one, which is what wakes a guest thread waiting on it so it can call

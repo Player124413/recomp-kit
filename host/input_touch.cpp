@@ -88,17 +88,28 @@ void TouchMapper::place(std::vector<TouchAction> *out, double x, double y, bool 
     motion(out, x, y);
 }
 
-// Press now; the release follows from tick() once the hold time has passed.
+// Give the game a frame to sample the placed cursor before it sees the press.
 void TouchMapper::click(std::vector<TouchAction> *out, int b, double x, double y, uint64_t now) {
     place(out, x, y, false);
     // Copied out before the next push: a reference into the vector would not
     // survive the reallocation, and the release would carry whatever was left.
     const double px = out->back().x, py = out->back().y;
-    button(out, b, true, px, py);
+    press_pending_ = true;
+    press_button_ = b;
+    press_x_ = px;
+    press_y_ = py;
+    presents_at_place_ = presents_;
+    press_deadline_ = now + kTouchPressDelayNs;
+}
+
+// The release hold starts when the press is emitted, not when it was placed.
+void TouchMapper::press_held(std::vector<TouchAction> *out, uint64_t now) {
+    press_pending_ = false;
+    button(out, press_button_, true, press_x_, press_y_);
     release_pending_ = true;
-    release_button_ = b;
-    release_x_ = px;
-    release_y_ = py;
+    release_button_ = press_button_;
+    release_x_ = press_x_;
+    release_y_ = press_y_;
     release_due_ = now + kTouchClickHoldNs;
     release_deadline_ = now + kTouchClickHoldMaxNs;
     presents_at_press_ = presents_;
@@ -160,6 +171,10 @@ void TouchMapper::reset_gesture() {
 }
 
 void TouchMapper::finger_down(TouchPoint p, uint64_t now, std::vector<TouchAction> *out) {
+    // Finish an earlier tap before starting this finger, even if its press
+    // has not reached a presented frame yet. Both taps keep their own point.
+    if (press_pending_)
+        press_held(out, now);
     if (release_pending_) {
         // A new finger before the last click released: release it first so
         // the two clicks stay distinct.
@@ -297,6 +312,7 @@ void TouchMapper::finger_cancel(int64_t id, std::vector<TouchAction> *out) {
 }
 
 void TouchMapper::cancel_all(std::vector<TouchAction> *out) {
+    press_pending_ = false; // no new click after focus loss or backgrounding
     if (release_pending_)
         release_held(out);
     if (dragging_)
@@ -309,6 +325,9 @@ void TouchMapper::cancel_all(std::vector<TouchAction> *out) {
 }
 
 void TouchMapper::tick(uint64_t now, std::vector<TouchAction> *out) {
+    if (press_pending_ &&
+        (presents_known_ ? presents_ != presents_at_place_ : now >= press_deadline_))
+        press_held(out, now);
     if (release_pending_ && release_ready(now))
         release_held(out);
     if (fingers_.size() != 1 || max_fingers_ != 1 || dragging_ || long_fired_)

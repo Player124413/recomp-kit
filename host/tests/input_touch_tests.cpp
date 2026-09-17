@@ -1,5 +1,6 @@
 // input_touch_tests.cpp - the gesture table, one case per row.
 #include "../input_touch.h"
+#include "../script_touch.h"
 
 #include <SDL3/SDL_scancode.h>
 #include <stdio.h>
@@ -15,17 +16,140 @@ static int g_failures = 0;
 
 static const uint64_t MS = 1000000ull;
 
+static void test_tap_places_one_presented_frame_before_pressing() {
+    TouchMapper m;
+    std::vector<TouchAction> out;
+    m.frames_presented(10);
+    m.finger_down({1, 100, 100}, 0, &out);
+    m.finger_up({1, 100, 100}, 20 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place &&
+          out[0].x == 100 && out[0].y == 100);
+    out.clear();
+    m.tick(20 * MS, &out);
+    CHECK(out.empty());
+    m.tick(100 * MS, &out); // known presents take precedence over the 60 ms fallback
+    CHECK(out.empty());
+    m.frames_presented(11);
+    CHECK(out.empty()); // reporting a frame does not emit the press; tick does
+    m.tick(100 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].down &&
+          out[0].button == 0 && out[0].x == 100 && out[0].y == 100);
+    out.clear();
+    m.frames_presented(12);
+    m.tick(190 * MS, &out);
+    CHECK(out.empty()); // 90 ms, but only one frame since the press
+    m.frames_presented(13);
+    m.tick(190 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && !out[0].down &&
+          out[0].button == 0 && out[0].x == 100 && out[0].y == 100);
+}
+
+static void test_tap_without_presents_presses_after_60_ms() {
+    TouchMapper m;
+    std::vector<TouchAction> out;
+    m.finger_down({1, 100, 100}, 0, &out);
+    m.finger_up({1, 100, 100}, 20 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 100 &&
+          out[0].y == 100);
+    out.clear();
+    m.tick(80 * MS - 1, &out);
+    CHECK(out.empty());
+    m.tick(80 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].down &&
+          out[0].button == 0 && out[0].x == 100 && out[0].y == 100);
+    out.clear();
+    m.tick(170 * MS - 1, &out);
+    CHECK(out.empty());
+    m.tick(170 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && !out[0].down &&
+          out[0].button == 0 && out[0].x == 100 && out[0].y == 100);
+}
+
+static void test_a_new_finger_finishes_a_pending_press_first() {
+    TouchMapper m;
+    std::vector<TouchAction> out;
+    m.frames_presented(10);
+    m.finger_down({1, 100, 100}, 0, &out);
+    m.finger_up({1, 100, 100}, 20 * MS, &out);
+    out.clear();
+    m.finger_down({2, 200, 200}, 30 * MS, &out);
+    CHECK(out.size() == 2 && out[0].kind == TouchAction::Button && out[0].down &&
+          out[0].button == 0 && out[0].x == 100 && out[0].y == 100 &&
+          out[1].kind == TouchAction::Button && !out[1].down && out[1].button == 0 &&
+          out[1].x == 100 && out[1].y == 100);
+    out.clear();
+    m.finger_up({2, 200, 200}, 50 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 200 &&
+          out[0].y == 200);
+    out.clear();
+    m.frames_presented(11);
+    m.tick(60 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].down && out[0].x == 200 &&
+          out[0].y == 200);
+    out.clear();
+    m.frames_presented(13);
+    m.tick(150 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && !out[0].down &&
+          out[0].x == 200 && out[0].y == 200);
+}
+
+static void test_focus_loss_discards_a_pending_press() {
+    TouchMapper m;
+    std::vector<TouchAction> out;
+    m.frames_presented(10);
+    m.finger_down({1, 100, 100}, 0, &out);
+    m.finger_up({1, 100, 100}, 20 * MS, &out);
+    out.clear();
+    m.cancel_all(&out);
+    CHECK(out.empty()); // the press never reached the guest, so it owes no release
+    m.frames_presented(20);
+    m.tick(1000 * MS, &out);
+    CHECK(out.empty());
+    m.finger_down({2, 200, 200}, 1010 * MS, &out);
+    CHECK(out.empty()); // no old click to flush on the next finger either
+}
+
+// The smoke driver must exercise the mapper: no button on finger-down, a
+// placement on lift, a press on a later frame, then the present-gated release.
+static void test_smoke_tap_drives_the_mapper() {
+    HostScriptTouch tap;
+    std::vector<TouchAction> out;
+    tap.start(24, 8, 640, 480, 0, 10, &out);
+    CHECK(tap.active() && out.empty());
+    tap.tick(79 * MS, 10, &out);
+    CHECK(out.empty() && !tap.pending(79 * MS, 10));
+    tap.tick(80 * MS, 10, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 24 && out[0].y == 8);
+    out.clear();
+    tap.tick(100 * MS, 10, &out);
+    CHECK(tap.active() && out.empty());
+    CHECK(tap.pending(100 * MS, 11));
+    tap.tick(100 * MS, 11, &out);
+    CHECK(tap.active() && out.size() == 1 && out[0].kind == TouchAction::Button && out[0].down &&
+          out[0].x == 24 && out[0].y == 8);
+    out.clear();
+    tap.tick(190 * MS, 12, &out);
+    CHECK(tap.active() && out.empty());
+    CHECK(tap.pending(190 * MS, 13));
+    tap.tick(190 * MS, 13, &out);
+    CHECK(!tap.active() && out.size() == 1 && out[0].kind == TouchAction::Button && !out[0].down &&
+          out[0].x == 24 && out[0].y == 8);
+}
+
 static void test_tap_is_left_click() {
     TouchMapper m;
     std::vector<TouchAction> out;
     m.finger_down({1, 100, 200}, 0, &out);
     m.finger_up({1, 101, 201}, 80 * MS, &out);
-    CHECK(out.size() == 2); // press now; the release is held
-    CHECK(out[0].kind == TouchAction::Motion && out[0].x == 101 && out[0].y == 201);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 101 &&
+          out[0].y == 201); // place now; the press is held
+    const uint64_t press_at = 80 * MS + kTouchPressDelayNs;
+    m.tick(press_at, &out);
+    CHECK(out.size() == 2);
     CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down);
-    m.tick(80 * MS + kTouchClickHoldNs / 2, &out);
+    m.tick(press_at + kTouchClickHoldNs / 2, &out);
     CHECK(out.size() == 2); // still held
-    m.tick(80 * MS + kTouchClickHoldNs, &out);
+    m.tick(press_at + kTouchClickHoldNs, &out);
     CHECK(out.size() == 3 && out[2].kind == TouchAction::Button && out[2].button == 0 &&
           !out[2].down);
     // The release lands where the press did. (The press point was once read
@@ -41,7 +165,8 @@ static void test_release_lands_where_the_press_did_whatever_the_vector_did() {
         out.reserve(reserve);
         m.finger_down({1, 300, 200}, 0, &out);
         m.finger_up({1, 300, 200}, 20 * MS, &out);
-        m.tick(20 * MS + kTouchClickHoldMaxNs, &out);
+        m.tick(20 * MS + kTouchPressDelayNs, &out);
+        m.tick(20 * MS + kTouchPressDelayNs + kTouchClickHoldNs, &out);
         CHECK(out.size() == 3 && !out[2].down && out[2].x == 300 && out[2].y == 200);
     }
 }
@@ -51,8 +176,9 @@ static void test_a_new_finger_releases_a_held_click_first() {
     std::vector<TouchAction> out;
     m.finger_down({1, 0, 0}, 0, &out);
     m.finger_up({1, 0, 0}, 20 * MS, &out);
+    m.tick(80 * MS, &out);
     out.clear();
-    m.finger_down({2, 50, 50}, 30 * MS, &out);
+    m.finger_down({2, 50, 50}, 90 * MS, &out);
     CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && !out[0].down);
 }
 
@@ -67,9 +193,11 @@ static void test_long_press_is_right_click() {
     CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place && out[0].x == 50);
     out.clear();
     m.finger_up({1, 50, 60}, 380 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion);
+    m.tick(380 * MS + kTouchPressDelayNs, &out);
     CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion &&
           out[1].kind == TouchAction::Button && out[1].button == 1 && out[1].down);
-    m.tick(380 * MS + kTouchClickHoldNs, &out);
+    m.tick(380 * MS + kTouchPressDelayNs + kTouchClickHoldNs, &out);
     CHECK(out.size() == 3 && out[2].kind == TouchAction::Button && out[2].button == 1 &&
           !out[2].down);
 }
@@ -123,12 +251,13 @@ static void test_tap_near_an_edge_clicks_at_the_finger() {
     std::vector<TouchAction> out;
     m.finger_down({1, 5, 400}, 0, &out);
     m.finger_up({1, 5, 400}, 50 * MS, &out);
-    CHECK(out.size() == 2 && out[0].kind == TouchAction::Motion && out[0].x == 5 &&
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 5 &&
           out[0].y == 400);
-    CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down &&
-          out[1].x == 5 && out[1].y == 400);
+    m.tick(50 * MS + kTouchPressDelayNs, &out);
+    CHECK(out.size() == 2 && out[1].kind == TouchAction::Button && out[1].button == 0 &&
+          out[1].down && out[1].x == 5 && out[1].y == 400);
     out.clear();
-    m.tick(50 * MS + kTouchClickHoldNs, &out);
+    m.tick(50 * MS + kTouchPressDelayNs + kTouchClickHoldNs, &out);
     CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].button == 0 &&
           !out[0].down && out[0].x == 5 && out[0].y == 400); // release, no nudge
     out.clear();
@@ -141,8 +270,9 @@ static void test_no_bounds_means_no_snapping() {
     std::vector<TouchAction> out;
     m.finger_down({1, 2, 3}, 0, &out);
     m.finger_up({1, 2, 3}, 50 * MS, &out);
-    CHECK(out.size() == 2 && out[0].x == 2 && out[0].y == 3);
-    m.tick(50 * MS + kTouchClickHoldNs, &out);
+    CHECK(out.size() == 1 && out[0].x == 2 && out[0].y == 3);
+    m.tick(50 * MS + kTouchPressDelayNs, &out);
+    m.tick(50 * MS + kTouchPressDelayNs + kTouchClickHoldNs, &out);
     CHECK(out.size() == 3); // release, no nudge
 }
 
@@ -222,14 +352,16 @@ static void test_click_release_waits_for_two_presented_frames() {
     m.frames_presented(10);
     m.finger_down({1, 100, 200}, 0, &out);
     m.finger_up({1, 100, 200}, 20 * MS, &out);
-    CHECK(out.size() == 2 && out[1].kind == TouchAction::Button && out[1].down);
-    m.tick(20 * MS + kTouchClickHoldNs, &out);
-    CHECK(out.size() == 2); // the hold time passed, but no frame sampled yet
     m.frames_presented(11);
-    m.tick(20 * MS + kTouchClickHoldNs + 10 * MS, &out);
-    CHECK(out.size() == 2); // one frame saw the press; the next must too
+    m.tick(30 * MS, &out);
+    CHECK(out.size() == 2 && out[1].kind == TouchAction::Button && out[1].down);
+    m.tick(30 * MS + kTouchClickHoldNs, &out);
+    CHECK(out.size() == 2); // the hold time passed, but no frame sampled yet
     m.frames_presented(12);
-    m.tick(20 * MS + kTouchClickHoldNs + 20 * MS, &out);
+    m.tick(30 * MS + kTouchClickHoldNs + 10 * MS, &out);
+    CHECK(out.size() == 2); // one frame saw the press; the next must too
+    m.frames_presented(13);
+    m.tick(30 * MS + kTouchClickHoldNs + 20 * MS, &out);
     CHECK(out.size() == 3 && out[2].kind == TouchAction::Button && !out[2].down);
 }
 
@@ -239,10 +371,12 @@ static void test_click_release_waits_for_the_hold_time_even_when_frames_flew() {
     m.frames_presented(10);
     m.finger_down({1, 100, 200}, 0, &out);
     m.finger_up({1, 100, 200}, 20 * MS, &out);
+    m.frames_presented(11);
+    m.tick(30 * MS, &out);
     m.frames_presented(20);
-    m.tick(20 * MS + kTouchClickHoldNs / 2, &out);
+    m.tick(30 * MS + kTouchClickHoldNs - 1, &out);
     CHECK(out.size() == 2);
-    m.tick(20 * MS + kTouchClickHoldNs, &out);
+    m.tick(30 * MS + kTouchClickHoldNs, &out);
     CHECK(out.size() == 3 && !out[2].down);
 }
 
@@ -254,9 +388,11 @@ static void test_a_stalled_game_still_gets_its_release() {
     m.frames_presented(10);
     m.finger_down({1, 100, 200}, 0, &out);
     m.finger_up({1, 100, 200}, 20 * MS, &out);
-    m.tick(20 * MS + kTouchClickHoldMaxNs - MS, &out);
+    m.frames_presented(11);
+    m.tick(30 * MS, &out);
+    m.tick(30 * MS + kTouchClickHoldMaxNs - MS, &out);
     CHECK(out.size() == 2);
-    m.tick(20 * MS + kTouchClickHoldMaxNs, &out);
+    m.tick(30 * MS + kTouchClickHoldMaxNs, &out);
     CHECK(out.size() == 3 && !out[2].down);
 }
 
@@ -281,7 +417,8 @@ static void test_edge_insets_widen_the_snap_on_that_edge_only() {
     CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].y == 45); // 45 >= 40
     out.clear();
     m.finger_up({2, 500, 45}, 5000 * MS, &out); // a right click, not an edge hold
-    m.tick(5000 * MS + kTouchClickHoldMaxNs, &out);
+    m.tick(5000 * MS + kTouchPressDelayNs, &out);
+    m.tick(5000 * MS + kTouchPressDelayNs + kTouchClickHoldNs, &out);
     out.clear();
     m.finger_down({3, 500, 780}, 6000 * MS, &out);
     m.tick(6360 * MS, &out);
@@ -340,6 +477,11 @@ static void test_the_edge_outlasts_the_pointer_glide_off_the_strip() {
 }
 
 int main() {
+    test_tap_places_one_presented_frame_before_pressing();
+    test_tap_without_presents_presses_after_60_ms();
+    test_a_new_finger_finishes_a_pending_press_first();
+    test_focus_loss_discards_a_pending_press();
+    test_smoke_tap_drives_the_mapper();
     test_the_edge_outlasts_the_pointer_glide_off_the_strip();
     test_release_lands_where_the_press_did_whatever_the_vector_did();
     test_a_pointer_against_a_system_strip_means_the_edge();

@@ -231,10 +231,13 @@ void mods_overlay_set_profile_dir(const char *dir) {
     }
     win32_invalidate_dir_cache();
 }
+// An unset profile is the layout's (RECOMP_PROFILE_DIR), as mods_overlay_reset
+// fills it: a caller that asks before any reset must not get "" and write
+// mod-settings.json at the filesystem root.
 const char *mods_overlay_profile_dir() {
     thread_local std::string value;
     RegistryLock lock;
-    value = profile();
+    value = profile().empty() ? host_layout().profile_dir : profile();
     return value.c_str();
 }
 void mods_overlay_begin_init(uint32_t owner) {

@@ -4544,13 +4544,32 @@ void DD_GetVerticalBlankStatus(X86 *c) {
 
 DX_STUB(DD_Initialize, DDERR_INVALIDOBJECT) // DirectDrawCreate already did it
 
+// RestoreDisplayMode, and releasing the object that set the mode, put the
+// desktop back: GetSystemMetrics and GetDeviceCaps report the desktop fallback
+// again until the next SetDisplayMode. A game that switches resolution by
+// releasing DirectDraw and re-creating it reads the desktop size between the
+// two, and keeps what it read as its screen bounds for edge scrolling and
+// window placement in the mode it sets next. The old mode left there had
+// every pointer position past the old width or height count as an edge.
+void restore_desktop_mode(ComObj *dd) {
+    if (!dd->mode_set)
+        return;
+    dd->mode_set = false;
+    LOGV("ddraw: display mode restored to the desktop");
+    ddraw_note_mode_impl(0, 0, 0);
+}
+
+void ddraw_destroy(ComObj *dd) {
+    restore_desktop_mode(dd);
+}
+
 void DD_RestoreDisplayMode(X86 *c) {
     ComObj *dd = this_ddraw(c);
     if (!dd) {
         com_ret(c, DDERR_INVALIDOBJECT);
         return;
     }
-    dd->mode_set = false;
+    restore_desktop_mode(dd);
     com_ret(c, DD_OK);
 }
 
@@ -4908,6 +4927,7 @@ void ddraw_register() {
     com_register_iid(IF_DDCOLORCONTROL, IID_IDirectDrawColorControl_);
 
     com_set_destructor(K_SURFACE, surface_destroy);
+    com_set_destructor(K_DDRAW, ddraw_destroy);
 
     imports_register(g_ddraw_exports, std::size(g_ddraw_exports));
 }

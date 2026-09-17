@@ -8,9 +8,11 @@
 #include "../runtime/imports.h"
 #include "../runtime/memory.h"
 #include "../runtime/win32.h"
+#include "../platform/os.h"
 
 #include <algorithm>
 #include <cmath>
+#include <errno.h>
 #include <string.h>
 #include <iterator>
 
@@ -28,6 +30,8 @@ extern "C" {
 namespace {
 
 constexpr uint32_t BINK_RECORD_BYTES = 0x100;
+constexpr uint32_t BINK_FILE_HANDLE = 0x00800000;
+constexpr uint32_t BINK_FROM_MEMORY = 0x04000000;
 uint32_t g_error_string = 0;
 char g_error[512] = {};
 
@@ -44,6 +48,15 @@ bool video_error(const char *text) {
     return false;
 }
 
+bool check_open_flags(uint32_t flags) {
+    if (flags & BINK_FROM_MEMORY)
+        return video_error("memory-resident video is not supported");
+    uint32_t ignored = flags & ~(BINK_FILE_HANDLE | BINK_FROM_MEMORY);
+    if (ignored)
+        LOGV("bink: ignoring open flags %08x", ignored);
+    return true;
+}
+
 #ifdef RECOMP_HAVE_FFMPEG
 bool decoder_error(const char *operation, int code) {
     char detail[AV_ERROR_MAX_STRING_SIZE], message[512];
@@ -57,6 +70,9 @@ bool decoder_error(const char *operation, int code) {
 // for DoFrame, and the host mixer copies every submitted PCM chunk.
 struct BinkPlayer {
     AVFormatContext *input = nullptr;
+    AVIOContext *io = nullptr;
+    int file_fd = -1;
+    int64_t file_start = 0, file_length = 0, file_position = 0;
     AVCodecContext *video = nullptr, *audio = nullptr;
     AVFrame *frame = nullptr, *audio_frame = nullptr;
     std::deque<AVPacket *> video_packets;
@@ -65,7 +81,8 @@ struct BinkPlayer {
     int video_index = -1, audio_index = -1;
     int32_t channel = -1;
     AVRational fps{};
-    uint32_t t0 = 0, count = 0, current = 1;
+    uint32_t t0 = 0, paused_at = 0, count = 0, current = 1;
+    bool paused = false;
     bool eof = false, flushed = false, failed = false;
     bool have_frame = false, audio_started = false, audio_unavailable = false;
 
@@ -81,6 +98,14 @@ struct BinkPlayer {
         avcodec_free_context(&video);
         avcodec_free_context(&audio);
         avformat_close_input(&input);
+        // Custom I/O survives close_input, including a failed open. FFmpeg
+        // may replace the original buffer, so free the context's current one.
+        if (io) {
+            av_freep(&io->buffer);
+            avio_context_free(&io);
+        }
+        if (file_fd >= 0)
+            os_fd_close(file_fd);
     }
 };
 std::map<uint32_t, std::unique_ptr<BinkPlayer>> g_players;
@@ -88,6 +113,92 @@ std::map<uint32_t, std::unique_ptr<BinkPlayer>> g_players;
 BinkPlayer *player_for(uint32_t rec) {
     auto it = g_players.find(rec);
     return it == g_players.end() ? nullptr : it->second.get();
+}
+
+// Expose only the host-file window beginning at the guest's saved position.
+// All callbacks use the player's reopened descriptor, never the guest's fd.
+int read_file_window(void *opaque, uint8_t *buffer, int bytes) {
+    auto &p = *static_cast<BinkPlayer *>(opaque);
+    if (bytes <= 0)
+        return AVERROR(EINVAL);
+    size_t wanted = (size_t)std::min<int64_t>(bytes, p.file_length - p.file_position);
+    if (!wanted)
+        return AVERROR_EOF;
+    int64_t got;
+    do {
+        got = os_fd_read(p.file_fd, buffer, wanted);
+    } while (got < 0 && errno == EINTR);
+    if (got < 0)
+        return AVERROR(errno);
+    if (!got)
+        return AVERROR_EOF;
+    p.file_position += got;
+    return (int)got;
+}
+
+int64_t seek_file_window(void *opaque, int64_t offset, int whence) {
+    auto &p = *static_cast<BinkPlayer *>(opaque);
+    whence &= ~AVSEEK_FORCE;
+    if (whence == AVSEEK_SIZE)
+        return p.file_length;
+    int64_t base;
+    switch (whence) {
+    case SEEK_SET:
+        base = 0;
+        break;
+    case SEEK_CUR:
+        base = p.file_position;
+        break;
+    case SEEK_END:
+        base = p.file_length;
+        break;
+    default:
+        return AVERROR(EINVAL);
+    }
+    // Check the relative addition before computing a host offset; seeking
+    // before the stream or beyond the host file must not escape the window.
+    if (offset < -base || offset > p.file_length - base)
+        return AVERROR(EINVAL);
+    int64_t position = base + offset;
+    if (os_fd_seek(p.file_fd, p.file_start + position, OS_SEEK_SET) < 0)
+        return AVERROR(errno);
+    p.file_position = position;
+    return position;
+}
+
+// Byte zero is the handle's current offset, and AVSEEK_SIZE reports the rest
+// of the host file. Bink's own header bounds its frames, so trailing archive
+// data is harmless. The player owns every allocation even if open fails.
+bool open_file_window(BinkPlayer &p, const std::string &path, int64_t offset) {
+    p.file_fd = os_fd_open(path.c_str(), OS_O_RDONLY);
+    if (p.file_fd < 0)
+        return decoder_error("open video file", AVERROR(errno));
+    OsStat st{};
+    if (os_fd_stat(p.file_fd, &st) < 0)
+        return decoder_error("query video file size", AVERROR(errno));
+    if (offset < 0 || st.size > INT64_MAX || (uint64_t)offset > st.size)
+        return video_error("video file offset is outside the host file");
+    if (os_fd_seek(p.file_fd, offset, OS_SEEK_SET) < 0)
+        return decoder_error("seek video file", AVERROR(errno));
+    p.file_start = offset;
+    p.file_length = (int64_t)st.size - offset;
+    p.input = avformat_alloc_context();
+    if (!p.input)
+        return video_error("cannot allocate video input");
+    constexpr int buffer_bytes = 64 * 1024;
+    auto *buffer = static_cast<uint8_t *>(av_malloc(buffer_bytes));
+    if (!buffer)
+        return video_error("cannot allocate video I/O buffer");
+    p.io = avio_alloc_context(buffer, buffer_bytes, 0, &p, read_file_window, nullptr,
+                              seek_file_window);
+    if (!p.io) {
+        av_freep(&buffer);
+        return video_error("cannot allocate video I/O context");
+    }
+    p.input->pb = p.io;
+    p.input->flags |= AVFMT_FLAG_CUSTOM_IO;
+    int rc = avformat_open_input(&p.input, nullptr, nullptr, nullptr);
+    return rc < 0 ? decoder_error("open input", rc) : true;
 }
 
 // The imported record has two observed layouts. Both pairs describe the
@@ -171,24 +282,40 @@ bool read_packet(BinkPlayer &p) {
 void BinkOpen(X86 *c) {
     set_eax(c, 0);
     g_error[0] = 0;
-    uint32_t name = arg(c, 0);
-    if (!name || !gm_valid(name, 1)) {
-        video_error("invalid video filename");
+    uint32_t name = arg(c, 0), flags = arg(c, 1);
+    if (!check_open_flags(flags))
         return;
-    }
-    std::string guest = gm_str(name);
-    std::string path = win32_host_path_op(guest, WIN32_FILE_READ);
-    if (path.empty()) {
-        video_error("cannot resolve video filename");
-        return;
-    }
     auto p = std::make_unique<BinkPlayer>();
-    int rc = avformat_open_input(&p->input, path.c_str(), nullptr, nullptr);
-    if (rc < 0) {
-        decoder_error("open input", rc);
-        return;
+    std::string guest;
+    if (flags & BINK_FILE_HANDLE) {
+        std::string path;
+        int64_t offset;
+        if (!win32_file_handle_position(name, &path, &offset)) {
+            video_error("invalid video file handle");
+            return;
+        }
+        if (!open_file_window(*p, path, offset))
+            return;
+        guest = win32_guest_path(path);
+        LOGV("bink: file handle %08x at offset %lld", name, (long long)offset);
+    } else {
+        if (!name || !gm_valid(name, 1)) {
+            video_error("invalid video filename");
+            return;
+        }
+        guest = gm_str(name);
+        std::string path = win32_host_path_op(guest, WIN32_FILE_READ);
+        if (path.empty()) {
+            video_error("cannot resolve video filename");
+            return;
+        }
+        int rc = avformat_open_input(&p->input, path.c_str(), nullptr, nullptr);
+        if (rc < 0) {
+            decoder_error("open input", rc);
+            return;
+        }
     }
-    rc = avformat_find_stream_info(p->input, nullptr);
+    int rc = avformat_find_stream_info(p->input, nullptr);
     if (rc < 0) {
         decoder_error("find stream info", rc);
         return;
@@ -252,6 +379,66 @@ void BinkOpen(X86 *c) {
     set_eax(c, rec);
 }
 
+// Start with PCM, convert the shared channel to a stream, then append until
+// a second is queued. Refused chunks stay pending for the next service call.
+void service_audio(uint32_t rec, BinkPlayer &p) {
+    if (p.paused || !p.audio || p.failed || p.audio_unavailable)
+        return;
+    uint32_t block = (uint32_t)p.audio->ch_layout.nb_channels * 2;
+    uint32_t ahead = (uint32_t)p.audio->sample_rate * block;
+    while (!p.audio_started || host_audio_queued_bytes(p.channel) < ahead) {
+        if (p.pending_pos == p.pending.size()) {
+            p.pending.clear();
+            p.pending_pos = 0;
+            while (p.pending.empty() && !p.eof && !p.failed)
+                p.failed = !read_packet(p);
+            if (p.failed || p.pending.empty())
+                break;
+        }
+        uint32_t bytes = (uint32_t)(p.pending.size() - p.pending_pos) * 2;
+        if (!p.audio_started) {
+            p.channel = dx_alloc_audio_channel();
+            if (p.channel >= 0) {
+                HostAudioPlay play{};
+                play.channel = p.channel;
+                play.pcm = p.pending.data() + p.pending_pos;
+                play.bytes = bytes;
+                play.sample_rate = p.audio->sample_rate;
+                play.channels = p.audio->ch_layout.nb_channels;
+                play.bits = 16;
+                host_audio_play(&play);
+                p.audio_started = host_audio_stream(p.channel) >= 0;
+            }
+            if (!p.audio_started) {
+                if (p.channel >= 0) {
+                    host_audio_stop(p.channel);
+                    dx_free_audio_channel(p.channel);
+                    p.channel = -1;
+                }
+                LOGW("bink: host audio streaming unavailable");
+                p.audio_unavailable = true;
+                p.pending.clear();
+                p.pending_pos = 0;
+                break;
+            }
+            p.pending_pos += bytes / 2;
+        } else {
+            bytes = std::min(bytes, ahead - host_audio_queued_bytes(p.channel));
+            bytes -= bytes % block;
+            if (!bytes)
+                break;
+            int32_t taken = host_audio_queue(p.channel, p.pending.data() + p.pending_pos, bytes);
+            if (taken <= 0)
+                break;
+            p.pending_pos += (uint32_t)taken / 2;
+        }
+    }
+    if (p.failed) {
+        p.current = p.count;
+        write_frame_count(rec, p);
+    }
+}
+
 // Decode exactly one visible frame. Audio prefetch may already have retained
 // its compressed packet, but never changes the guest frame counter.
 void BinkDoFrame(X86 *c) {
@@ -280,6 +467,7 @@ void BinkDoFrame(X86 *c) {
                 break;
             }
             p->have_frame = true;
+            service_audio(rec, *p);
             return;
         }
         if (rc != AVERROR(EAGAIN)) {
@@ -313,12 +501,52 @@ void BinkDoFrame(X86 *c) {
 }
 
 void BinkNextFrame(X86 *c) {
-    if (BinkPlayer *p = player_for(arg(c, 0))) {
+    uint32_t rec = arg(c, 0);
+    if (BinkPlayer *p = player_for(rec)) {
         if (host_close_requested())
             p->current = p->count;
         else if (p->current < UINT32_MAX)
             ++p->current;
-        write_frame_count(arg(c, 0), *p);
+        write_frame_count(rec, *p);
+        service_audio(rec, *p);
+    }
+    set_eax(c, 0);
+}
+
+// The SDK stores eight {x, y, width, height} rectangles at +0x34 and their
+// count at +0xb4. A decoded frame dirties the whole image; before decode,
+// clear the count so the guest never blits an uninitialised frame.
+void BinkGetRects(X86 *c) {
+    set_eax(c, 0);
+    uint32_t rec = arg(c, 0);
+    BinkPlayer *p = player_for(rec);
+    if (!p)
+        return;
+    uint32_t count = p->have_frame ? 1 : 0;
+    if (count) {
+        wr32(rec + 0x34, 0);
+        wr32(rec + 0x38, 0);
+        wr32(rec + 0x3c, (uint32_t)p->frame->width);
+        wr32(rec + 0x40, (uint32_t)p->frame->height);
+    }
+    wr32(rec + 0xb4, count);
+    set_eax(c, count);
+}
+
+// Shift the playback origin by the time spent paused, preserving the time
+// remaining until the next frame. Repeated pause/resume calls are harmless;
+// unsigned subtraction also handles the host's millisecond counter wrapping.
+void BinkPause(X86 *c) {
+    if (BinkPlayer *p = player_for(arg(c, 0))) {
+        if (arg(c, 1)) {
+            if (!p->paused) {
+                p->paused_at = host_millis();
+                p->paused = true;
+            }
+        } else if (p->paused) {
+            p->t0 += host_millis() - p->paused_at;
+            p->paused = false;
+        }
     }
     set_eax(c, 0);
 }
@@ -327,77 +555,25 @@ void BinkNextFrame(X86 *c) {
 // The wait ends at that counter's boundary using host time, never a guest
 // rendering clock; unsigned subtraction also handles host_millis wrapping.
 void BinkWait(X86 *c) {
-    BinkPlayer *p = player_for(arg(c, 0));
+    uint32_t rec = arg(c, 0);
+    BinkPlayer *p = player_for(rec);
+    if (p)
+        service_audio(rec, *p);
     uint32_t wait = 0;
     if (p && !p->failed && !host_close_requested()) {
         // The ABI's millisecond expression truncates, rather than rounding.
         int64_t due =
             av_rescale_rnd((int64_t)(p->current - 1) * 1000, p->fps.den, p->fps.num, AV_ROUND_DOWN);
-        wait = (uint32_t)(host_millis() - p->t0) < (uint64_t)due;
+        wait = p->paused || (uint32_t)(host_millis() - p->t0) < (uint64_t)due;
     }
     set_eax(c, wait);
 }
 
-// Start with PCM, convert the shared channel to a stream, then append until
-// a second is queued. Refused chunks stay pending for the next service call.
 void BinkService(X86 *c) {
     set_eax(c, 0);
-    BinkPlayer *p = player_for(arg(c, 0));
-    if (!p || !p->audio || p->failed || p->audio_unavailable)
-        return;
-    uint32_t block = (uint32_t)p->audio->ch_layout.nb_channels * 2;
-    uint32_t ahead = (uint32_t)p->audio->sample_rate * block;
-    while (!p->audio_started || host_audio_queued_bytes(p->channel) < ahead) {
-        if (p->pending_pos == p->pending.size()) {
-            p->pending.clear();
-            p->pending_pos = 0;
-            while (p->pending.empty() && !p->eof && !p->failed)
-                p->failed = !read_packet(*p);
-            if (p->failed || p->pending.empty())
-                break;
-        }
-        uint32_t bytes = (uint32_t)(p->pending.size() - p->pending_pos) * 2;
-        if (!p->audio_started) {
-            p->channel = dx_alloc_audio_channel();
-            if (p->channel >= 0) {
-                HostAudioPlay play{};
-                play.channel = p->channel;
-                play.pcm = p->pending.data() + p->pending_pos;
-                play.bytes = bytes;
-                play.sample_rate = p->audio->sample_rate;
-                play.channels = p->audio->ch_layout.nb_channels;
-                play.bits = 16;
-                host_audio_play(&play);
-                p->audio_started = host_audio_stream(p->channel) >= 0;
-            }
-            if (!p->audio_started) {
-                if (p->channel >= 0) {
-                    host_audio_stop(p->channel);
-                    dx_free_audio_channel(p->channel);
-                    p->channel = -1;
-                }
-                LOGW("bink: host audio streaming unavailable");
-                p->audio_unavailable = true;
-                p->pending.clear();
-                p->pending_pos = 0;
-                break;
-            }
-            p->pending_pos += bytes / 2;
-        } else {
-            bytes = std::min(bytes, ahead - host_audio_queued_bytes(p->channel));
-            bytes -= bytes % block;
-            if (!bytes)
-                break;
-            int32_t taken = host_audio_queue(p->channel, p->pending.data() + p->pending_pos, bytes);
-            if (taken <= 0)
-                break;
-            p->pending_pos += (uint32_t)taken / 2;
-        }
-    }
-    if (p->failed) {
-        p->current = p->count;
-        write_frame_count(arg(c, 0), *p);
-    }
+    uint32_t rec = arg(c, 0);
+    if (BinkPlayer *p = player_for(rec))
+        service_audio(rec, *p);
 }
 
 // Validate the entire destination rectangle before writing any row, using
@@ -441,14 +617,25 @@ void BinkClose(X86 *c) {
 // A finished record makes a guest continue past cinematics on builds without
 // FFmpeg. It is a successful skip, so GetError remains an empty string.
 void BinkOpen(X86 *c) {
+    set_eax(c, 0);
     g_error[0] = 0;
+    uint32_t name = arg(c, 0), flags = arg(c, 1);
+    if (!check_open_flags(flags))
+        return;
+    if ((flags & BINK_FILE_HANDLE) && !win32_file_handle_position(name, nullptr, nullptr)) {
+        video_error("invalid video file handle");
+        return;
+    }
     uint32_t rec = heap_alloc(BINK_RECORD_BYTES, true, 16);
     if (rec) {
         memset(g_mem + rec, 0, BINK_RECORD_BYTES);
         wr32(rec, 640);
         wr32(rec + 4, 480);
-        LOGV("bink: open \"%s\" -> finished video record %08x (no decoder)",
-             gm_str(arg(c, 0)).c_str(), rec);
+        if (flags & BINK_FILE_HANDLE)
+            LOGV("bink: open handle %08x -> finished video record %08x (no decoder)", name, rec);
+        else
+            LOGV("bink: open \"%s\" -> finished video record %08x (no decoder)",
+                 gm_str(name).c_str(), rec);
     } else {
         video_error("cannot allocate video record");
     }
@@ -463,6 +650,12 @@ void BinkDoFrame(X86 *c) {
     ret0(c);
 }
 void BinkNextFrame(X86 *c) {
+    ret0(c);
+}
+void BinkGetRects(X86 *c) {
+    ret0(c);
+}
+void BinkPause(X86 *c) {
     ret0(c);
 }
 void BinkWait(X86 *c) {
@@ -502,19 +695,44 @@ void BinkGetError(X86 *c) {
 #define SMACK(name, bytes, fn) {"smackw32.dll", "_Smack" #name "@" #bytes, (bytes) / 4, fn}
 
 const ImportShim g_video_shims[] = {
-    BINK(Open, 8, BinkOpen),       BINK(OpenMiles, 4, ret0),
-    BINK(SetSoundSystem, 8, ret1), BINK(DDSurfaceType, 4, BinkDDSurfaceType),
-    BINK(DoFrame, 4, BinkDoFrame), BINK(NextFrame, 4, BinkNextFrame),
-    BINK(Wait, 4, BinkWait),       BINK(CopyToBuffer, 28, BinkCopyToBuffer),
-    BINK(Service, 4, BinkService), BINK(GetError, 0, BinkGetError),
-    BINK(Close, 4, BinkClose),     BINK(BufferClose, 4, ret0),
-    SMACK(Open, 12, ret0),         SMACK(SoundUseMSS, 4, ret0),
-    SMACK(DoFrame, 4, ret0),       SMACK(NextFrame, 4, ret0),
-    SMACK(Wait, 4, ret0),          SMACK(ToBuffer, 28, ret0),
+    BINK(OpenDirectSound, 4, ret1),
+    BINK(GetRects, 8, BinkGetRects),
+    BINK(Pause, 8, BinkPause),
+    BINK(Open, 8, BinkOpen),
+    BINK(OpenMiles, 4, ret0),
+    BINK(SetSoundSystem, 8, ret1),
+    BINK(DDSurfaceType, 4, BinkDDSurfaceType),
+    BINK(DoFrame, 4, BinkDoFrame),
+    BINK(NextFrame, 4, BinkNextFrame),
+    BINK(Wait, 4, BinkWait),
+    BINK(CopyToBuffer, 28, BinkCopyToBuffer),
+    BINK(Service, 4, BinkService),
+    BINK(GetError, 0, BinkGetError),
+    BINK(Close, 4, BinkClose),
+    BINK(BufferClose, 4, ret0),
+    SMACK(Open, 12, ret0),
+    SMACK(SoundUseMSS, 4, ret0),
+    SMACK(DoFrame, 4, ret0),
+    SMACK(NextFrame, 4, ret0),
+    SMACK(Wait, 4, ret0),
+    SMACK(ToBuffer, 28, ret0),
     SMACK(Close, 4, ret0),
 };
 
 } // namespace
+
+void bink_shutdown() {
+#ifdef RECOMP_HAVE_FFMPEG
+    // Unlike reset, shutdown runs before the guest heap is discarded. Destroy
+    // players here so their audio stops before the host's static state dies.
+    while (!g_players.empty()) {
+        auto it = g_players.begin();
+        uint32_t rec = it->first;
+        g_players.erase(it);
+        heap_free(rec);
+    }
+#endif
+}
 
 void bink_reset() {
 #ifdef RECOMP_HAVE_FFMPEG

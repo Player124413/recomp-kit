@@ -1024,6 +1024,11 @@ D3DRenderer::Impl::Impl(gpu::Device *device) : device_(device) {
     hd_.pack.open(packPath);
     ok_ = true;
     terrain_detail_ = packTexture(0, 0, 0);
+    {
+        const bool detail = hd_.pack.files.count(0) != 0;
+        mods_display_texture_pack(uint32_t(hd_.pack.files.size() - (detail ? 1 : 0)),
+                                  terrain_detail_ ? 1 : 0);
+    }
     // Preload the pack's priority list before the first game frame. Stop at
     // 75% of the budget, leaving headroom for textures encountered later.
     std::ifstream preload(std::filesystem::path(packPath) / "preload.txt");

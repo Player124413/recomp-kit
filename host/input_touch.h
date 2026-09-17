@@ -13,6 +13,9 @@
 constexpr double kTouchTapTravel = 20.0; // a resting finger drifts a few points
 constexpr uint64_t kTouchLongPressNs = 350ull * 1000000ull;
 constexpr double kTouchPanStep = 24.0;
+// Place a tap before pressing so a frame can sample the new cursor position.
+// Without presented-frame counts, wait this long before emitting the press.
+constexpr uint64_t kTouchPressDelayNs = 60ull * 1000000ull;
 // A synthesized click stays pressed this long: a game that samples its mouse
 // buttons once per frame never sees a press and release inside one frame.
 constexpr uint64_t kTouchClickHoldNs = 90ull * 1000000ull;
@@ -94,10 +97,10 @@ class TouchMapper {
     void finger_down(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
     void finger_motion(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
     void finger_up(TouchPoint p, uint64_t now_ns, std::vector<TouchAction> *out);
-    // Fires time-based gestures (long press, held releases). Call once per pump.
+    // Fires deferred presses, releases and long presses. Call once per pump.
     void tick(uint64_t now_ns, std::vector<TouchAction> *out);
-    // The host's running count of presented frames. Once told, a click's
-    // release also waits for kTouchClickHoldFrames presents after its press.
+    // The host's running count of presented frames. Once told, a click presses
+    // one frame after placement and releases kTouchClickHoldFrames after press.
     void frames_presented(uint32_t count);
     // The system took the finger away (SDL_EVENT_FINGER_CANCELED): forget it
     // without a click; a drag it was holding is released.
@@ -129,6 +132,13 @@ class TouchMapper {
     // Where the cursor goes once an edge hold is over, after any held release.
     bool nudge_pending_ = false;
     double nudge_x_ = 0, nudge_y_ = 0;
+    // A click's press waits for a frame after placement, or the time deadline
+    // when the host has not supplied presented-frame counts.
+    bool press_pending_ = false;
+    int press_button_ = 0;
+    double press_x_ = 0, press_y_ = 0;
+    uint64_t press_deadline_ = 0;
+    uint32_t presents_at_place_ = 0;
     // A click's release, held back until kTouchClickHoldNs after its press and,
     // when presents are reported, until kTouchClickHoldFrames of them.
     bool release_pending_ = false;
@@ -142,6 +152,7 @@ class TouchMapper {
     bool release_ready(uint64_t now) const;
     void place(std::vector<TouchAction> *out, double x, double y, bool snap = true);
     void click(std::vector<TouchAction> *out, int button, double x, double y, uint64_t now);
+    void press_held(std::vector<TouchAction> *out, uint64_t now);
     void end_edge_hold(std::vector<TouchAction> *out);
     void release_held(std::vector<TouchAction> *out);
     double centroid_x() const;

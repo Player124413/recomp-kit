@@ -259,6 +259,18 @@ MOD_TEST_SUITE(page_shows_only_the_rows_the_game_lists) {
     mods_settings_rows_for_test((2u << DISPLAY_KEYPAD_BIT) - 1);
 }
 
+MOD_TEST_SUITE(textures_row_says_what_the_pack_holds) {
+    mods_display_reset();
+    MOD_CHECK(mods_display_line(DISPLAY_TEXTURES) == "Textures: HD pack");
+    mods_display_texture_pack(0, 1);
+    MOD_CHECK(mods_display_line(DISPLAY_TEXTURES) == "Terrain detail: on");
+    mods_display_texture_pack(12, 1);
+    MOD_CHECK(mods_display_line(DISPLAY_TEXTURES) == "Textures: HD pack");
+    mods_display_texture_pack(0, 0);
+    MOD_CHECK(mods_display_line(DISPLAY_TEXTURES) == "Textures: original (no texture pack)");
+    mods_display_reset();
+}
+
 MOD_TEST_SUITE(page_draws_into_host_storage_only) {
     // The guest arena, mapped before anything asks for an address inside it.
     // Every suite that touches guest memory does this for itself; without it

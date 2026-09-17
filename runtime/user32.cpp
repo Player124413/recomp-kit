@@ -1068,9 +1068,13 @@ void u_GetSystemMetrics(X86 *c) {
     case 0:  // SM_CXSCREEN
     case 16: // SM_CXFULLSCREEN
         v = width;
+        LOGV("GetSystemMetrics(%u) -> %u (display mode %ux%ux%u)", arg(c, 0), v, width, height,
+             bpp);
         break;
     case 1: // SM_CYSCREEN
         v = height;
+        LOGV("GetSystemMetrics(%u) -> %u (display mode %ux%ux%u)", arg(c, 0), v, width, height,
+             bpp);
         break;
     case 17: // SM_CYFULLSCREEN
         v = height - 19;

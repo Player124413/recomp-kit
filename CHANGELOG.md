@@ -812,6 +812,50 @@
   omitted when none exists; ANSI and wide disk-space queries share the same
   virtual disk geometry.
 
+- Bink: close any movie left open at guest exit before host audio teardown.
+  Release decoder state, audio channels and guest records in the shared
+  smoke, headless and SDL host shutdown path, preventing a process-exit abort.
+
+- Bink: start and refill audio from DoFrame, NextFrame and Wait, so movies
+  have sound when the game never calls the optional BinkService helper.
+  All four entry points share the same audio routine and paused guard.
+
+- Bink: serve the DirectSound token, decoded-frame rectangles and pause
+  entry points. Pausing holds the frame clock and stops audio refills;
+  resuming shifts frame deadlines by the paused interval. Builds without
+  FFmpeg expose the same entry points with finished-video behavior.
+  LoadLibrary now accepts any DLL with registered shims, case-insensitively,
+  so dynamically loaded video imports resolve through GetProcAddress.
+
+- Bink: open a video from a guest file handle at its current offset using
+  FFmpeg custom I/O over the remainder of the host file. The player reopens
+  the file read-only and owns its I/O context, leaving the guest's position
+  and descriptor intact. Reject memory-resident video with a readable error;
+  log and ignore other open flags. Cover decoding from an optional private
+  container selected by `RECOMP_TEST_BINK_CONTAINER=<host path>,<offset>`.
+
+- DirectDraw: releasing the object that set the display mode, or
+  RestoreDisplayMode, puts the desktop back, so GetSystemMetrics and
+  GetDeviceCaps report the desktop fallback until the next SetDisplayMode.
+  A game that changes resolution by releasing and re-creating DirectDraw reads
+  its screen bounds in between; the stale previous mode had every pointer
+  position past the old width or height count as a screen edge, which
+  scrolled the map whenever the pointer rested there. GetSystemMetrics logs
+  the screen sizes it reports at the verbose level.
+
+- Smoke: add `tap x y`, driving a stationary finger through TouchMapper and
+  the window input gates with the smoke host's clock and presented frames.
+  Cover parsing and the mapper-driven finger lifecycle.
+
+- Touch: place a tap's pointer first, then press after one presented frame
+  (60 ms when presented-frame counts are unavailable), so a game can sample
+  the new cursor position before handling the click. Start the existing
+  90 ms / two-frame release hold at the actual press. A new finger finishes
+  a pending tap's press and release before starting the next gesture; focus
+  loss drops an unissued press. Drag and edge-hold behavior is unchanged.
+  Mapper and host suites pass; device menu/minimap confirmation is pending.
+
+
 - Build: default FFmpeg ON on Linux, import its major-version shared objects
   and package them beside the executable with an `$ORIGIN` rpath and notice.
   On Windows, detect MSYS2 bash/make and require a MinGW-compatible compiler;

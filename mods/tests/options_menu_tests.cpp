@@ -2,6 +2,7 @@
 #include "../mods_internal.h"
 #include "../options_menu.h"
 #include "../display_settings.h"
+#include "../keypad_settings.h"
 #include "../../runtime/loader.h"
 #include "../../runtime/imports.h"
 #include "../../runtime/memory.h"
@@ -68,11 +69,20 @@ MOD_TEST_SUITE(native_options_preserve_navigation_and_apply_controls) {
     activate(1);
     update();
     MOD_CHECK_EQ(rd32(controller + 12), 5);
-    MOD_CHECK_EQ(flags(40), 3); // no duplicate resolution/fourth Display row
+    // Window, frame limit and overlay, then the keypad's three rows; no
+    // duplicate resolution row.
+    for (unsigned i : {37u, 38u, 39u, 40u, 41u, 42u})
+        MOD_CHECK_EQ(flags(i), 0);
+    MOD_CHECK_EQ(flags(43), 3);
     activate(4);
     MOD_CHECK_EQ(mods_display_fps(), 40);
     activate(5);
     MOD_CHECK_EQ(mods_display_overlay(), 1);
+    const int keypad_left = mods_keypad_value(KEYPAD_LEFT_ROW);
+    activate(6);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 1 - keypad_left);
+    activate(6);
+    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), keypad_left);
     // The display API still follows the original Graphics resolution selector.
     wr8(0x89d15c, 2);
     wr8(0x749cf0, 1);
