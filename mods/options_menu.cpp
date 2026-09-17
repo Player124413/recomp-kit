@@ -3,6 +3,7 @@
 #include "options_menu.h"
 #include "game_config.h"
 #include "display_settings.h"
+#include "keypad_settings.h"
 #include "mods_internal.h"
 #include "../runtime/imports.h"
 #include "../runtime/memory.h"
@@ -150,6 +151,34 @@ const DisplayRow enhanced[] = {DISPLAY_RENDERING, DISPLAY_TEXTURES, DISPLAY_FILT
                                DISPLAY_UI_SCALE, DISPLAY_WIDE};
 // Resolution stays in the original Graphics tab, with the game's live rebuild.
 const DisplayRow display[] = {DISPLAY_WINDOW, DISPLAY_FPS, DISPLAY_OVERLAY};
+// An entry of an added tab: a display row, or kKeypad + a keypad row.
+constexpr int kKeypad = 100;
+// The rows a tab shows: the ones game.toml [settings] rows lists, the keypad's
+// three after the Display tab's own. Eight fit a tab (rows_per_page).
+std::vector<int> tab_rows(unsigned tab) {
+    std::vector<int> rows;
+    if (tab == 4)
+        for (auto r : enhanced)
+            if (mods_display_row_applies(r))
+                rows.push_back(r);
+    if (tab == 5) {
+        for (auto r : display)
+            if (mods_display_row_applies(r))
+                rows.push_back(r);
+        if (mods_settings_row_listed(DISPLAY_KEYPAD_BIT))
+            for (int k = 0; k < KEYPAD_ROW_COUNT; ++k)
+                rows.push_back(kKeypad + k);
+    }
+    return rows;
+}
+PopModStatus nudge_row(int entry, int delta) {
+    return entry >= kKeypad ? mods_keypad_nudge(KeypadRow(entry - kKeypad), delta)
+                            : mods_display_nudge(DisplayRow(entry), delta);
+}
+std::string row_line(int entry) {
+    return entry >= kKeypad ? mods_keypad_line(KeypadRow(entry - kKeypad))
+                            : mods_display_line(DisplayRow(entry));
+}
 // Dispatch one native Options control to a display setting, mod action or page navigation.
 // Use the shared setters so successful changes apply live and follow normal persistence.
 void action(X86 *c) {
@@ -174,10 +203,9 @@ void action(X86 *c) {
     const unsigned row = i - 3, tab = rd32(controller + 12);
     const int delta = rd32(0x749ce0) == 3 ? -1 : 1;
     PopModStatus status = POP_OK;
-    if (tab == 4 && row < std::size(enhanced))
-        status = mods_display_nudge(enhanced[row], delta);
-    else if (tab == 5 && row < std::size(display))
-        status = mods_display_nudge(display[row], delta);
+    const auto rows = tab_rows(tab);
+    if ((tab == 4 || tab == 5) && row < rows.size())
+        status = nudge_row(rows[row], delta);
     else if (tab == 6 && mod_page * rows_per_page + row < mod_rows.size()) {
         const auto r = mod_rows[mod_page * rows_per_page + row];
         if (r.menu) {
@@ -209,9 +237,8 @@ void update(X86 *c) {
             show(original_control(i));
         if (tab == 6)
             rebuild_mods();
-        const size_t count = tab == 4   ? std::size(enhanced)
-                             : tab == 5 ? std::size(display)
-                                        : std::min(size_t(rows_per_page),
+        const size_t count = tab == 4 || tab == 5 ? tab_rows(tab).size()
+                                                  : std::min(size_t(rows_per_page),
                                                    mod_rows.size() - mod_page * rows_per_page);
         for (unsigned i = 0; i < count; ++i) {
             show(control(3 + i));
@@ -240,10 +267,9 @@ std::string label(unsigned i) {
     if (i >= 11)
         return i == 11 ? "< Previous" : "Next >";
     const unsigned row = i - 3, tab = rd32(controller + 12);
-    if (tab == 4 && row < std::size(enhanced))
-        return mods_display_line(enhanced[row]);
-    if (tab == 5 && row < std::size(display))
-        return mods_display_line(display[row]);
+    const auto rows = tab_rows(tab);
+    if ((tab == 4 || tab == 5) && row < rows.size())
+        return row_line(rows[row]);
     if (tab == 6 && mod_page * rows_per_page + row < mod_rows.size())
         return mod_rows[mod_page * rows_per_page + row].text;
     return {};

@@ -76,6 +76,35 @@ class LoadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 game_config.load(game)
 
+    def test_settings_rows_knob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "game.toml").write_text(base)
+            self.assertIn("#define RECOMP_SETTINGS_ROWS 0x3ffu", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[settings]\nrows = ["window", "performance_overlay", "keypad"]\n')
+            self.assertIn("#define RECOMP_SETTINGS_ROWS 0x248u", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[settings]\nrows = []\n')
+            self.assertIn("#define RECOMP_SETTINGS_ROWS 0x000u", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[settings]\nrows = ["window", "sharpness"]\n')
+            with self.assertRaises(ValueError) as caught:
+                game_config.load(game)
+            self.assertIn("sharpness", str(caught.exception))
+
+    def test_mods_builtin_knob(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "game.toml").write_text(base)
+            self.assertIn("#define RECOMP_MODS_BUILTIN_POPULOUS 1", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[mods]\nbuiltin = "none"\n')
+            self.assertIn("#define RECOMP_MODS_BUILTIN_POPULOUS 0", gen_game_config.render_header(game_config.load(game)))
+            (game / "game.toml").write_text(base + '\n[mods]\nbuiltin = "majesty"\n')
+            with self.assertRaises(ValueError):
+                gen_game_config.render_header(game_config.load(game))
+
     def test_missing_key_is_an_error_naming_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

@@ -1,5 +1,6 @@
 // settings_page_tests.cpp - navigation, editing and the drawing itself.
 #include "mods_tests.h"
+#include "../display_settings.h"
 #include "../mods_internal.h"
 #include "../../runtime/memory.h"
 #include <limits>
@@ -228,6 +229,34 @@ MOD_TEST_SUITE(page_toggles_on_its_reserved_key) {
     mods_input_key(0x44, 0x79, false);
     MOD_CHECK(!mods_page_visible());
     teardown();
+}
+
+MOD_TEST_SUITE(page_shows_only_the_rows_the_game_lists) {
+    // game.toml [settings] rows = ["window", "performance_overlay", "keypad"]
+    mods_settings_rows_for_test(1u << DISPLAY_WINDOW | 1u << DISPLAY_OVERLAY |
+                                1u << DISPLAY_KEYPAD_BIT);
+    setup();
+    mods_page_open(nullptr);
+    // Three mod settings, Display, Performance overlay and the keypad's three.
+    MOD_CHECK_EQ(mods_page_line_count(), 8u);
+    MOD_CHECK(std::string(mods_page_line(0)).find("Display:") == 0);
+    MOD_CHECK(std::string(mods_page_line(1)).find("Performance overlay:") == 0);
+    MOD_CHECK(std::string(mods_page_line(2)).find("Keypad left") == 0);
+    // An unlisted row cannot be set and keeps its neutral value.
+    MOD_CHECK_EQ(mods_display_set(DISPLAY_UI_SCALE, 3), POP_E_STATE);
+    MOD_CHECK_EQ(mods_display_set(DISPLAY_RENDERING, 1), POP_E_STATE);
+    MOD_CHECK_EQ(mods_display_scale(), 0);
+    MOD_CHECK_EQ(mods_display_classic(), 0);
+    mods_page_close();
+    teardown();
+    // Without the keypad.
+    mods_settings_rows_for_test(1u << DISPLAY_WINDOW | 1u << DISPLAY_OVERLAY);
+    setup();
+    mods_page_open(nullptr);
+    MOD_CHECK_EQ(mods_page_line_count(), 5u);
+    mods_page_close();
+    teardown();
+    mods_settings_rows_for_test((2u << DISPLAY_KEYPAD_BIT) - 1);
 }
 
 MOD_TEST_SUITE(page_draws_into_host_storage_only) {

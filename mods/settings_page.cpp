@@ -51,7 +51,7 @@ void rebuild() {
             g_lines.push_back(mods_display_line(DisplayRow(i)));
             g_rows.push_back({false, uint32_t(i), true});
         }
-        for (int i = 0; i < KEYPAD_ROW_COUNT; ++i) {
+        for (int i = 0; i < KEYPAD_ROW_COUNT && mods_settings_row_listed(DISPLAY_KEYPAD_BIT); ++i) {
             g_lines.push_back(mods_keypad_line(KeypadRow(i)));
             Row row{false, uint32_t(i)};
             row.is_keypad = true;
