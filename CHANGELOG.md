@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- CI builds again on every platform. The GeneralUser GS SoundFont the hosts
+  bundle was ignored by `.gitignore` (`*.sf2`) and never committed, so every
+  packaging step failed to copy it and a public checkout had no music; it is
+  tracked now. The smoke host includes `<algorithm>` and `<cstdint>` for the
+  compilers that do not bring them in transitively (Linux, Windows), and the
+  watchpoint's backtrace is compiled out on Android, whose NDK has
+  `backtrace` only from API 33.
+
 - The portable suites pass again. The instruction harness defines the
   runtime globals the memory writers read (the watchpoint and the DirectDraw
   write ranges), which it had been missing since the watchpoint arrived; the

@@ -21,7 +21,9 @@
 // device uploaded textures, that the scene is not black, that a sound had
 // amplitude in it, and it can leave you the frames to look at.
 #include "boot.h"
+#include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include "game_config.h"
 #include "script.h"
 #include "smoke_dumpat.h"

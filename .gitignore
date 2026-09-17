@@ -23,6 +23,7 @@ __pycache__/
 *.rar
 *.pack
 *.sf2
+!third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2
 *.log
 .DS_Store
 .env

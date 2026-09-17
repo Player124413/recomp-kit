@@ -4,7 +4,7 @@
 #include "loader.h"
 
 #include "../platform/os.h"
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
 #include <execinfo.h>
 #endif
 #include <algorithm>
@@ -62,7 +62,7 @@ WatchArm g_watch_arm;
 // written thousands of times, and a report long enough to read is a report too
 // slow to reach the moment worth reading.
 const char *watch_writer() {
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
     static char out[128];
     void *frames[32];
     const int n = backtrace(frames, 32);
