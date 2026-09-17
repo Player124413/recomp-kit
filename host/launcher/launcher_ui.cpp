@@ -65,10 +65,16 @@ const Color kFocus{240, 200, 90, 255};
 
 // A path as the player would say it: under the home folder as "~/...".
 std::string display(const std::string &path) {
-    const char *home = getenv("HOME");
-    const size_t n = home ? strlen(home) : 0;
-    if (n > 1 && path.compare(0, n, home) == 0 && (path.size() == n || path[n] == '/'))
-        return "~" + path.substr(n);
+    const char *env = getenv("HOME");
+    if (!env || strlen(env) < 2)
+        return path;
+    // iOS spells the same container /private/var/... and /var/....
+    std::string home = env;
+    const std::vector<std::string> spellings = {
+        home, home.compare(0, 9, "/private/") == 0 ? home.substr(8) : "/private" + home};
+    for (const std::string &h : spellings)
+        if (path.compare(0, h.size(), h) == 0 && (path.size() == h.size() || path[h.size()] == '/'))
+            return "~" + path.substr(h.size());
     return path;
 }
 
