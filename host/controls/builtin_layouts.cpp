@@ -207,11 +207,410 @@ std::string pad_and_keys_tablet() {
     return s;
 }
 
+// ---------------------------------------------------------------- phones
+//
+// A phone in landscape has about 750 x 390 pt inside its side insets, less
+// than half the tablet's area, so the pad keeps the tablet's parts at about
+// two thirds their size and moves both sticks to the bottom corners: the
+// middle of the bottom edge is the only room left for the system buttons,
+// and on a tablet that is where the inboard right stick sits. Keeping the
+// group ids and their order ("sticks", "buttons", "tabs") the same as the
+// tablet pad keeps the hidden-group bits, which are stored per layout name,
+// meaning the same thing after a rotation.
+
+const char *kPadPhoneLandscape = R"JSON({
+  "version": 1,
+  "name": "pad",
+  "opacity": 0.7,
+  "groups": [
+    {
+      "id": "sticks",
+      "controls": [
+        {"kind": "stick", "stick": "left", "mode": "floating", "anchor": "bottom-left",
+         "x": 24, "y": 24, "radius": 70},
+        {"kind": "stick", "stick": "right", "mode": "floating", "anchor": "bottom-right",
+         "x": 24, "y": 24, "radius": 70}
+      ]
+    },
+    {
+      "id": "buttons",
+      "controls": [
+        {"kind": "dpad", "anchor": "bottom-left", "x": 170, "y": 24, "size": 100},
+        {"kind": "button", "button": "triangle", "anchor": "bottom-right", "x": 231, "y": 123, "size": 48},
+        {"kind": "button", "button": "circle", "anchor": "bottom-right", "x": 180, "y": 72, "size": 48},
+        {"kind": "button", "button": "cross", "anchor": "bottom-right", "x": 231, "y": 21, "size": 48},
+        {"kind": "button", "button": "square", "anchor": "bottom-right", "x": 282, "y": 72, "size": 48},
+        {"kind": "button", "button": "l1", "anchor": "top-left", "x": 24, "y": 12, "w": 80, "h": 34},
+        {"kind": "button", "button": "l2", "anchor": "top-left", "x": 24, "y": 52, "w": 80, "h": 34},
+        {"kind": "button", "button": "r1", "anchor": "top-right", "x": 24, "y": 12, "w": 80, "h": 34},
+        {"kind": "button", "button": "r2", "anchor": "top-right", "x": 24, "y": 52, "w": 80, "h": 34},
+        {"kind": "button", "button": "select", "anchor": "bottom-center", "x": -58, "y": 8, "w": 56, "h": 26},
+        {"kind": "button", "button": "ps", "anchor": "bottom-center", "x": 0, "y": 8, "w": 56, "h": 26},
+        {"kind": "button", "button": "start", "anchor": "bottom-center", "x": 58, "y": 8, "w": 56, "h": 26}
+      ]
+    },
+    {
+      "id": "tabs",
+      "controls": [
+        {"kind": "toggle", "target": "next", "label": "KEYS", "anchor": "top-center",
+         "y": 8, "w": 72, "h": 28}
+      ]
+    }
+  ]
+})JSON";
+
+// Two 5x4 thumb blocks in the bottom corners, 30pt keys: the letters in
+// QWERTY order, the modifiers and Esc along the left block's bottom row and
+// an arrow cluster in the right block's. The digits, punctuation and the
+// function keys do not fit; F-keys live in this form's pad+keys layout.
+const char *kKeysPhoneLandscape = R"JSON({
+  "version": 1,
+  "name": "keys",
+  "safe_inset": true,
+  "groups": [
+    {
+      "id": "left",
+      "grid": {"cols": 5, "rows": 4, "key": 30, "gap": 3},
+      "anchor": "bottom-left",
+      "controls": [
+        {"kind": "key", "scancode": "Q", "col": 0, "row": 0},
+        {"kind": "key", "scancode": "W", "col": 1, "row": 0},
+        {"kind": "key", "scancode": "E", "col": 2, "row": 0},
+        {"kind": "key", "scancode": "R", "col": 3, "row": 0},
+        {"kind": "key", "scancode": "T", "col": 4, "row": 0},
+        {"kind": "key", "scancode": "A", "col": 0, "row": 1},
+        {"kind": "key", "scancode": "S", "col": 1, "row": 1},
+        {"kind": "key", "scancode": "D", "col": 2, "row": 1},
+        {"kind": "key", "scancode": "F", "col": 3, "row": 1},
+        {"kind": "key", "scancode": "G", "col": 4, "row": 1},
+        {"kind": "key", "scancode": "Z", "col": 0, "row": 2},
+        {"kind": "key", "scancode": "X", "col": 1, "row": 2},
+        {"kind": "key", "scancode": "C", "col": 2, "row": 2},
+        {"kind": "key", "scancode": "V", "col": 3, "row": 2},
+        {"kind": "key", "scancode": "B", "col": 4, "row": 2},
+        {"kind": "key", "scancode": "Escape", "label": "Esc", "col": 0, "row": 3},
+        {"kind": "key", "scancode": "LShift", "label": "Sft", "col": 1, "row": 3},
+        {"kind": "key", "scancode": "LCtrl", "label": "Ctl", "col": 2, "row": 3},
+        {"kind": "key", "scancode": "LAlt", "label": "Alt", "col": 3, "row": 3},
+        {"kind": "key", "scancode": "Space", "label": "Spc", "col": 4, "row": 3}
+      ]
+    },
+    {
+      "id": "right",
+      "grid": {"cols": 5, "rows": 4, "key": 30, "gap": 3},
+      "anchor": "bottom-right",
+      "controls": [
+        {"kind": "key", "scancode": "Y", "col": 0, "row": 0},
+        {"kind": "key", "scancode": "U", "col": 1, "row": 0},
+        {"kind": "key", "scancode": "I", "col": 2, "row": 0},
+        {"kind": "key", "scancode": "O", "col": 3, "row": 0},
+        {"kind": "key", "scancode": "P", "col": 4, "row": 0},
+        {"kind": "key", "scancode": "H", "col": 0, "row": 1},
+        {"kind": "key", "scancode": "J", "col": 1, "row": 1},
+        {"kind": "key", "scancode": "K", "col": 2, "row": 1},
+        {"kind": "key", "scancode": "L", "col": 3, "row": 1},
+        {"kind": "key", "scancode": "Backspace", "label": "Bks", "col": 4, "row": 1},
+        {"kind": "key", "scancode": "N", "col": 0, "row": 2},
+        {"kind": "key", "scancode": "M", "col": 1, "row": 2},
+        {"kind": "key", "scancode": "Tab", "col": 2, "row": 2},
+        {"kind": "key", "scancode": "Up", "label": "^", "col": 3, "row": 2},
+        {"kind": "key", "scancode": "Return", "label": "Ent", "col": 0, "row": 3, "span": 2},
+        {"kind": "key", "scancode": "Left", "label": "<", "col": 2, "row": 3},
+        {"kind": "key", "scancode": "Down", "label": "v", "col": 3, "row": 3},
+        {"kind": "key", "scancode": "Right", "label": ">", "col": 4, "row": 3}
+      ]
+    },
+    {
+      "id": "tabs",
+      "controls": [
+        {"kind": "toggle", "target": "left", "label": "HIDE", "label_off": "KEYS",
+         "anchor": "bottom-left", "w": 64, "h": 20, "stack_on": "left"},
+        {"kind": "toggle", "target": "right", "label": "HIDE", "label_off": "KEYS",
+         "anchor": "bottom-right", "w": 64, "h": 20, "stack_on": "right"},
+        {"kind": "toggle", "target": "next", "label": "PAD", "anchor": "bottom-center",
+         "w": 64, "h": 20}
+      ]
+    }
+  ]
+})JSON";
+
+// Landscape pad+keys is the pad without its dpad and system buttons, plus a
+// single strip of the keys a game most often binds to a menu or a save.
+const char *kPadKeysPhoneLandscape = R"JSON({
+  "version": 1,
+  "name": "pad+keys",
+  "safe_inset": true,
+  "groups": [
+    {
+      "id": "left",
+      "grid": {"cols": 10, "rows": 1, "key": 30, "gap": 3},
+      "anchor": "top-center",
+      "y": 8,
+      "controls": [
+        {"kind": "key", "scancode": "Escape", "label": "Esc", "col": 0, "row": 0},
+        {"kind": "key", "scancode": "F1", "col": 1, "row": 0},
+        {"kind": "key", "scancode": "F2", "col": 2, "row": 0},
+        {"kind": "key", "scancode": "F3", "col": 3, "row": 0},
+        {"kind": "key", "scancode": "F4", "col": 4, "row": 0},
+        {"kind": "key", "scancode": "F5", "col": 5, "row": 0},
+        {"kind": "key", "scancode": "Tab", "col": 6, "row": 0},
+        {"kind": "key", "scancode": "Return", "label": "Ent", "col": 7, "row": 0},
+        {"kind": "key", "scancode": "Space", "label": "Spc", "col": 8, "row": 0},
+        {"kind": "key", "scancode": "Backspace", "label": "Bks", "col": 9, "row": 0}
+      ]
+    },
+    {
+      "id": "tabs",
+      "controls": [
+        {"kind": "toggle", "target": "next", "label": "NEXT", "anchor": "bottom-center",
+         "w": 64, "h": 20}
+      ]
+    },
+    {
+      "id": "sticks",
+      "controls": [
+        {"kind": "stick", "stick": "left", "mode": "floating", "anchor": "bottom-left",
+         "x": 24, "y": 24, "radius": 70},
+        {"kind": "stick", "stick": "right", "mode": "floating", "anchor": "bottom-right",
+         "x": 24, "y": 24, "radius": 70}
+      ]
+    },
+    {
+      "id": "face",
+      "controls": [
+        {"kind": "button", "button": "triangle", "anchor": "bottom-right", "x": 226, "y": 108, "size": 42},
+        {"kind": "button", "button": "circle", "anchor": "bottom-right", "x": 180, "y": 62, "size": 42},
+        {"kind": "button", "button": "cross", "anchor": "bottom-right", "x": 226, "y": 16, "size": 42},
+        {"kind": "button", "button": "square", "anchor": "bottom-right", "x": 272, "y": 62, "size": 42}
+      ]
+    }
+  ]
+})JSON";
+
+// In portrait every anchor resolves inside the controls area below the game
+// (about 390 x 490 pt on a 4:3 game), which is tall enough to spread the pad
+// out: sticks and the face diamond at mid-height where the thumbs rest, the
+// dpad and the system buttons along the bottom, the shoulders in a row just
+// under the game image.
+const char *kPadPhonePortrait = R"JSON({
+  "version": 1,
+  "name": "pad",
+  "opacity": 0.7,
+  "safe_inset": true,
+  "groups": [
+    {
+      "id": "sticks",
+      "controls": [
+        {"kind": "stick", "stick": "left", "mode": "floating", "anchor": "center-left",
+         "x": 24, "y": -20, "radius": 80},
+        {"kind": "stick", "stick": "right", "mode": "floating", "anchor": "bottom-right",
+         "x": 24, "y": 40, "radius": 60}
+      ]
+    },
+    {
+      "id": "buttons",
+      "controls": [
+        {"kind": "dpad", "anchor": "bottom-left", "x": 24, "y": 40, "size": 110},
+        {"kind": "button", "button": "triangle", "anchor": "center-right", "x": 78, "y": -92, "size": 60},
+        {"kind": "button", "button": "circle", "anchor": "center-right", "x": 16, "y": -30, "size": 60},
+        {"kind": "button", "button": "cross", "anchor": "center-right", "x": 78, "y": 32, "size": 60},
+        {"kind": "button", "button": "square", "anchor": "center-right", "x": 140, "y": -30, "size": 60},
+        {"kind": "button", "button": "l1", "anchor": "top-left", "x": 16, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "l2", "anchor": "top-left", "x": 108, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "r2", "anchor": "top-right", "x": 108, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "r1", "anchor": "top-right", "x": 16, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "select", "anchor": "bottom-center", "x": -60, "y": 8, "w": 56, "h": 26},
+        {"kind": "button", "button": "ps", "anchor": "bottom-center", "x": 0, "y": 8, "w": 56, "h": 26},
+        {"kind": "button", "button": "start", "anchor": "bottom-center", "x": 60, "y": 8, "w": 56, "h": 26}
+      ]
+    },
+    {
+      "id": "tabs",
+      "controls": [
+        {"kind": "toggle", "target": "next", "label": "KEYS", "anchor": "top-center",
+         "y": 44, "w": 72, "h": 28}
+      ]
+    }
+  ]
+})JSON";
+
+// Portrait is wide enough for one unsplit board: the full 10-column QWERTY
+// with a digit row above it and a modifier row, Enter and Backspace at the
+// right edge and the arrow cluster in the bottom-right corner. 34pt keys,
+// the same as the tablet's small size.
+const char *kKeysPhonePortrait = R"JSON({
+  "version": 1,
+  "name": "keys",
+  "safe_inset": true,
+  "groups": [
+    {
+      "id": "left",
+      "grid": {"cols": 10, "rows": 5, "key": 34, "gap": 3},
+      "anchor": "center",
+      "controls": [
+        {"kind": "key", "scancode": "1", "col": 0, "row": 0},
+        {"kind": "key", "scancode": "2", "col": 1, "row": 0},
+        {"kind": "key", "scancode": "3", "col": 2, "row": 0},
+        {"kind": "key", "scancode": "4", "col": 3, "row": 0},
+        {"kind": "key", "scancode": "5", "col": 4, "row": 0},
+        {"kind": "key", "scancode": "6", "col": 5, "row": 0},
+        {"kind": "key", "scancode": "7", "col": 6, "row": 0},
+        {"kind": "key", "scancode": "8", "col": 7, "row": 0},
+        {"kind": "key", "scancode": "9", "col": 8, "row": 0},
+        {"kind": "key", "scancode": "0", "col": 9, "row": 0},
+        {"kind": "key", "scancode": "Q", "col": 0, "row": 1},
+        {"kind": "key", "scancode": "W", "col": 1, "row": 1},
+        {"kind": "key", "scancode": "E", "col": 2, "row": 1},
+        {"kind": "key", "scancode": "R", "col": 3, "row": 1},
+        {"kind": "key", "scancode": "T", "col": 4, "row": 1},
+        {"kind": "key", "scancode": "Y", "col": 5, "row": 1},
+        {"kind": "key", "scancode": "U", "col": 6, "row": 1},
+        {"kind": "key", "scancode": "I", "col": 7, "row": 1},
+        {"kind": "key", "scancode": "O", "col": 8, "row": 1},
+        {"kind": "key", "scancode": "P", "col": 9, "row": 1},
+        {"kind": "key", "scancode": "A", "col": 0, "row": 2},
+        {"kind": "key", "scancode": "S", "col": 1, "row": 2},
+        {"kind": "key", "scancode": "D", "col": 2, "row": 2},
+        {"kind": "key", "scancode": "F", "col": 3, "row": 2},
+        {"kind": "key", "scancode": "G", "col": 4, "row": 2},
+        {"kind": "key", "scancode": "H", "col": 5, "row": 2},
+        {"kind": "key", "scancode": "J", "col": 6, "row": 2},
+        {"kind": "key", "scancode": "K", "col": 7, "row": 2},
+        {"kind": "key", "scancode": "L", "col": 8, "row": 2},
+        {"kind": "key", "scancode": "Return", "label": "Ent", "col": 9, "row": 2},
+        {"kind": "key", "scancode": "LShift", "label": "Sft", "col": 0, "row": 3},
+        {"kind": "key", "scancode": "Z", "col": 1, "row": 3},
+        {"kind": "key", "scancode": "X", "col": 2, "row": 3},
+        {"kind": "key", "scancode": "C", "col": 3, "row": 3},
+        {"kind": "key", "scancode": "V", "col": 4, "row": 3},
+        {"kind": "key", "scancode": "B", "col": 5, "row": 3},
+        {"kind": "key", "scancode": "N", "col": 6, "row": 3},
+        {"kind": "key", "scancode": "M", "col": 7, "row": 3},
+        {"kind": "key", "scancode": "Up", "label": "^", "col": 8, "row": 3},
+        {"kind": "key", "scancode": "Backspace", "label": "Bks", "col": 9, "row": 3},
+        {"kind": "key", "scancode": "Escape", "label": "Esc", "col": 0, "row": 4},
+        {"kind": "key", "scancode": "Tab", "col": 1, "row": 4},
+        {"kind": "key", "scancode": "LCtrl", "label": "Ctl", "col": 2, "row": 4},
+        {"kind": "key", "scancode": "LAlt", "label": "Alt", "col": 3, "row": 4},
+        {"kind": "key", "scancode": "Space", "col": 4, "row": 4, "span": 3},
+        {"kind": "key", "scancode": "Left", "label": "<", "col": 7, "row": 4},
+        {"kind": "key", "scancode": "Down", "label": "v", "col": 8, "row": 4},
+        {"kind": "key", "scancode": "Right", "label": ">", "col": 9, "row": 4}
+      ]
+    },
+    {
+      "id": "tabs",
+      "controls": [
+        {"kind": "toggle", "target": "left", "label": "HIDE", "label_off": "KEYS",
+         "anchor": "bottom-left", "x": 10, "w": 64, "h": 20, "stack_on": "left"},
+        {"kind": "toggle", "target": "next", "label": "PAD", "anchor": "bottom-center",
+         "w": 64, "h": 20}
+      ]
+    }
+  ]
+})JSON";
+
+// Portrait pad+keys: the pad in the top of the controls area (every anchor a
+// top one, so the pad stays put when the board below it grows), and the
+// three letter rows across the bottom.
+const char *kPadKeysPhonePortrait = R"JSON({
+  "version": 1,
+  "name": "pad+keys",
+  "safe_inset": true,
+  "groups": [
+    {
+      "id": "left",
+      "grid": {"cols": 10, "rows": 3, "key": 34, "gap": 3},
+      "anchor": "bottom-center",
+      "y": 8,
+      "controls": [
+        {"kind": "key", "scancode": "Q", "col": 0, "row": 0},
+        {"kind": "key", "scancode": "W", "col": 1, "row": 0},
+        {"kind": "key", "scancode": "E", "col": 2, "row": 0},
+        {"kind": "key", "scancode": "R", "col": 3, "row": 0},
+        {"kind": "key", "scancode": "T", "col": 4, "row": 0},
+        {"kind": "key", "scancode": "Y", "col": 5, "row": 0},
+        {"kind": "key", "scancode": "U", "col": 6, "row": 0},
+        {"kind": "key", "scancode": "I", "col": 7, "row": 0},
+        {"kind": "key", "scancode": "O", "col": 8, "row": 0},
+        {"kind": "key", "scancode": "P", "col": 9, "row": 0},
+        {"kind": "key", "scancode": "A", "col": 0, "row": 1},
+        {"kind": "key", "scancode": "S", "col": 1, "row": 1},
+        {"kind": "key", "scancode": "D", "col": 2, "row": 1},
+        {"kind": "key", "scancode": "F", "col": 3, "row": 1},
+        {"kind": "key", "scancode": "G", "col": 4, "row": 1},
+        {"kind": "key", "scancode": "H", "col": 5, "row": 1},
+        {"kind": "key", "scancode": "J", "col": 6, "row": 1},
+        {"kind": "key", "scancode": "K", "col": 7, "row": 1},
+        {"kind": "key", "scancode": "L", "col": 8, "row": 1},
+        {"kind": "key", "scancode": "Return", "label": "Ent", "col": 9, "row": 1},
+        {"kind": "key", "scancode": "LShift", "label": "Sft", "col": 0, "row": 2},
+        {"kind": "key", "scancode": "Z", "col": 1, "row": 2},
+        {"kind": "key", "scancode": "X", "col": 2, "row": 2},
+        {"kind": "key", "scancode": "C", "col": 3, "row": 2},
+        {"kind": "key", "scancode": "V", "col": 4, "row": 2},
+        {"kind": "key", "scancode": "B", "col": 5, "row": 2},
+        {"kind": "key", "scancode": "N", "col": 6, "row": 2},
+        {"kind": "key", "scancode": "M", "col": 7, "row": 2},
+        {"kind": "key", "scancode": "Space", "col": 8, "row": 2, "span": 2}
+      ]
+    },
+    {
+      "id": "tabs",
+      "controls": [
+        {"kind": "toggle", "target": "left", "label": "HIDE", "label_off": "KEYS",
+         "anchor": "bottom-left", "x": 10, "w": 64, "h": 20, "stack_on": "left"},
+        {"kind": "toggle", "target": "next", "label": "NEXT", "anchor": "bottom-right",
+         "x": 10, "w": 64, "h": 20, "stack_on": "left"}
+      ]
+    },
+    {
+      "id": "sticks",
+      "controls": [
+        {"kind": "stick", "stick": "left", "mode": "floating", "anchor": "top-left",
+         "x": 24, "y": 60, "radius": 70},
+        {"kind": "stick", "stick": "right", "mode": "floating", "anchor": "top-right",
+         "x": 24, "y": 220, "radius": 60}
+      ]
+    },
+    {
+      "id": "face",
+      "controls": [
+        {"kind": "dpad", "anchor": "top-left", "x": 24, "y": 230, "size": 110},
+        {"kind": "button", "button": "triangle", "anchor": "top-right", "x": 68, "y": 52, "size": 52},
+        {"kind": "button", "button": "circle", "anchor": "top-right", "x": 12, "y": 108, "size": 52},
+        {"kind": "button", "button": "cross", "anchor": "top-right", "x": 68, "y": 164, "size": 52},
+        {"kind": "button", "button": "square", "anchor": "top-right", "x": 124, "y": 108, "size": 52},
+        {"kind": "button", "button": "l1", "anchor": "top-left", "x": 16, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "l2", "anchor": "top-left", "x": 108, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "r2", "anchor": "top-right", "x": 108, "y": 8, "w": 84, "h": 34},
+        {"kind": "button", "button": "r1", "anchor": "top-right", "x": 16, "y": 8, "w": 84, "h": 34}
+      ]
+    }
+  ]
+})JSON";
+
 } // namespace
 
 const char *builtin_layout(const std::string &name, Form form) {
-    if (form != Form::Tablet)
+    if (form == Form::PhoneLandscape) {
+        if (name == "keys")
+            return kKeysPhoneLandscape;
+        if (name == "pad")
+            return kPadPhoneLandscape;
+        if (name == "pad+keys")
+            return kPadKeysPhoneLandscape;
         return nullptr;
+    }
+    if (form == Form::PhonePortrait) {
+        if (name == "keys")
+            return kKeysPhonePortrait;
+        if (name == "pad")
+            return kPadPhonePortrait;
+        if (name == "pad+keys")
+            return kPadKeysPhonePortrait;
+        return nullptr;
+    }
     if (name == "keys")
         return kKeysTablet;
     if (name == "pad")

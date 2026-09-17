@@ -1377,8 +1377,9 @@ static void test_tablet_fallback() {
     bool fell_back = true;
     CHECK(load_with_tablet_fallback(store, "keys", Form::Tablet, &l, &problem, &fell_back));
     CHECK(!fell_back);
+    // "keys" has a built-in for every form, so nothing falls back.
     CHECK(load_with_tablet_fallback(store, "keys", Form::PhoneLandscape, &l, &problem, &fell_back));
-    CHECK(fell_back && l.name == "keys");
+    CHECK(!fell_back && l.name == "keys");
     CHECK(load_with_tablet_fallback(store, "mine", Form::PhonePortrait, &l, &problem, &fell_back));
     CHECK(fell_back);
     CHECK(load_with_tablet_fallback(store, "any", Form::PhonePortrait, &l, &problem, &fell_back));
@@ -1967,6 +1968,142 @@ static void test_builtin_layouts_fit_and_do_not_overlap() {
     CHECK(cycle.kind == Kind::Toggle && cycle.target == "next" && cycle.label == "PAD");
 }
 
+// The two phone reference screens the built-ins are drawn for: a 844x390 pt
+// landscape phone with 47 pt side insets (a notch on its left in landscape),
+// and a 390x844 pt portrait one whose controls area is what is left below a
+// 4:3 game drawn at full width under a 59 pt top inset.
+static Screen phone_landscape_screen() {
+    Screen s = screen(844, 390, 1.0);
+    s.safe = {47, 0, 844 - 2 * 47, 390};
+    return s;
+}
+
+static Screen phone_portrait_screen() {
+    Screen s = screen(390, 844, 1.0);
+    s.safe = {0, 59, 390, 844 - 59};
+    const Rect game{0, 59, 390, int(lround(390 * 3.0 / 4.0))};
+    s.controls_area = controls_area_below(s.dw, s.dh, game, 0);
+    return s;
+}
+
+// Every control of `l` sits inside the rectangle its anchors resolve in, no
+// two non-key controls share an interior point, and every grid group's box
+// fits too. `min_key_w` (0 for none) is the smallest key width allowed.
+static void check_layout_fits(const char *what, const Layout &l, const Screen &s, int min_key_w) {
+    const Rect area = anchor_area(l, s);
+    CHECK(!area.empty());
+    std::vector<Rect> pads, grids;
+    for (int g = 0; g < int(l.groups.size()); ++g) {
+        if (l.groups[g].has_grid) {
+            const Rect b = group_rect(l, g, s);
+            const bool fits = b.x >= area.x && b.y >= area.y && b.x + b.w <= area.x + area.w &&
+                              b.y + b.h <= area.y + area.h;
+            if (!fits)
+                fprintf(stderr, "  %s group %d box at %d,%d %dx%d outside %d,%d %dx%d\n", what, g,
+                        b.x, b.y, b.w, b.h, area.x, area.y, area.w, area.h);
+            CHECK(fits);
+            grids.push_back(b);
+        }
+        for (int c = 0; c < int(l.groups[g].controls.size()); ++c) {
+            const Rect r = control_rect(l, g, c, s);
+            const bool fits = !r.empty() && r.x >= area.x && r.y >= area.y &&
+                              r.x + r.w <= area.x + area.w && r.y + r.h <= area.y + area.h;
+            if (!fits)
+                fprintf(stderr, "  %s group %d control %d at %d,%d %dx%d outside %d,%d %dx%d\n",
+                        what, g, c, r.x, r.y, r.w, r.h, area.x, area.y, area.w, area.h);
+            CHECK(fits);
+            const Control &ctl = l.groups[g].controls[c];
+            if (ctl.kind == Kind::Stick)
+                CHECK(ctl.radius > 0);
+            if (ctl.kind == Kind::Key) {
+                if (min_key_w > 0 && r.w < min_key_w)
+                    fprintf(stderr, "  %s group %d control %d is %d wide\n", what, g, c, r.w);
+                if (min_key_w > 0)
+                    CHECK(r.w >= min_key_w);
+            } else {
+                pads.push_back(r);
+            }
+        }
+    }
+    for (size_t i = 0; i < pads.size(); ++i) {
+        for (size_t j = i + 1; j < pads.size(); ++j) {
+            if (overlaps(pads[i], pads[j]))
+                fprintf(stderr,
+                        "  %s: pad controls %zu (%d,%d %dx%d) and %zu (%d,%d %dx%d) "
+                        "overlap\n",
+                        what, i, pads[i].x, pads[i].y, pads[i].w, pads[i].h, j, pads[j].x,
+                        pads[j].y, pads[j].w, pads[j].h);
+            CHECK(!overlaps(pads[i], pads[j]));
+        }
+        for (const Rect &b : grids)
+            CHECK(!overlaps(pads[i], b));
+    }
+}
+
+// Every built-in exists for both phone forms, parses, fits its reference
+// screen (the whole safe area in landscape, the controls area below the game
+// in portrait) and keeps its pad controls apart. Portrait keys stay thumb
+// sized (30 pt or wider) and portrait layouts keep their safe inset.
+static void test_phone_builtin_layouts_fit_and_do_not_overlap() {
+    for (const Form form : {Form::PhoneLandscape, Form::PhonePortrait}) {
+        const Screen s =
+            form == Form::PhoneLandscape ? phone_landscape_screen() : phone_portrait_screen();
+        for (const char *name : {"pad", "keys", "pad+keys"}) {
+            const char *text = builtin_layout(name, form);
+            CHECK(text != nullptr);
+            if (!text)
+                continue;
+            Layout l;
+            std::string err;
+            const bool parsed = parse_layout(text, &l, &err);
+            if (!parsed)
+                fprintf(stderr, "  %s %s: %s\n", form_name(form), name, err.c_str());
+            CHECK(parsed);
+            CHECK(l.name == name);
+            std::string what = std::string(form_name(form)) + " " + name;
+            if (form == Form::PhonePortrait)
+                CHECK(l.safe_inset);
+            check_layout_fits(what.c_str(), l, s, form == Form::PhonePortrait ? 30 : 0);
+            // Each layout can be cycled away from.
+            bool cycles = false;
+            for (const Group &g : l.groups)
+                for (const Control &c : g.controls)
+                    if (c.kind == Kind::Toggle && c.target == "next")
+                        cycles = true;
+            CHECK(cycles);
+        }
+        // The pad stays translucent on phones too.
+        Layout pad;
+        std::string err;
+        CHECK(parse_layout(builtin_layout("pad", form), &pad, &err) && pad.opacity == 0.7);
+    }
+}
+
+// The hidden-group bits are stored per layout name, so a layout with fewer
+// groups than the one they were written for must not inherit a bit that
+// would hide a group it does have; clamp_hidden_bits drops the bits past the
+// end and leaves the rest alone.
+static void test_hidden_bits_are_clamped_to_the_group_count() {
+    CHECK(clamp_hidden_bits(0x7, 3) == 0x7);
+    CHECK(clamp_hidden_bits(0x7, 2) == 0x3);
+    CHECK(clamp_hidden_bits(0x6, 1) == 0x0);
+    CHECK(clamp_hidden_bits(0xffffffffu, 0) == 0);
+    CHECK(clamp_hidden_bits(0xffffffffu, 64) == 0xffffu); // only 16 bits are stored
+
+    // Landscape "keys" is two halves and a tab row; portrait is one board
+    // and a tab row, so the landscape bit for the right half would land on
+    // the portrait tab row. It is dropped, and the board's bit survives.
+    Layout land, port;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("keys", Form::PhoneLandscape), &land, &err));
+    CHECK(parse_layout(builtin_layout("keys", Form::PhonePortrait), &port, &err));
+    CHECK(land.groups.size() == 3 && port.groups.size() == 2);
+    CHECK(hidden_bits_for(land, 0x3) == 0x3); // both halves hidden
+    CHECK(hidden_bits_for(land, 0x7) == 0x3); // never the tab row
+    CHECK(hidden_bits_for(port, 0x3) == 0x1); // the board, not the tabs
+    CHECK(hidden_bits_for(port, 0x4) == 0x0); // nothing past the last group
+}
+
 // A held stick's knob is its own quad, so moving it keeps the revision; a
 // button press, the dpad's hat and a floating base's move are drawn, so
 // they change it. radius_px follows the layout and screen scale.
@@ -2019,18 +2156,20 @@ static void test_make_view_pad_revision() {
     CHECK(make_view(l, r, s, 1.0).revision == idle);
 }
 
-// `controls_tests --dump <dir>`: renders each tablet built-in at iPad size
-// (2360x1640, 2x) through paint_overlay, idle and with a few controls held
-// (the held stick's knob composited the way Overlay's quad draws it), as
-// raw premultiplied RGBA files "<name>-<state>.2360x1640.rgba" for viewing.
-static void dump_builtins(const char *dir) {
-    const int dw = 2360, dh = 1640;
-    const Screen s = screen(dw, dh, 2.0);
+// `controls_tests --dump <dir>`: renders every built-in through
+// paint_overlay, idle and with a few controls held (the held stick's knob
+// composited the way Overlay's quad draws it), as raw premultiplied RGBA
+// files "<name>-<state>.<form>.<w>x<h>.rgba" for viewing. Each form gets its
+// reference screen: an iPad, a 844x390 pt phone in landscape with its side
+// insets, and the same phone in portrait, where only the controls area below
+// a 4:3 game is drawn.
+static void dump_form(const char *dir, Form form, const Screen &s) {
+    const int dw = s.dw, dh = s.dh;
     for (const char *name : {"pad", "keys", "pad+keys"}) {
         for (int held = 0; held < 2; ++held) {
             Layout l;
             std::string err;
-            if (!parse_layout(builtin_layout(name, Form::Tablet), &l, &err))
+            if (!builtin_layout(name, form) || !parse_layout(builtin_layout(name, form), &l, &err))
                 continue;
             Router r;
             Rec rec;
@@ -2065,8 +2204,9 @@ static void dump_builtins(const char *dir) {
                 if (d.kind == Kind::Stick && d.pressed)
                     paint_knob(c, d.base_x + d.knob_x * d.radius_px,
                                d.base_y + d.knob_y * d.radius_px, knob_radius(d.radius_px), true);
-            std::string file =
-                std::string(dir) + "/" + name + (held ? "-held" : "-idle") + ".2360x1640.rgba";
+            char tail[64];
+            snprintf(tail, sizeof tail, ".%s.%dx%d.rgba", form_name(form), dw, dh);
+            std::string file = std::string(dir) + "/" + name + (held ? "-held" : "-idle") + tail;
             for (char &ch : file)
                 if (ch == '+')
                     ch = '_';
@@ -2074,6 +2214,17 @@ static void dump_builtins(const char *dir) {
             printf("wrote %s\n", file.c_str());
         }
     }
+}
+
+static void dump_builtins(const char *dir) {
+    dump_form(dir, Form::Tablet, screen(2360, 1640, 2.0));
+    Screen land = screen(1688, 780, 2.0);
+    land.safe = {94, 0, 1688 - 2 * 94, 780};
+    dump_form(dir, Form::PhoneLandscape, land);
+    Screen port = screen(780, 1688, 2.0);
+    port.safe = {0, 118, 780, 1688 - 118};
+    port.controls_area = controls_area_below(port.dw, port.dh, Rect{0, 118, 780, 585}, 0);
+    dump_form(dir, Form::PhonePortrait, port);
 }
 
 // Each layer's revision follows only its own group: a pad press changes
@@ -2249,6 +2400,8 @@ int main(int argc, char **argv) {
     test_pad_art_cross_button();
     test_pad_art_stays_in_its_rect();
     test_builtin_layouts_fit_and_do_not_overlap();
+    test_phone_builtin_layouts_fit_and_do_not_overlap();
+    test_hidden_bits_are_clamped_to_the_group_count();
     test_make_view_pad_revision();
     test_layer_revisions_are_per_group();
     test_small_key_label_fits();

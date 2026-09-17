@@ -79,9 +79,7 @@ bool g_published_wanted = false;
 uint64_t g_published_revision = 0;
 
 // The groups the player has hidden, as the settings row stores them: bit i
-// is groups[i], for the first kHiddenBits groups.
-constexpr size_t kHiddenBits = 16;
-
+// is groups[i], for the first kHiddenBits groups (layout_fallback.h).
 uint32_t hidden_bits(const Layout &l) {
     uint32_t bits = 0;
     for (size_t i = 0; i < l.groups.size() && i < kHiddenBits; ++i)
@@ -135,11 +133,17 @@ class HostSink : public ControlsSink {
 
 HostSink g_sink;
 
-// Loads `name` for `form` into g_layout, releasing whatever the router held
-// against the old one first. "" (the Hidden choice) or a failed load leaves
-// no layout.
+// Loads `name` for `form` into g_layout, releasing whatever the router and
+// the mapped binding held against the old one first -- a rotation swaps the
+// layout under the player's fingers, and nothing else would ever lift the
+// keys or mouse buttons a held pad button stood for. "" (the Hidden choice)
+// or a failed load leaves no layout.
 void reload(const std::string &name, Form form) {
     g_router.set_layout(nullptr, g_sink); // releases against the old layout
+    std::vector<TouchAction> released;
+    g_binding.release_all(&released);
+    if (!released.empty() && g_hooks.touch_actions)
+        g_hooks.touch_actions(released);
     g_loaded = true;
     g_loaded_name = name;
     g_loaded_form = form;
@@ -265,7 +269,10 @@ void host_pump(uint64_t now) {
         }
         // The hidden groups follow the row whoever set it: a toggle writes it
         // (group_visibility_changed), and a settings load or reset may too.
-        const uint32_t bits = mods_controls_hidden_groups();
+        // The row belongs to the layout name, not to one form of it, so the
+        // bits are taken as they apply here (hidden_bits_for) and the row is
+        // left alone -- rotating back restores the other form's groups.
+        const uint32_t bits = hidden_bits_for(g_layout, mods_controls_hidden_groups());
         if (bits != hidden_bits(g_layout))
             apply_hidden_bits(g_layout, bits);
     }
