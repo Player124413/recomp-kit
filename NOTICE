@@ -42,6 +42,12 @@ permits its use in software projects; see third_party/soundfonts/generaluser-gs/
 LICENSE and README.md for its source. Apps carry it as general-midi.sf2 to play
 MIDI for a game that ships no instrument bank of its own.
 
+miniz 3.0.2 (third_party/miniz) is Copyright 2013-2014 RAD Game Tools and
+Valve Software and Copyright 2010-2014 Rich Geldreich and Tenacious Software
+LLC, licensed under the MIT License; see third_party/miniz/LICENSE. The
+launcher reads the player's ZIP of their own game and writes save exports
+with it.
+
 SDL3 is fetched at build time from https://github.com/libsdl-org/SDL at a pinned
 release tag and linked statically; it is licensed under the zlib License.
 
