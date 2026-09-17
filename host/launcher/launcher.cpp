@@ -428,6 +428,10 @@ class FolderSource final : public Source {
         return ok;
     }
 
+    bool move_to(const Entry &e, const std::string &target) override {
+        return os_rename(join(root_, e.relative).c_str(), target.c_str()) == 0;
+    }
+
   private:
     void walk(const std::string &relative, std::vector<Entry> *out) {
         const std::string dir = join(root_, relative);
@@ -605,7 +609,7 @@ bool junk(const std::string &relative) {
 } // namespace
 
 ImportOutcome import_game(const Spec &spec, Source &source, const std::string &dest_in,
-                          const std::function<bool(const Progress &)> &progress) {
+                          const std::function<bool(const Progress &)> &progress, bool move) {
     ImportOutcome out;
     const std::string dest = normalize(dest_in);
     std::vector<Entry> all;
@@ -693,6 +697,8 @@ ImportOutcome import_game(const Spec &spec, Source &source, const std::string &d
             needed += e.size;
     }
     uint64_t free_bytes = 0;
+    if (move)
+        needed = 0; // a move needs no room; if one falls back to a copy, the write reports it
     if (os_free_space(dest.c_str(), &free_bytes) == 0 && needed + spec.min_free_bytes > free_bytes) {
         out.result = ImportResult::NoSpace;
         out.bytes_needed = needed + spec.min_free_bytes;
@@ -727,6 +733,13 @@ ImportOutcome import_game(const Spec &spec, Source &source, const std::string &d
             continue;
         }
         mkdirs(parent_of(target));
+        if (move && source.move_to(e, target)) {
+            ++out.files_copied;
+            p.bytes_done += e.size;
+            ++p.files_done;
+            report(true);
+            continue;
+        }
         const std::string part = target + ".part";
         const int fd = os_fd_open(part.c_str(), OS_O_WRONLY | OS_O_CREAT | OS_O_TRUNC);
         if (fd < 0) {

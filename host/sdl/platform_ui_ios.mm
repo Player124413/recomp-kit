@@ -184,11 +184,17 @@ class IosPlatform final : public launcher::Platform {
             const std::string name = entry.path().filename().string();
             if (!entry.is_directory(ec) || name == "game" || name[0] == '.')
                 continue;
-            const std::string root = launcher::find_root(spec, entry.path().string());
-            if (!root.empty())
-                out.push_back(root);
+            // The folder itself, so a move can remove all of it afterwards.
+            if (!launcher::find_root(spec, entry.path().string()).empty())
+                out.push_back(entry.path().string());
         }
         return out;
+    }
+    // A folder the player copied into Documents is moved into Documents/game.
+    bool movable(const launcher::Picked &p) override {
+        const std::string docs = documents_dir() + "/";
+        return !p.path.empty() && p.path.compare(0, docs.size(), docs) == 0 &&
+               p.path.find('/', docs.size()) == std::string::npos && p.path != docs + "game";
     }
     void open_url(const std::string &url) override {
         NSURL *u = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
