@@ -2,6 +2,7 @@
 #include "../../platform/os.h"
 #include "../controls/binding.h"
 #include "../controls/builtin_layouts.h"
+#include "../controls/haptics.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
 #include "../controls/layout_fallback.h"
@@ -1714,6 +1715,16 @@ static void test_binding_release_all_latches_still_held_buttons() {
     CHECK(actions.size() == 1 && actions[0] == "settings");
 }
 
+// The rumble decision's whole truth table: a connected controller always
+// wins (it has its own motors), the device motor only stands in when there
+// is no controller, and neither leaves nothing to rumble.
+static void test_rumble_sink_truth_table() {
+    CHECK(rumble_sink(true, true) == RumbleSink::Controller);
+    CHECK(rumble_sink(true, false) == RumbleSink::Controller);
+    CHECK(rumble_sink(false, true) == RumbleSink::Device);
+    CHECK(rumble_sink(false, false) == RumbleSink::None);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -1773,6 +1784,7 @@ int main() {
     test_binding_aliased_key_is_ref_counted();
     test_binding_aliased_mouse_button_is_ref_counted();
     test_binding_release_all_latches_still_held_buttons();
+    test_rumble_sink_truth_table();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

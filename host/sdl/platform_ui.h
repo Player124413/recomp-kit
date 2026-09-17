@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
 #include <string>
 
 // Hints that must be set before SDL_Init. Desktop: click-through focus, no
@@ -46,3 +47,14 @@ int platform_ui_default_overlay();
 // The guest has exited and the host has torn down: a desktop process returns
 // from main; iOS and Android end the process after SDL_Quit.
 void platform_ui_process_exit(int code);
+
+// A light tap tick for an on-screen control press. iOS: UIImpactFeedbackGenerator
+// (light style). Android: performHapticFeedback(KEYBOARD_TAP). Desktop: no-op.
+void platform_ui_haptic_tap();
+
+// The device's own motor, standing in for game rumble when no controller is
+// connected. `low`/`high` are the guest's low/high-frequency motor strengths
+// (0..65535, as SDL_GetGamepadRumble takes them); 0,0 stops the motor.
+// iOS: a Core Haptics continuous player, intensity max(low, high)/65535.
+// Android: Vibrator.vibrate with an amplitude derived the same way. Desktop: no-op.
+void platform_ui_device_rumble(uint16_t low, uint16_t high);
