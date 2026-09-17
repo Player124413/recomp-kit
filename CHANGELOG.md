@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The desktop app accepts `--launcher`; its argument check printed the usage
+  and exited before the launcher could read the flag.
+
 - `runtime/native_seam.h` lists what a game's native overrides may call: the
   area a fullscreen window fills (`host_display_screen_size`, reported by the
   SDL host from the fullscreen window, which keeps clear of a camera notch, or
