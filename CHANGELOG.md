@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- CI passes on main again after the Siege of Avalon merge: the repository
+  check allows the bundled GeneralUser GS SoundFont, and the Media Foundation
+  topology test is skipped in builds without video decoding, where no file
+  opens as a source.
+
 - Launcher: a long title shrinks to fit (and is cut short only below the body
   size), a path wraps after a slash, Up and Down keep the column when the
   buttons are in two, a screen too short for its text keeps the buttons on

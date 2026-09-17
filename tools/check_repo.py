@@ -16,8 +16,12 @@ def main():
     blocked_dirs = {"original", "analysis", "build", ".venv", ".tools", ".omx", ".claude", ".codex"}
     blocked_ext = {".exe", ".dll", ".dylib", ".o", ".a", ".zip", ".rar", ".pack", ".sf2", ".pem", ".key",
                    ".bin", ".dat", ".popt", ".so", ".wav", ".mp3", ".mpg", ".mp4", ".smk", ".bik"}
+    # Third-party files the kit ships on purpose, each with its licence beside it.
+    allowed = {"third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2"}
     for name in filter(None, names):
         path = ROOT / name
+        if name in allowed:
+            continue
         if path.is_symlink() or Path(name).parts[0] in blocked_dirs or path.suffix.lower() in blocked_ext:
             errors.append(f"Private input or compiled artifact is tracked: {name}")
         if path.name == ".env" or path.name.startswith(".env."):

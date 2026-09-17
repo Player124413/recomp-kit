@@ -11895,7 +11895,7 @@ static void next_event(uint32_t session, uint32_t *type, uint32_t *status) {
 // the failure surfaces as a nil call inside the player, nowhere near here.
 // This needs a real source, so it opens the tone the audio tests carry: the
 // clip has no video track, and the event sequence does not depend on one.
-static void test_media_foundation_topology_ready() {
+[[maybe_unused]] static void test_media_foundation_topology_ready() {
     cpu_reset();
 
     char dir[512];
@@ -12235,7 +12235,10 @@ int main() {
         {"colour control", test_color_control},
         {"FourCC is a format error", test_fourcc_is_a_pixel_format_error},
         {"Media Foundation session", test_media_foundation_session},
+#ifdef RECOMP_HAVE_FFMPEG
+        // Without video decoding (the MSVC-ABI build) no file opens as a source.
         {"Media Foundation topology ready", test_media_foundation_topology_ready},
+#endif
         {"dx_reset", test_reset},
     };
     for (auto &t : tests) {
