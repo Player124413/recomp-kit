@@ -451,28 +451,38 @@ uint32_t address_of(const X86 *c, const Operand &o) {
 
 struct Fault {};
 
-uint32_t load(const X86 *c, const Operand &o) {
-    switch (o.kind) {
-    case 1:
+uint32_t load_mem(const X86 *c, const Operand &o);
+
+// A register or an immediate is an array read; only memory reaches the
+// out-of-line path, which is the one with an address to form and check.
+inline uint32_t load(const X86 *c, const Operand &o) {
+    if (__builtin_expect(o.kind == 1, 1))
         return c->r[o.reg];
-    case 3:
+    if (o.kind == 3)
         return (uint32_t)o.disp;
-    default: {
-        uint32_t a = address_of(c, o);
-        if (!readable(a, 4)) {
-            snprintf(g_error, sizeof g_error, "read of %08x outside guest memory", a);
-            throw Fault{};
-        }
-        return rd32(a);
-    }
-    }
+    return load_mem(c, o);
 }
 
-void store(X86 *c, const Operand &o, uint32_t v) {
-    if (o.kind == 1) {
+uint32_t load_mem(const X86 *c, const Operand &o) {
+    uint32_t a = address_of(c, o);
+    if (!readable(a, 4)) {
+        snprintf(g_error, sizeof g_error, "read of %08x outside guest memory", a);
+        throw Fault{};
+    }
+    return rd32(a);
+}
+
+void store_mem(X86 *c, const Operand &o, uint32_t v);
+
+inline void store(X86 *c, const Operand &o, uint32_t v) {
+    if (__builtin_expect(o.kind == 1, 1)) {
         c->r[o.reg] = v;
         return;
     }
+    store_mem(c, o, v);
+}
+
+void store_mem(X86 *c, const Operand &o, uint32_t v) {
     uint32_t a = address_of(c, o);
     if (!readable(a, 4)) {
         snprintf(g_error, sizeof g_error, "write of %08x outside guest memory", a);
@@ -633,11 +643,15 @@ bool condition(const X86 *c, const Flags &f, uint8_t cc) {
 
 // Runs from the routine's first instruction to its RET.
 void run(X86 *c, const Routine &r) {
-    uint32_t pc = 0;
+    // build() ends a routine at a RET or at a JMP nothing branches past, and
+    // every branch target is an instruction of this routine, so the stream
+    // can be walked as a pointer with no bound to test per instruction.
+    const Ins *const code = r.code.data();
+    const Ins *ip = code;
     Flags f;
     for (;;) {
-        const Ins &in = r.code[pc];
-        uint32_t next = pc + 1;
+        const Ins &in = *ip;
+        const Ins *next = ip + 1;
         switch (in.op) {
         case NOP:
             break;
@@ -656,37 +670,46 @@ void run(X86 *c, const Routine &r) {
         case LEA:
             store(c, in.dst, address_of(c, in.src));
             break;
-        case ADD:
-        case OR:
-        case AND:
-        case SUB:
-        case XOR:
-        case CMP:
-        case TEST: {
-            uint32_t a = load(c, in.dst), b = load(c, in.src), res;
-            switch (in.op) {
-            case ADD:
-                res = a + b;
-                break;
-            case OR:
-                res = a | b;
-                break;
-            case AND:
-            case TEST:
-                res = a & b;
-                break;
-            case SUB:
-            case CMP:
-                res = a - b;
-                break;
-            default: // XOR
-                res = a ^ b;
-                break;
-            }
-            // TEST is AND without the store, CMP is SUB without it.
-            f = Flags{in.op == TEST ? AND : in.op, a, b, res, 0, 0};
-            if (in.op != CMP && in.op != TEST)
-                store(c, in.dst, res);
+        // One case per operation: the shape is decided when the routine is
+        // decoded, so running an instruction is one dispatch, not two.
+        case ADD: {
+            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a + b;
+            f = Flags{ADD, a, b, res, 0, 0};
+            store(c, in.dst, res);
+            break;
+        }
+        case OR: {
+            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a | b;
+            f = Flags{OR, a, b, res, 0, 0};
+            store(c, in.dst, res);
+            break;
+        }
+        case AND: {
+            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a & b;
+            f = Flags{AND, a, b, res, 0, 0};
+            store(c, in.dst, res);
+            break;
+        }
+        case SUB: {
+            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a - b;
+            f = Flags{SUB, a, b, res, 0, 0};
+            store(c, in.dst, res);
+            break;
+        }
+        case XOR: {
+            uint32_t a = load(c, in.dst), b = load(c, in.src), res = a ^ b;
+            f = Flags{XOR, a, b, res, 0, 0};
+            store(c, in.dst, res);
+            break;
+        }
+        case CMP: { // SUB without the store
+            uint32_t a = load(c, in.dst), b = load(c, in.src);
+            f = Flags{CMP, a, b, a - b, 0, 0};
+            break;
+        }
+        case TEST: { // AND without the store
+            uint32_t a = load(c, in.dst), b = load(c, in.src);
+            f = Flags{AND, a, b, a & b, 0, 0};
             break;
         }
         case IMUL: {
@@ -731,18 +754,14 @@ void run(X86 *c, const Routine &r) {
             c->r[R_ESP] += in.ret_pop;
             return;
         case JMP:
-            next = in.target_index;
+            next = code + in.target_index;
             break;
         case JCC:
             if (condition(c, f, in.cond))
-                next = in.target_index;
+                next = code + in.target_index;
             break;
         }
-        pc = next;
-        if (pc >= r.code.size()) {
-            snprintf(g_error, sizeof g_error, "ran past the end of the routine at %08x", r.start);
-            throw Fault{};
-        }
+        ip = next;
     }
 }
 
