@@ -308,7 +308,9 @@ def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modul
                    allow_unmodelled=None):
     """Translate the image into `stage`, then each auxiliary module (game.toml
     [modules.aux.<key>]) into `stage/aux-<key>`, which cmake/Translate.cmake
-    compiles into its own library."""
+    compiles into its own library. A module is translated under the same
+    --allow-table-gaps/--allow-unmodelled acceptances as the image: they are
+    the build's, and a module's listing has the same gaps a game's has."""
     command = [sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(stage),
                "--game", str(game_dir),
                "--report", str(Path(build_root) / "recomp/translate-report.json")]
@@ -320,10 +322,14 @@ def run_translator(stage, game_dir, build_root, allow_table_gaps=None, aux_modul
     for key in aux_modules:
         out = Path(stage) / ("aux-" + key)
         out.mkdir()
-        subprocess.run([sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(out),
-                        "--game", str(game_dir), "--module", key,
-                        "--report", str(Path(build_root) / ("recomp/translate-%s-report.json" % key))],
-                       cwd=ROOT, check=True)
+        module = [sys.executable, str(ROOT / "tools/recomp/translate.py"), "--out", str(out),
+                  "--game", str(game_dir), "--module", key,
+                  "--report", str(Path(build_root) / ("recomp/translate-%s-report.json" % key))]
+        if allow_table_gaps:
+            module += ["--allow-table-gaps", allow_table_gaps]
+        if allow_unmodelled:
+            module += ["--allow-unmodelled", allow_unmodelled]
+        subprocess.run(module, cwd=ROOT, check=True)
 
 
 def texture_pack(game_dir, build_root):

@@ -183,6 +183,20 @@ def test_allow_table_gaps_reaches_the_translator(tmp_path, monkeypatch):
     assert calls[0][calls[0].index("--allow-table-gaps") + 1] == "switch 004ab2af"
 
 
+def test_acceptances_reach_each_auxiliary_module(tmp_path, monkeypatch):
+    """A module's listing has the same gaps a game's has, so the build's
+    acceptances cover it too."""
+    calls = []
+    monkeypatch.setattr(build.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    (tmp_path / "stage").mkdir()
+    build.run_translator(tmp_path / "stage", tmp_path, tmp_path / "build",
+                         allow_table_gaps="switch 1003c81c", aux_modules=("blit",),
+                         allow_unmodelled="SSE in the math library")
+    assert len(calls) == 2
+    assert calls[1][calls[1].index("--allow-table-gaps") + 1] == "switch 1003c81c"
+    assert calls[1][calls[1].index("--allow-unmodelled") + 1] == "SSE in the math library"
+
+
 def test_no_table_gap_flag_by_default(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(build.subprocess, "run", lambda cmd, **kw: calls.append(cmd))

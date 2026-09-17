@@ -70,6 +70,13 @@ if(POP_HAVE_GEN)
     set_target_properties(${aux_target} PROPERTIES
       ARCHIVE_OUTPUT_DIRECTORY ${POP_OUT} OUTPUT_NAME ${aux_target})
     target_include_directories(${aux_target} PRIVATE ${dir} ${POP_GEN_DIR} ${POP_ROOT} ${POP_ROOT}/runtime)
+    # A module's own funcs.h reads the same overrides header, so a native
+    # replacement can stand in for one of its functions as for the image's.
+    if(RECOMP_OVERRIDE_HEADER)
+      target_compile_definitions(${aux_target} PRIVATE
+        RECOMP_OVERRIDE_HEADER="${RECOMP_OVERRIDE_HEADER}")
+      target_include_directories(${aux_target} PRIVATE ${_override_dir})
+    endif()
     target_compile_options(${aux_target} PRIVATE ${POP_WARN_GEN})
     pop_optimize(${aux_target} 2)
     list(APPEND POP_GEN_AUX_TARGETS ${aux_target})
