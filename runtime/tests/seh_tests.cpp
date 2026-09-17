@@ -211,6 +211,47 @@ static void chain_walk() {
     heap_free(info);
 }
 
+// A call into the first 64 KB faults on Windows, and the program's handlers
+// see an access violation: an execute fault at the target, raised at the
+// call's return address. A nil interface's vtable reads back as zero, so this
+// is what calling through one does. A call to any other unknown address is a
+// translation gap, not a fault, and no handler sees it.
+static uint32_t null_calls;
+static constexpr uint32_t NULL_CALL_RETURN = 0x00401234;
+static void record_null_call(X86 *, uint32_t record, uint32_t) {
+    ++null_calls;
+    CHECK(rd32(record) == 0xc0000005u);
+    CHECK(rd32(record + 4) == 0);
+    CHECK(rd32(record + 12) == NULL_CALL_RETURN);
+    CHECK(rd32(record + 16) == 2);
+    CHECK(rd32(record + 20) == 8);
+    CHECK(rd32(record + 24) == 0x64);
+}
+static void null_call_faults() {
+    X86 c;
+    loader_init_context(&c);
+    clear_observations();
+    null_calls = 0;
+    uint32_t reg = c.r[R_ESP] - 32;
+    registration(&c, reg, 0xffffffff, handler_search);
+    c.r[R_ESP] = reg - 36;
+    wr32(c.r[R_ESP], NULL_CALL_RETURN); // the CALL's return address
+    const uint32_t esp = c.r[R_ESP];
+    recomp_seh_test_unhandled_hook(record_null_call);
+    recomp_unknown_call(&c, 0x64);
+    CHECK(visits == 1 && seen[0] == reg && null_calls == 1);
+    // Taken by nothing - here only because the test hook stands in for the
+    // abort - the call returns zero, as it always did.
+    CHECK(c.r[R_ESP] == esp + 4 && c.eip == NULL_CALL_RETURN && c.r[R_EAX] == 0);
+    clear_observations();
+    c.r[R_ESP] = esp;
+    recomp_unknown_call(&c, 0x00c00000);
+    CHECK(visits == 0 && null_calls == 1);
+    CHECK(c.r[R_ESP] == esp + 4 && c.eip == NULL_CALL_RETURN);
+    recomp_seh_test_unhandled_hook(nullptr);
+    wr32(c.fs_base, 0xffffffff);
+}
+
 static void unwind_and_leave() {
     X86 c;
     loader_init_context(&c);
@@ -627,6 +668,7 @@ int main(int argc, char **argv) {
     }
     delay_load_return();
     chain_walk();
+    null_call_faults();
     unwind_and_leave();
     landing();
     adopted_landing();

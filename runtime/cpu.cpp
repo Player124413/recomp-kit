@@ -174,6 +174,26 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
         return;
     }
     uint32_t ret = rd32(c->r[R_ESP]);
+    // Windows maps nothing in the first 64 KB, so a call there - through a nil
+    // interface, whose vtable reads back as zero - faults, and the program's
+    // own handlers see an access violation. A Delphi program turns that into
+    // EAccessViolation, and a try/except around the call carries on: the
+    // original drew speech with a surface that could be nil and relied on
+    // exactly that. Returning 0 instead ran on with the garbage and aborted at
+    // the next jump through it. Only when no handler takes the fault does the
+    // call return as before.
+    if (target < 0x10000) {
+        // EXCEPTION_ACCESS_VIOLATION's two parameters: an execute fault (8) at
+        // the target. They sit below the stack pointer, which the dispatcher
+        // copies into its own record before any handler runs.
+        const uint32_t info = c->r[R_ESP] - 16;
+        wr32(info, 8);
+        wr32(info + 4, target);
+        log_once("null-call", "call to %08x (return=%08x): raising an access violation, as Windows "
+                              "would, for the guest's handlers",
+                 target, ret);
+        recomp_seh_raise(c, 0xc0000005u, 0, 2, info);
+    }
     char key[64];
     snprintf(key, sizeof key, "unknown-call:%08x", target);
     // Bounded for the same reason log_once is: a guest that generates code

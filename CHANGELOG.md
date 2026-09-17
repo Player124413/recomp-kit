@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A call into the first 64 KB raises an access violation through the guest's
+  own exception handlers, as it faults on Windows, instead of returning 0. A
+  call through a nil interface reads a zero vtable and lands there; a Delphi
+  program turns the fault into EAccessViolation and a try/except around the
+  call carries on, and Siege of Avalon relies on that around draws whose
+  surface can be nil. Returning 0 ran on with the garbage and aborted at the
+  next jump through it - on the iPad at every start, and on the Mac now and
+  then at exit. Only when no handler takes the fault does the call return 0
+  as before. `seh_tests` checks the record and that other unknown targets are
+  not faults.
+
 - DirectDraw write tracking keeps one baseline copy per surface instead of a
   copy per Lock and a hash of the whole surface at every final Unlock. A
   program that draws text a glyph at a time locks its whole back buffer for
