@@ -2063,6 +2063,10 @@ extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) 
     host_present(argb, w, h, 32, nullptr, w * 4);
     host_present_seal_window();
 }
+// A GPU-drawn window frame reaches the captures the same way, read back.
+extern "C" void host_display_present_gpu2d(uint32_t id, int w, int h) {
+    host_gpu2d_present_readback(id, w, h);
+}
 
 namespace {
 

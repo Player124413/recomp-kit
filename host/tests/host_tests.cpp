@@ -5569,6 +5569,62 @@ static void test_presenter_real_offscreen(D3DRenderer *renderer) {
     host_present_stop();
 }
 
+// The Direct3D 11 hardware path's host side on the real device: a texture
+// drawn a texel a pixel into a cleared target, then blended; read back, and
+// published through the presenter as a window frame.
+static void test_gpu2d_pixels(D3DRenderer *) {
+    host_present_start_offscreen(4, 4);
+    CHECK_EQ(host_gpu2d_available(), 1);
+    const uint32_t tex = 0x7001, target = 0x7002;
+    const uint8_t texels[16] = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 200, 100, 50, 128};
+    host_gpu2d_texture(tex, 2, 2, texels, 0, 0, 2, 2);
+    const float grey[4] = {0.5f, 0.5f, 0.5f, 1};
+    host_gpu2d_clear(target, 4, 4, grey);
+    HostGpu2DQuad copy{1, 1, 2, 2, 0, 0, 1, 1, 0, 1, 0, 1, 0};
+    CHECK_EQ(host_gpu2d_draw(target, 4, 4, tex, &copy), 1);
+    // The bottom-right texel alone, over the top-left pixel, alpha-blended.
+    HostGpu2DQuad blend{0, 0, 1, 1, 0.5, 0.5, 0.5, 0.5, 1, 2, 3, 0, 1};
+    CHECK_EQ(host_gpu2d_draw(target, 4, 4, tex, &blend), 1);
+    CHECK_EQ(host_gpu2d_draw(target, 4, 4, 0x7fff, &copy), 0); // no such texture
+    uint8_t out[64] = {};
+    CHECK_EQ(host_gpu2d_readback(target, 4, 4, out), 1);
+    auto at = [&](int x, int y) { return out + (y * 4 + x) * 4; };
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+            const uint8_t *p = at(x, y);
+            if (x == 0 && y == 0) {
+                // 200 * 128/255 + 128 * 127/255, and so on, to within rounding.
+                CHECK(std::abs(int(p[0]) - 164) <= 1);
+                CHECK(std::abs(int(p[1]) - 114) <= 1);
+                CHECK(std::abs(int(p[2]) - 89) <= 1);
+                continue;
+            }
+            const bool inside = x >= 1 && x <= 2 && y >= 1 && y <= 2;
+            const uint8_t *want = inside ? texels + ((y - 1) * 2 + (x - 1)) * 4 : nullptr;
+            for (int c = 0; c < 3; ++c)
+                CHECK(std::abs(int(p[c]) - int(want ? want[c] : 128)) <= (want ? 0 : 1));
+        }
+    // A window frame straight from the target.
+    const uint64_t before = host_present_unique_completed();
+    host_display_present_gpu2d(target, 4, 4);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (host_present_unique_completed() == before && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    CHECK(host_present_unique_completed() > before);
+    uint8_t shown[64] = {};
+    CHECK(host_present_test_read_rgba(shown, sizeof shown));
+    for (int i = 0; i < 16; ++i)
+        for (int c = 0; c < 3; ++c)
+            CHECK_EQ(shown[i * 4 + c], out[i * 4 + c]);
+    // A reset drops every copy and says so.
+    const uint32_t generation = host_gpu2d_generation();
+    host_gpu2d_reset();
+    CHECK(host_gpu2d_generation() != generation);
+    CHECK_EQ(host_gpu2d_readback(target, 4, 4, out), 0);
+    host_present_stop();
+    CHECK_EQ(host_gpu2d_available(), 0);
+}
+
 static void test_presenter_menu_ui_and_movie_pixels() {
     for (auto cls : {HOST_SCREEN_MENU, HOST_SCREEN_FMV}) {
         host_present_test_begin();
@@ -9122,6 +9178,7 @@ int main(int argc, char **argv) {
             void (*fn)(D3DRenderer *);
         } gpu[] = {
             {"offscreen presenter", test_presenter_real_offscreen},
+            {"Direct3D 11 hardware path", test_gpu2d_pixels},
             {"presenter world and overlay", test_presenter_incremental_world_and_overlay},
             {"wide scene clipping", test_wide_scene_pixels},
             {"native tile borders", test_native_tile_borders},

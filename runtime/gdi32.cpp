@@ -21,6 +21,9 @@ struct PresentedSurface {
     bool fullscreen = false;
     uint64_t last_present_ns = 0;
     std::vector<uint32_t> pixels;
+    // A presenter whose frame is on the GPU: the pixels are fetched only when
+    // something has to be composed with them.
+    bool (*fetch)(uint32_t owner, uint32_t *argb, int w, int h) = nullptr;
 };
 PresentedSurface &presented_surface() {
     static PresentedSurface value;
@@ -1253,6 +1256,40 @@ void gdi_composite_windows(uint32_t *argb, int w, int h) {
 // clock. A retained DC can be drawn into across pump iterations, so ReleaseDC
 // alone is insufficient. Never change primary pixels: borrow its readback as
 // the base, then composite into a private ARGB snapshot.
+namespace {
+// Where a presented snapshot lands: the whole screen, or its window's client area.
+struct Placement {
+    int32_t x = 0, y = 0;
+    int w = 0, h = 0;
+    bool visible = true;
+};
+Placement placement(uint32_t hwnd, bool fullscreen, int screen_w, int screen_h) {
+    Placement p{0, 0, screen_w, screen_h, true};
+    if (!fullscreen && hwnd) {
+        auto *window = user32::find_window(hwnd);
+        p.visible = window && window->visible;
+        if (window) {
+            user32::client_origin(window->hwnd, &p.x, &p.y);
+            p.w = window->w;
+            p.h = window->h;
+        }
+    }
+    return p;
+}
+// The snapshot's pixels, fetched from its presenter if it keeps them elsewhere.
+bool presented_pixels(PresentedSurface &s) {
+    if (s.pixels.size() == size_t(s.w) * s.h)
+        return true;
+    if (!s.fetch || s.w <= 0 || s.h <= 0)
+        return false;
+    s.pixels.resize(size_t(s.w) * s.h);
+    if (s.fetch(s.owner, s.pixels.data(), s.w, s.h))
+        return true;
+    s.pixels.clear();
+    return false;
+}
+} // namespace
+
 void gdi_present_windows(bool refresh) {
     auto surfaces = visible_surfaces();
     auto &presented = presented_surface();
@@ -1284,31 +1321,27 @@ void gdi_present_windows(bool refresh) {
         ddraw_gdi_end_primary(primary);
         return;
     }
-    // Where the snapshot lands: the whole screen, or its window's client area.
-    int32_t x = 0, y = 0;
-    int width = w, height = h;
-    bool visible = true;
-    if (presented.owner && !presented.fullscreen && presented.hwnd) {
-        auto *window = user32::find_window(presented.hwnd);
-        visible = window && window->visible;
-        if (window) {
-            user32::client_origin(window->hwnd, &x, &y);
-            width = window->w;
-            height = window->h;
-        }
-    }
+    const Placement where = presented.owner ? placement(presented.hwnd, presented.fullscreen, w, h)
+                                            : Placement{0, 0, w, h, true};
+    const int32_t x = where.x, y = where.y;
+    const int width = where.w, height = where.h;
     // A snapshot the screen's own size, covering all of it, is drawn over
     // everything below, so the screen is that snapshot: no base to read, no
-    // window to compose under it, and no copy to make of it.
-    if (presented.owner && visible && x == 0 && y == 0 && width == w && height == h &&
-        presented.w == w && presented.h == h && presented.pixels.size() == size_t(w) * h) {
+    // window to compose under it, and no copy to make of it. A window that
+    // changed under it changed nothing visible. A refresh repeats the frame -
+    // the settings page is drawn over repeats too - fetching it from the GPU
+    // if that is where it is, which happens only while the program has
+    // stopped presenting.
+    if (presented.owner && where.visible && x == 0 && y == 0 && width == w && height == h &&
+        presented.w == w && presented.h == h) {
         ddraw_gdi_end_primary(primary);
         for (auto *window : surfaces)
             window->surface.dirty = false;
-        if (!mf_owns_the_screen())
+        if (refresh && !mf_owns_the_screen() && presented_pixels(presented))
             host_display_present_window(presented.pixels.data(), w, h);
         return;
     }
+    const bool visible = where.visible && (!presented.owner || presented_pixels(presented));
     std::vector<uint32_t> pixels(size_t(w) * h, 0xff000000);
     if (primary) {
         for (int py = 0; py < h; ++py)
@@ -1366,9 +1399,39 @@ extern "C" void gdi_present_surface(uint32_t owner, uint32_t hwnd, const uint32_
     s.h = h;
     s.fullscreen = fullscreen;
     s.pixels.assign(argb, argb + size_t(w) * h);
+    s.fetch = nullptr;
     s.last_present_ns = 0;
     gdi_present_windows(true);
     s.last_present_ns = os_monotonic_ns();
+}
+extern "C" void gdi_present_external(uint32_t owner, uint32_t hwnd, int w, int h, bool fullscreen,
+                                     bool (*fetch)(uint32_t, uint32_t *, int, int)) {
+    if (!owner || w <= 0 || h <= 0)
+        return;
+    auto &s = presented_surface();
+    s.owner = owner;
+    s.hwnd = hwnd;
+    s.w = w;
+    s.h = h;
+    s.fullscreen = fullscreen;
+    s.pixels.clear();
+    s.fetch = fetch;
+    s.last_present_ns = os_monotonic_ns();
+}
+extern "C" bool gdi_surface_covers_screen(uint32_t owner, uint32_t hwnd, int w, int h,
+                                          bool fullscreen) {
+    auto &s = presented_surface();
+    // The screen is the snapshot's only while this presenter owns it; before
+    // its first frame the DirectDraw primary or the desktop may be in charge.
+    if (!owner || s.owner != owner || s.hwnd != hwnd || s.fullscreen != fullscreen ||
+        !surface_owns_screen() || mf_owns_the_screen())
+        return false;
+    uint32_t sw = 0, sh = 0, bpp = 32;
+    win32_display_mode(&sw, &sh, &bpp);
+    if (int(sw) != w || int(sh) != h)
+        return false;
+    const Placement where = placement(hwnd, fullscreen, w, h);
+    return where.visible && where.x == 0 && where.y == 0 && where.w == w && where.h == h;
 }
 extern "C" void gdi_forget_surface(uint32_t owner) {
     auto &s = presented_surface();

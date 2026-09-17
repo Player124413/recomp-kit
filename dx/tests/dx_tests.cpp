@@ -15,6 +15,7 @@
 #include "../com.h"
 #include "../dx.h"
 #include "../host_api.h"
+#include "../../runtime/display_seam.h"
 #include "../riff.h"
 #include "../video_frame.h"
 #include "../ddraw.h"
@@ -131,6 +132,120 @@ void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *pal
 
 void host_display_present_window(const uint32_t *argb, int w, int h) {
     host_present(argb, w, h, 32, nullptr, w * 4);
+}
+
+// A host GPU for the Direct3D 11 hardware path, in software: textures and
+// targets are RGBA8 arrays, a rectangle samples the nearest texel at each
+// covered pixel centre and blends as gpu.h's factors say. It is what the shim
+// may assume of host/gpu2d.cpp; host_tests checks the real one on Metal.
+bool g_gpu2d_on = false;
+uint32_t g_gpu2d_generation = 1;
+struct FakeGpuSurface {
+    int w = 0, h = 0;
+    std::vector<uint8_t> rgba;
+};
+std::map<uint32_t, FakeGpuSurface> g_gpu2d;
+int g_gpu2d_draws = 0, g_gpu2d_uploads = 0, g_gpu2d_readbacks = 0, g_gpu2d_presents = 0;
+static FakeGpuSurface &fake_gpu_surface(uint32_t id, int w, int h) {
+    FakeGpuSurface &s = g_gpu2d[id];
+    if (s.w != w || s.h != h) {
+        s.w = w;
+        s.h = h;
+        s.rgba.assign(size_t(w) * h * 4, 0);
+    }
+    return s;
+}
+int host_gpu2d_available(void) {
+    return g_gpu2d_on;
+}
+uint32_t host_gpu2d_generation(void) {
+    return g_gpu2d_generation;
+}
+void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba, int x, int y, int rw,
+                        int rh) {
+    ++g_gpu2d_uploads;
+    FakeGpuSurface &s = fake_gpu_surface(id, w, h);
+    for (int r = 0; r < rh; ++r)
+        memcpy(s.rgba.data() + (size_t(y + r) * w + x) * 4, rgba + size_t(r) * rw * 4,
+               size_t(rw) * 4);
+}
+void host_gpu2d_forget(uint32_t id) {
+    g_gpu2d.erase(id);
+}
+void host_gpu2d_reset(void) {
+    g_gpu2d.clear();
+    ++g_gpu2d_generation;
+}
+void host_gpu2d_clear(uint32_t id, int w, int h, const float rgba[4]) {
+    FakeGpuSurface &s = fake_gpu_surface(id, w, h);
+    for (size_t i = 0; i < s.rgba.size(); ++i)
+        s.rgba[i] = uint8_t(std::lround(rgba[i % 4] * 255));
+}
+int host_gpu2d_draw(uint32_t target, int w, int h, uint32_t texture, const HostGpu2DQuad *q) {
+    auto src = g_gpu2d.find(texture);
+    if (src == g_gpu2d.end())
+        return 0;
+    ++g_gpu2d_draws;
+    const FakeGpuSurface tex = src->second;
+    FakeGpuSurface &dst = fake_gpu_surface(target, w, h);
+    auto factor = [](int f, int c, const float *s, const float *d) -> float {
+        switch (f) {
+        case 0: return 0;
+        case 1: return 1;
+        case 2: return s[3];
+        case 3: return 1 - s[3];
+        case 4: return d[3];
+        case 5: return 1 - d[3];
+        case 6: return s[c];
+        case 7: return 1 - s[c];
+        case 8: return d[c];
+        default: return 1 - d[c];
+        }
+    };
+    for (int py = int(std::ceil(q->y - 0.5)); py < int(std::ceil(q->y + q->h - 0.5)); ++py)
+        for (int px = int(std::ceil(q->x - 0.5)); px < int(std::ceil(q->x + q->w - 0.5)); ++px) {
+            if (px < 0 || py < 0 || px >= w || py >= h)
+                continue;
+            const int tx = int(std::floor((q->u + (px + 0.5 - q->x) / q->w * q->uw) * tex.w));
+            const int ty = int(std::floor((q->v + (py + 0.5 - q->y) / q->h * q->uh) * tex.h));
+            const uint8_t *t = tex.rgba.data() + (size_t(ty) * tex.w + tx) * 4;
+            uint8_t *o = dst.rgba.data() + (size_t(py) * w + px) * 4;
+            if (!q->blend) {
+                memcpy(o, t, 4);
+                continue;
+            }
+            float sc[4], dc[4], out[4];
+            for (int c = 0; c < 4; ++c) {
+                sc[c] = t[c] / 255.f;
+                dc[c] = o[c] / 255.f;
+            }
+            for (int c = 0; c < 4; ++c)
+                out[c] = sc[c] * factor(c == 3 ? q->src_alpha : q->src_rgb, c, sc, dc) +
+                         dc[c] * factor(c == 3 ? q->dst_alpha : q->dst_rgb, c, sc, dc);
+            for (int c = 0; c < 4; ++c)
+                o[c] = uint8_t(std::lround(std::clamp(out[c], 0.f, 1.f) * 255));
+        }
+    return 1;
+}
+int host_gpu2d_readback(uint32_t id, int w, int h, uint8_t *rgba) {
+    auto it = g_gpu2d.find(id);
+    if (it == g_gpu2d.end() || it->second.w != w || it->second.h != h)
+        return 0;
+    ++g_gpu2d_readbacks;
+    memcpy(rgba, it->second.rgba.data(), it->second.rgba.size());
+    return 1;
+}
+void host_display_present_gpu2d(uint32_t id, int w, int h) {
+    ++g_gpu2d_presents;
+    auto it = g_gpu2d.find(id);
+    if (it == g_gpu2d.end())
+        return;
+    std::vector<uint32_t> argb(size_t(w) * h);
+    for (size_t i = 0; i < argb.size(); ++i) {
+        const uint8_t *c = it->second.rgba.data() + i * 4;
+        argb[i] = 0xff000000u | uint32_t(c[0]) << 16 | uint32_t(c[1]) << 8 | c[2];
+    }
+    host_present(argb.data(), w, h, 32, nullptr, w * 4);
 }
 
 void host_set_display_mode(int w, int h, int bpp) {
@@ -10988,8 +11103,10 @@ static void test_d3d11_alpha_pixels() {
 // blend that changes nothing but forces the loop, then from a B8G8R8A8
 // texture (the copy with a swizzle) and with a point sampler: four identical
 // presents, all equal to the texels themselves.
-static void test_d3d11_texel_copy() {
+static void test_d3d11_texel_copy(bool hardware) {
     cpu_reset();
+    g_gpu2d_on = hardware;
+    g_gpu2d_draws = g_gpu2d_uploads = g_gpu2d_readbacks = g_gpu2d_presents = 0;
     gm_zero(sc(0), 0x4000);
     uint32_t live = com_live_count();
     uint32_t sd = sc(0x100);
@@ -11223,8 +11340,40 @@ static void test_d3d11_texel_copy() {
         CHECK_EQ(other->pitch, copy.pitch);
         CHECK(other->pixels == copy.pixels);
     }
+    if (hardware) {
+        // The first present found the screen not yet the swap chain's: it read
+        // the target back, and the next frame was drawn in software. From the
+        // second present on the screen is the swap chain's, and the last two
+        // frames were drawn and presented on the GPU.
+        CHECK_EQ(g_gpu2d_draws, 3);
+        CHECK_EQ(g_gpu2d_presents, 2);
+        CHECK_EQ(g_gpu2d_readbacks, 1);
+        // A quarter pixel off the centres is not a copy: the software path
+        // takes it, reading the target back first, and gets the same answer
+        // as without a host.
+        matrix_call("D3DXMatrixTranslation",
+                    {sc(0x400), float_word(-0.5f + 0.0625f), float_word(-0.25f), 0});
+        matrix_call("D3DXMatrixMultiplyTranspose", {sc(0x500), sc(0x4c0), sc(0x400)});
+        CHECK_EQ(call_method(ctx, 14, {cb, 0, 4, 0, sc(0x340)}), S_OK);
+        memcpy(gm_ptr(rd32(sc(0x340))), gm_ptr(sc(0x500)), 128);
+        call_method(ctx, 15, {cb, 0});
+        const int readbacks = g_gpu2d_readbacks;
+        const Present shifted = draw(srv_rgba, point, 0);
+        CHECK_EQ(g_gpu2d_draws, 3);
+        CHECK(g_gpu2d_readbacks > readbacks);
+        g_gpu2d_on = false;
+        const Present reference = draw(srv_rgba, point, 0);
+        CHECK(shifted.pixels == reference.pixels);
+    }
+    g_gpu2d_on = false;
     cleanup();
     CHECK_EQ(com_live_count(), live);
+}
+static void test_d3d11_texel_copy_software() {
+    test_d3d11_texel_copy(false);
+}
+static void test_d3d11_texel_copy_hardware() {
+    test_d3d11_texel_copy(true);
 }
 static void test_d3d11_resource_bounds() {
     cpu_reset();
@@ -11579,7 +11728,8 @@ int main() {
         {"D3D11 resource bounds", test_d3d11_resource_bounds},
         {"D3D11 quad pixels", test_d3d11_quad_pixels},
         {"D3D11 alpha pixels", test_d3d11_alpha_pixels},
-        {"D3D11 texel copy", test_d3d11_texel_copy},
+        {"D3D11 texel copy", test_d3d11_texel_copy_software},
+        {"D3D11 hardware path", test_d3d11_texel_copy_hardware},
         {"overlapping self-blit", test_overlapping_self_blit},
         {"lock write tracking", test_lock_write_tracking},
         {"D3D11 scaffold", test_d3d11_scaffold},

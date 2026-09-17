@@ -234,6 +234,24 @@ extern "C" int host_display_offer_mode(int w, int h, int bpp) {
 
 // VCL-only frames have no DirectDraw recorder to seal them. Stage an owned
 // RGBA copy and publish it through the same immutable presenter mailbox.
+bool host_gpu2d_stage(uint32_t id, int w, int h);
+// A window frame drawn on the GPU (host/gpu2d.cpp): the render target is copied
+// into the frame on the device, with no pixels on the CPU at all.
+extern "C" void host_display_present_gpu2d(uint32_t id, int w, int h) {
+    if (w <= 0 || h <= 0)
+        return;
+    if (g_mode_w != w || g_mode_h != h || g_mode_bpp != 32)
+        host_set_display_mode(w, h, 32);
+    host_present_first_write();
+    if (!host_gpu2d_stage(id, w, h))
+        return;
+    {
+        ReportLock held;
+        ++g_present_count;
+    }
+    host_page_overlay(nullptr, w, h, 32, w * 4, nullptr);
+    host_present_seal_window();
+}
 extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) {
     if (!argb || w <= 0 || h <= 0)
         return;

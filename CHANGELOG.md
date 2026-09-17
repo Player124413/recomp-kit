@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Direct3D 11 draws the GPU can reproduce exactly go to the GPU
+  (`host/gpu2d.cpp`). A draw that is two triangles tiling an axis-aligned
+  rectangle, a texel to a pixel, inside its texture, is a copy with a blend,
+  and the compositor program draws it into a GPU copy of the render target;
+  textures are uploaded, converted to RGBA8 and only where they changed, when
+  a draw samples them. At `Present` the back buffer is copied into the
+  presenter's frame on the device when GDI says the swap chain has the whole
+  screen (`gdi_surface_covers_screen`, `gdi_present_external`), and GDI reads
+  it back only if it has to compose over it. Everything else - other draws,
+  `Map`, `UpdateSubresource` into a target, windowed presents - reads the
+  target back and stays on the software rasterizer, which remains the
+  reference; a target read back three frames running stays there.
+  `RECOMP_D3D11_SOFTWARE=1` turns the path off. Siege of Avalon's frame was a
+  1920x1080 rasterized copy and three more full-frame copies on the CPU at
+  every present; it is now an upload when the game changes the picture and a
+  GPU copy per present.
+  `dx_tests` runs the texel-copy scene through a software double of the host
+  and checks the fallback; `host_tests` checks the host side on Metal.
+
 - The rasterizer's texel copy converts every 16-bit format, the packed R16
   decode included, through whole-word tables, and swaps 8-bit channel order
   word by word. Siege of Avalon's main layer is R16 drawn with the packed

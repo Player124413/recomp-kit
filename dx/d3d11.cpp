@@ -90,6 +90,7 @@
 #include "../runtime/display_seam.h"
 #include "../runtime/memory.h"
 #include "../runtime/imports.h"
+#include "../platform/os.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -111,6 +112,8 @@ void destroy(ComObj *obj) {
         return;
     Object o = std::move(it->second);
     objects().erase(it);
+    if (o.host_valid || o.host_owned)
+        host_gpu2d_forget(obj->id);
     if (o.iface == IF_DXGI_SWAP)
         gdi_forget_surface(obj->id);
     if (o.data)
@@ -136,6 +139,7 @@ Object *from(uint32_t view, ComIface iface) {
 ComObj *create(ComKind kind, ComIface iface, uint32_t device) {
     auto *obj = com_new(kind);
     auto &o = objects()[obj->id];
+    o.id = obj->id;
     o.iface = iface;
     o.device = device;
     com_addref(com_get(device));
@@ -220,13 +224,214 @@ void put_pixel(Object &o, uint32_t x, uint32_t y, const std::array<float, 4> &c)
     }
     o.dirty = true;
 }
-// The display seam copies the ARGB snapshot synchronously and seals an owned
-// host frame. GDI refreshes retain it; no presenter reads guest memory.
-void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
-    std::vector<uint32_t> argb(size_t(o.texture.Width) * o.texture.Height);
+// Conversion tables, each giving a source word as the four bytes of an RGBA8
+// (or BGRA8) texel. The 5- and 6-bit channels are widened as pixel() then
+// put_pixel() would, in the same float expressions, so the bytes agree.
+namespace {
+const std::array<uint8_t, 32> &lut5() {
+    static const auto t = [] {
+        std::array<uint8_t, 32> v{};
+        for (int i = 0; i < 32; ++i)
+            v[i] = uint8_t(std::lround(std::clamp(i / 31.f, 0.f, 1.f) * 255));
+        return v;
+    }();
+    return t;
+}
+const std::array<uint8_t, 64> &lut6() {
+    static const auto t = [] {
+        std::array<uint8_t, 64> v{};
+        for (int i = 0; i < 64; ++i)
+            v[i] = uint8_t(std::lround(std::clamp(i / 63.f, 0.f, 1.f) * 255));
+        return v;
+    }();
+    return t;
+}
+uint32_t swap_red_blue(uint32_t c) {
+    return (c & 0xff00ff00u) | (c >> 16 & 0xffu) | (c & 0xffu) << 16;
+}
+// Every 5-6-5 word, opaque.
+const uint32_t *lut565(bool bgra) {
+    static const std::vector<uint32_t> rgba = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v)
+            t[v] = uint32_t(lut5()[(v >> 11) & 31]) | uint32_t(lut6()[(v >> 5) & 63]) << 8 |
+                   uint32_t(lut5()[v & 31]) << 16 | 0xff000000u;
+        return t;
+    }();
+    static const std::vector<uint32_t> swapped = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v)
+            t[v] = swap_red_blue(rgba[v]);
+        return t;
+    }();
+    return bgra ? swapped.data() : rgba.data();
+}
+// Every 16-bit word through the packed decode: pixel(), then the shader
+// arithmetic of raster_triangle, then put_pixel(), in the same float
+// expressions - including where the round trip through 65535.f truncates a
+// word to the one below it.
+const uint32_t *lut_packed(bool bgra) {
+    static const std::vector<uint32_t> rgba = [] {
+        std::vector<uint32_t> t(65536);
+        auto q = [](float c) { return uint32_t(std::lround(std::clamp(c, 0.f, 1.f) * 255)); };
+        for (int v = 0; v < 65536; ++v) {
+            float s = v / 65535.f;
+            int word = int(s * 65535.f);
+            int blue = word % 32;
+            word = (word - blue) / 32;
+            int green = word % 64;
+            word = (word - green) / 64;
+            int red = word % 32;
+            t[v] = q(red / 32.f) | q(green / 64.f) << 8 | q(blue / 32.f) << 16 | 0xff000000u;
+        }
+        return t;
+    }();
+    static const std::vector<uint32_t> swapped = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v)
+            t[v] = swap_red_blue(rgba[v]);
+        return t;
+    }();
+    return bgra ? swapped.data() : rgba.data();
+}
+// Rows of 16-bit words to 32-bit texels through a table.
+void widen_row(const uint8_t *src, uint8_t *dst, size_t n, const uint32_t *lut) {
+    for (size_t i = 0; i < n; ++i) {
+        uint16_t v;
+        memcpy(&v, src + i * 2, 2);
+        memcpy(dst + i * 4, &lut[v], 4);
+    }
+}
+// Four-byte rows with red and blue exchanged.
+void swap_row(const uint8_t *src, uint8_t *dst, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t c;
+        memcpy(&c, src + i * 4, 4);
+        c = swap_red_blue(c);
+        memcpy(dst + i * 4, &c, 4);
+    }
+}
+// The (x, y, w, h) region of a texture as RGBA8, converted for the plain or
+// the packed pixel shader. False for a format the GPU copy cannot hold.
+bool to_rgba(const Object &o, bool packed, int32_t x, int32_t y, int32_t w, int32_t h,
+             std::vector<uint8_t> &out) {
+    const uint32_t f = o.texture.Format;
+    const uint32_t *lut = f == 85 && !packed ? lut565(false) : f == 56 && packed ? lut_packed(false)
+                                                                                 : nullptr;
+    if (!lut && (packed || !(f == 28 || f == 87)))
+        return false;
+    const uint32_t bpp = lut ? 2 : 4;
+    out.resize(size_t(w) * h * 4);
+    for (int32_t r = 0; r < h; ++r) {
+        const uint8_t *src = gm_ptr(o.data + uint32_t(y + r) * o.pitch + uint32_t(x) * bpp);
+        uint8_t *dst = out.data() + size_t(r) * w * 4;
+        if (lut)
+            widen_row(src, dst, size_t(w), lut);
+        else if (f == 87)
+            swap_row(src, dst, size_t(w));
+        else
+            memcpy(dst, src, size_t(w) * 4);
+    }
+    return true;
+}
+} // namespace
+
+bool gpu_available() {
+    static const bool software = recomp_env("D3D11_SOFTWARE") != nullptr;
+    return !software && host_gpu2d_available();
+}
+// A copy the host has since dropped is no copy at all. A render target whose
+// pixels were only there has lost them; the next full draw replaces them.
+void host_check(Object &o) {
+    if ((o.host_valid || o.host_owned) && o.host_generation != host_gpu2d_generation()) {
+        if (o.host_owned)
+            log_once("d3d11.lost", "D3D11: the host GPU dropped a render target's pixels");
+        o.host_valid = o.host_owned = false;
+    }
+}
+// Record that the host copy now matches, in this generation.
+void host_matches(Object &o) {
+    o.host_valid = true;
+    o.host_generation = host_gpu2d_generation();
+    o.dirty_x0 = o.dirty_x1 = 0;
+}
+void cpu_view(Object &o) {
+    host_check(o);
+    if (!o.host_owned)
+        return;
+    o.host_owned = false;
+    const uint32_t w = o.texture.Width, h = o.texture.Height, f = o.texture.Format;
+    std::vector<uint8_t> rgba(size_t(w) * h * 4);
+    if ((f != 28 && f != 87) || !host_gpu2d_readback(o.id, int(w), int(h), rgba.data())) {
+        log_once("d3d11.readback", "D3D11: a render target drawn on the GPU could not be read back");
+        o.host_valid = false;
+        return;
+    }
+    // Three reads in a row with no present from the GPU between them: this
+    // target is used from the CPU, and drawing it on the GPU only adds reads.
+    if (++o.readbacks >= 3 && !o.host_refused) {
+        o.host_refused = true;
+        log_once("d3d11.refused", "D3D11: a render target read back every frame is drawn in software");
+    }
+    for (uint32_t y = 0; y < h; ++y) {
+        const uint8_t *src = rgba.data() + size_t(y) * w * 4;
+        uint8_t *dst = gm_ptr(o.data + y * o.pitch);
+        if (f == 87)
+            swap_row(src, dst, w);
+        else
+            memcpy(dst, src, size_t(w) * 4);
+    }
+    host_matches(o);
+    o.host_decode = 1;
+}
+void cpu_wrote(Object &o, int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+    o.dirty = true;
+    if (!o.host_valid)
+        return;
+    x0 = std::max(x0, 0);
+    y0 = std::max(y0, 0);
+    x1 = std::min(x1, int32_t(o.texture.Width));
+    y1 = std::min(y1, int32_t(o.texture.Height));
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    if (o.dirty_x0 >= o.dirty_x1) {
+        o.dirty_x0 = x0;
+        o.dirty_y0 = y0;
+        o.dirty_x1 = x1;
+        o.dirty_y1 = y1;
+        return;
+    }
+    o.dirty_x0 = std::min(o.dirty_x0, x0);
+    o.dirty_y0 = std::min(o.dirty_y0, y0);
+    o.dirty_x1 = std::max(o.dirty_x1, x1);
+    o.dirty_y1 = std::max(o.dirty_y1, y1);
+}
+bool host_sync(Object &o, bool packed) {
+    host_check(o);
+    const uint8_t decode = packed ? 2 : 1;
+    if (o.host_owned)
+        return decode == 1; // what a render target holds is plain colour
+    const bool full = !o.host_valid || o.host_decode != decode;
+    if (!full && o.dirty_x0 >= o.dirty_x1)
+        return true;
+    const int32_t x = full ? 0 : o.dirty_x0, y = full ? 0 : o.dirty_y0;
+    const int32_t w = full ? int32_t(o.texture.Width) : o.dirty_x1 - o.dirty_x0;
+    const int32_t h = full ? int32_t(o.texture.Height) : o.dirty_y1 - o.dirty_y0;
+    std::vector<uint8_t> rgba;
+    if (!to_rgba(o, packed, x, y, w, h, rgba))
+        return false;
+    host_gpu2d_texture(o.id, int(o.texture.Width), int(o.texture.Height), rgba.data(), x, y, w, h);
+    host_matches(o);
+    o.host_decode = decode;
+    return true;
+}
+
+namespace {
+// A texture's pixels as opaque ARGB, the form the display seam takes.
+void to_argb(const Object &o, uint32_t *argb) {
     const bool rgba = o.texture.Format == 28, bgra = o.texture.Format == 87;
     for (uint32_t y = 0; y < o.texture.Height; ++y) {
-        uint32_t *row = argb.data() + size_t(y) * o.texture.Width;
+        uint32_t *row = argb + size_t(y) * o.texture.Width;
         if (rgba || bgra) {
             // Eight-bit channels pass through pixel() and back unchanged;
             // take the bytes as they are, a row at a time through plain
@@ -241,7 +446,7 @@ void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
                 for (uint32_t x = 0; x < n; ++x) {
                     uint32_t c;
                     memcpy(&c, src + size_t(x) * 4, 4);
-                    row[x] = 0xff000000u | (c & 0xffu) << 16 | (c & 0xff00u) | (c >> 16 & 0xffu);
+                    row[x] = 0xff000000u | swap_red_blue(c);
                 }
             }
             continue;
@@ -252,7 +457,46 @@ void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
                      uint32_t(std::lround(c[1] * 255)) << 8 | uint32_t(std::lround(c[2] * 255));
         }
     }
-    gdi_present_surface(owner, hwnd, argb.data(), o.texture.Width, o.texture.Height, fullscreen);
+}
+// GDI asks for the pixels of a frame presented from the GPU only when it has
+// to compose with them. `owner` is the swap chain.
+bool fetch_presented(uint32_t owner, uint32_t *argb, int w, int h) {
+    auto *swap = get(com_get(owner));
+    auto *back = swap && swap->iface == IF_DXGI_SWAP ? get(com_get(swap->resource)) : nullptr;
+    if (!back || int(back->texture.Width) != w || int(back->texture.Height) != h)
+        return false;
+    cpu_view(*back);
+    to_argb(*back, argb);
+    return true;
+}
+} // namespace
+
+// A back buffer drawn on the GPU and filling the screen goes to the display as
+// it is; GDI is told the screen is its, and reads it back only if it has to.
+// Anything else is a synchronous ARGB snapshot the display seam copies; GDI
+// refreshes retain it, and no presenter reads guest memory.
+void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
+    const int w = int(o.texture.Width), h = int(o.texture.Height);
+    host_check(o);
+    // Whether this frame could leave on the GPU decides where the next ones
+    // are drawn: a present that has to be composed on the CPU would read
+    // every GPU frame back.
+    const bool gpu = gpu_available() && gdi_surface_covers_screen(owner, hwnd, w, h, fullscreen);
+    if (o.host_owned && gpu) {
+        gdi_present_external(owner, hwnd, w, h, fullscreen, fetch_presented);
+        host_display_present_gpu2d(o.id, w, h);
+        o.readbacks = 0;
+        o.host_refused = false;
+        return;
+    }
+    if (!gpu)
+        o.host_refused = true;
+    else if (o.readbacks < 3)
+        o.host_refused = false; // the screen is this swap chain's now
+    cpu_view(o);
+    std::vector<uint32_t> argb(size_t(w) * h);
+    to_argb(o, argb.data());
+    gdi_present_surface(owner, hwnd, argb.data(), w, h, fullscreen);
 }
 void get_device(X86 *c) {
     auto *o = get(com_this_arg(c));
@@ -274,6 +518,7 @@ void get_device(X86 *c) {
 } // namespace dx11
 void d3d11_reset() {
     gdi_forget_surface(0);
+    host_gpu2d_reset();
     dx11::objects().clear();
 }
 
@@ -310,9 +555,24 @@ void clear_rtv(X86 *c) {
             com_ret(c, E_INVALIDARG);
             return;
         }
-    for (uint32_t y = 0; y < r->texture.Height; ++y)
-        for (uint32_t x = 0; x < r->texture.Width; ++x)
+    const uint32_t w = r->texture.Width, h = r->texture.Height, f = r->texture.Format;
+    if (dx11::gpu_available() && (f == 28 || f == 87) && !r->host_refused) {
+        // The whole target, so nothing on the CPU is worth keeping.
+        float clamped[4];
+        for (int i = 0; i < 4; ++i)
+            clamped[i] = std::clamp(colour[i], 0.f, 1.f);
+        host_gpu2d_clear(r->id, int(w), int(h), clamped);
+        r->host_owned = true;
+        dx11::host_matches(*r);
+        r->host_decode = 1;
+        com_ret(c, S_OK);
+        return;
+    }
+    r->host_owned = false; // every pixel is about to be replaced
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x)
             dx11::put_pixel(*r, x, y, colour);
+    dx11::cpu_wrote(*r, 0, 0, int32_t(w), int32_t(h));
     com_ret(c, S_OK);
 }
 void create_device(X86 *c) {
@@ -406,6 +666,7 @@ bool upload(dx11::Object &o, uint32_t box, uint32_t src, uint32_t pitch) {
     }
     if (o.iface != IF_D3D11_TEXTURE)
         return false;
+    dx11::cpu_view(o);
     D3D11_BOX b{0, 0, 0, o.texture.Width, o.texture.Height, 1};
     if (box && !read_record(box, b))
         return false;
@@ -421,7 +682,7 @@ bool upload(dx11::Object &o, uint32_t box, uint32_t src, uint32_t pitch) {
     for (uint32_t y = b.top; y < b.bottom; ++y)
         memmove(gm_ptr(o.data + y * o.pitch + b.left * bytes_per_pixel),
                 gm_ptr(src + (y - b.top) * pitch), row);
-    o.dirty = true;
+    dx11::cpu_wrote(o, int32_t(b.left), int32_t(b.top), int32_t(b.right), int32_t(b.bottom));
     return true;
 }
 void create_texture(X86 *c) {
@@ -495,9 +756,12 @@ void map_resource(X86 *c) {
         com_ret(c, E_INVALIDARG);
         return;
     }
+    if (r->iface == IF_D3D11_TEXTURE)
+        dx11::cpu_view(*r);
     if (mode == 4)
         gm_zero(r->data, r->bytes);
     r->mapped = true;
+    r->map_mode = mode;
     wr32(out, r->data);
     wr32(out + 4, r->pitch);
     wr32(out + 8, r->bytes);
@@ -511,7 +775,8 @@ void unmap_resource(X86 *c) {
         return;
     }
     r->mapped = false;
-    r->dirty = true;
+    if (r->map_mode != 1) // D3D11_MAP_READ promises nothing was written
+        dx11::cpu_wrote(*r, 0, 0, int32_t(r->texture.Width), int32_t(r->texture.Height));
     com_ret(c, S_OK);
 }
 void update_resource(X86 *c) {
@@ -1038,98 +1303,16 @@ bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, i
         }
         return true;
     };
-    // 5- and 6-bit channels widened as pixel() then put_pixel() would, in
-    // the same float expressions, so the bytes agree.
-    static const auto lut5 = [] {
-        std::array<uint8_t, 32> t{};
-        for (int i = 0; i < 32; ++i)
-            t[i] = uint8_t(std::lround(std::clamp(i / 31.f, 0.f, 1.f) * 255));
-        return t;
-    }();
-    static const auto lut6 = [] {
-        std::array<uint8_t, 64> t{};
-        for (int i = 0; i < 64; ++i)
-            t[i] = uint8_t(std::lround(std::clamp(i / 63.f, 0.f, 1.f) * 255));
-        return t;
-    }();
-    // Every 16-bit word through the packed decode: pixel(), then the shader
-    // arithmetic of raster_triangle, then put_pixel(), in the same float
-    // expressions, so the bytes agree - including where the round trip
-    // through 65535.f truncates a word to the one below it.
-    static const std::vector<uint32_t> lut16 = [] {
-        std::vector<uint32_t> t(65536);
-        auto q = [](float c) { return uint32_t(std::lround(std::clamp(c, 0.f, 1.f) * 255)); };
-        for (int v = 0; v < 65536; ++v) {
-            float s = v / 65535.f;
-            int word = int(s * 65535.f);
-            int blue = word % 32;
-            word = (word - blue) / 32;
-            int green = word % 64;
-            word = (word - green) / 64;
-            int red = word % 32;
-            t[v] = q(red / 32.f) | q(green / 64.f) << 8 | q(blue / 32.f) << 16;
-        }
-        return t;
-    }();
     const bool target_bgra = of == 87;
-    // Every 5-6-5 word as the target's four bytes, built from the tables above
-    // so it agrees with them; a present quad is two million lookups a frame.
-    static const std::vector<uint32_t> lut565_rgba = [] {
-        std::vector<uint32_t> t(65536);
-        for (int v = 0; v < 65536; ++v)
-            t[v] = uint32_t(lut5[(v >> 11) & 31]) | uint32_t(lut6[(v >> 5) & 63]) << 8 |
-                   uint32_t(lut5[v & 31]) << 16 | 0xff000000u;
-        return t;
-    }();
-    static const std::vector<uint32_t> lut565_bgra = [] {
-        std::vector<uint32_t> t(65536);
-        for (int v = 0; v < 65536; ++v)
-            t[v] = uint32_t(lut5[v & 31]) | uint32_t(lut6[(v >> 5) & 63]) << 8 |
-                   uint32_t(lut5[(v >> 11) & 31]) << 16 | 0xff000000u;
-        return t;
-    }();
-    // The packed decode as the target's four bytes, from lut16.
-    static const std::vector<uint32_t> lut16_rgba = [] {
-        std::vector<uint32_t> t(65536);
-        for (int v = 0; v < 65536; ++v)
-            t[v] = lut16[v] | 0xff000000u;
-        return t;
-    }();
-    static const std::vector<uint32_t> lut16_bgra = [] {
-        std::vector<uint32_t> t(65536);
-        for (int v = 0; v < 65536; ++v) {
-            const uint32_t c = lut16[v];
-            t[v] = (c >> 16 & 0xffu) | (c & 0xff00u) | (c & 0xffu) << 16 | 0xff000000u;
-        }
-        return t;
-    }();
     auto copy_row = [&](uint32_t src, uint32_t dst, uint32_t n) {
-        if (tf == of) {
+        if (tf == of)
             memmove(gm_ptr(dst), gm_ptr(src), n * 4);
-            return;
-        }
-        if (packed || tf == 85) {
-            const uint32_t *lut = (packed ? (target_bgra ? lut16_bgra : lut16_rgba)
-                                          : (target_bgra ? lut565_bgra : lut565_rgba))
-                                      .data();
-            const uint8_t *s = gm_ptr(src);
-            uint8_t *d = gm_ptr(dst);
-            for (uint32_t i = 0; i < n; ++i) {
-                uint16_t v;
-                memcpy(&v, s + size_t(i) * 2, 2);
-                memcpy(d + size_t(i) * 4, &lut[v], 4);
-            }
-            return;
-        }
-        // The other eight-bit order: red and blue trade places.
-        const uint8_t *s = gm_ptr(src);
-        uint8_t *d = gm_ptr(dst);
-        for (uint32_t i = 0; i < n; ++i) {
-            uint32_t c;
-            memcpy(&c, s + size_t(i) * 4, 4);
-            c = (c & 0xff00ff00u) | (c >> 16 & 0xffu) | (c & 0xffu) << 16;
-            memcpy(d + size_t(i) * 4, &c, 4);
-        }
+        else if (packed)
+            dx11::widen_row(gm_ptr(src), gm_ptr(dst), n, dx11::lut_packed(target_bgra));
+        else if (tf == 85)
+            dx11::widen_row(gm_ptr(src), gm_ptr(dst), n, dx11::lut565(target_bgra));
+        else
+            dx11::swap_row(gm_ptr(src), gm_ptr(dst), n); // the other eight-bit order
     };
     const uint32_t texel_bytes = tf == 85 || tf == 56 ? 2 : 4;
     bool copied = false;
@@ -1245,6 +1428,138 @@ void raster_triangle(QuadVertex a, QuadVertex b, QuadVertex c, dx11::Object &tar
             dx11::put_pixel(target, x, y, out);
         }
 }
+// D3D11_BLEND (1-10) as gpu.h's factor order, which HostGpu2DQuad carries.
+int gpu_factor(uint32_t d3d) {
+    static const int map[11] = {1, 0, 1, 6, 7, 2, 3, 4, 5, 8, 9};
+    return d3d <= 10 ? map[d3d] : 1;
+}
+// The hardware path. It takes a draw the GPU reproduces exactly: two
+// triangles that tile an axis-aligned rectangle, at w = 1, carrying texel
+// centres onto pixel centres one to one, inside the texture, in formats the
+// GPU copy holds. There the sampler's filter and address mode make no
+// difference and the shader is the texel itself - the draw is a copy, which
+// the compositor program does. Anything else returns false and is rasterized.
+bool gpu_draw(dx11::Object &target, dx11::Object &tex, const std::vector<QuadVertex> &verts,
+              const D3D11_VIEWPORT &vp, const D3D11_RENDER_TARGET_BLEND_DESC &blend,
+              const D3D11_RASTERIZER_DESC &raster, uint32_t shader) {
+    const uint32_t tf = tex.texture.Format, of = target.texture.Format;
+    const bool packed = shader == 3;
+    if (!dx11::gpu_available() || !(of == 28 || of == 87) ||
+        (packed ? tf != 56 : !(tf == 28 || tf == 87 || tf == 85)) || tex.host_owned ||
+        target.host_refused ||
+        verts.size() != 6 || blend.RenderTargetWriteMask != 15)
+        return false;
+    struct Corner {
+        double x, y, u, v;
+    } p[6];
+    for (int i = 0; i < 6; ++i) {
+        const QuadVertex &q = verts[i];
+        if (q.clip[3] != 1 || q.clip[2] < 0 || q.clip[2] > 1)
+            return false;
+        p[i] = {vp.TopLeftX + (q.clip[0] + 1) * vp.Width / 2,
+                vp.TopLeftY + (1 - q.clip[1]) * vp.Height / 2, q.u, q.v};
+    }
+    // Neither triangle culled or degenerate, by raster_triangle's own test.
+    for (int t = 0; t < 6; t += 3) {
+        const double area = (p[t + 1].x - p[t].x) * (p[t + 2].y - p[t].y) -
+                            (p[t + 1].y - p[t].y) * (p[t + 2].x - p[t].x);
+        if (area == 0 || !std::isfinite(area))
+            return false;
+        const bool front = raster.FrontCounterClockwise ? area < 0 : area > 0;
+        if ((raster.CullMode == 2 && front) || (raster.CullMode == 3 && !front))
+            return false;
+    }
+    double x0 = p[0].x, x1 = p[0].x, y0 = p[0].y, y1 = p[0].y;
+    for (const auto &q : p) {
+        x0 = std::min(x0, q.x);
+        x1 = std::max(x1, q.x);
+        y0 = std::min(y0, q.y);
+        y1 = std::max(y1, q.y);
+    }
+    if (!(x1 > x0 && y1 > y0))
+        return false;
+    // Each vertex on a corner (bit 0 right, bit 1 bottom), one texture
+    // coordinate per corner, and the two triangles each missing one of a pair
+    // of opposite corners: then they share a diagonal and tile the rectangle.
+    double cu[4], cv[4];
+    bool seen[4] = {};
+    int missing[2] = {};
+    for (int t = 0; t < 2; ++t) {
+        int mask = 0;
+        for (int k = 0; k < 3; ++k) {
+            const Corner &q = p[3 * t + k];
+            const int cx = q.x == x0 ? 0 : q.x == x1 ? 1 : -1;
+            const int cy = q.y == y0 ? 0 : q.y == y1 ? 2 : -1;
+            if (cx < 0 || cy < 0)
+                return false;
+            const int id = cx | cy;
+            if (mask & (1 << id))
+                return false;
+            mask |= 1 << id;
+            if (seen[id] && (cu[id] != q.u || cv[id] != q.v))
+                return false;
+            seen[id] = true;
+            cu[id] = q.u;
+            cv[id] = q.v;
+        }
+        missing[t] = __builtin_ctz(~mask & 15);
+    }
+    if ((missing[0] ^ missing[1]) != 3)
+        return false;
+    // Texture coordinates that follow the axes, a texel a pixel, on centres.
+    const double tw = tex.texture.Width, th = tex.texture.Height;
+    if (cu[0] != cu[2] || cu[1] != cu[3] || cv[0] != cv[1] || cv[2] != cv[3])
+        return false;
+    const double kx = cu[0] * tw - x0, ky = cv[0] * th - y0;
+    if (std::abs((cu[1] - cu[0]) * tw - (x1 - x0)) > 1e-3 ||
+        std::abs((cv[2] - cv[0]) * th - (y1 - y0)) > 1e-3 ||
+        std::abs(kx - std::round(kx)) > 1e-3 || std::abs(ky - std::round(ky)) > 1e-3)
+        return false;
+    // What survives the viewport and the target, and the texels under it.
+    const double tw_px = target.texture.Width, th_px = target.texture.Height;
+    const double vx0 = std::max({x0, double(vp.TopLeftX), 0.0});
+    const double vy0 = std::max({y0, double(vp.TopLeftY), 0.0});
+    const double vx1 = std::min({x1, double(vp.TopLeftX) + vp.Width, tw_px});
+    const double vy1 = std::min({y1, double(vp.TopLeftY) + vp.Height, th_px});
+    if (!(vx1 > vx0 && vy1 > vy0))
+        return true; // nothing is covered
+    // The first and last pixel centres covered, by the top-left rule, and the
+    // texels they read.
+    const double sx = std::round(kx), sy = std::round(ky);
+    const double px0 = std::ceil(vx0 - 0.5), px1 = std::ceil(vx1 - 0.5) - 1;
+    const double py0 = std::ceil(vy0 - 0.5), py1 = std::ceil(vy1 - 0.5) - 1;
+    if (px1 < px0 || py1 < py0)
+        return true; // no pixel centre is covered
+    if (sx + px0 < 0 || sy + py0 < 0 || sx + px1 > tw - 1 || sy + py1 > th - 1)
+        return false;
+    if (!dx11::host_sync(tex, packed))
+        return false;
+    // The target's own pixels matter unless this draw replaces all of them.
+    const bool replaces = !blend.BlendEnable && vx0 <= 0 && vy0 <= 0 && vx1 >= tw_px && vy1 >= th_px;
+    dx11::host_check(target);
+    if (!target.host_owned && !replaces && !dx11::host_sync(target, false))
+        return false;
+    HostGpu2DQuad q{};
+    q.x = vx0;
+    q.y = vy0;
+    q.w = vx1 - vx0;
+    q.h = vy1 - vy0;
+    q.u = (sx + vx0) / tw;
+    q.v = (sy + vy0) / th;
+    q.uw = q.w / tw;
+    q.uh = q.h / th;
+    q.blend = blend.BlendEnable ? 1 : 0;
+    q.src_rgb = gpu_factor(blend.SrcBlend);
+    q.dst_rgb = gpu_factor(blend.DestBlend);
+    q.src_alpha = gpu_factor(blend.SrcBlendAlpha);
+    q.dst_alpha = gpu_factor(blend.DestBlendAlpha);
+    if (!host_gpu2d_draw(target.id, int(tw_px), int(th_px), tex.id, &q))
+        return false;
+    target.host_owned = true;
+    dx11::host_matches(target);
+    target.host_decode = 1;
+    return true;
+}
 void draw_indexed(X86 *c) {
     auto *ctx = dx11::from(arg(c, 0), IF_D3D11_CONTEXT);
     auto object = [](uint32_t id) { return dx11::get(com_get(id)); };
@@ -1334,12 +1649,19 @@ void draw_indexed(X86 *c) {
     raster.CullMode = 1;
     if (auto *s = object(ctx->raster))
         memcpy(&raster, s->desc.data(), sizeof(raster));
+    if (gpu_draw(*target, *tex, vertices, ctx->viewport, blend, raster, ps->shader)) {
+        com_ret(c, S_OK);
+        return;
+    }
+    dx11::cpu_view(*target);
+    dx11::cpu_view(*tex);
     for (uint32_t i = 0; i < count; i += 3) {
         auto polygon = clip_triangle(vertices.data() + i);
         for (size_t j = 1; j + 1 < polygon.size(); ++j)
             raster_triangle(polygon[0], polygon[j], polygon[j + 1], *target, *tex, ctx->viewport,
                             sampler, blend, raster, ps->shader);
     }
+    dx11::cpu_wrote(*target, 0, 0, int32_t(target->texture.Width), int32_t(target->texture.Height));
     com_ret(c, S_OK);
 }
 

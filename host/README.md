@@ -26,6 +26,7 @@ startup and never runs `WinMain`.
 | `present_thread.cpp`, `present_frame.h` | the presenter: sealed frames, the target pool, the swapchain worker |
 | `compositor.{h,cpp}`, `performance_overlay.{h,cpp}` | world, UI and overlays composed onto the drawable; the FPS overlay |
 | `d3d_render.{h,cpp}` | the renderer behind `host_d3d_draw`, over `gpu/gpu.h` |
+| `gpu2d.cpp` | the Direct3D 11 hardware path: GPU copies of the shim's textures and render targets, the rectangles drawn into them, and the render target handed to the presenter |
 | `gpu/gpu.h`, `gpu/shaders.md` | the device-level GPU interface every backend implements, and the shader contract |
 | `gpu/metal/` | the Metal backend, the only Objective-C++ in the host |
 | `gpu/fake/` | the CPU test double |
@@ -185,6 +186,30 @@ A `SIGSEGV`/`SIGBUS` handler prints the guest EIP and ESP alongside the report,
 which turns a fault inside recompiled code into something with an address on
 it — recompiled code reaches guest memory through `g_mem` with no bounds check,
 so a guest that loses its stack pointer faults the host.
+
+## The Direct3D 11 hardware path
+
+`dx/d3d11.cpp` is a software rasterizer, and it still is the reference: every
+draw it cannot prove the GPU reproduces goes through it. What it can prove is
+the draw a 2D renderer makes every frame - two triangles tiling an
+axis-aligned rectangle at w = 1, carrying texel centres onto pixel centres one
+to one, inside the texture. There the sampler's filter and address mode change
+nothing and the pixel shader is the texel itself, so the draw is a copy (with
+the blend the state asks for), and `gpu2d.cpp` draws it with the compositor
+program.
+
+| resource | where its pixels are |
+| --- | --- |
+| a texture | in guest memory, as the guest wrote them; the GPU copy is converted to RGBA8 (5-6-5 and the packed R16 decode through tables) and re-uploaded, dirty rectangle only, before a draw samples it |
+| a render target | on the GPU once a clear or a rectangle went there; any CPU use - a `Map`, an `UpdateSubresource`, a draw the software path takes, a present GDI has to compose - reads it back first |
+| the back buffer at `Present` | copied into the presenter's frame on the GPU when GDI says the swap chain has the whole screen; otherwise read back and presented as pixels, and the next frame is drawn in software |
+
+A render target read back three times with no GPU present between stays in
+software. Uploads and readbacks commit the open command buffer and wait for
+it, so the CPU never writes a texture the GPU has still to read. The smoke host
+reads every GPU frame back for its captures (`host_gpu2d_present_readback`);
+the windowed host does not. `RECOMP_D3D11_SOFTWARE=1` keeps every draw in the
+rasterizer, for comparison.
 
 ## Where the pixels meet
 
@@ -421,6 +446,7 @@ The windowed host reads `RECOMP_EXE` too, and adds:
 | --- | --- |
 | `RECOMP_HOST_D3D_NOCULL` | ignore `D3DRENDERSTATE_CULLMODE` |
 | `RECOMP_HOST_NO_AUDIO` | never start the audio engine |
+| `RECOMP_D3D11_SOFTWARE` | draw every Direct3D 11 call in the software rasterizer |
 
 `RECOMP_LOG`, `RECOMP_IMPORT_STATS`, `RECOMP_CREATETHREAD` and the rest are the
 runtime's, documented in `runtime/README.md`.

@@ -33,7 +33,8 @@ these inputs.
 - Vertex and fragment bytes slot 0: `CompositorQuad { float rect[4]; float uv[4]; float drawable[2];
   uint32 opaque, pad; }` (48 bytes). rect in drawable pixels, y down; uv normalised.
 - Fragment texture 0, nearest, clamp to edge. Output: colour attachment 0 in the target's format;
-  `opaque` forces alpha to 1.
+  `opaque` forces alpha to 1. `gpu2d.cpp` draws Direct3D 11 rectangles with it too, under any
+  blend factors, so the sample must be the texel itself, unfiltered.
 
 ## `hud` (render pipeline)
 

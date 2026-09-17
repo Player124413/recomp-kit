@@ -300,6 +300,11 @@ HostSceneTarget host_present_acquire_target(int guest_w, int guest_h, int scene_
 // Copy the UI by value, never a pointer into a sealed frame. The world/overlay
 // must belong to the acquired target. Task 4/6 supplies this before seal.
 void host_present_set_input(const CompositorInput *input);
+// A real device is presenting (not the fake one, not stopped).
+bool host_present_gpu_ready();
+// Stage the frame's pixels as a copy of `src` (RGBA8, w x h), encoded into
+// `cb`, which the caller commits before sealing. False when nothing was staged.
+bool host_present_stage_texture(gpu::Texture src, int w, int h, gpu::CommandBuffer cb);
 // Register BEFORE committing each prefix buffer on the renderer's queue. Its
 // completion fences all earlier prefixes; dropped frames retire behind it.
 void host_present_track_command(gpu::CommandBuffer command);

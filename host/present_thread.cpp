@@ -1165,6 +1165,40 @@ extern "C" void host_present_stage_rgba(const uint8_t *rgba, int w, int h) {
             s->device->upload(t.pixels, {0, 0, w, h}, rgba, w * 4);
     }
 }
+// Whether a real device is presenting, so a guest-side GPU path has a queue to
+// put its work on and a frame to stage it into.
+bool host_present_gpu_ready() {
+    auto s = active.load();
+    return s && !s->fake && s->device && !s->stop;
+}
+// The GPU counterpart of host_present_stage_rgba: the frame's pixels are a copy
+// of `src`, encoded into `cb`. The caller commits `cb` before it seals, and the
+// one queue runs that copy before anything composes the frame.
+bool host_present_stage_texture(gpu::Texture src, int w, int h, gpu::CommandBuffer cb) {
+    auto s = active.load();
+    if (!s || s->fake || !src || !cb || w <= 0 || h <= 0)
+        return false;
+    s->acquire(w, h, s->drawable_w, s->drawable_h);
+    std::lock_guard lock(s->mutex);
+    if (s->stop || !s->writing || !s->writing->target)
+        return false;
+    auto &t = *s->writing->target;
+    t.device = s->device;
+    if (!t.pixels || t.pixels_w != w || t.pixels_h != h) {
+        if (t.pixels)
+            s->device->destroy(t.pixels);
+        t.pixels = s->texture(w, h);
+        t.pixels_w = w;
+        t.pixels_h = h;
+    }
+    if (!t.pixels)
+        return false;
+    s->guest_w = w;
+    s->guest_h = h;
+    s->writing->staged_pixels = true;
+    s->device->blit(cb, src, {0, 0, w, h}, t.pixels, 0, 0);
+    return true;
+}
 void host_present_set_input(const CompositorInput *input) {
     auto s = active.load();
     if (!s || !input)

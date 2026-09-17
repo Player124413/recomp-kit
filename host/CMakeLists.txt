@@ -112,6 +112,7 @@ set(POP_CORE_LIBS recomp_platform recomp_runtime recomp_snapshot recomp_dx recom
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
                         ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${HOST}/keypad_overlay.cpp
                         ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp ${HOST}/d3d_render.cpp
+                        ${HOST}/gpu2d.cpp
                         ${HOST}/indexed_frame.cpp)
 
 # The host's platform file: desktop or iPadOS (host/sdl/platform_ui.h).
