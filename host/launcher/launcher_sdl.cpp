@@ -283,6 +283,8 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
                 last_screen = sc;
             }
         }
+        if (launcher.finished() || launcher.quit())
+            break; // the last frame shown stays what the player saw
         SDL_GetWindowSizeInPixels(window, &dw, &dh);
         SDL_GetWindowSize(window, &bw, &bh);
         if (dw <= 0 || dh <= 0)
