@@ -74,6 +74,15 @@ pop_test_binary(keypad_tests)
 add_test(NAME keypad_tests COMMAND keypad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
+add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/tests/controls_tests.cpp)
+target_include_directories(controls_tests PRIVATE ${POP_ROOT})
+target_compile_options(controls_tests PRIVATE ${POP_WARN_WERROR})
+pop_link_sdl(controls_tests)
+pop_optimize(controls_tests 1)
+pop_test_binary(controls_tests)
+add_test(NAME controls_tests COMMAND controls_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(controls_tests PROPERTIES LABELS nogame)
+
 add_executable(launcher_tests ${HOST}/tests/launcher_tests.cpp ${POP_ROOT}/mods/font6x8.cpp)
 target_include_directories(launcher_tests PRIVATE ${POP_ROOT} ${POP_ROOT}/runtime ${POP_ROOT}/third_party/lua
                                                   ${CMAKE_BINARY_DIR}/generated)
