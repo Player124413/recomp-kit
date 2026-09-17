@@ -22,7 +22,6 @@ constexpr int kPickTree = 0x5201, kPickZip = 0x5202, kPickSaves = 0x5203, kCreat
 jclass g_activity = nullptr;
 std::mutex g_mutex;
 std::map<int, PickDone> g_pending;
-std::map<std::string, std::string> g_exports; // temporary file -> suggested name
 
 JNIEnv *env() {
     return static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
