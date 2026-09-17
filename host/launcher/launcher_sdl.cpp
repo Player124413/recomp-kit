@@ -131,6 +131,10 @@ void write_ppm(const std::string &path, const Canvas &c, bool bgra) {
 std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, Platform &platform,
                 const RunOptions &options) {
     const Spec &spec = spec_from_config();
+    {
+        const PlatformInfo info = platform.info();
+        fprintf(stderr, "[launcher] game data %s, saves %s\n", info.import_root.c_str(), info.profile_dir.c_str());
+    }
     Launcher launcher(spec, platform);
     launcher.start(options.known);
     if (!options.unplayable.empty())
