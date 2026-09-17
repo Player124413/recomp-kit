@@ -12,8 +12,9 @@ struct HostLayout {
     bool developer = false;    // checkout_root is set
 };
 const HostLayout &host_layout();
-// resources_dir + "/" + rel, with the developer mapping for the three names
-// "mods/core", "texture-pack" and "classic-modes.json"; "" when unknown.
+// resources_dir + "/" + rel, with the developer mapping for the names
+// "mods/core", "texture-pack", "classic-modes.json" and "general-midi.sf2";
+// "" when unknown.
 std::string host_resource(const char *rel);
 // A file the host writes during a run (the emulated registry, the run
 // record): <checkout>/build/recomp/<name> in developer mode, else

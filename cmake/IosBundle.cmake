@@ -65,6 +65,15 @@ function(pop_ios_bundle target)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/tools/recomp/baseline/classic-modes.json
             $<TARGET_BUNDLE_CONTENT_DIR:${target}>/classic-modes.json
     VERBATIM)
+  # The General MIDI bank for a game that ships none, with its licence.
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${POP_ROOT}/third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2
+            $<TARGET_BUNDLE_CONTENT_DIR:${target}>/general-midi.sf2
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${POP_ROOT}/third_party/soundfonts/generaluser-gs/LICENSE
+            $<TARGET_BUNDLE_CONTENT_DIR:${target}>/general-midi-LICENSE.txt
+    VERBATIM)
   if(EXISTS ${POP_BUILD_ROOT}/recomp/symbols.json)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_BUILD_ROOT}/recomp/symbols.json

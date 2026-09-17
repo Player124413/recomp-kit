@@ -39,7 +39,8 @@ def test_linux_archive_contents(tmp_path, monkeypatch, machine, arch):
     monkeypatch.setattr(package_desktop.platform, "machine", lambda: machine)
     out = package_desktop.stage(exe, cfg, tmp_path / "out", system="Linux")
     expected = {"StubRecomp", "LICENSE", "NOTICE", "README.txt", "resources",
-                "resources/classic-modes.json", "resources/symbols.json"}
+                "resources/classic-modes.json", "resources/symbols.json",
+                "resources/general-midi.sf2", "resources/general-midi-LICENSE.txt"}
     assert {p.relative_to(out).as_posix() for p in out.rglob("*")} == expected
     assert (out / "StubRecomp").read_bytes() == exe.read_bytes()
     assert stat.S_IMODE((out / "StubRecomp").stat().st_mode) == stat.S_IMODE(exe.stat().st_mode)
@@ -48,6 +49,10 @@ def test_linux_archive_contents(tmp_path, monkeypatch, machine, arch):
     assert (out / "resources/classic-modes.json").read_bytes() == (
         package_desktop.ROOT / "tools/recomp/baseline/classic-modes.json").read_bytes()
     assert (out / "resources/symbols.json").read_bytes() == (tmp_path / "symbols.json").read_bytes()
+    # The kit's own General MIDI bank ships; the game's private one does not.
+    bank = package_desktop.ROOT / "third_party/soundfonts/generaluser-gs"
+    assert (out / "resources/general-midi.sf2").read_bytes() == (bank / "GeneralUser-GS.sf2").read_bytes()
+    assert (out / "resources/general-midi-LICENSE.txt").read_bytes() == (bank / "LICENSE").read_bytes()
     readme = (out / "README.txt").read_text()
     assert 'RECOMP_EXE="/path/to/your game/STUB.EXE" ./StubRecomp' in readme
     assert "parent directory as the game data root" in readme

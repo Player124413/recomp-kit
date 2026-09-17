@@ -33,6 +33,10 @@ def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None, build_dir=Non
     for name in ("LICENSE", "NOTICE"):
         copy(ROOT / name, staged / name)
     copy(ROOT / "tools/recomp/baseline/classic-modes.json", resources / "classic-modes.json")
+    # The General MIDI bank for a game that ships none, with its licence.
+    bank = ROOT / "third_party/soundfonts/generaluser-gs"
+    copy(bank / "GeneralUser-GS.sf2", resources / "general-midi.sf2")
+    copy(bank / "LICENSE", resources / "general-midi-LICENSE.txt")
     # The translation index lives beside the binary with the desktop Ninja
     # presets, just as finish_bundle.py reads it from build/recomp on macOS.
     symbols = app_binary.parent / "symbols.json"

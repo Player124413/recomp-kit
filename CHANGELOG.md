@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A game that plays MIDI and ships no instrument bank now has music. The
+  SoundFont search knew only one game's bank (`Sound\POPFIGHT.SF2`), so a
+  game that relied on Windows' own General MIDI synthesizer - whose bank
+  cannot be redistributed - was accepted and not heard. The kit carries
+  GeneralUser GS 2.0.3 (`third_party/soundfonts/generaluser-gs`, its own
+  permissive licence) and offers it after the game's own bank: apps bundle it
+  as `general-midi.sf2` with its licence (macOS, iOS, the desktop archives),
+  and a developer build reads it from the kit tree. `host_tests` and
+  `test_package_desktop` check both.
+
 - A DirectDraw blit whose source is its own destination copies as DirectDraw
   does, as though through a temporary. A game that scrolls its map buffer by
   blitting it onto itself moves it down or right as often as up or left, and

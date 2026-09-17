@@ -28,6 +28,9 @@ def stage_resources(dest, cc, game_dir, build_root):
     resources = dest / "resources"
     resources.mkdir(parents=True)
     shutil.copy(ROOT / "tools/recomp/baseline/classic-modes.json", resources / "classic-modes.json")
+    bank = ROOT / "third_party/soundfonts/generaluser-gs"
+    shutil.copy(bank / "GeneralUser-GS.sf2", resources / "general-midi.sf2")
+    shutil.copy(bank / "LICENSE", resources / "general-midi-LICENSE.txt")
     symbols = build_root / "recomp/symbols.json"
     if symbols.is_file():
         shutil.copy(symbols, resources / "symbols.json")

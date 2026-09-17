@@ -126,7 +126,7 @@ extern "C" int host_midi_startup(const char *sf2_path) {
         std::lock_guard<std::mutex> held(g_synth_mutex);
         g_synth = synth;
     }
-    g_which = "TinySoundFont with the game's SoundFont";
+    g_which = "TinySoundFont";
     host_audio_set_music_source(render_music, nullptr);
     g_ready.store(true, std::memory_order_release);
     printf("[host] midi: %s, from %s\n", g_which, sf2_path);

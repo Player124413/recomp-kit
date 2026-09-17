@@ -97,6 +97,12 @@ std::string host_resource(const char *rel) {
             return l.checkout_root + "/build/recomp/mods/core";
         if (strcmp(rel, "texture-pack") == 0)
             return l.checkout_root + "/build/texture-pack";
+        if (strcmp(rel, "general-midi.sf2") == 0) {
+            // The kit's bundled bank, wherever the kit is relative to the game.
+            const char *const bank = "/third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2";
+            const std::string own = l.checkout_root + bank;
+            return exists(own) ? own : std::string(RECOMP_KIT_DIR) + bank;
+        }
         if (strcmp(rel, "classic-modes.json") == 0) {
             // The kit's committed probe list, wherever the kit is relative to the game.
             const std::string own = l.checkout_root + "/tools/recomp/baseline/classic-modes.json";

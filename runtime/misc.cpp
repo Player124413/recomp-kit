@@ -1243,9 +1243,12 @@ MidiOut &midi() {
     return m;
 }
 
-// Where the bank lives. The game never names it - SFMAN32.DLL would have - so
-// the path is the one the retail install uses, resolved through the file shim
-// so it follows whatever root this run was given.
+// Where the bank lives. A game that ships its own never names it -
+// SFMAN32.DLL would have - so the path is the one the retail install uses,
+// resolved through the file shim so it follows whatever root this run was
+// given. A game with no bank of its own played through Windows' General MIDI
+// synthesizer, which cannot be redistributed; it gets the kit's bundled
+// General MIDI bank instead (third_party/soundfonts/generaluser-gs).
 std::string midi_soundfont_path() {
     static const char *candidates[] = {
         "Sound\\POPFIGHT.SF2",
@@ -1260,6 +1263,10 @@ std::string midi_soundfont_path() {
         if (os_stat(host.c_str(), &st) == 0 && st.is_regular)
             return host;
     }
+    const std::string bundled = host_resource("general-midi.sf2");
+    OsStat st;
+    if (!bundled.empty() && os_stat(bundled.c_str(), &st) == 0 && st.is_regular)
+        return bundled;
     return std::string();
 }
 

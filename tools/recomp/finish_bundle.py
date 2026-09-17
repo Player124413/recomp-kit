@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+GENERAL_MIDI = ROOT / "third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2"
 
 
 def rename_identity(plist_path, name, version):
@@ -59,6 +60,9 @@ def main():
     probes = ROOT / "tools/recomp/baseline/classic-modes.json"
     if probes.is_file():
         shutil.copy(probes, resources / "classic-modes.json")
+    # The General MIDI bank for a game that ships none, with its licence.
+    shutil.copy2(GENERAL_MIDI, resources / "general-midi.sf2")
+    shutil.copy2(GENERAL_MIDI.parent / "LICENSE", resources / "general-midi-LICENSE.txt")
     # The translation index the mod loader reads, when this build has one.
     fresh = args.build_root / "recomp/symbols.json"
     if fresh.is_file():

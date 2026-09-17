@@ -36,6 +36,12 @@ third_party/fonts/opensans/LICENSE and README.md for its source. Open Sans is a
 trademark of Google and may be registered in certain jurisdictions. The runtime
 embeds it to draw the interface faces Windows provides and the kit does not.
 
+GeneralUser GS 2.0.3 (third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2)
+by S. Christian Collins is included unmodified under its own licence, which
+permits its use in software projects; see third_party/soundfonts/generaluser-gs/
+LICENSE and README.md for its source. Apps carry it as general-midi.sf2 to play
+MIDI for a game that ships no instrument bank of its own.
+
 SDL3 is fetched at build time from https://github.com/libsdl-org/SDL at a pinned
 release tag and linked statically; it is licensed under the zlib License.
 

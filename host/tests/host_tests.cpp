@@ -1100,6 +1100,16 @@ static void test_game_path() {
     host_layout_set_exe_path_for_test(nullptr);
 }
 
+// A developer build finds the kit's General MIDI bank in the kit's own tree,
+// and the MIDI device offers it to a game that ships no bank of its own.
+static void test_bundled_general_midi() {
+    const std::string bank = host_resource("general-midi.sf2");
+    OsStat st;
+    CHECK(!bank.empty() && os_stat(bank.c_str(), &st) == 0 && st.is_regular);
+    CHECK(bank.find("third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2") != std::string::npos);
+    CHECK_EQ(st.size, 32319396u);
+}
+
 static void test_audio_maths() {
     CHECK_NEAR(host_audio_gain_from_millibels(0), 1.0, 1e-6);
     CHECK_NEAR(host_audio_gain_from_millibels(-10000), 0.0, 1e-6);
@@ -2283,18 +2293,20 @@ static void test_audio_voice_remaining_versus_queued() {
     host_audio_offline_end();
 }
 
-// The music, which is MIDI through the SoundFont the game ships. This opens
-// the real POPFIGHT.SF2, plays a note and renders the engine offline: no audio
-// device is opened and nothing comes out of the speakers, but what is measured
-// is exactly what would have.
+// The music, which is MIDI through a SoundFont: the one the game ships when
+// it is here, else the kit's bundled General MIDI bank, which is always here.
+// This plays a note and renders the engine offline: no audio device is opened
+// and nothing comes out of the speakers, but what is measured is exactly what
+// would have.
 static void test_midi_soundfont() {
-    const char *sf2 = "original/gog/Sound/POPFIGHT.SF2";
-    FILE *f = fopen(sf2, "rb");
-    if (!f) {
-        printf("  (no %s, so the synth is not tested)\n", sf2);
-        return;
-    }
-    fclose(f);
+    std::string bank = "original/gog/Sound/POPFIGHT.SF2";
+    if (FILE *f = fopen(bank.c_str(), "rb"))
+        fclose(f);
+    else
+        bank = host_resource("general-midi.sf2");
+    CHECK(!bank.empty());
+    const char *sf2 = bank.c_str();
+    printf("  (the synth plays %s)\n", sf2);
 
     // Offline first. Opening the synth starts the engine, and an engine that
     // is already in manual rendering mode starts without touching the hardware.
@@ -9007,6 +9019,7 @@ int main(int argc, char **argv) {
         void (*fn)();
     } plain[] = {
         {"game path", test_game_path},
+        {"bundled General MIDI bank", test_bundled_general_midi},
         {"display settings bridge", test_display_settings_bridge},
         {"presentation service", test_presentation_service},
         {"palette expansion", test_palette_expansion},
