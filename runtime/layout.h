@@ -13,8 +13,9 @@ struct HostLayout {
 };
 const HostLayout &host_layout();
 // resources_dir + "/" + rel, with the developer mapping for the names
-// "mods/core", "texture-pack", "classic-modes.json" and "general-midi.sf2";
-// "" when unknown.
+// "mods/core", "texture-pack", "classic-modes.json", "general-midi.sf2",
+// "symbols.json" and "controls" (the game's on-screen controls layouts: a
+// game repository's layouts/); "" when unknown.
 std::string host_resource(const char *rel);
 // A file the host writes during a run (the emulated registry, the run
 // record): <checkout>/build/recomp/<name> in developer mode, else

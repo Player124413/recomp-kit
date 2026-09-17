@@ -99,6 +99,10 @@ std::string host_resource(const char *rel) {
     if (l.developer && strcmp(rel, "symbols.json") == 0)
         return l.checkout_root +
                "/build/recomp/symbols.json"; // the regenerated translation's index
+    // The game's on-screen controls layouts: its repository's layouts/ in a
+    // developer run (bundle or not), so an edit there needs no packaging.
+    if (l.developer && strcmp(rel, "controls") == 0)
+        return l.checkout_root + "/layouts";
     if (l.developer && l.resources_dir == l.checkout_root) {
         if (strcmp(rel, "mods/core") == 0)
             return l.checkout_root + "/build/recomp/mods/core";

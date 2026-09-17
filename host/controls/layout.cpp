@@ -260,11 +260,15 @@ bool parse_control(const Json &cj, const Group &grp, size_t group_index, size_t 
         // radius is the knob's travel, independent of the zone (w/h): the
         // hit-test and floating-base-clamp rect. "zone" sets it explicitly;
         // without one it defaults to 2r, matching the old round-control size.
+        // A stick with a zone but no radius travels half the zone's short
+        // side rather than not at all.
         c.radius = cj.num("radius", 0);
         if (const Json *zonej = cj.get("zone");
             zonej && zonej->type == Json::Array && zonej->a.size() == 2) {
             c.w = zonej->a[0].n;
             c.h = zonej->a[1].n;
+            if (!cj.get("radius"))
+                c.radius = std::min(c.w, c.h) / 2;
         } else {
             c.w = c.h = 2 * c.radius;
         }

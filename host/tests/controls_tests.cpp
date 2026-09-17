@@ -9,6 +9,7 @@
 #include "../controls/layout_store.h"
 #include "../controls/overlay.h"
 #include "../controls/overlay_paint.h"
+#include "../controls/pad_art.h"
 #include "../controls/raster.h"
 #include "../controls/router.h"
 #include "../controls/vpad.h"
@@ -265,7 +266,10 @@ static void test_layout_store() {
 
     problem.clear();
     Layout unused;
-    CHECK(!store.load("pad", Form::Tablet, &unused, &problem));
+    // A broken game pad.json is skipped: the built-in pad loads, and the
+    // problem is still reported.
+    CHECK(store.load("pad", Form::Tablet, &unused, &problem));
+    CHECK(unused.name == "pad");
     CHECK(problem.find("pad.json") != std::string::npos);
     CHECK(problem.find("line 1") != std::string::npos);
 
@@ -1217,7 +1221,7 @@ static void test_make_view_keys() {
     const int left_keys = int(l.groups[0].controls.size());
     CHECK(left_keys + int(l.groups[1].controls.size()) == 77);
     CHECK(count_kind(v, Kind::Key) == 77);
-    CHECK(count_kind(v, Kind::Toggle) == 2);
+    CHECK(count_kind(v, Kind::Toggle) == 3); // two HIDE tabs and the layout tab
     int lit = 0;
     for (const DrawControl &d : v.controls)
         if (d.lit) {
@@ -1231,9 +1235,13 @@ static void test_make_view_keys() {
             const Rect a = v.backdrops[g], b = group_rect(l, g, s);
             CHECK(a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h);
         }
+    int hide_tabs = 0;
     for (const DrawControl &d : v.controls)
-        if (d.kind == Kind::Toggle)
+        if (d.kind == Kind::Toggle && d.label != "PAD") {
+            ++hide_tabs;
             CHECK(d.group_visible && d.label == "HIDE" && d.label_off == "KEYS");
+        }
+    CHECK(hide_tabs == 2);
 
     // The revision follows what is drawn.
     const uint64_t rev = v.revision;
@@ -1245,14 +1253,14 @@ static void test_make_view_keys() {
     v = make_view(l, r, s, 1.0);
     CHECK(v.revision != rev);
     CHECK(count_kind(v, Kind::Key) == 77 - left_keys);
-    CHECK(count_kind(v, Kind::Toggle) == 2);
+    CHECK(count_kind(v, Kind::Toggle) == 3);
     CHECK(v.backdrops.size() == 1);
     int hidden_tabs = 0;
     for (const DrawControl &d : v.controls)
         if (d.kind == Kind::Toggle && !d.group_visible)
             ++hidden_tabs;
     CHECK(hidden_tabs == 1);
-    CHECK(v.controls.size() == size_t(77 - left_keys + 2));
+    CHECK(v.controls.size() == size_t(77 - left_keys + 3));
 }
 
 // At the default size the drawn rects are exactly the old keypad's.
@@ -1298,7 +1306,10 @@ static void test_make_view_matches_the_old_keypad() {
                 CHECK(tab.group_visible == (shown != 0));
                 CHECK(tab.label == "HIDE" && tab.label_off == "KEYS");
             }
-            CHECK(at == v.controls.size());
+            // Then the layout tab (group 2 control 2), which the old keypad lacked.
+            CHECK(at + 1 == v.controls.size());
+            if (at < v.controls.size())
+                CHECK(v.controls[at].kind == Kind::Toggle && v.controls[at].label == "PAD");
         }
     }
 }
@@ -1745,22 +1756,22 @@ static void test_router_claims_the_controls_area() {
     Rec rec;
     r.set_layout(&l, rec);
     r.set_screen(s);
-    // A point no control covers, inside the claim area, and another outside it.
-    CHECK(hit_test(l, s, 590, 20).group < 0);
+    // A point no control covers (clear of the top-centre layout tab), inside the claim area, and another outside it.
+    CHECK(hit_test(l, s, 300, 20).group < 0);
     CHECK(hit_test(l, s, 590, 300).group < 0);
-    CHECK(!r.finger_down(1, 590, 20, 0, rec));
+    CHECK(!r.finger_down(1, 300, 20, 0, rec));
     r.set_claim_area(Rect{0, 0, 1180, 100});
-    CHECK(r.finger_down(2, 590, 20, 0, rec));
+    CHECK(r.finger_down(2, 300, 20, 0, rec));
     CHECK(r.owns(2));
     CHECK(rec.calls.empty()); // claimed, and does nothing
-    CHECK(r.finger_motion(2, 600, 30, 5, rec));
+    CHECK(r.finger_motion(2, 310, 30, 5, rec));
     CHECK(r.finger_up(2, 10, rec));
     CHECK(!r.owns(2));
     CHECK(rec.calls.empty());
     CHECK(!r.finger_down(3, 590, 300, 20, rec)); // outside the area: the game's
-    CHECK(r.finger_down(4, 590, 20, 30, rec));
+    CHECK(r.finger_down(4, 300, 20, 30, rec));
     CHECK(r.finger_cancel(4, rec));
-    CHECK(r.finger_down(5, 590, 20, 40, rec));
+    CHECK(r.finger_down(5, 300, 20, 40, rec));
     r.cancel_all(rec);
     CHECK(!r.owns(5));
     CHECK(rec.calls.empty());
@@ -1771,7 +1782,7 @@ static void test_router_claims_the_controls_area() {
     CHECK(r.finger_down(6, x, y, 50, rec));
     CHECK((rec.calls == std::vector<std::string>{"k44+", "tap"}));
     r.set_claim_area(Rect{});
-    CHECK(!r.finger_down(7, 590, 20, 60, rec));
+    CHECK(!r.finger_down(7, 300, 20, 60, rec));
 }
 
 // make_view copies the controls area, and a new area is a new raster.
@@ -1790,7 +1801,265 @@ static void test_make_view_carries_the_controls_area() {
     CHECK(v.revision != rev);
 }
 
-int main() {
+// A stick with no "radius" travels half its zone, never zero.
+static void test_stick_without_radius_uses_half_its_zone() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(R"({"version": 1, "name": "z", "groups": [{"id": "g", "controls": [
+        {"kind": "stick", "zone": [200, 120]}]}]})",
+                       &l, &err));
+    const Control &c = l.groups[0].controls[0];
+    CHECK(c.w == 200 && c.h == 120 && c.radius == 60);
+}
+
+// --- Pad art and the built-in layouts ---------------------------------------
+
+static DrawControl pad_control(Kind kind, PadButton button, int w, int h) {
+    DrawControl d;
+    d.kind = kind;
+    d.button = button;
+    d.rect = Rect{0, 0, w, h};
+    d.radius_px = std::min(w, h) / 2;
+    d.floating = false;
+    return d;
+}
+
+static void test_pad_art_cross_button() {
+    DrawControl d = pad_control(Kind::Button, PadButton::Cross, 128, 128);
+    std::vector<uint8_t> px(128 * 128 * 4, 0);
+    Canvas c(px, 128, 128);
+    paint_control(c, d, 0, 0);
+    CHECK(c.at(64, 64).a > 0);
+    // Somewhere on the down-right diagonal the glyph's blue shows.
+    bool blue = false;
+    for (int t = 4; t <= 26 && !blue; ++t) {
+        const Rgba p = c.at(64 + t, 64 + t);
+        blue = p.a > 0 && p.b > p.r + 40;
+    }
+    CHECK(blue);
+
+    // Pressed brightens the fill at a point clear of the glyph and the rim.
+    const Rgba idle = c.at(64, 105);
+    std::vector<uint8_t> px2(128 * 128 * 4, 0);
+    Canvas c2(px2, 128, 128);
+    d.pressed = true;
+    paint_control(c2, d, 0, 0);
+    const Rgba lit = c2.at(64, 105);
+    CHECK(idle.a > 0 && lit.a > 0);
+    CHECK(lit.r > idle.r + 20 && lit.g > idle.g + 20 && lit.b > idle.b + 20);
+}
+
+// Every pad kind paints something inside its own rect and nothing outside it
+// (up to the one-pixel far edge Canvas's corner sampling may touch).
+static void test_pad_art_stays_in_its_rect() {
+    const Kind kinds[] = {Kind::Button, Kind::Button, Kind::Button, Kind::Button,
+                          Kind::Dpad,   Kind::Stick,  Kind::Action};
+    const PadButton buttons[] = {PadButton::Triangle, PadButton::L2,    PadButton::Select,
+                                 PadButton::Ps,       PadButton::Cross, PadButton::Cross,
+                                 PadButton::Cross};
+    for (int i = 0; i < 7; ++i) {
+        DrawControl d = pad_control(kinds[i], buttons[i], 80, 60);
+        d.rect = Rect{20, 20, 80, 60};
+        d.label = kinds[i] == Kind::Action ? "MENU" : "";
+        std::vector<uint8_t> px(120 * 100 * 4, 0);
+        Canvas c(px, 120, 100);
+        paint_control(c, d, 0, 0);
+        int inside = 0, outside = 0;
+        for (int y = 0; y < 100; ++y)
+            for (int x = 0; x < 120; ++x)
+                if (c.at(x, y).a) {
+                    // Canvas samples from a pixel's own corner, so a shape
+                    // ending exactly on the far edge may touch that pixel.
+                    const Rect edge{d.rect.x, d.rect.y, d.rect.w + 1, d.rect.h + 1};
+                    const bool in = edge.contains(x, y);
+                    (in ? inside : outside)++;
+                    if (!in && outside == 1)
+                        fprintf(stderr, "  kind %d: paint at %d,%d\n", i, x, y);
+                }
+        CHECK(inside > 0);
+        CHECK(outside == 0);
+    }
+    // The knob fills its own small canvas around its centre.
+    std::vector<uint8_t> px(128 * 128 * 4, 0);
+    Canvas c(px, 128, 128);
+    paint_knob(c, 64, 64, 64, true);
+    CHECK(c.at(64, 64).a == 255 && c.at(1, 1).a == 0);
+}
+
+// Rects overlap when they share an interior point (touching is fine).
+static bool overlaps(const Rect &a, const Rect &b) {
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+// Every built-in parses, fits a 1180x820 pt screen with every group shown,
+// and no two non-key controls overlap each other or a keyboard half.
+static void test_builtin_layouts_fit_and_do_not_overlap() {
+    for (const char *name : {"pad", "keys", "pad+keys"}) {
+        const char *text = builtin_layout(name, Form::Tablet);
+        CHECK(text != nullptr);
+        if (!text)
+            continue;
+        Layout l;
+        std::string err;
+        CHECK(parse_layout(text, &l, &err));
+        CHECK(l.name == name);
+        const Screen s = screen(1180, 820, 1.0);
+        const Rect all{0, 0, 1180, 820};
+        std::vector<Rect> pads, grids;
+        for (int g = 0; g < int(l.groups.size()); ++g) {
+            if (l.groups[g].has_grid) {
+                const Rect b = group_rect(l, g, s);
+                CHECK(b.x >= 0 && b.y >= 0 && b.x + b.w <= all.w && b.y + b.h <= all.h);
+                grids.push_back(b);
+            }
+            for (int c = 0; c < int(l.groups[g].controls.size()); ++c) {
+                const Rect r = control_rect(l, g, c, s);
+                const bool fits =
+                    !r.empty() && r.x >= 0 && r.y >= 0 && r.x + r.w <= all.w && r.y + r.h <= all.h;
+                if (!fits)
+                    fprintf(stderr, "  %s group %d control %d at %d,%d %dx%d\n", name, g, c, r.x,
+                            r.y, r.w, r.h);
+                CHECK(fits);
+                const Control &ctl = l.groups[g].controls[c];
+                if (ctl.kind == Kind::Stick)
+                    CHECK(ctl.radius > 0);
+                if (ctl.kind != Kind::Key)
+                    pads.push_back(r);
+            }
+        }
+        for (size_t i = 0; i < pads.size(); ++i) {
+            for (size_t j = i + 1; j < pads.size(); ++j) {
+                if (overlaps(pads[i], pads[j]))
+                    fprintf(stderr, "  %s: pad controls %zu and %zu overlap\n", name, i, j);
+                CHECK(!overlaps(pads[i], pads[j]));
+            }
+            for (const Rect &b : grids)
+                CHECK(!overlaps(pads[i], b));
+        }
+    }
+    // The pad is translucent by default; the keyboard stays opaque.
+    Layout pad, keys;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("pad", Form::Tablet), &pad, &err) && pad.opacity == 0.7);
+    CHECK(parse_layout(builtin_layout("keys", Form::Tablet), &keys, &err) && keys.opacity == 1.0);
+    const Control &cycle = keys.groups[2].controls[2];
+    CHECK(cycle.kind == Kind::Toggle && cycle.target == "next" && cycle.label == "PAD");
+}
+
+// A held stick's knob is its own quad, so moving it keeps the revision; a
+// button press, the dpad's hat and a floating base's move are drawn, so
+// they change it. radius_px follows the layout and screen scale.
+static void test_make_view_pad_revision() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("pad", Form::Tablet), &l, &err));
+    const Screen s = screen(2360, 1640, 2.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    ControlsView v = make_view(l, r, s, 1.0);
+    int stick = -1, dpad = -1, cross = -1;
+    for (int i = 0; i < int(v.controls.size()); ++i) {
+        const DrawControl &d = v.controls[i];
+        if (d.kind == Kind::Stick && stick < 0)
+            stick = i;
+        if (d.kind == Kind::Dpad)
+            dpad = i;
+        if (d.kind == Kind::Button && d.button == PadButton::Cross)
+            cross = i;
+    }
+    CHECK(stick >= 0 && dpad >= 0 && cross >= 0);
+    if (stick < 0 || dpad < 0 || cross < 0)
+        return;
+    CHECK(v.controls[stick].radius_px == 220); // 110 pt at 2x
+    const Rect sr = v.controls[stick].rect;
+    const uint64_t idle = v.revision;
+
+    CHECK(r.finger_down(1, sr.x + 100, sr.y + 100, 0, rec));
+    const uint64_t held = make_view(l, r, s, 1.0).revision;
+    CHECK(held != idle); // the base moved to the finger and lit
+    CHECK(r.finger_motion(1, sr.x + 300, sr.y + 100, 1, rec));
+    v = make_view(l, r, s, 1.0);
+    CHECK(v.controls[stick].knob_x > 0.5);
+    CHECK(v.revision == held); // only the knob moved
+    CHECK(r.finger_up(1, 2, rec));
+    CHECK(make_view(l, r, s, 1.0).revision == idle);
+
+    const Rect dr = v.controls[dpad].rect;
+    CHECK(r.finger_down(2, dr.x + dr.w / 2.0, dr.y + 2, 3, rec));
+    CHECK(make_view(l, r, s, 1.0).revision != idle);
+    CHECK(r.finger_up(2, 4, rec));
+
+    const Rect cr = v.controls[cross].rect;
+    CHECK(r.finger_down(3, cr.x + cr.w / 2.0, cr.y + cr.h / 2.0, 5, rec));
+    CHECK(make_view(l, r, s, 1.0).revision != idle);
+    CHECK(r.finger_up(3, 6, rec));
+    CHECK(make_view(l, r, s, 1.0).revision == idle);
+}
+
+// `controls_tests --dump <dir>`: renders each tablet built-in at iPad size
+// (2360x1640, 2x) through paint_overlay, idle and with a few controls held
+// (the held stick's knob composited the way Overlay's quad draws it), as
+// raw premultiplied RGBA files "<name>-<state>.2360x1640.rgba" for viewing.
+static void dump_builtins(const char *dir) {
+    const int dw = 2360, dh = 1640;
+    const Screen s = screen(dw, dh, 2.0);
+    for (const char *name : {"pad", "keys", "pad+keys"}) {
+        for (int held = 0; held < 2; ++held) {
+            Layout l;
+            std::string err;
+            if (!parse_layout(builtin_layout(name, Form::Tablet), &l, &err))
+                continue;
+            Router r;
+            Rec rec;
+            r.set_layout(&l, rec);
+            r.set_screen(s);
+            if (held) {
+                // Push the first stick up-right, press the first dpad down
+                // and every other L2/R2/cross.
+                int64_t id = 1;
+                for (int g = 0; g < int(l.groups.size()); ++g)
+                    for (int c = 0; c < int(l.groups[g].controls.size()); ++c) {
+                        const Control &ctl = l.groups[g].controls[c];
+                        const Rect cr = control_rect(l, g, c, s);
+                        const double cx = cr.x + cr.w / 2.0, cy = cr.y + cr.h / 2.0;
+                        if (ctl.kind == Kind::Stick && ctl.stick == 0) {
+                            r.finger_down(id, cx + 20, cy + 30, 0, rec);
+                            r.finger_motion(id++, cx + 120, cy - 60, 1, rec);
+                        } else if (ctl.kind == Kind::Dpad) {
+                            r.finger_down(id++, cx, cy + cr.h * 0.4, 0, rec);
+                        } else if (ctl.kind == Kind::Button && (ctl.button == PadButton::L2 ||
+                                                                ctl.button == PadButton::Cross)) {
+                            r.finger_down(id++, cx, cy, 0, rec);
+                        }
+                    }
+            }
+            const double opacity = l.opacity;
+            const ControlsView v = make_view(l, r, s, opacity);
+            std::vector<uint8_t> px(size_t(dw) * dh * 4, 0);
+            Canvas c(px, dw, dh, v.opacity);
+            paint_overlay(c, v, Rect{0, 0, dw, dh});
+            for (const DrawControl &d : v.controls)
+                if (d.kind == Kind::Stick && d.pressed)
+                    paint_knob(c, d.base_x + d.knob_x * d.radius_px,
+                               d.base_y + d.knob_y * d.radius_px, knob_radius(d.radius_px), true);
+            std::string file =
+                std::string(dir) + "/" + name + (held ? "-held" : "-idle") + ".2360x1640.rgba";
+            for (char &ch : file)
+                if (ch == '+')
+                    ch = '_';
+            write_file(file, std::string(px.begin(), px.end()));
+            printf("wrote %s\n", file.c_str());
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--dump") == 0) {
+        dump_builtins(argv[2]);
+        return g_failures ? 1 : 0;
+    }
     test_json_round_trip();
     test_json_errors_name_the_line();
     test_layout_parse_and_write();
@@ -1853,6 +2122,11 @@ int main() {
     test_controls_area_below_the_game();
     test_router_claims_the_controls_area();
     test_make_view_carries_the_controls_area();
+    test_stick_without_radius_uses_half_its_zone();
+    test_pad_art_cross_button();
+    test_pad_art_stays_in_its_rect();
+    test_builtin_layouts_fit_and_do_not_overlap();
+    test_make_view_pad_revision();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

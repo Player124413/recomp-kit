@@ -4,6 +4,7 @@
 #include "../../mods/controls_settings.h"
 #include "../../mods/mods_internal.h"
 #include "../../platform/os.h"
+#include "../../runtime/layout.h"
 #include "../present.h"
 #include "binding.h"
 #include "game_config.h"
@@ -189,9 +190,10 @@ void publish() {
 
 void host_init(const HostHooks &hooks) {
     g_hooks = hooks;
-    // The game's bundled layouts directory has no accessor yet, so only the
-    // player's copies and the kit's built-ins are searched.
-    g_store.set_dirs(std::string(mods_overlay_profile_dir()) + "/controls", "");
+    // The player's copies, then the game's shipped layouts (its resources'
+    // controls/), then the kit's built-ins.
+    g_store.set_dirs(std::string(mods_overlay_profile_dir()) + "/controls",
+                     host_resource("controls"));
     mods_controls_set_names(g_store.names());
     g_binding.set_table(load_mapped_table());
 }

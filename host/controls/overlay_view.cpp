@@ -4,6 +4,7 @@
 #include "../keypad_layout.h"
 #include "router.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace controls {
@@ -77,6 +78,10 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
             d.base_y = st.base_y;
             d.hat = st.hat;
             d.floating = ctl.floating;
+            // Scaled like the router's own travel (router.cpp), so the knob
+            // quad lands where the stick's output says it is.
+            if (ctl.kind == Kind::Stick)
+                d.radius_px = int(std::lround(ctl.radius * l.scale * s.scale));
             if (ctl.kind == Kind::Toggle) {
                 const int target = group_named(l, ctl.target);
                 d.group_visible = target < 0 || l.groups[target].visible;
@@ -86,9 +91,10 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
         }
     }
 
-    // Only what Overlay's paint() draws: a key's press or a stick's knob that
-    // is not drawn must not re-rasterize the whole canvas. Extend this with
-    // every field a later task starts drawing.
+    // Only what paint_overlay draws: a key's press must not re-rasterize the
+    // whole canvas, and neither may a stick's knob offset, which Overlay
+    // draws as its own quad. Extend this with every field a later task
+    // starts drawing.
     Hash h;
     h.num(v.dw);
     h.num(v.dh);
@@ -106,6 +112,21 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
             h.num(d.lit ? 1 : 0);
         } else if (d.kind == Kind::Toggle) {
             h.str(d.group_visible ? d.label : d.label_off);
+        } else {
+            // The pad art (pad_art.cpp): labels, the button's glyph, its
+            // press, the dpad's lit arrows and a stick's base.
+            h.str(d.label);
+            h.num(int(d.button));
+            h.num(d.pressed ? 1 : 0);
+            h.num(d.hat);
+            if (d.kind == Kind::Stick) {
+                h.num(d.radius_px);
+                h.num(d.floating ? 1 : 0);
+                if (d.pressed) { // at rest the base sits at the rect's centre
+                    h.real(d.base_x);
+                    h.real(d.base_y);
+                }
+            }
         }
     }
     v.revision = h.h;

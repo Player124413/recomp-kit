@@ -2,7 +2,8 @@
 // a layout and the router's live state into a flat list of what to draw (no
 // GPU; overlay_view.cpp, unit-tested); Overlay rasterizes that list into one
 // premultiplied RGBA texture and blends it with the hud pipeline, on the
-// presenter worker's thread only.
+// presenter worker's thread only. A held stick's knob is a second, small
+// texture blitted at its offset, so a moving knob never re-rasterizes.
 // Design: docs/superpowers/specs/2026-09-17-touch-controls-design.md, 8.1.
 #pragma once
 
@@ -26,9 +27,10 @@ struct DrawControl {
     bool pressed = false;
     bool lit = false; // a latched or locked modifier key
     PadButton button = PadButton::Cross;
-    double knob_x = 0, knob_y = 0;
-    double base_x = 0, base_y = 0;
-    uint8_t hat = 0;
+    double knob_x = 0, knob_y = 0; // Stick: [-1, 1], screen axes (y down)
+    double base_x = 0, base_y = 0; // Stick: the base centre, drawable pixels
+    int radius_px = 0;             // Stick: knob travel (and base radius), drawable pixels
+    uint8_t hat = 0;               // Dpad: 1 up, 2 right, 4 down, 8 left
     bool floating = false;
     bool group_visible = true; // Toggle: its target group is shown (else label_off is drawn)
     std::string label_off;
@@ -64,11 +66,20 @@ class Overlay {
               const ControlsView &view);
 
   private:
+    struct Quad {
+        gpu::Texture texture;
+        Rect rect; // drawable pixels
+    };
+    void release();
     void update(gpu::Device *device, const ControlsView &view, int w, int h);
-    void blit(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h);
+    void update_knob(gpu::Device *device, double opacity);
+    void blit(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h,
+              const std::vector<Quad> &quads);
 
     gpu::Device *device_ = nullptr;
     gpu::Texture texture_;
+    gpu::Texture knob_; // kKnobSize square, painted at knob_opacity_
+    double knob_opacity_ = -1;
     int tex_w_ = 0, tex_h_ = 0;
     Rect rect_; // where the raster is drawn, in drawable pixels
     // What the raster was built for.

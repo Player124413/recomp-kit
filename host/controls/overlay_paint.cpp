@@ -1,7 +1,7 @@
 // overlay_paint.cpp - see overlay_paint.h.
 #include "overlay_paint.h"
 
-#include <algorithm>
+#include "pad_art.h"
 
 namespace controls {
 
@@ -46,8 +46,7 @@ void paint_overlay(Canvas &c, const ControlsView &view, const Rect &r) {
             break;
         }
         default:
-            // A placeholder until the pad look lands (Task 11).
-            c.disc(x + w / 2.0, y + h / 2.0, std::min(w, h) / 2.0, flat(40, 48, 64, 200));
+            paint_control(c, d, r.x, r.y); // the DualSense look (pad_art.cpp)
             break;
         }
     }

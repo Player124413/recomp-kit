@@ -1120,6 +1120,30 @@ static void test_bundled_general_midi() {
     CHECK_EQ(st.size, 32319396u);
 }
 
+// The game's controls layouts: a game repository's layouts/ in a developer
+// run, the resources' controls/ in a packaged one.
+static void test_controls_layouts_resource() {
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/controls-resource-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    const std::string root = dir;
+    os_mkdir((root + "/build").c_str());
+    FILE *f = fopen((root + "/game.toml").c_str(), "wb");
+    CHECK(f != nullptr);
+    if (f)
+        fclose(f);
+    host_layout_set_exe_path_for_test((root + "/build/app").c_str());
+    CHECK(host_resource("controls") == root + "/layouts");
+    remove((root + "/game.toml").c_str());
+    os_mkdir((root + "/build/resources").c_str());
+    host_layout_set_exe_path_for_test((root + "/build/app").c_str());
+    CHECK(host_resource("controls") == root + "/build/resources/controls");
+    host_layout_set_exe_path_for_test(nullptr);
+    os_rmdir((root + "/build/resources").c_str());
+    os_rmdir((root + "/build").c_str());
+    os_rmdir(root.c_str());
+}
+
 static void test_audio_maths() {
     CHECK_NEAR(host_audio_gain_from_millibels(0), 1.0, 1e-6);
     CHECK_NEAR(host_audio_gain_from_millibels(-10000), 0.0, 1e-6);
@@ -9237,6 +9261,7 @@ int main(int argc, char **argv) {
     } plain[] = {
         {"game path", test_game_path},
         {"bundled General MIDI bank", test_bundled_general_midi},
+        {"controls layouts resource", test_controls_layouts_resource},
         {"display settings bridge", test_display_settings_bridge},
         {"game rect: landscape is today's placement", test_game_rect_landscape_is_todays_placement},
         {"game rect: portrait", test_game_rect_portrait},
