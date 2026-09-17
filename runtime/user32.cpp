@@ -242,7 +242,8 @@ void u_UnregisterClassA(X86 *c) {
 
 // Create a guest window and deliver WM_NCCREATE/WM_CREATE through its window procedure.
 // Honor callback rejection and the initial visibility transition before returning the window handle.
-void create_window_named(X86 *c, bool wide) {
+namespace {
+void create_window_body(X86 *c, bool wide) {
     uint32_t exstyle = arg(c, 0);
     std::string cls = class_key(arg(c, 1), wide);
     std::string title = wide ? gm_wstr(arg(c, 2)) : gm_str(arg(c, 2));
@@ -349,6 +350,15 @@ void create_window_named(X86 *c, bool wide) {
     }
     window_created(hwnd);
     set_eax(c, hwnd);
+}
+} // namespace
+// The creation messages, and the imports their handlers make, run without a
+// thread switch; see sched_atomic_enter. A guest exception that unwinds past
+// the call ends the stretch through the unwinder.
+void create_window_named(X86 *c, bool wide) {
+    sched_atomic_enter(c->r[R_ESP]);
+    create_window_body(c, wide);
+    sched_atomic_leave();
 }
 
 void u_CreateWindowExA(X86 *c) {

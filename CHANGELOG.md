@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Window creation runs without a thread switch. The import checkpoints could
+  hand the baton to another guest thread in the middle of `CreateWindowEx` and
+  its creation messages, and Delphi's VCL passes the control being created to
+  the first message through a global (`CreationControl`): with a worker and
+  the main thread both creating windows, the message took the other thread's
+  control, called a freed object instance through Delphi's `StdWndProc`, and
+  the access violation reached an untranslated top-level handler. Siege of
+  Avalon crashed so in a level, and a close in that state was left unanswered
+  until the host unwound it. `CreateWindowExA/W` skip their entry checkpoint,
+  and the shim runs in a `sched_atomic_enter` stretch that a guest exception
+  unwinding past it ends. `runtime_tests` checks both.
+
 - A windowed DXGI swap chain on a program's own top-level window owns the
   display, as a fullscreen one does: the display mode becomes its back-buffer
   size and the window covers it. The host shows one window, and it is the

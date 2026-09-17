@@ -2566,6 +2566,20 @@ static void fake_pointer_handoff_thread(X86 *c) {
     set_eax(c, 0);
 }
 
+// A window procedure that polls a non-blocking import while its window is
+// being created, and records whether the service thread ran meanwhile.
+static uint32_t g_creation_service_passes = 0xffffffffu;
+static void creation_polling_wndproc(X86 *c) {
+    if (arg(c, 1) == 0x81) { // WM_NCCREATE
+        const uint32_t before = g_service_loops;
+        const double t0 = wall_seconds();
+        while (wall_seconds() - t0 < 0.05)
+            call_import(c, "KERNEL32.dll", "GetTickCount", {});
+        g_creation_service_passes = g_service_loops - before;
+    }
+    set_eax(c, 1);
+}
+
 static void test_scheduling(X86 *c) {
     section("cooperative scheduling contracts");
     uint32_t pcode = scratch_block(4);
@@ -2587,6 +2601,42 @@ static void test_scheduling(X86 *c) {
         call_import(c, "KERNEL32.dll", "GetTickCount", {});
     check(g_service_loops > before,
           "polling GetTickCount alone let the service thread run (%u passes)", g_service_loops);
+
+    // --- an atomic stretch keeps the baton through import checkpoints ------
+    before = g_service_loops;
+    sched_atomic_enter(c->r[R_ESP]);
+    t0 = wall_seconds();
+    while (wall_seconds() - t0 < 0.05)
+        call_import(c, "KERNEL32.dll", "GetTickCount", {});
+    check(g_service_loops == before, "no other thread ran inside an atomic stretch");
+    // A guest exception unwinding above the stretch ends it.
+    sched_atomic_unwind_to_esp(c->r[R_ESP] + 4);
+    t0 = wall_seconds();
+    while (wall_seconds() - t0 < 0.25)
+        call_import(c, "KERNEL32.dll", "GetTickCount", {});
+    check(g_service_loops > before, "unwinding above the stretch ended it");
+
+    // --- window creation is such a stretch, messages and all ---------------
+    {
+        uint32_t proc = imports_alloc_trampoline("test", "creation_polling_wndproc",
+                                                 creation_polling_wndproc, 4);
+        uint32_t cls = put_str("AtomicCreate"), wc = scratch_block(40);
+        wr32(wc + 4, proc);
+        wr32(wc + 36, cls);
+        call_import(c, "USER32.dll", "RegisterClassA", {wc});
+        g_creation_service_passes = 0xffffffffu;
+        uint32_t hwnd = call_import(c, "USER32.dll", "CreateWindowExA",
+                                    {0, cls, cls, 0, 0, 0, 64, 64, 0, 0, 0, 0});
+        check(hwnd != 0 && g_creation_service_passes == 0,
+              "no other thread ran while CreateWindowExA sent WM_NCCREATE (%u passes)",
+              g_creation_service_passes);
+        before = g_service_loops;
+        t0 = wall_seconds();
+        while (wall_seconds() - t0 < 0.25)
+            call_import(c, "KERNEL32.dll", "GetTickCount", {});
+        check(g_service_loops > before, "and the stretch ended with the call");
+        call_import(c, "USER32.dll", "DestroyWindow", {hwnd});
+    }
 
     // --- an unsignalled wait consumes real time and reports a timeout ------
     uint32_t ev = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, 0});

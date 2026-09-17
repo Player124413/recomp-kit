@@ -26,7 +26,18 @@ struct Tramp {
     uint8_t argc = 0;
     void (*fn)(X86 *) = nullptr;
     uint32_t calls = 0;
+    // Entered without a scheduling checkpoint (see atomic_import).
+    bool atomic = false;
 };
+
+// Imports whose callers have just set up state the call reads back, with no
+// import in between: a thread switch at their entry checkpoint would let
+// another thread replace it. Delphi's VCL sets its creation-control global and
+// calls CreateWindowEx at once; the window procedure reads it on the first
+// message.
+bool atomic_import(const std::string &key) {
+    return key == "user32.dll!CreateWindowExA" || key == "user32.dll!CreateWindowExW";
+}
 
 // Deliberately leaked: an atexit hook (RECOMP_IMPORT_STATS) reads these after
 // static destructors would otherwise have run.
@@ -112,6 +123,7 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
     }
 
     Tramp t;
+    t.atomic = atomic_import(k);
     t.dll = dll ? dll : "?";
     t.name = name ? name : "?";
     t.desc = t.dll + "!" + t.name;
@@ -364,9 +376,11 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     // GetTickCount and would otherwise starve the service threads for as long
     // as it liked, expired waits and all. Every call into the runtime is a
     // checkpoint, rate limited to one yield per millisecond per thread, and it
-    // runs before the shim so the guest state is a consistent call boundary.
-    sched_checkpoint();
+    // runs before the shim so the guest state is a consistent call boundary -
+    // except at an atomic import, and inside a sched_atomic_enter stretch.
     uint32_t idx = (target - TRAMP_BASE) / TRAMP_STRIDE;
+    if (idx >= tramps().size() || !tramps()[idx].atomic)
+        sched_checkpoint();
     if (idx >= tramps().size()) {
         // No shim to say how many arguments to drop, but the return address
         // must still be consumed or the guest stack is displaced from here on.

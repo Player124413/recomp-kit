@@ -63,6 +63,17 @@ void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
 // display in, and gets its bounds back when the chain leaves fullscreen.
 void win32_cover_display(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h);
 void win32_uncover_display(X86 *c, uint32_t hwnd);
+// A stretch of a guest thread in which the import checkpoints do not hand the
+// baton to another thread (a blocking call still does), entered at guest stack
+// pointer `esp`. Window creation runs in one: Delphi's VCL passes the control
+// being created to its first window message through a global, and a thread
+// switch at one of the imports between setting it and reading it gave that
+// message another thread's control. A guest exception that unwinds above
+// `esp` ends the stretch (sched_atomic_unwind_to_esp), since the matching
+// leave never runs.
+void sched_atomic_enter(uint32_t esp);
+void sched_atomic_leave();
+void sched_atomic_unwind_to_esp(uint32_t esp);
 // A window with no parent: a program's own top-level window.
 bool win32_top_level(uint32_t hwnd);
 extern "C" bool ddraw_enum_display_mode(uint32_t index, uint32_t *w, uint32_t *h, uint32_t *bpp);

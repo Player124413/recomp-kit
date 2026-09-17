@@ -4,6 +4,8 @@
 #include "memory.h"
 #include "mods_seam.h"
 #include "profile.h"
+// kernel32.cpp: a guest exception unwinding past an atomic stretch ends it.
+void sched_atomic_unwind_to_esp(uint32_t esp);
 #include <cstdlib>
 #include <cstdio>
 #include <map>
@@ -343,6 +345,7 @@ void recomp_seh_intercept(X86 *c, uint32_t target) {
         }
     }
     mods_hooks_unwind_to_esp(reg);
+    sched_atomic_unwind_to_esp(reg);
     recomp_profile_truncate(landing->profile_depth);
     recomp_callback_truncate(landing->callback_depth);
     state.landing = landing;

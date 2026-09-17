@@ -2611,6 +2611,26 @@ bool host_guest_yield() {
     return guest_yield();
 }
 
+// The guest stack pointers of this thread's open sched_atomic_enter stretches,
+// innermost last. Nesting deeper than this is not tracked, and not needed.
+const uint32_t SCHED_ATOMIC_MAX = 8;
+__thread uint32_t t_atomic = 0;
+__thread uint32_t t_atomic_esp[SCHED_ATOMIC_MAX];
+void sched_atomic_enter(uint32_t esp) {
+    if (t_atomic < SCHED_ATOMIC_MAX)
+        t_atomic_esp[t_atomic] = esp;
+    ++t_atomic;
+}
+void sched_atomic_leave() {
+    if (t_atomic)
+        --t_atomic;
+}
+void sched_atomic_unwind_to_esp(uint32_t esp) {
+    // A stretch entered below `esp` belongs to a frame being unwound.
+    while (t_atomic && t_atomic <= SCHED_ATOMIC_MAX && t_atomic_esp[t_atomic - 1] < esp)
+        --t_atomic;
+}
+
 void sched_checkpoint() {
     // Drain first and unconditionally: a guest with no worker threads never
     // reaches the scheduler proper, and a signal it never applied is a wait
@@ -2620,7 +2640,7 @@ void sched_checkpoint() {
         apply_host_signals_locked();
         g_sched_m.unlock();
     }
-    if (threads().size() < 2)
+    if (threads().size() < 2 || t_atomic)
         return;
     GuestThread *me = threads()[t_self];
     double now = sched_now();
