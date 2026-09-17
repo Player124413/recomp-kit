@@ -622,6 +622,14 @@ Rect control_rect(const Layout &l, int group, int control, const Screen &s) {
     return r;
 }
 
+Rect controls_area_below(int dw, int dh, const Rect &game, int safe_bottom) {
+    if (dh <= dw || game.empty())
+        return Rect{};
+    const int top = game.y + game.h;
+    const Rect area{0, top, dw, dh - top - (safe_bottom > 0 ? safe_bottom : 0)};
+    return area.empty() ? Rect{} : area;
+}
+
 Hit hit_test(const Layout &l, const Screen &s, double px_, double py_) {
     Hit result;
     if (s.dw <= 0 || s.dh <= 0)

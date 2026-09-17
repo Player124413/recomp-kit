@@ -93,6 +93,7 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
     h.num(v.dw);
     h.num(v.dh);
     h.real(v.opacity);
+    h.rect(v.controls_area);
     h.num(int64_t(v.backdrops.size()));
     for (const Rect &b : v.backdrops)
         h.rect(b);

@@ -56,6 +56,34 @@ struct HostWindowSize host_window_size_for(int guest_w, int guest_h, int usable_
 void host_present_point_to_guest(double drawable_w, double drawable_h, int guest_w, int guest_h,
                                  double px, double py, int32_t *out_x, int32_t *out_y);
 
+// The game rectangle: the part of the drawable the presenter composes the
+// game into, in drawable pixels. Everything that places the game or maps a
+// point onto it goes through this one rectangle: the presenter's composite
+// and published layout, the input gate (fed game-rectangle pixels by the
+// window host), the gesture mapper's edges and the on-screen controls' area.
+//
+// Landscape (dw >= dh): the whole drawable, which is where the presenter has
+// always composed; the compositor then places the guest image inside it as
+// before. Portrait (dh > dw, a phone held upright): full width, the guest's
+// aspect kept, pinned `safe_top` pixels down, leaving the space below for the
+// controls. A portrait image too tall to fit below `safe_top` takes the
+// landscape rule. No guest mode yet (gw or gh <= 0): the whole drawable.
+struct HostGameRect {
+    int x, y, w, h;
+};
+struct HostGameRect host_present_game_rect(int dw, int dh, int gw, int gh, int safe_top);
+// The system strip above the game in portrait (a status bar, a notch), in
+// drawable pixels. Set by the window host whenever it reads the safe area.
+void host_present_set_safe_top(int pixels);
+int host_present_safe_top(void);
+// The rectangle for the live drawable, guest mode and safe top: what the
+// presenter composes into right now. The whole drawable before it starts.
+struct HostGameRect host_present_current_game_rect(void);
+// A drawable pixel as a pixel in the game rectangle. May fall outside it
+// (negative, or past its size): the gate treats such a point as off the game.
+void host_present_point_to_game(struct HostGameRect rect, int32_t x, int32_t y, int32_t *out_x,
+                                int32_t *out_y);
+
 // ---------------------------------------------------------------------------
 // Frame dumps, for looking at actual pixels instead of describing them.
 //

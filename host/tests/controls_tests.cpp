@@ -1725,6 +1725,71 @@ static void test_rumble_sink_truth_table() {
     CHECK(rumble_sink(false, false) == RumbleSink::None);
 }
 
+// Portrait on a phone: the space below the game image is the controls area.
+// Landscape, or a game image that fills the drawable, has none.
+static void test_controls_area_below_the_game() {
+    const Rect game{0, 141, 1170, 878};
+    const Rect a = controls_area_below(1170, 2532, game, 102);
+    CHECK(a.x == 0 && a.y == 141 + 878 && a.w == 1170 && a.h == 2532 - (141 + 878) - 102);
+    CHECK(controls_area_below(2532, 1170, Rect{0, 0, 2532, 1170}, 0).empty());
+    CHECK(controls_area_below(1170, 2532, Rect{0, 0, 1170, 2532}, 102).empty());
+    CHECK(controls_area_below(1170, 2532, Rect{}, 102).empty());
+}
+
+// Every touch in the controls area belongs to the controls, even between
+// them; a touch outside it that hits no control still goes to the game.
+static void test_router_claims_the_controls_area() {
+    Layout l = keys_layout();
+    const Screen s = screen(1180, 820, 1.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    // A point no control covers, inside the claim area, and another outside it.
+    CHECK(hit_test(l, s, 590, 20).group < 0);
+    CHECK(hit_test(l, s, 590, 300).group < 0);
+    CHECK(!r.finger_down(1, 590, 20, 0, rec));
+    r.set_claim_area(Rect{0, 0, 1180, 100});
+    CHECK(r.finger_down(2, 590, 20, 0, rec));
+    CHECK(r.owns(2));
+    CHECK(rec.calls.empty()); // claimed, and does nothing
+    CHECK(r.finger_motion(2, 600, 30, 5, rec));
+    CHECK(r.finger_up(2, 10, rec));
+    CHECK(!r.owns(2));
+    CHECK(rec.calls.empty());
+    CHECK(!r.finger_down(3, 590, 300, 20, rec)); // outside the area: the game's
+    CHECK(r.finger_down(4, 590, 20, 30, rec));
+    CHECK(r.finger_cancel(4, rec));
+    CHECK(r.finger_down(5, 590, 20, 40, rec));
+    r.cancel_all(rec);
+    CHECK(!r.owns(5));
+    CHECK(rec.calls.empty());
+    // A control inside the area still works as a control.
+    double x, y;
+    center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y);
+    r.set_claim_area(Rect{0, 0, 1180, 820});
+    CHECK(r.finger_down(6, x, y, 50, rec));
+    CHECK((rec.calls == std::vector<std::string>{"k44+", "tap"}));
+    r.set_claim_area(Rect{});
+    CHECK(!r.finger_down(7, 590, 20, 60, rec));
+}
+
+// make_view copies the controls area, and a new area is a new raster.
+static void test_make_view_carries_the_controls_area() {
+    Layout l = keys_layout();
+    Screen s = screen(1170, 2532, 3.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    const uint64_t rev = make_view(l, r, s, 1.0).revision;
+    s.controls_area = Rect{0, 1019, 1170, 1411};
+    const ControlsView v = make_view(l, r, s, 1.0);
+    CHECK(v.controls_area.x == 0 && v.controls_area.y == 1019 && v.controls_area.w == 1170 &&
+          v.controls_area.h == 1411);
+    CHECK(v.revision != rev);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -1785,6 +1850,9 @@ int main() {
     test_binding_aliased_mouse_button_is_ref_counted();
     test_binding_release_all_latches_still_held_buttons();
     test_rumble_sink_truth_table();
+    test_controls_area_below_the_game();
+    test_router_claims_the_controls_area();
+    test_make_view_carries_the_controls_area();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

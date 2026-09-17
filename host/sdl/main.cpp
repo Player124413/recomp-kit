@@ -186,8 +186,23 @@ void window_sizes(int *bw, int *bh, int *dw, int *dh) {
     SDL_GetWindowSizeInPixels(g_window, dw, dh);
 }
 
-// Decode window points into drawable pixels only. Layout selection, capture,
-// drag ownership and guest motion are applied later under the guest baton.
+// The presenter's game rectangle for a drawable of dw x dh (present.h): in
+// landscape always the whole drawable, as it has always been; in portrait the
+// rectangle the presenter composes the game into, when it fits this drawable.
+HostGameRect game_rect_for(int dw, int dh) {
+    const HostGameRect whole = {0, 0, dw, dh};
+    if (dh <= dw)
+        return whole;
+    const HostGameRect r = host_present_current_game_rect();
+    if (r.w <= 0 || r.h <= 0 || r.x < 0 || r.y < 0 || r.x + r.w > dw || r.y + r.h > dh)
+        return whole;
+    return r;
+}
+
+// Decode window points into game-rectangle pixels only: drawable pixels, less
+// the rectangle's origin, with the rectangle's size as the extent (the whole
+// drawable in landscape). Layout selection, capture, drag ownership and guest
+// motion are applied later under the guest baton.
 void view_point_to_drawable(double px, double py, int32_t *out_x, int32_t *out_y, int *width,
                             int *height) {
     *out_x = 0;
@@ -198,17 +213,34 @@ void view_point_to_drawable(double px, double py, int32_t *out_x, int32_t *out_y
     window_sizes(&bw, &bh, &dw, &dh);
     if (bw <= 0 || bh <= 0)
         return;
-    *width = dw;
-    *height = dh;
+    const HostGameRect rect = game_rect_for(dw, dh);
+    int32_t x, y;
     if (!g_pointer_confinement.empty()) {
-        *out_x = host_confined_pointer_pixel(px, g_pointer_confinement.x, g_pointer_confinement.w,
-                                             *width);
-        *out_y = host_confined_pointer_pixel(py, g_pointer_confinement.y, g_pointer_confinement.h,
-                                             *height);
-        return;
+        x = host_confined_pointer_pixel(px, g_pointer_confinement.x, g_pointer_confinement.w, dw);
+        y = host_confined_pointer_pixel(py, g_pointer_confinement.y, g_pointer_confinement.h, dh);
+    } else {
+        x = (int32_t)floor(px / bw * dw);
+        y = (int32_t)floor(py / bh * dh);
     }
-    *out_x = (int32_t)floor(px / bw * dw);
-    *out_y = (int32_t)floor(py / bh * dh);
+    host_present_point_to_game(rect, x, y, out_x, out_y);
+    *width = rect.w;
+    *height = rect.h;
+}
+
+// The game rectangle in window points, for the paths that work in points.
+// `whole` says it is the entire window (landscape).
+struct PointRect {
+    double x, y, w, h;
+    bool whole;
+};
+PointRect game_rect_points() {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    const HostGameRect r = game_rect_for(dw, dh);
+    if (bw <= 0 || dw <= 0 || (r.x == 0 && r.y == 0 && r.w == dw && r.h == dh))
+        return {0, 0, double(bw), double(bh), true};
+    const double scale = double(dw) / bw;
+    return {r.x / scale, r.y / scale, r.w / scale, r.h / scale, false};
 }
 
 // ---------------------------------------------------------------------------
@@ -433,7 +465,9 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy) 
         int bw, bh, dw, dh;
         window_sizes(&bw, &bh, &dw, &dh);
         const double margin = 8 * (bw > 0 ? double(dw) / bw : 1.0);
-        if (host_pointer_at_resize_edge(px, py, dw, dh, margin))
+        // The pointer is in game-rectangle pixels.
+        const HostGameRect game = game_rect_for(dw, dh);
+        if (host_pointer_at_resize_edge(px, py, game.w, game.h, margin))
             apply_pointer_capture(false);
     }
     {
@@ -516,7 +550,10 @@ void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
     double strip_top = 0, strip_bottom = 0;
     system_strip_insets(&strip_top, &strip_bottom);
     static PointerStripLatch strip_latch;
-    const float y = (float)strip_latch.apply(motion.y, strip_top);
+    // Only a strip the game image reaches: in portrait the image starts below it.
+    const PointRect game = game_rect_points();
+    const double strip = game.whole ? strip_top : std::max(0.0, strip_top - game.y);
+    const float y = (float)strip_latch.apply(motion.y, strip);
     view_point_to_drawable(motion.x, y, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
     static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
     static double last_trace = 0;
@@ -861,13 +898,29 @@ TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
     int w = 0, h = 0;
     if (g_window)
         SDL_GetWindowSize(g_window, &w, &h);
-    g_touch.set_bounds(w, h);
+    // The gesture mapper's edges are the game image's (portrait: the image's
+    // rectangle inside the window).
+    const PointRect game = game_rect_points();
+    if (game.whole) {
+        g_touch.set_bounds(w, h);
+        g_touch.set_origin(0, 0);
+    } else {
+        g_touch.set_bounds(game.w, game.h);
+        g_touch.set_origin(game.x, game.y);
+    }
     // The strips the system keeps (a status bar, a gesture zone) never deliver
     // a finger, so a finger "on" that edge arrives at the strip's inner side.
+    // Only the part of a strip that overlaps the game image counts.
     SDL_Rect safe{0, 0, w, h};
     if (g_window && SDL_GetWindowSafeArea(g_window, &safe)) {
-        const double l = safe.x, t = safe.y;
-        const double r = w - (safe.x + safe.w), b = h - (safe.y + safe.h);
+        double l = safe.x, t = safe.y;
+        double r = w - (safe.x + safe.w), b = h - (safe.y + safe.h);
+        if (!game.whole) {
+            l = safe.x - game.x;
+            t = safe.y - game.y;
+            r = (game.x + game.w) - (safe.x + safe.w);
+            b = (game.y + game.h) - (safe.y + safe.h);
+        }
         g_touch.set_edge_insets(l > 0 ? l : 0, t > 0 ? t : 0, r > 0 ? r : 0, b > 0 ? b : 0);
         static bool logged = false;
         if (!logged) {
@@ -974,7 +1027,11 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
         // The green button or the View menu: the player chose fullscreen, so
         // it becomes the setting instead of being undone on the next frame.
-        if (!g_fullscreen_transition) {
+        // A touch platform's window is always fullscreen and has no
+        // "windowed" mode to save - platform_ui_pointer_capture_supported()
+        // is false there - so a rotation raising this same event (no player
+        // choice behind it) never rewrites the saved window-mode setting.
+        if (!g_fullscreen_transition && platform_ui_pointer_capture_supported()) {
             g_wanted_window_mode = 2;
             (void)mods_display_set(DISPLAY_WINDOW, 2);
         }
@@ -985,7 +1042,8 @@ void handle_event(const SDL_Event &event) {
         update_platform_pointer_capture();
         break;
     case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-        if (!g_fullscreen_transition && g_wanted_window_mode == 2) {
+        if (!g_fullscreen_transition && g_wanted_window_mode == 2 &&
+            platform_ui_pointer_capture_supported()) {
             g_wanted_window_mode = 0;
             (void)mods_display_set(DISPLAY_WINDOW, 0);
         }
@@ -1110,6 +1168,8 @@ controls::Screen controls_screen() {
     if (g_window && SDL_GetWindowSafeArea(g_window, &safe))
         s.safe = {int(lround(safe.x * s.scale)), int(lround(safe.y * s.scale)),
                   int(lround(safe.w * s.scale)), int(lround(safe.h * s.scale))};
+    // Portrait pins the game image below the top strip.
+    host_present_set_safe_top(s.safe.y);
     return s;
 }
 
@@ -1133,7 +1193,10 @@ void after_events() {
         if (wanted && !(absent || force))
             touch_release_all();
         wanted = absent || force;
-        controls::host_set_screen(controls_screen());
+        const controls::Screen screen = controls_screen();
+        const HostGameRect game = game_rect_for(screen.dw, screen.dh);
+        controls::host_set_screen(screen, controls::Rect{game.x, game.y, game.w, game.h},
+                                  screen.dh - (screen.safe.y + screen.safe.h));
         controls::host_set_wanted(absent, false);
         controls::host_pump(SDL_GetTicksNS());
     }
@@ -1358,6 +1421,10 @@ void post_drawable_size() {
     static int last_w = 0, last_h = 0;
     if (dw <= 0 || dh <= 0 || (last_w == dw && last_h == dh))
         return;
+    // A flip between portrait and landscape (a phone rotating) moves every
+    // touch control out from under whatever fingers were holding it.
+    if (last_w > 0 && last_h > 0 && (last_w > last_h) != (dw > dh))
+        touch_release_all();
     last_w = dw;
     last_h = dh;
     host_present_resize(dw, dh);
@@ -1641,7 +1708,7 @@ extern "C" int host_display_screen_size(int *w, int *h) {
     const int sw = g_screen_w.load(), sh = g_screen_h.load();
     if (!w || !h || sw <= 0 || sh <= 0)
         return 0;
-    *w = sw;
-    *h = sh;
+    // Never a portrait screen: the game's image goes above the controls.
+    host_landscape_screen_size(sw, sh, w, h);
     return 1;
 }

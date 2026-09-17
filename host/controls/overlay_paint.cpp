@@ -18,6 +18,10 @@ Paint flat(int r, int g, int b, int a) {
 } // namespace
 
 void paint_overlay(Canvas &c, const ControlsView &view, const Rect &r) {
+    // Portrait: the area below the game is opaque, whatever the opacity.
+    if (!view.controls_area.empty())
+        c.rect(view.controls_area.x - r.x, view.controls_area.y - r.y, view.controls_area.w,
+               view.controls_area.h, flat(12, 14, 18, 255));
     for (const Rect &b : view.backdrops)
         c.rect(b.x - r.x, b.y - r.y, b.w, b.h, flat(6, 9, 15, 150));
     for (const DrawControl &d : view.controls) {

@@ -19,7 +19,7 @@
     <key>UIViewControllerBasedStatusBarAppearance</key><false/>
     <key>UILaunchScreen</key><dict/>
     <key>UISupportedInterfaceOrientations</key>
-    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>CFBundleIcons</key>

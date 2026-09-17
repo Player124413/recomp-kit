@@ -90,7 +90,10 @@ void redirect_stdio_to_logcat() {
 void platform_ui_init_hints() {
 #ifdef __ANDROID__
     redirect_stdio_to_logcat();
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    // SDL_HINT_ORIENTATIONS is set per device class in platform_ui_create_window
+    // instead of here: reading the display needs SDL_Init, which has not run
+    // yet at this point, and SDLActivity only reads the hint once, from
+    // Android_CreateWindow.
     // The shared touch mapper generates mouse events itself.
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
@@ -122,10 +125,35 @@ SDL_Window *platform_ui_create_window(const char *title, int window_w, int windo
             nullptr);
         watching = true;
     }
+    // A phone rotates live between portrait and landscape; a tablet stays
+    // landscape. This has to run here rather than in platform_ui_init_hints:
+    // SDL_GetDisplayBounds needs SDL_Init (already done by the time this
+    // runs) and, more importantly, SDLActivity.setOrientationBis reads
+    // SDL_HINT_ORIENTATIONS exactly once, from Android_CreateWindow - so the
+    // hint has to be current right before the SDL_CreateWindow call below.
+    // The window is resizable so that call takes its "both orientations
+    // allowed" branch: with only Landscape hinted that still resolves to one
+    // landscape-only request (SCREEN_ORIENTATION_USER_LANDSCAPE), and with
+    // Landscape and Portrait both hinted it asks for
+    // SCREEN_ORIENTATION_FULL_USER, a live, sensor-driven orientation - a
+    // fixed (non-resizable) window would instead freeze to whichever
+    // orientation the window happened to be created in and never rotate
+    // again. RecompActivity.onCreate locks a tablet to landscape before SDL
+    // ever runs; hinting landscape-only here on top of that keeps SDL from
+    // ever asking the system for something wider once its own window exists.
+    SDL_Rect bounds = {0, 0, 0, 0};
+    SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &bounds);
+    const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+    const float smallest_side_pt =
+        (float)(bounds.w < bounds.h ? bounds.w : bounds.h) / (scale > 0 ? scale : 1.0f);
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, smallest_side_pt < 600
+                                           ? "LandscapeLeft LandscapeRight Portrait"
+                                           : "LandscapeLeft LandscapeRight");
     if (window_mode)
         *window_mode = 2;
     return SDL_CreateWindow(title, 0, 0,
-                            surface_flag | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                            surface_flag | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                                SDL_WINDOW_RESIZABLE);
 #else
     SDL_Window *w = SDL_CreateWindow(title, window_w, window_h,
                                      surface_flag | SDL_WINDOW_HIGH_PIXEL_DENSITY |

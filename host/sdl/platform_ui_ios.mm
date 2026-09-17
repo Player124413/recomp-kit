@@ -42,7 +42,12 @@ std::string documents_dir() {
 } // namespace
 
 void platform_ui_init_hints() {
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    // iPhones rotate freely to portrait; iPads stay landscape (the Info.plist
+    // keys above match, so the OS never offers portrait to an iPad).
+    SDL_SetHint(SDL_HINT_ORIENTATIONS,
+                UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad
+                    ? "LandscapeLeft LandscapeRight"
+                    : "LandscapeLeft LandscapeRight Portrait");
     // The mapper turns fingers into mouse and key events itself.
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");

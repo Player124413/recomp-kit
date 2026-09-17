@@ -3,6 +3,7 @@ package dev.recompkit;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
@@ -43,6 +44,17 @@ public class RecompActivity extends SDLActivity {
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
+        // The manifest allows any orientation (phones rotate live to
+        // portrait for the touch controls; tablets stay landscape). SDL sets
+        // its own per-device-class orientation hint once it has a display to
+        // measure (platform_ui_create_window, host/sdl/platform_ui_desktop.cpp)
+        // and that hint is what actually holds a tablet in landscape once
+        // SDL's (resizable) window exists. Before that - between this
+        // activity starting and SDL's first window - there is no hint yet,
+        // so this is the fallback that keeps a tablet from ever showing a
+        // frame in portrait.
+        if (getResources().getConfiguration().smallestScreenWidthDp >= 600)
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
         super.onCreate(savedInstanceState);
         sActivity = this;
         takeViewIntent(getIntent());

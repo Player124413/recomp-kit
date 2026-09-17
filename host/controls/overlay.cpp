@@ -30,7 +30,7 @@ Overlay::~Overlay() {
 void Overlay::update(gpu::Device *device, const ControlsView &view, int w, int h) {
     if (device_ == device && built_ && revision_ == view.revision && dw_ == w && dh_ == h)
         return;
-    Rect r;
+    Rect r = view.controls_area;
     for (const Rect &b : view.backdrops)
         r = unite(r, b);
     for (const DrawControl &d : view.controls)

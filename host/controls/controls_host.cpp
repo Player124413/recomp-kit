@@ -196,9 +196,11 @@ void host_init(const HostHooks &hooks) {
     g_binding.set_table(load_mapped_table());
 }
 
-void host_set_screen(const Screen &s) {
+void host_set_screen(const Screen &s, const Rect &game, int safe_bottom) {
     g_screen = s;
-    g_router.set_screen(s);
+    g_screen.controls_area = controls_area_below(s.dw, s.dh, game, safe_bottom);
+    g_router.set_screen(g_screen);
+    g_router.set_claim_area(g_screen.controls_area);
     // The binding works in window points; s.scale is drawable pixels per point.
     g_binding.set_bounds(s.scale > 0 ? s.dw / s.scale : 0, s.scale > 0 ? s.dh / s.scale : 0);
 }

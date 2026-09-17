@@ -56,6 +56,10 @@ class Router {
     // the new one and rebuilding its per-control state.
     void set_layout(Layout *layout, ControlsSink &sink);
     void set_screen(const Screen &s);
+    // Portrait: the controls area. While enabled, a finger landing in it that
+    // hits no control is still claimed, and does nothing, so the gesture mapper only
+    // sees fingers on the game image. Empty (the default) claims nothing.
+    void set_claim_area(const Rect &area);
     // false: hit_test never claims a new finger, and every finger currently
     // held is released exactly as cancel_all() would release it.
     void set_enabled(bool on, ControlsSink &sink);
@@ -111,6 +115,7 @@ class Router {
 
     Layout *layout_ = nullptr; // not owned
     Screen screen_;
+    Rect claim_area_;
     bool enabled_ = true;
     std::map<int64_t, Owned> fingers_;
     std::vector<std::vector<ControlState>> states_; // sized from layout_
