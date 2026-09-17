@@ -48,7 +48,13 @@ void redirect_stdio_to_logcat() {
 void platform_ui_init_hints() {
 #ifdef __ANDROID__
     redirect_stdio_to_logcat();
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    // Phones rotate to portrait for the touch controls; tablets are locked to
+    // landscape in RecompActivity.onCreate before SDL creates a window. This
+    // hint's Portrait entry never reaches a locked tablet: SDL's own window
+    // is not resizable on Android, so it narrows to whichever hinted
+    // orientation already matches the (locked) window shape, rather than
+    // widening the lock.
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
     // The shared touch mapper generates mouse events itself.
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");

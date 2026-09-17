@@ -1400,6 +1400,10 @@ void post_drawable_size() {
     static int last_w = 0, last_h = 0;
     if (dw <= 0 || dh <= 0 || (last_w == dw && last_h == dh))
         return;
+    // A flip between portrait and landscape (a phone rotating) moves every
+    // touch control out from under whatever fingers were holding it.
+    if (last_w > 0 && last_h > 0 && (last_w > last_h) != (dw > dh))
+        touch_release_all();
     last_w = dw;
     last_h = dh;
     host_present_resize(dw, dh);

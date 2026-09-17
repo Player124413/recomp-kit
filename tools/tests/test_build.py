@@ -45,7 +45,7 @@ def test_android_templates_render(tmp_path):
     app = root.find("application")
     assert app.get(android + "label") == "@string/app_name"
     assert app.get(android + "requestLegacyExternalStorage") == "false"
-    assert app.find("activity").get(android + "screenOrientation") == "landscape"
+    assert app.find("activity").get(android + "screenOrientation") == "fullUser"
 
 
 @pytest.mark.parametrize("system", ["Darwin", "Linux", "Windows"])
