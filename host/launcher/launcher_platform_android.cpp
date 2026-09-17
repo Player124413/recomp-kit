@@ -55,7 +55,8 @@ void pick(int request, const std::string &suggested, PickDone done) {
 
 int open_fd(const std::string &uri, const char *mode) {
     JNIEnv *e = env();
-    jmethodID m = e->GetStaticMethodID(g_activity, "launcherOpenFd", "(Ljava/lang/String;Ljava/lang/String;)I");
+    jmethodID m = e->GetStaticMethodID(g_activity, "launcherOpenFd",
+                                       "(Ljava/lang/String;Ljava/lang/String;)I");
     jstring u = jstr(e, uri), md = jstr(e, mode);
     const int fd = e->CallStaticIntMethod(g_activity, m, u, md);
     e->DeleteLocalRef(u);
@@ -89,7 +90,8 @@ class TreeSource final : public Source {
         out->clear();
         docs_.clear();
         JNIEnv *e = env();
-        jmethodID m = e->GetStaticMethodID(g_activity, "launcherListTree", "(Ljava/lang/String;)[Ljava/lang/String;");
+        jmethodID m = e->GetStaticMethodID(g_activity, "launcherListTree",
+                                           "(Ljava/lang/String;)[Ljava/lang/String;");
         jstring u = jstr(e, uri_);
         auto rows = static_cast<jobjectArray>(e->CallStaticObjectMethod(g_activity, m, u));
         e->DeleteLocalRef(u);
@@ -106,7 +108,8 @@ class TreeSource final : public Source {
             std::vector<std::string> f;
             for (size_t start = 0;;) {
                 const size_t tab = text.find('\t', start);
-                f.push_back(text.substr(start, tab == std::string::npos ? std::string::npos : tab - start));
+                f.push_back(
+                    text.substr(start, tab == std::string::npos ? std::string::npos : tab - start));
                 if (tab == std::string::npos)
                     break;
                 start = tab + 1;
@@ -174,8 +177,12 @@ class AndroidPlatform final : public Platform {
                       " (any folder name), then open the app again.";
         return i;
     }
-    void pick_folder(PickDone done) override { pick(kPickTree, "", wrap(std::move(done), true)); }
-    void pick_zip(PickDone done) override { pick(kPickZip, "", wrap(std::move(done), false)); }
+    void pick_folder(PickDone done) override {
+        pick(kPickTree, "", wrap(std::move(done), true));
+    }
+    void pick_zip(PickDone done) override {
+        pick(kPickZip, "", wrap(std::move(done), false));
+    }
     void pick_saves(PickDone done) override {
         // import_profile reads a path: copy the document into the cache first.
         const std::string cache = external_ + "/cache-saves.zip";
@@ -236,7 +243,8 @@ class AndroidPlatform final : public Platform {
         os_listdir(
             external_.c_str(),
             [](const char *name, void *user) {
-                auto *c = static_cast<std::pair<std::vector<std::string> *, const std::string *> *>(user);
+                auto *c =
+                    static_cast<std::pair<std::vector<std::string> *, const std::string *> *>(user);
                 if (name[0] != '.')
                     c->first->push_back(*c->second + "/" + name);
                 return 0;
@@ -260,7 +268,8 @@ class AndroidPlatform final : public Platform {
     }
     bool initial_pick(Picked *p) override {
         JNIEnv *e = env();
-        jmethodID m = e->GetStaticMethodID(g_activity, "launcherTakeViewUri", "()Ljava/lang/String;");
+        jmethodID m =
+            e->GetStaticMethodID(g_activity, "launcherTakeViewUri", "()Ljava/lang/String;");
         auto s = static_cast<jstring>(e->CallStaticObjectMethod(g_activity, m));
         const std::string uri = cstr(e, s);
         if (s)
@@ -285,9 +294,11 @@ class AndroidPlatform final : public Platform {
             return;
         last_update_ = now;
         JNIEnv *e = env();
-        jmethodID m = e->GetStaticMethodID(g_activity, "launcherImportActivity", "(ZJJLjava/lang/String;)V");
+        jmethodID m =
+            e->GetStaticMethodID(g_activity, "launcherImportActivity", "(ZJJLjava/lang/String;)V");
         jstring current = jstr(e, progress ? progress->current : "");
-        e->CallStaticVoidMethod(g_activity, m, jboolean(active), jlong(progress ? progress->bytes_done : 0),
+        e->CallStaticVoidMethod(g_activity, m, jboolean(active),
+                                jlong(progress ? progress->bytes_done : 0),
                                 jlong(progress ? progress->bytes_total : 0), current);
         e->DeleteLocalRef(current);
     }
@@ -320,9 +331,8 @@ std::unique_ptr<Platform> make_platform(SDL_Window *) {
 
 } // namespace launcher
 
-extern "C" JNIEXPORT void JNICALL Java_dev_recompkit_RecompActivity_nativePicked(JNIEnv *e, jclass, jint request,
-                                                                               jobjectArray uris,
-                                                                               jobjectArray names) {
+extern "C" JNIEXPORT void JNICALL Java_dev_recompkit_RecompActivity_nativePicked(
+    JNIEnv *e, jclass, jint request, jobjectArray uris, jobjectArray names) {
     launcher::PickDone done;
     {
         std::lock_guard<std::mutex> lock(launcher::g_mutex);

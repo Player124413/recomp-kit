@@ -71,22 +71,31 @@ class DesktopPlatform final : public Platform {
         return i;
     }
     void pick_folder(PickDone done) override {
-        SDL_ShowOpenFolderDialog(on_dialog, new Pending{std::move(done), true}, window_, nullptr, false);
+        SDL_ShowOpenFolderDialog(on_dialog, new Pending{std::move(done), true}, window_, nullptr,
+                                 false);
     }
     void pick_zip(PickDone done) override {
         static const SDL_DialogFileFilter filters[] = {{"ZIP archive", "zip"}};
-        SDL_ShowOpenFileDialog(on_dialog, new Pending{std::move(done), false}, window_, filters, 1, nullptr,
-                               false);
+        SDL_ShowOpenFileDialog(on_dialog, new Pending{std::move(done), false}, window_, filters, 1,
+                               nullptr, false);
     }
     void pick_export(const std::string &suggested, PickDone done) override {
         static const SDL_DialogFileFilter filters[] = {{"ZIP archive", "zip"}};
         SDL_ShowSaveFileDialog(on_dialog, new Pending{std::move(done), false}, window_, filters, 1,
                                suggested.c_str());
     }
-    void pick_saves(PickDone done) override { pick_zip(std::move(done)); }
-    std::vector<std::string> candidates(const Spec &spec) override { return detect_installs(spec); }
-    void open_folder(const std::string &path) override { SDL_OpenURL(file_url(path).c_str()); }
-    void open_url(const std::string &url) override { SDL_OpenURL(url.c_str()); }
+    void pick_saves(PickDone done) override {
+        pick_zip(std::move(done));
+    }
+    std::vector<std::string> candidates(const Spec &spec) override {
+        return detect_installs(spec);
+    }
+    void open_folder(const std::string &path) override {
+        SDL_OpenURL(file_url(path).c_str());
+    }
+    void open_url(const std::string &url) override {
+        SDL_OpenURL(url.c_str());
+    }
 
   private:
     SDL_Window *window_;

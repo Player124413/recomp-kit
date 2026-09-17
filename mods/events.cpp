@@ -128,7 +128,8 @@ bool mods_events_init() {
         if (!addr) {
             char key[64];
             snprintf(key, sizeof key, "mods.event.absent.%s", w.name);
-            log_once(key, "mods: this game names no routine for %s; its subscribers never run", w.name);
+            log_once(key, "mods: this game names no routine for %s; its subscribers never run",
+                     w.name);
             continue;
         }
         if (!mods_symbol_hookable(addr) ||

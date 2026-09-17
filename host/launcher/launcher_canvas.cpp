@@ -77,7 +77,8 @@ std::vector<std::string> Canvas::wrap(const std::string &s, int width, int size)
     size_t start = 0;
     while (start <= s.size()) {
         size_t newline = s.find('\n', start);
-        std::string para = s.substr(start, newline == std::string::npos ? std::string::npos : newline - start);
+        std::string para =
+            s.substr(start, newline == std::string::npos ? std::string::npos : newline - start);
         while (para.size() > per_line) {
             size_t cut = para.rfind(' ', per_line);
             if (cut == std::string::npos || cut == 0)

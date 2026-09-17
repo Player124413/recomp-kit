@@ -24,9 +24,9 @@ const char *state_name(State s);
 
 struct Status {
     State state = State::NotFound;
-    std::string root;   // the folder holding the executable ("" when not found)
-    std::string exe;    // its path as found on disk
-    std::string digest; // its SHA-256 when it was hashed
+    std::string root;                 // the folder holding the executable ("" when not found)
+    std::string exe;                  // its path as found on disk
+    std::string digest;               // its SHA-256 when it was hashed
     std::vector<std::string> missing; // required folders not present
 };
 
@@ -73,7 +73,9 @@ class Source {
                       std::string *error) = 0;
     // Moves the entry's file to `target` without copying it (same volume);
     // false when the source cannot, and the caller copies instead.
-    virtual bool move_to(const Entry &, const std::string &) { return false; }
+    virtual bool move_to(const Entry &, const std::string &) {
+        return false;
+    }
 };
 std::unique_ptr<Source> folder_source(const std::string &root);
 // A ZIP by path, or by an open descriptor the source then owns (Android's
@@ -87,7 +89,15 @@ struct Progress {
     std::string current;
 };
 
-enum class ImportResult { Done, Cancelled, NoExecutable, WrongVersion, Incomplete, NoSpace, Failed };
+enum class ImportResult {
+    Done,
+    Cancelled,
+    NoExecutable,
+    WrongVersion,
+    Incomplete,
+    NoSpace,
+    Failed
+};
 const char *import_result_name(ImportResult r);
 
 struct ImportOutcome {

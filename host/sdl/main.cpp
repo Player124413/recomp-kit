@@ -1312,7 +1312,7 @@ int main(int argc, char **argv) {
     std::string game_error;
 #ifdef __ANDROID__
     platform_ui_init_hints(); // stdout and stderr reach logcat from here on
-    (void)exe_flag; // The mobile app always uses its own external data root.
+    (void)exe_flag;           // The mobile app always uses its own external data root.
     // SDL's Java glue has initialized the app-specific external files path
     // before SDL_main. Resolve it before host_layout caches a profile path.
     const char *external = SDL_GetAndroidExternalStoragePath();
@@ -1372,9 +1372,10 @@ int main(int argc, char **argv) {
             auto platform = launcher::make_platform(g_window);
             launcher::RunOptions options;
             options.known = game.exe;
-            options.unplayable = std::string("This device has no usable ") + gpu::default_backend_name() +
-                                 " graphics, which the game needs" +
-                                 (strcmp(gpu::default_backend_name(), "vulkan") == 0 ? " (Vulkan 1.1)." : ".");
+            options.unplayable =
+                std::string("This device has no usable ") + gpu::default_backend_name() +
+                " graphics, which the game needs" +
+                (strcmp(gpu::default_backend_name(), "vulkan") == 0 ? " (Vulkan 1.1)." : ".");
             if (const char *keys = recomp_env("LAUNCHER_KEYS"))
                 options.keys = keys;
             if (const char *dump = recomp_env("LAUNCHER_DUMP")) {
@@ -1426,7 +1427,8 @@ int main(int argc, char **argv) {
             }
             if (const char *keys = recomp_env("LAUNCHER_KEYS"))
                 options.keys = keys;
-            const std::string chosen = launcher::run(g_window, g_gpu.get(), g_surface, *platform, options);
+            const std::string chosen =
+                launcher::run(g_window, g_gpu.get(), g_surface, *platform, options);
             if (chosen.empty())
                 return 2;
             if (chosen != game.exe && !game_path_save(chosen))

@@ -237,9 +237,10 @@ void update(X86 *c) {
             show(original_control(i));
         if (tab == 6)
             rebuild_mods();
-        const size_t count = tab == 4 || tab == 5 ? tab_rows(tab).size()
-                                                  : std::min(size_t(rows_per_page),
-                                                   mod_rows.size() - mod_page * rows_per_page);
+        const size_t count =
+            tab == 4 || tab == 5
+                ? tab_rows(tab).size()
+                : std::min(size_t(rows_per_page), mod_rows.size() - mod_page * rows_per_page);
         for (unsigned i = 0; i < count; ++i) {
             show(control(3 + i));
             position(control(3 + i), 320, 115 + 30 * i);

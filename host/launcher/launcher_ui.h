@@ -27,7 +27,7 @@ struct Picked {
 using PickDone = std::function<void(std::vector<Picked> picked, std::string error)>;
 
 struct PlatformInfo {
-    bool plays_in_place = true;  // desktop: an install is played where it is
+    bool plays_in_place = true; // desktop: an install is played where it is
     bool can_pick_folder = true;
     bool can_pick_zip = true;
     bool can_open_folder = false;
@@ -54,7 +54,9 @@ class Platform {
     // Folders that may hold the game.
     virtual std::vector<std::string> candidates(const Spec &spec) = 0;
     // Something the app was opened with (Android "Open with" on a ZIP), once.
-    virtual bool initial_pick(Picked *) { return false; }
+    virtual bool initial_pick(Picked *) {
+        return false;
+    }
     virtual void open_folder(const std::string &) {}
     virtual void open_url(const std::string &) {}
     // An import starts, advances or ends: keep the device awake, keep the
@@ -62,7 +64,9 @@ class Platform {
     virtual void import_activity(bool /*active*/, const Progress *) {}
     // Whether an import from `p` may move its files and remove what is left:
     // a folder the player copied into app storage.
-    virtual bool movable(const Picked &) { return false; }
+    virtual bool movable(const Picked &) {
+        return false;
+    }
     // A finished import: e.g. keep it out of device backups (iPadOS).
     virtual void protect_import(const std::string &) {}
     // The import from `p` ended, whatever the result (security-scoped access).
@@ -121,22 +125,42 @@ class Launcher {
     // The game cannot run here (no GPU): Play explains instead of starting.
     void set_unplayable(const std::string &reason);
     void advance(double seconds);
-    bool counting_down() const { return countdown_ > 0; }
+    bool counting_down() const {
+        return countdown_ > 0;
+    }
     void key(Key k);
     void activate(int id);
     void tick(); // picker results and import progress, on the host's thread
     void draw(Canvas &canvas, int scale);
 
-    bool finished() const { return finished_; }
-    bool quit() const { return quit_; }
-    std::string exe() const { return status_.exe; }
-    const Status &status() const { return status_; }
-    Screen screen() const { return screen_; }
-    const std::string &message() const { return message_; }
-    const std::vector<std::string> &found() const { return found_; }
+    bool finished() const {
+        return finished_;
+    }
+    bool quit() const {
+        return quit_;
+    }
+    std::string exe() const {
+        return status_.exe;
+    }
+    const Status &status() const {
+        return status_;
+    }
+    Screen screen() const {
+        return screen_;
+    }
+    const std::string &message() const {
+        return message_;
+    }
+    const std::vector<std::string> &found() const {
+        return found_;
+    }
     const std::vector<Button> &buttons();
-    bool dirty() const { return dirty_; }
-    int focus() const { return focus_; }
+    bool dirty() const {
+        return dirty_;
+    }
+    int focus() const {
+        return focus_;
+    }
 
   private:
     void rebuild();

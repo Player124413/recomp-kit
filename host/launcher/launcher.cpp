@@ -188,7 +188,8 @@ Status check(const Spec &spec, const std::string &root_in, const std::string &ca
     if (!stamp.empty() && stamp == spec.sha256)
         digest = stamp;
     // An install played in place: the digest cached for this size and mtime.
-    const std::string key = s.exe + "\t" + std::to_string(st.size) + "\t" + std::to_string(st.mtime);
+    const std::string key =
+        s.exe + "\t" + std::to_string(st.size) + "\t" + std::to_string(st.mtime);
     if (digest.empty() && !cache_file.empty()) {
         std::istringstream lines(read_text(cache_file));
         for (std::string line; std::getline(lines, line);)
@@ -285,7 +286,9 @@ struct Sha256 {
     size_t used = 0;
     uint64_t length = 0;
 
-    static uint32_t rotr(uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
+    static uint32_t rotr(uint32_t x, int n) {
+        return (x >> n) | (x << (32 - n));
+    }
     void compress(const uint8_t *b) {
         static const uint32_t k[64] = {
             0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
@@ -309,9 +312,10 @@ struct Sha256 {
         }
         uint32_t a = h[0], bb = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
         for (int i = 0; i < 64; ++i) {
-            const uint32_t t1 = hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) +
-                                k[i] + w[i];
-            const uint32_t t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c));
+            const uint32_t t1 =
+                hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + k[i] + w[i];
+            const uint32_t t2 =
+                (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c));
             hh = g;
             g = f;
             f = e;
@@ -459,7 +463,8 @@ bool has_parent_step(const std::string &relative) {
     size_t start = 0;
     for (;;) {
         const size_t end = relative.find('/', start);
-        if (relative.compare(start, end == std::string::npos ? std::string::npos : end - start, "..") == 0)
+        if (relative.compare(start, end == std::string::npos ? std::string::npos : end - start,
+                             "..") == 0)
             return true;
         if (end == std::string::npos)
             return false;
@@ -498,8 +503,8 @@ class ZipSource final : public Source {
             e.relative = normalize(st.m_filename);
             // No absolute or parent-relative names: a ZIP must not write
             // outside the folder it is imported into.
-            if (e.relative.empty() || e.relative[0] == '/' || e.relative.find(':') != std::string::npos ||
-                has_parent_step(e.relative))
+            if (e.relative.empty() || e.relative[0] == '/' ||
+                e.relative.find(':') != std::string::npos || has_parent_step(e.relative))
                 continue;
             e.is_dir = mz_zip_reader_is_file_a_directory(&zip_, i);
             e.size = st.m_uncomp_size;
@@ -699,7 +704,8 @@ ImportOutcome import_game(const Spec &spec, Source &source, const std::string &d
     uint64_t free_bytes = 0;
     if (move)
         needed = 0; // a move needs no room; if one falls back to a copy, the write reports it
-    if (os_free_space(dest.c_str(), &free_bytes) == 0 && needed + spec.min_free_bytes > free_bytes) {
+    if (os_free_space(dest.c_str(), &free_bytes) == 0 &&
+        needed + spec.min_free_bytes > free_bytes) {
         out.result = ImportResult::NoSpace;
         out.bytes_needed = needed + spec.min_free_bytes;
         out.bytes_free = free_bytes;
@@ -983,9 +989,9 @@ std::string env(const char *name) {
 
 // drive_c folders where a Windows install usually lands.
 void add_drive_c(std::vector<std::string> *bases, const std::string &drive_c) {
-    for (const char *sub : {"GOG Games", "Program Files (x86)/GOG Galaxy/Games",
-                            "Program Files (x86)/GOG.com", "Program Files (x86)",
-                            "Program Files", "Games"})
+    for (const char *sub :
+         {"GOG Games", "Program Files (x86)/GOG Galaxy/Games", "Program Files (x86)/GOG.com",
+          "Program Files (x86)", "Program Files", "Games"})
         bases->push_back(join(drive_c, sub));
 }
 
@@ -1027,7 +1033,9 @@ std::vector<std::string> detect_installs(const Spec &spec) {
             bases.push_back(normalize(buf));
     for (const std::string &id : spec.steam_ids)
         if (os_registry_read(("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\"
-                              "Steam App " + id).c_str(),
+                              "Steam App " +
+                              id)
+                                 .c_str(),
                              "InstallLocation", buf, sizeof buf) == 0)
             bases.push_back(normalize(buf));
     if (os_registry_read("HKCU\\Software\\Valve\\Steam", "SteamPath", buf, sizeof buf) == 0)
@@ -1052,8 +1060,8 @@ std::vector<std::string> detect_installs(const Spec &spec) {
     add_drive_c(&bases, join(home, ".wine/drive_c"));
     for (const std::string &g : children(join(home, "Games")))
         add_drive_c(&bases, join(join(join(home, "Games"), g), "drive_c"));
-    for (const char *steam : {".local/share/Steam", ".steam/steam",
-                              ".var/app/com.valvesoftware.Steam/data/Steam"}) {
+    for (const char *steam :
+         {".local/share/Steam", ".steam/steam", ".var/app/com.valvesoftware.Steam/data/Steam"}) {
         const std::string root = join(home, steam);
         add_steam_libraries(&bases, root);
         const std::string compat = join(root, "steamapps/compatdata");
