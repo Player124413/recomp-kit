@@ -1,7 +1,9 @@
 // controls_tests.cpp - the on-screen controls: json, layouts, router, pad, binding, editor.
+#include "../controls/builtin_layouts.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
 #include "../keypad_layout.h"
+#include "keypad_legacy_oracle.h"
 
 #include <cmath>
 #include <stdio.h>
@@ -123,11 +125,52 @@ static void test_layout_geometry_and_hits() {
     CHECK(hit_test(l, none, 0, 0).group == -1);
 }
 
+// The built-in "keys" tablet layout must reproduce host/keypad_layout.cpp's
+// geometry exactly, at every size step and screen scale: same key rects,
+// same scancodes and labels, same tab rects shown and hidden.
+static void test_builtin_keys_matches_the_old_keypad() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("keys", Form::Tablet), &l, &err));
+    const double scales[] = {1.0, 2.0, 3.0};
+    const int sizes_pt[] = {32, 36, 40};
+    for (double sc : scales)
+        for (int size = 0; size < 3; ++size) {
+            l.scale = sizes_pt[size] / 36.0;
+            const Screen s = screen(int(1180 * sc), int(820 * sc), sc);
+            for (int side = 0; side < 2; ++side) {
+                int n = 0;
+                const KeypadKey *keys = legacy_keypad_keys(KeypadSide(side), &n);
+                const Group &g = l.groups[side];
+                CHECK(int(g.controls.size()) == n);
+                for (int i = 0; i < n; ++i) {
+                    const KeypadRect old =
+                        legacy_keypad_key_rect(KeypadSide(side), keys[i], size, sc, s.dw, s.dh);
+                    const Rect now = control_rect(l, side, i, s);
+                    CHECK(now.x == old.x && now.y == old.y && now.w == old.w && now.h == old.h);
+                    CHECK(g.controls[i].scancode == keys[i].scancode);
+                    CHECK(g.controls[i].label == keys[i].label);
+                }
+                if (size == 1) { // tabs do not scale with key size in the old keypad
+                    for (int shown = 0; shown < 2; ++shown) {
+                        l.groups[side].visible = shown != 0;
+                        const KeypadRect old = legacy_keypad_tab_rect(KeypadSide(side), shown != 0,
+                                                                      size, sc, s.dw, s.dh);
+                        const Rect now = control_rect(l, 2, side, s);
+                        CHECK(now.x == old.x && now.y == old.y && now.w == old.w && now.h == old.h);
+                    }
+                    l.groups[side].visible = true;
+                }
+            }
+        }
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
     test_layout_parse_and_write();
     test_layout_geometry_and_hits();
+    test_builtin_keys_matches_the_old_keypad();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;
