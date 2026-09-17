@@ -37,10 +37,11 @@ class LayoutStore {
     // First match, in order: profile name.form, profile name, game
     // name.form, game name, built-in. A file that exists but fails to parse
     // is skipped, not fatal to the search; its error goes to *problem as
-    // "<file name>: <parse error>" (the parse error already starts with
-    // "line N:"), keeping the first such failure when more than one file
-    // fails. Returns false, leaving *problem empty, when nothing matches and
-    // no file failed to parse.
+    // "<file name>: <parse error>" (parse_layout's own error text -- a JSON
+    // "line N:" position, or a "group N control M:" schema location),
+    // keeping the first such failure when more than one file fails.
+    // Returns false, leaving *problem empty, when nothing matches and no
+    // file failed to parse.
     bool load(const std::string &name, Form form, Layout *out, std::string *problem) const;
 
     // Whether the player has their own "<name>.<form>.json" under profile_dir.

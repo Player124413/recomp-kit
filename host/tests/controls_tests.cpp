@@ -1,4 +1,5 @@
 // controls_tests.cpp - the on-screen controls: json, layouts, router, pad, binding, editor.
+#include "../../platform/os.h"
 #include "../controls/builtin_layouts.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
@@ -7,16 +8,9 @@
 #include "keypad_legacy_oracle.h"
 
 #include <cmath>
-#include <cstdio>
 #include <filesystem>
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
-#ifdef _WIN32
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
 
 static int g_failures = 0;
 #define CHECK(c)                                                                                   \
@@ -194,10 +188,10 @@ static void test_form_for() {
 // Exercises the profile-then-game-then-built-in search, names() and the
 // save/delete round trip against a scratch directory tree.
 static void test_layout_store() {
-    const std::filesystem::path root =
-        std::filesystem::temp_directory_path() / ("controls_tests_" + std::to_string(getpid()));
-    std::error_code ec;
-    std::filesystem::remove_all(root, ec);
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/controls-store-test-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    const std::filesystem::path root = dir;
     const std::filesystem::path profile_dir = root / "profile";
     const std::filesystem::path game_dir = root / "game";
 
@@ -257,6 +251,7 @@ static void test_layout_store() {
     CHECK(store.load("keys", Form::Tablet, &fallback, &problem));
     CHECK(fallback.opacity == 0.5);
 
+    std::error_code ec;
     std::filesystem::remove_all(root, ec);
 }
 
