@@ -9,6 +9,7 @@
 #include "layout_store.h"
 #include "overlay.h"
 #include "router.h"
+#include "vpad.h"
 
 #include <stdio.h>
 #include <string>
@@ -224,6 +225,7 @@ void host_pump(uint64_t now) {
         g_enabled = enabled;
         g_router.set_enabled(enabled, g_sink);
     }
+    vpad().set_source(kPadSourceTouch, g_router.pad());
     publish();
 }
 

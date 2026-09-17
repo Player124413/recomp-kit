@@ -6,6 +6,7 @@
 #pragma once
 
 #include "layout.h"
+#include "vpad.h"
 
 #include <cstdint>
 #include <map>
@@ -66,6 +67,9 @@ class Router {
                               int control) const; // a static zero state when out of range
     uint32_t generation() const;                  // bumps whenever anything drawn changes
     const Layout *layout() const;
+    // The OR of every currently-owned Button/Dpad/Stick control; recomputed
+    // whenever a finger claiming one of them lands, moves or lifts.
+    const PadState &pad() const;
 
   private:
     // What a live finger is sitting on: a control (group/control >= 0), or a
@@ -89,6 +93,8 @@ class Router {
     // Cancel on a Key control: modifiers cancel through modifiers_ (no
     // latch survives); anything else is sink.key(scancode, false) alone.
     void key_cancel(const Control &c, ControlsSink &sink);
+    // Rebuilds pad_ from every currently-owned Button/Dpad/Stick control.
+    void recompute_pad();
 
     Layout *layout_ = nullptr; // not owned
     Screen screen_;
@@ -97,6 +103,7 @@ class Router {
     std::vector<std::vector<ControlState>> states_; // sized from layout_
     KeypadModifiers modifiers_;
     uint32_t generation_ = 0;
+    PadState pad_;
 };
 
 } // namespace controls

@@ -9,6 +9,7 @@
 #include "../controls/overlay_paint.h"
 #include "../controls/raster.h"
 #include "../controls/router.h"
+#include "../controls/vpad.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
 
@@ -859,6 +860,205 @@ static void test_router_state_out_of_range_is_zero() {
     CHECK(!cs.pressed && cs.knob_x == 0 && cs.knob_y == 0 && cs.hat == 0);
 }
 
+// --- Vpad: stick/dpad math, source merge, edge queue -----------------------
+
+static void test_stick_output() {
+    float x, y;
+    stick_output(0, 0, 100, 0.15, &x, &y);
+    CHECK(x == 0 && y == 0);
+
+    stick_output(10, 0, 100, 0.15, &x, &y); // 0.1 * radius, inside the deadzone
+    CHECK(x == 0 && y == 0);
+
+    stick_output(100, 0, 100, 0.15, &x, &y);
+    CHECK(fabs(x - 1.0) < 0.001 && fabs(y) < 0.001);
+
+    stick_output(200, 0, 100, 0.15, &x, &y); // beyond the radius, clamped
+    CHECK(fabs(x - 1.0) < 0.001 && fabs(y) < 0.001);
+
+    stick_output(57.5, 0, 100, 0.15, &x, &y); // 0.575 * radius
+    CHECK(fabs(x - 0.5) < 0.01 && fabs(y) < 0.01);
+
+    stick_output(100, 100, 100, 0.15, &x, &y); // diagonal: magnitude 1
+    CHECK(fabs(std::hypot(double(x), double(y)) - 1.0) < 0.001);
+}
+
+static void test_dpad_hat() {
+    CHECK(dpad_hat(0, -60, 60) == kHatUp);
+    CHECK(dpad_hat(60, 60, 60) == (kHatRight | kHatDown));
+    CHECK(dpad_hat(6, 0, 60) == 0); // 0.1 * half, inside the neutral radius
+}
+
+static void test_pad_state_merge() {
+    PadState a, b;
+    a.buttons = kPadCross;
+    b.buttons = kPadCircle;
+    const PadState m1 = merge(a, b);
+    CHECK(m1.buttons == (kPadCross | kPadCircle));
+
+    a = PadState();
+    b = PadState();
+    a.lx = 0.2f;
+    b.lx = -0.7f;
+    CHECK(merge(a, b).lx == -0.7f); // larger magnitude wins
+}
+
+static void test_vpad_edges() {
+    Vpad v;
+    PadState cross;
+    cross.buttons = kPadCross;
+    v.set_source(kPadSourceTouch, cross);
+    CHECK(v.packet() != 0);
+    PadEdge e{};
+    CHECK(v.next_edge(0, &e));
+    CHECK(e.kind == 0 && e.index == 0 && e.value == 1);
+    const uint32_t after_first = e.sequence;
+
+    // Setting the same state again adds no edge.
+    v.set_source(kPadSourceTouch, cross);
+    PadEdge e2{};
+    CHECK(!v.next_edge(after_first, &e2));
+
+    // A controller source holding cross while the touch source releases it:
+    // the merged state still has cross, and no edge is added.
+    v.set_source(kPadSourceController, cross);
+    v.set_source(kPadSourceTouch, PadState());
+    PadEdge e3{};
+    CHECK(!v.next_edge(after_first, &e3));
+    CHECK(v.state().buttons == kPadCross);
+
+    // 300 changes overflow the 256-entry ring; the oldest surviving edge is
+    // number 45 (300 - 256 + 1).
+    Vpad v2;
+    for (int i = 0; i < 300; ++i) {
+        PadState toggled;
+        toggled.buttons = (i % 2 == 0) ? kPadCross : 0;
+        v2.set_source(kPadSourceTouch, toggled);
+    }
+    PadEdge e4{};
+    CHECK(v2.next_edge(0, &e4));
+    CHECK(e4.sequence > 44);
+}
+
+// to_host's rounding: lx -1 hits the int16 minimum exactly (-1 * 32767);
+// ly 0.5 rounds 16383.5 up to 16384; l2 (a byte-scaled trigger) hits 255.
+static void test_to_host_scales_axes() {
+    PadState s;
+    s.lx = -1.0f;
+    s.ly = 0.5f;
+    s.l2 = 1.0f;
+    const HostPadState h = to_host(s);
+    CHECK(h.lx == -32767);
+    CHECK(h.ly == 16384);
+    CHECK(h.l2 == 255);
+}
+
+// A layout with a cross button, an l2 button, a dpad and a floating left
+// stick, all in one non-grid group, at scale 1 so rects match points exactly:
+// cross {0,0,60,60}, l2 {100,0,60,60}, dpad {200,0,120,120} (centre 260,60,
+// half 60), stick {400,0,200,200} (centre 500,100, radius 100).
+static Layout pad_layout() {
+    Layout l;
+    l.groups.resize(1);
+    Group &g = l.groups[0];
+    g.id = "pad";
+
+    Control cross;
+    cross.kind = Kind::Button;
+    cross.button = PadButton::Cross;
+    cross.anchor = Anchor::TopLeft;
+    cross.x = 0;
+    cross.y = 0;
+    cross.w = cross.h = 60;
+    g.controls.push_back(cross);
+
+    Control l2;
+    l2.kind = Kind::Button;
+    l2.button = PadButton::L2;
+    l2.anchor = Anchor::TopLeft;
+    l2.x = 100;
+    l2.y = 0;
+    l2.w = l2.h = 60;
+    g.controls.push_back(l2);
+
+    Control dpad;
+    dpad.kind = Kind::Dpad;
+    dpad.anchor = Anchor::TopLeft;
+    dpad.x = 200;
+    dpad.y = 0;
+    dpad.w = dpad.h = 120;
+    g.controls.push_back(dpad);
+
+    Control stick;
+    stick.kind = Kind::Stick;
+    stick.stick = 0;
+    stick.floating = true;
+    stick.deadzone = 0.15;
+    stick.anchor = Anchor::TopLeft;
+    stick.x = 400;
+    stick.y = 0;
+    stick.w = stick.h = 200;
+    g.controls.push_back(stick);
+
+    return l;
+}
+
+static void test_router_pad_buttons() {
+    Layout l = pad_layout();
+    const Screen s = screen(2000, 1000, 1.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+
+    CHECK(r.finger_down(1, 30, 30, 0, rec)); // cross
+    CHECK(r.pad().buttons == kPadCross);
+
+    CHECK(r.finger_down(2, 130, 30, 0, rec)); // l2
+    CHECK(r.pad().l2 == 1.0f);
+
+    CHECK(r.finger_up(1, 10, rec));
+    CHECK(r.finger_up(2, 10, rec));
+    CHECK((r.pad() == PadState()));
+}
+
+static void test_router_pad_stick_dpad_and_cancel() {
+    Layout l = pad_layout();
+    const Screen s = screen(2000, 1000, 1.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+
+    // A finger at the stick's right edge region: base at the finger, then
+    // motion by +radius saturates lx to 1.
+    CHECK(r.finger_down(1, 590, 100, 0, rec));
+    CHECK(r.finger_motion(1, 690, 100, 0, rec));
+    CHECK(r.pad().lx == 1.0f);
+    CHECK(r.state(0, 3).knob_x == 1.0);
+
+    // Dpad motion from up to right changes the hat without a lift.
+    CHECK(r.finger_down(2, 260, 0, 0, rec));
+    CHECK(r.pad().hat == kHatUp);
+    CHECK(r.finger_motion(2, 320, 60, 0, rec));
+    CHECK(r.pad().hat == kHatRight);
+
+    // Lifting clears everything.
+    CHECK(r.finger_up(1, 10, rec));
+    CHECK(r.finger_up(2, 10, rec));
+    CHECK((r.pad() == PadState()));
+    CHECK(r.state(0, 3).knob_x == 0.0 && r.state(0, 3).base_x == 0.0);
+
+    // cancel_all clears everything, including a mid-drag stick.
+    CHECK(r.finger_down(3, 30, 30, 0, rec));   // cross
+    CHECK(r.finger_down(4, 590, 100, 0, rec)); // stick
+    CHECK(r.finger_motion(4, 690, 100, 0, rec));
+    CHECK(r.pad().buttons == kPadCross);
+    r.cancel_all(rec);
+    CHECK((r.pad() == PadState()));
+    CHECK(r.state(0, 3).knob_x == 0.0 && r.state(0, 3).base_x == 0.0);
+}
+
 // --- Overlay view: what the presenter draws -------------------------------
 
 static int count_kind(const ControlsView &v, Kind k) {
@@ -1076,6 +1276,13 @@ int main() {
     test_router_two_fingers_same_key_first_lift_releases();
     test_router_set_layout_null_disables_hit_testing();
     test_router_state_out_of_range_is_zero();
+    test_stick_output();
+    test_dpad_hat();
+    test_pad_state_merge();
+    test_vpad_edges();
+    test_to_host_scales_axes();
+    test_router_pad_buttons();
+    test_router_pad_stick_dpad_and_cancel();
     test_make_view_keys();
     test_make_view_matches_the_old_keypad();
     test_make_view_revision_ignores_undrawn_press();

@@ -3,6 +3,8 @@
 
 #include "../keypad_layout.h"
 
+#include <algorithm>
+
 namespace controls {
 
 namespace {
@@ -124,18 +126,69 @@ bool Router::finger_down(int64_t id, double px, double py, uint64_t now_ns, Cont
         sink.action(c.action);
         break;
     case Kind::Button:
-    case Kind::Dpad:
-    case Kind::Stick:
-        break; // sticks and the dpad get their motion handling in Task 9
+        break; // its pad bit comes from recompute_pad() below, from ownership alone
+    case Kind::Dpad: {
+        const Rect r = control_rect(*layout_, h.group, h.control, screen_);
+        const double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
+        states_[h.group][h.control].hat = dpad_hat(px - cx, py - cy, r.w / 2.0);
+        break;
     }
+    case Kind::Stick: {
+        const Rect r = control_rect(*layout_, h.group, h.control, screen_);
+        const double radius = r.w / 2.0;
+        double bx, by;
+        if (c.floating) {
+            // Clamped so the base circle (radius `radius`) stays inside the
+            // rect; a touch near an edge snaps the base inward.
+            bx = std::clamp(px, r.x + radius, r.x + r.w - radius);
+            by = std::clamp(py, r.y + radius, r.y + r.h - radius);
+        } else {
+            bx = r.x + r.w / 2.0;
+            by = r.y + r.h / 2.0;
+        }
+        ControlState &cs = states_[h.group][h.control];
+        cs.base_x = bx;
+        cs.base_y = by;
+        float ox, oy;
+        stick_output(px - bx, py - by, radius, c.deadzone, &ox, &oy);
+        cs.knob_x = ox;
+        cs.knob_y = oy;
+        break;
+    }
+    }
+    recompute_pad();
     sink.tap();
     return true;
 }
 
-bool Router::finger_motion(int64_t id, double, double, uint64_t, ControlsSink &) {
+bool Router::finger_motion(int64_t id, double px, double py, uint64_t, ControlsSink &) {
     // Keys, buttons, toggles and actions ignore motion; sticks and the dpad
-    // (Task 9) will need it to track a dragging knob or hat direction.
-    return fingers_.count(id) != 0;
+    // track a dragging knob or hat direction from it.
+    const auto it = fingers_.find(id);
+    if (it == fingers_.end())
+        return false;
+    const Owned &o = it->second;
+    if (o.gap || o.group < 0 || o.control < 0)
+        return true;
+    const Control &c = layout_->groups[o.group].controls[o.control];
+    if (c.kind == Kind::Dpad) {
+        const Rect r = control_rect(*layout_, o.group, o.control, screen_);
+        const double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
+        states_[o.group][o.control].hat = dpad_hat(px - cx, py - cy, r.w / 2.0);
+        recompute_pad();
+        ++generation_;
+    } else if (c.kind == Kind::Stick) {
+        const Rect r = control_rect(*layout_, o.group, o.control, screen_);
+        const double radius = r.w / 2.0;
+        ControlState &cs = states_[o.group][o.control];
+        float ox, oy;
+        stick_output(px - cs.base_x, py - cs.base_y, radius, c.deadzone, &ox, &oy);
+        cs.knob_x = ox;
+        cs.knob_y = oy;
+        recompute_pad();
+        ++generation_;
+    }
+    return true;
 }
 
 bool Router::finger_up(int64_t id, uint64_t now_ns, ControlsSink &sink) {
@@ -152,6 +205,13 @@ bool Router::finger_up(int64_t id, uint64_t now_ns, ControlsSink &sink) {
     const Control &c = layout_->groups[o.group].controls[o.control];
     if (c.kind == Kind::Key)
         key_up(c, now_ns, sink);
+    else if (c.kind == Kind::Dpad)
+        states_[o.group][o.control].hat = 0;
+    else if (c.kind == Kind::Stick) {
+        ControlState &cs = states_[o.group][o.control];
+        cs.knob_x = cs.knob_y = cs.base_x = cs.base_y = 0;
+    }
+    recompute_pad();
     return true;
 }
 
@@ -169,6 +229,13 @@ bool Router::finger_cancel(int64_t id, ControlsSink &sink) {
     const Control &c = layout_->groups[o.group].controls[o.control];
     if (c.kind == Kind::Key)
         key_cancel(c, sink);
+    else if (c.kind == Kind::Dpad)
+        states_[o.group][o.control].hat = 0;
+    else if (c.kind == Kind::Stick) {
+        ControlState &cs = states_[o.group][o.control];
+        cs.knob_x = cs.knob_y = cs.base_x = cs.base_y = 0;
+    }
+    recompute_pad();
     return true;
 }
 
@@ -183,6 +250,12 @@ void Router::cancel_all(ControlsSink &sink) {
         const Control &c = layout_->groups[o.group].controls[o.control];
         if (c.kind == Kind::Key && !keypad_is_modifier(c.scancode))
             sink.key(c.scancode, false);
+        else if (c.kind == Kind::Dpad)
+            states_[o.group][o.control].hat = 0;
+        else if (c.kind == Kind::Stick) {
+            ControlState &cs = states_[o.group][o.control];
+            cs.knob_x = cs.knob_y = cs.base_x = cs.base_y = 0;
+        }
     }
     fingers_.clear();
 
@@ -191,6 +264,7 @@ void Router::cancel_all(ControlsSink &sink) {
     for (const KeypadKeyEvent &e : events)
         sink.key(e.scancode, e.down);
 
+    recompute_pad();
     ++generation_;
 }
 
@@ -217,6 +291,49 @@ uint32_t Router::generation() const {
 
 const Layout *Router::layout() const {
     return layout_;
+}
+
+const PadState &Router::pad() const {
+    return pad_;
+}
+
+void Router::recompute_pad() {
+    PadState p;
+    if (layout_) {
+        for (const auto &kv : fingers_) {
+            const Owned &o = kv.second;
+            if (o.gap || o.group < 0 || o.control < 0)
+                continue;
+            const Control &c = layout_->groups[o.group].controls[o.control];
+            const ControlState &cs = states_[o.group][o.control];
+            PadState q;
+            switch (c.kind) {
+            case Kind::Button:
+                q.buttons = uint16_t(1u << int(c.button));
+                if (c.button == PadButton::L2)
+                    q.l2 = 1.0f;
+                else if (c.button == PadButton::R2)
+                    q.r2 = 1.0f;
+                break;
+            case Kind::Dpad:
+                q.hat = cs.hat;
+                break;
+            case Kind::Stick:
+                if (c.stick == 0) {
+                    q.lx = float(cs.knob_x);
+                    q.ly = float(cs.knob_y);
+                } else {
+                    q.rx = float(cs.knob_x);
+                    q.ry = float(cs.knob_y);
+                }
+                break;
+            default:
+                continue;
+            }
+            p = merge(p, q);
+        }
+    }
+    pad_ = p;
 }
 
 } // namespace controls

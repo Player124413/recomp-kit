@@ -76,7 +76,8 @@ set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
 add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                               ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
-                              ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
+                              ${HOST}/controls/router.cpp ${HOST}/controls/vpad.cpp
+                              ${HOST}/controls/overlay_view.cpp
                               ${HOST}/controls/raster.cpp ${HOST}/controls/overlay_paint.cpp
                               ${HOST}/keypad_layout.cpp
                               ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
@@ -155,7 +156,8 @@ set(POP_CORE_LIBS recomp_platform recomp_runtime recomp_snapshot recomp_dx recom
 # The on-screen controls the presenter draws (controls_host.cpp is the app's own).
 set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                          ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
-                         ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
+                         ${HOST}/controls/router.cpp ${HOST}/controls/vpad.cpp
+                         ${HOST}/controls/overlay_view.cpp
                          ${HOST}/controls/overlay.cpp ${HOST}/controls/raster.cpp
                          ${HOST}/controls/overlay_paint.cpp
                          ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp)
