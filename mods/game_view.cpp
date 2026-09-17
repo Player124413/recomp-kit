@@ -6,6 +6,7 @@
 // out. `slot` is the physical slot index throughout: entity(slot) takes one,
 // entity_slot(nth) maps an iteration index onto one.
 #include "mods_internal.h"
+#include "game_config.h"
 
 #include <deque>
 #include <string.h>
@@ -347,6 +348,9 @@ void sprite_resolve(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocation *in
 }
 } // namespace
 int mods_sprite_hooks_init() {
+#if !RECOMP_MODS_BUILTIN_POPULOUS
+    return 1; // this game has none of Populous's routines (game.toml [mods] builtin)
+#endif
     if (sprite_installed)
         return 1;
     struct Hook {
@@ -355,13 +359,27 @@ int mods_sprite_hooks_init() {
         int mode;
     };
     uint32_t installed[7]{}, n = 0;
-    for (auto h : {Hook{0x46f080, sprite_scope, POP_HOOK_BEFORE},
-                   Hook{0x46dbe0, sprite_project, POP_HOOK_WRAP},
-                   Hook{0x45f4a0, sprite_scope, POP_HOOK_BEFORE},
-                   Hook{0x45f9d0, sprite_scope, POP_HOOK_BEFORE},
-                   Hook{0x45efd0, sprite_scope, POP_HOOK_BEFORE},
-                   Hook{0x4f95a0, sprite_quad, POP_HOOK_BEFORE},
-                   Hook{0x4f98a0, sprite_resolve, POP_HOOK_WRAP}}) {
+    // The seven sprite routines, in the order below: game.toml
+    // [hooks].sprites. A game that lists none has no sprite view. Without the
+    // key, the Populous addresses these hooks were written against.
+#ifdef RECOMP_HOOK_SPRITES_COUNT
+#if RECOMP_HOOK_SPRITES_COUNT == 0
+    sprite_installed = true;
+    return 1;
+#else
+    const uint32_t addrs[7] = RECOMP_HOOK_SPRITES;
+#endif
+#else
+    const uint32_t addrs[7] = {0x46f080, 0x46dbe0, 0x45f4a0, 0x45f9d0, 0x45efd0, 0x4f95a0, 0x4f98a0};
+#endif
+#if !defined(RECOMP_HOOK_SPRITES_COUNT) || RECOMP_HOOK_SPRITES_COUNT != 0
+    for (auto h : {Hook{addrs[0], sprite_scope, POP_HOOK_BEFORE},
+                   Hook{addrs[1], sprite_project, POP_HOOK_WRAP},
+                   Hook{addrs[2], sprite_scope, POP_HOOK_BEFORE},
+                   Hook{addrs[3], sprite_scope, POP_HOOK_BEFORE},
+                   Hook{addrs[4], sprite_scope, POP_HOOK_BEFORE},
+                   Hook{addrs[5], sprite_quad, POP_HOOK_BEFORE},
+                   Hook{addrs[6], sprite_resolve, POP_HOOK_WRAP}}) {
         if (mods_hook_install_ex(MODS_OWNER_RUNTIME, h.addr, 0, h.fn, h.mode, POP_HOOK_NO_GAME_VIEW,
                                  nullptr, &installed[n]) != POP_OK) {
             while (n)
@@ -372,6 +390,7 @@ int mods_sprite_hooks_init() {
     }
     sprite_installed = true;
     return 1;
+#endif
 }
 void mods_sprite_reset() {
     sprite_installed = false;

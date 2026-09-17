@@ -123,7 +123,15 @@ bool mods_events_init() {
         const auto &w = wanted[i];
         uint32_t addr = mods_symbol_event(w.name);
         uint32_t id = 0;
-        if (!addr || !mods_symbol_hookable(addr) ||
+        // A game that names no routine for an event has no such event: its
+        // subscribers are accepted and never called.
+        if (!addr) {
+            char key[64];
+            snprintf(key, sizeof key, "mods.event.absent.%s", w.name);
+            log_once(key, "mods: this game names no routine for %s; its subscribers never run", w.name);
+            continue;
+        }
+        if (!mods_symbol_hookable(addr) ||
             mods_hook_install_ex(MODS_OWNER_RUNTIME, addr, 0, w.fn, w.mode, POP_HOOK_NO_GAME_VIEW,
                                  nullptr, &id) != POP_OK) {
             LOGW("mods: event %s is not a hookable entry symbol (%08x)", w.name, addr);
