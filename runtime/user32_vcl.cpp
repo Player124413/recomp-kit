@@ -642,8 +642,22 @@ void pump_once(X86 *c) {
         g_message_waiter();
     sched_checkpoint();
 }
+// WaitMessage returns once there is something to retrieve, and not before.
+// Delphi's idle handler calls it whenever its queue is empty; a WaitMessage
+// that came straight back turned TApplication's message loop into a spin that
+// held the scheduler baton, and the game's render and cursor threads, which
+// only run when it is let go, fell to half the display's rate. Timers and host
+// input are serviced on every pass, as a blocked thread's would be. Without a
+// host there is nothing that could post a message, so it returns at once.
 void wait_message(X86 *c) {
-    pump_once(c);
+    for (;;) {
+        pump_once(c);
+        pump_mouse_input(c);
+        if (!queue().empty() || paint_pending() || !g_message_waiter)
+            break;
+        if (!host_guest_yield())
+            guest_sleep_ms(1);
+    }
     set_eax(c, 1);
 }
 // MsgWaitForMultipleObjects(n, handles, wait_all, ms, mask) and the Ex form,

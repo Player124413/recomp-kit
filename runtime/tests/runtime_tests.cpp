@@ -5421,6 +5421,14 @@ static bool vcl_wait_once() {
     ++vcl_wait_calls;
     return false;
 }
+static uint32_t vcl_late_hwnd = 0;
+// Posts a message on its third call only: a WaitMessage must keep waiting
+// until then.
+static bool vcl_wait_posts_late() {
+    if (++vcl_wait_calls == 3)
+        host_post_message(vcl_late_hwnd, 0x8003, 0, 0);
+    return vcl_wait_calls >= 3;
+}
 static void test_user32_window_model() {
     section("window model lifetime, callbacks and waits");
     X86 c;
@@ -5543,6 +5551,16 @@ static void test_user32_window_model() {
           "queued message returns count without pumping");
     call_import(&c, "USER32.dll", "WaitMessage", {});
     check(vcl_wait_calls == 2, "WaitMessage pumps once");
+    while (call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1}))
+        ;
+    host_set_message_waiter(vcl_wait_posts_late);
+    vcl_late_hwnd = hwnd;
+    vcl_wait_calls = 0;
+    call_import(&c, "USER32.dll", "WaitMessage", {});
+    check(vcl_wait_calls == 3 &&
+              call_import(&c, "USER32.dll", "PeekMessageW", {msg, hwnd, 0x8003, 0x8003, 1}) == 1,
+          "WaitMessage waits until a message is queued");
+    host_set_message_waiter(vcl_wait_once);
     // A signalled handle answers before any message, in both argument orders;
     // an unsignalled one leaves the message, then the timeout. This is the
     // wait Delphi's TThread.WaitFor makes for a thread's handle.

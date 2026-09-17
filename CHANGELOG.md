@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- `WaitMessage` waits until there is a message or a paint to retrieve, pumping
+  timers and host input meanwhile, instead of returning at once. Delphi's idle
+  handler calls it whenever the queue is empty, and a WaitMessage that came
+  straight back turned `TApplication`'s loop into a spin that asked for the
+  cursor sixty thousand times a second and kept the scheduler baton: Siege of
+  Avalon's render and mouse threads, which run only when it is let go,
+  presented at 50 fps on a 120 Hz display. With no host to post a message it
+  still returns at once. `runtime_tests` checks it waits for a late message.
+
+- A present that covers the whole screen skips the work beneath it.
+  `gdi_present_windows` no longer reads a primary, composes every window and
+  copies the snapshot over them when the snapshot is the screen's size and
+  covers it; it hands the snapshot on as it is. The ARGB to RGBA conversion in
+  `host_display_present_window`, the D3D11 present's conversion and the
+  rasterizer's 5-6-5 texel copy run through plain pointers and whole-word
+  tables. At 1920x1080 a Siege of Avalon frame's present fell to about 3 ms.
+
+- The offscreen presenter's refresh wait uses the rate its synthetic display
+  link ticks at, 120 Hz. It used the 60 Hz default, so a smoke run's
+  `Present` with a sync interval waited for every other tick of its own link
+  and no smoke could show more than 60 fps.
+
 - A DirectDraw Unlock compares only the rows the guest wrote while its lock was
   open. A guest Lock opens a write range over the surface's pixels
   (`recomp_dirty`, up to four at once) that every translated store updates, and

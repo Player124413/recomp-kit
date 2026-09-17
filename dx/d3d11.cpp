@@ -229,12 +229,20 @@ void present(Object &o, uint32_t owner, uint32_t hwnd, bool fullscreen) {
         uint32_t *row = argb.data() + size_t(y) * o.texture.Width;
         if (rgba || bgra) {
             // Eight-bit channels pass through pixel() and back unchanged;
-            // take the bytes as they are.
-            const uint32_t src = o.data + y * o.pitch;
-            for (uint32_t x = 0; x < o.texture.Width; ++x) {
-                uint32_t c = rd32(src + x * 4);
-                row[x] = 0xff000000u | (bgra ? c & 0xffffffu
-                                             : (c & 0xffu) << 16 | (c & 0xff00u) | (c >> 16 & 0xffu));
+            // take the bytes as they are, a row at a time through plain
+            // pointers the compiler vectorizes.
+            const uint8_t *src = gm_ptr(o.data + y * o.pitch);
+            const uint32_t n = o.texture.Width;
+            if (bgra) {
+                memcpy(row, src, size_t(n) * 4);
+                for (uint32_t x = 0; x < n; ++x)
+                    row[x] |= 0xff000000u;
+            } else {
+                for (uint32_t x = 0; x < n; ++x) {
+                    uint32_t c;
+                    memcpy(&c, src + size_t(x) * 4, 4);
+                    row[x] = 0xff000000u | (c & 0xffu) << 16 | (c & 0xff00u) | (c >> 16 & 0xffu);
+                }
             }
             continue;
         }
@@ -1064,9 +1072,36 @@ bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, i
         return t;
     }();
     const bool target_bgra = of == 87;
+    // Every 5-6-5 word as the target's four bytes, built from the tables above
+    // so it agrees with them; a present quad is two million lookups a frame.
+    static const std::vector<uint32_t> lut565_rgba = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v)
+            t[v] = uint32_t(lut5[(v >> 11) & 31]) | uint32_t(lut6[(v >> 5) & 63]) << 8 |
+                   uint32_t(lut5[v & 31]) << 16 | 0xff000000u;
+        return t;
+    }();
+    static const std::vector<uint32_t> lut565_bgra = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v)
+            t[v] = uint32_t(lut5[v & 31]) | uint32_t(lut6[(v >> 5) & 63]) << 8 |
+                   uint32_t(lut5[(v >> 11) & 31]) << 16 | 0xff000000u;
+        return t;
+    }();
     auto copy_row = [&](uint32_t src, uint32_t dst, uint32_t n) {
         if (tf == of) {
             memmove(gm_ptr(dst), gm_ptr(src), n * 4);
+            return;
+        }
+        if (tf == 85 && !packed) {
+            const uint32_t *lut = (target_bgra ? lut565_bgra : lut565_rgba).data();
+            const uint8_t *s = gm_ptr(src);
+            uint8_t *d = gm_ptr(dst);
+            for (uint32_t i = 0; i < n; ++i) {
+                uint16_t v;
+                memcpy(&v, s + size_t(i) * 2, 2);
+                memcpy(d + size_t(i) * 4, &lut[v], 4);
+            }
             return;
         }
         for (uint32_t i = 0; i < n; ++i, dst += 4) {

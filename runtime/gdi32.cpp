@@ -1284,27 +1284,40 @@ void gdi_present_windows(bool refresh) {
         ddraw_gdi_end_primary(primary);
         return;
     }
+    // Where the snapshot lands: the whole screen, or its window's client area.
+    int32_t x = 0, y = 0;
+    int width = w, height = h;
+    bool visible = true;
+    if (presented.owner && !presented.fullscreen && presented.hwnd) {
+        auto *window = user32::find_window(presented.hwnd);
+        visible = window && window->visible;
+        if (window) {
+            user32::client_origin(window->hwnd, &x, &y);
+            width = window->w;
+            height = window->h;
+        }
+    }
+    // A snapshot the screen's own size, covering all of it, is drawn over
+    // everything below, so the screen is that snapshot: no base to read, no
+    // window to compose under it, and no copy to make of it.
+    if (presented.owner && visible && x == 0 && y == 0 && width == w && height == h &&
+        presented.w == w && presented.h == h && presented.pixels.size() == size_t(w) * h) {
+        ddraw_gdi_end_primary(primary);
+        for (auto *window : surfaces)
+            window->surface.dirty = false;
+        if (!mf_owns_the_screen())
+            host_display_present_window(presented.pixels.data(), w, h);
+        return;
+    }
     std::vector<uint32_t> pixels(size_t(w) * h, 0xff000000);
     if (primary) {
-        for (int y = 0; y < h; ++y)
-            for (int x = 0; x < w; ++x)
-                gdi::read_pixel(primary, x, y, &pixels[size_t(y) * w + x]);
+        for (int py = 0; py < h; ++py)
+            for (int px = 0; px < w; ++px)
+                gdi::read_pixel(primary, px, py, &pixels[size_t(py) * w + px]);
         ddraw_gdi_end_primary(primary);
     }
     gdi_composite_windows(pixels.data(), w, h);
     if (presented.owner) {
-        int32_t x = 0, y = 0;
-        int width = w, height = h;
-        bool visible = true;
-        if (!presented.fullscreen && presented.hwnd) {
-            auto *window = user32::find_window(presented.hwnd);
-            visible = window && window->visible;
-            if (window) {
-                user32::client_origin(window->hwnd, &x, &y);
-                width = window->w;
-                height = window->h;
-            }
-        }
         if (visible && width > 0 && height > 0) {
             const int64_t x0 = std::max<int64_t>(0, x), x1 = std::min<int64_t>(w, int64_t(x) + width),
                           y0 = std::max<int64_t>(0, y), y1 = std::min<int64_t>(h, int64_t(y) + height);

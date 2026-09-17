@@ -774,6 +774,8 @@ static bool pending_paint(uint32_t p, uint32_t hwnd, uint32_t min_msg, uint32_t 
         Msg m{w->hwnd, 0xf, 0, 0, host_millis(), uint32_t(g_cursor_x), uint32_t(g_cursor_y)};
         if (!msg_matches(m, hwnd, min_msg, max_msg))
             continue;
+        if (!p)
+            return true; // only asked whether there is one
         last_message = m;
         store_msg(p, m);
         return true;
@@ -782,6 +784,10 @@ static bool pending_paint(uint32_t p, uint32_t hwnd, uint32_t min_msg, uint32_t 
 }
 
 Msg last_message{};
+
+bool paint_pending() {
+    return pending_paint(0, 0, 0, 0);
+}
 
 void peek_message(X86 *c) {
     // The game's message loop is PeekMessageA and nothing else: it never calls

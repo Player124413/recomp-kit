@@ -51,6 +51,8 @@ static std::mutex g_present_keypad_mutex;
 static KeypadView g_present_keypad; // wanted = false until the host publishes
 
 namespace {
+// The refresh rate of the offscreen presenter's synthetic display link.
+constexpr double kOffscreenHz = 120.0;
 using Clock = std::chrono::steady_clock;
 template <class T> struct AtomicShared {
     std::shared_ptr<T> value;
@@ -833,12 +835,12 @@ struct Service : std::enable_shared_from_this<Service> {
                         auto elapsed =
                             std::chrono::duration<double>(Clock::now() - synthetic_start).count();
                         synthetic_index =
-                            std::max(synthetic_index + 1, uint64_t(elapsed * 120) + 1);
+                            std::max(synthetic_index + 1, uint64_t(elapsed * kOffscreenHz) + 1);
                         auto deadline = synthetic_start +
                                         std::chrono::duration_cast<Clock::duration>(
-                                            std::chrono::duration<double>(synthetic_index / 120.0));
+                                            std::chrono::duration<double>(synthetic_index / kOffscreenHz));
                         wake.wait_until(lock, deadline, [&] { return stop; });
-                        ts = synthetic_origin + synthetic_index / 120.0;
+                        ts = synthetic_origin + synthetic_index / kOffscreenHz;
                     } else {
                         // Seal is a bootstrap event, not an acknowledgement. A
                         // bounded wait also services a stopped link and checks
@@ -984,6 +986,9 @@ void host_present_start_offscreen(int w, int h) {
     auto s = begin(false, true, true);
     s->drawable_w = w;
     s->drawable_h = h;
+    // The synthetic link below ticks at this rate; a Present that waits for a
+    // refresh has to wait for the same one.
+    s->frame_period = 1.0 / kOffscreenHz;
     s->worker = std::thread([s] { s->run(); });
 }
 void host_present_resize(int w, int h) {

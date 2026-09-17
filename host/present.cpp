@@ -1,6 +1,7 @@
 #include "../runtime/display_seam.h"
 #include "../platform/os.h"
 #include <atomic>
+#include <cstring>
 // present.mm - host_present for the windowed host.
 //
 // There is one thing on the screen and it is the DirectDraw surface. Software
@@ -239,12 +240,16 @@ extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) 
     if (g_mode_w != w || g_mode_h != h || g_mode_bpp != 32)
         host_set_display_mode(w, h, 32);
     host_present_first_write();
-    std::vector<uint8_t> rgba(size_t(w) * h * 4);
-    for (size_t i = 0; i < size_t(w) * h; ++i) {
-        rgba[4 * i] = uint8_t(argb[i] >> 16);
-        rgba[4 * i + 1] = uint8_t(argb[i] >> 8);
-        rgba[4 * i + 2] = uint8_t(argb[i]);
-        rgba[4 * i + 3] = 255;
+    const size_t n = size_t(w) * h;
+    std::vector<uint8_t> rgba(n * 4);
+    // Word to word through plain pointers, which the compiler vectorizes; the
+    // byte-indexed form it replaces cost a 1080p frame several milliseconds.
+    const uint32_t *src = argb;
+    uint8_t *dst = rgba.data();
+    for (size_t i = 0; i < n; ++i) {
+        const uint32_t v = src[i];
+        const uint32_t out = 0xff000000u | (v & 0xffu) << 16 | (v & 0xff00u) | (v >> 16 & 0xffu);
+        memcpy(dst + 4 * i, &out, 4);
     }
     {
         ReportLock held;
