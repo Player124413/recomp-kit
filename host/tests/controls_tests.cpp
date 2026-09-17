@@ -2,6 +2,7 @@
 #include "../../platform/os.h"
 #include "../controls/binding.h"
 #include "../controls/builtin_layouts.h"
+#include "../controls/editor.h"
 #include "../controls/haptics.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
@@ -2682,6 +2683,634 @@ static void test_rumble_router_sink_change() {
     CHECK((log.calls == Calls{"c:0,0,0", "d:500,600"}));
 }
 
+// --- editor ------------------------------------------------------------------
+
+// Stands in for the `pad` built-in (another track adds it): two floating
+// sticks, a dpad, four face buttons in a diamond and two shoulders.
+static const char *kEditorPadLayout = R"({
+  "version": 1, "name": "pad",
+  "groups": [
+    {"id": "sticks", "controls": [
+       {"kind": "stick", "stick": "left", "anchor": "bottom-left", "x": 40, "y": 40, "radius": 60},
+       {"kind": "stick", "stick": "right", "anchor": "bottom-right", "x": 300, "y": 40, "radius": 60}]},
+    {"id": "dpad", "controls": [
+       {"kind": "dpad", "anchor": "bottom-left", "x": 60, "y": 200, "size": 140}]},
+    {"id": "face", "controls": [
+       {"kind": "button", "button": "cross", "anchor": "bottom-right", "x": 110, "y": 200, "size": 60},
+       {"kind": "button", "button": "circle", "anchor": "bottom-right", "x": 40, "y": 270, "size": 60},
+       {"kind": "button", "button": "square", "anchor": "bottom-right", "x": 180, "y": 270, "size": 60},
+       {"kind": "button", "button": "triangle", "anchor": "bottom-right", "x": 110, "y": 340, "size": 60}]},
+    {"id": "shoulders", "controls": [
+       {"kind": "button", "button": "l1", "anchor": "top-left", "x": 40, "y": 60, "w": 100, "h": 50},
+       {"kind": "button", "button": "r1", "anchor": "top-right", "x": 40, "y": 60, "w": 100, "h": 50}]}
+  ]})";
+
+static Screen editor_screen() {
+    Screen s;
+    s.dw = 2360;
+    s.dh = 1640;
+    s.scale = 2;
+    s.safe = Rect{0, 0, 2360, 1640};
+    return s;
+}
+
+static Layout editor_pad() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kEditorPadLayout, &l, &err));
+    return l;
+}
+
+static void tap(Editor &e, double x, double y, int64_t id = 7) {
+    e.finger_down(id, x, y);
+    e.finger_up(id);
+}
+
+static void tap_rect(Editor &e, const Rect &r) {
+    tap(e, r.x + r.w / 2.0, r.y + r.h / 2.0);
+}
+
+static void tap_tool(Editor &e, Tool t) {
+    for (const auto &item : e.toolbar())
+        if (item.tool == t) {
+            tap_rect(e, item.rect);
+            return;
+        }
+    CHECK(!"tool not on the toolbar");
+}
+
+// Taps the picker row whose value is `value`, dragging the list up a row at
+// a time until it is in view.
+static bool pick(Editor &e, const std::string &value) {
+    for (int step = 0; step < 400; ++step) {
+        const auto &items = e.picker();
+        if (items.empty())
+            return false;
+        for (const auto &it : items)
+            if (it.value == value && it.rect.h >= 32 * 2) {
+                tap_rect(e, it.rect);
+                return true;
+            }
+        Rect box = e.picker_rect();
+        double x = box.x + box.w / 2.0, y = box.y + box.h / 2.0;
+        e.finger_down(9, x, y);
+        e.finger_motion(9, x, y - 64);
+        e.finger_up(9);
+    }
+    return false;
+}
+
+static Rect cross_rect(const Editor &e, const Screen &s) {
+    return control_rect(e.layout(), 2, 0, s);
+}
+
+static void test_editor_open_and_toolbar() {
+    Editor e;
+    Screen s = editor_screen();
+    CHECK(!e.is_open());
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    CHECK(e.is_open());
+    CHECK(e.snap());
+    CHECK(e.layout().name == "pad");
+    // Ruling: eight visible tools (the brief's nine counted Tool::None).
+    const Tool order[] = {Tool::Add,  Tool::Delete, Tool::Bind,  Tool::Stick,
+                          Tool::Snap, Tool::Layout, Tool::Reset, Tool::Done};
+    CHECK(e.toolbar().size() == 8);
+    for (size_t i = 0; i < e.toolbar().size() && i < 8; ++i) {
+        const Rect &r = e.toolbar()[i].rect;
+        CHECK(e.toolbar()[i].tool == order[i]);
+        CHECK(e.toolbar()[i].label && *e.toolbar()[i].label);
+        CHECK(r.w == 144 && r.h == 72);
+        CHECK(r.y >= 0 && r.y + r.h <= 100);
+        if (i > 0)
+            CHECK(r.x == e.toolbar()[i - 1].rect.x + 144 + 12);
+    }
+    // Centred in the safe area.
+    const Rect &first = e.toolbar().front().rect;
+    const Rect &last = e.toolbar().back().rect;
+    CHECK(std::abs((first.x - 0) - (2360 - (last.x + last.w))) <= 1);
+    CHECK(e.picker().empty());
+    CHECK(e.selected_group() == -1 && e.selected_control() == -1);
+
+    // Portrait: the toolbar sits at the top of the controls area.
+    Screen p;
+    p.dw = 1170;
+    p.dh = 2532;
+    p.scale = 3;
+    p.safe = Rect{0, 141, 1170, 2289};
+    p.controls_area = Rect{0, 1500, 1170, 930};
+    e.set_screen(p);
+    CHECK(e.toolbar().front().rect.y >= 1500 && e.toolbar().front().rect.y < 1500 + 30);
+    CHECK(e.toolbar().front().rect.x >= 0 &&
+          e.toolbar().back().rect.x + e.toolbar().back().rect.w <= 1170);
+}
+
+static void test_editor_select_drag_and_reanchor() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    Rect before = cross_rect(e, s);
+    CHECK(before.x == 2020 && before.y == 1120 && before.w == 120);
+    CHECK(e.layout().groups[2].controls[0].anchor == Anchor::BottomRight);
+
+    uint32_t gen = e.generation();
+    tap_rect(e, before);
+    CHECK(e.selected_group() == 2 && e.selected_control() == 0);
+    CHECK(e.generation() != gen);
+
+    // Tapping empty space clears the selection.
+    tap(e, 1180, 700);
+    CHECK(e.selected_group() == -1 && e.selected_control() == -1);
+
+    double cx = before.x + 60, cy = before.y + 60;
+    e.finger_down(1, cx, cy);
+    CHECK(e.selected_group() == 2 && e.selected_control() == 0);
+    e.finger_motion(1, cx - 403, cy - 597);
+    Rect moved = cross_rect(e, s);
+    CHECK(std::abs(moved.x - (before.x - 400)) <= 12 && std::abs(moved.y - (before.y - 600)) <= 12);
+    CHECK(moved.x % 20 == 0 && moved.y % 20 == 0);
+    CHECK(!e.guides().empty());
+    e.finger_up(1);
+    // The centre (1680, 580) is in the right third and the middle third.
+    CHECK(e.layout().groups[2].controls[0].anchor == Anchor::Right);
+    Rect after = cross_rect(e, s);
+    CHECK(after.x == moved.x && after.y == moved.y && after.w == moved.w && after.h == moved.h);
+    CHECK(e.guides().empty());
+    // Still in place on a different screen size's anchor maths: the offset is
+    // measured from the right edge, centred vertically.
+    const Control &c = e.layout().groups[2].controls[0];
+    CHECK(std::lround(c.x * 2) == 2360 - 120 - after.x);
+}
+
+static void test_editor_snap_off_and_snap_to_control() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, false);
+    CHECK(!e.snap());
+    Rect before = cross_rect(e, s);
+    double cx = before.x + 60, cy = before.y + 60;
+    e.finger_down(1, cx, cy);
+    e.finger_motion(1, cx - 403, cy - 597);
+    e.finger_up(1);
+    Rect after = cross_rect(e, s);
+    CHECK(after.x == before.x - 403 && after.y == before.y - 597);
+    CHECK(e.guides().empty());
+
+    // Snap back on: a drop within 6 pt of the circle's left edge lines up with it.
+    tap_tool(e, Tool::Snap);
+    CHECK(e.snap());
+    Rect circle = control_rect(e.layout(), 2, 1, s);
+    Rect cr = cross_rect(e, s);
+    e.finger_down(1, cr.x + 60, cr.y + 60);
+    // Put the cross's left edge 7 px right of the circle's left edge, well
+    // below it so nothing else is near; 7 px is off the 20 px grid.
+    double tx = circle.x + 7 + 60, ty = 1400 + 3 + 60;
+    e.finger_motion(1, tx, ty);
+    Rect snapped = cross_rect(e, s);
+    CHECK(snapped.x == circle.x);
+    bool vertical_guide = false;
+    for (const Rect &g : e.guides())
+        if (g.w == 1 && g.x == circle.x)
+            vertical_guide = true;
+    CHECK(vertical_guide);
+    e.finger_up(1);
+}
+
+static void test_editor_pinch() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    Rect r = cross_rect(e, s);
+    double cx = r.x + 60, cy = r.y + 60;
+    e.finger_down(1, cx, cy);
+    e.finger_down(2, cx - 100, cy);
+    e.finger_motion(2, cx - 200, cy);
+    const Control &c = e.layout().groups[2].controls[0];
+    CHECK(c.w == 120 && c.h == 120);
+    // The centre stays put.
+    Rect grown = cross_rect(e, s);
+    CHECK(std::abs(grown.x + grown.w / 2 - cx) <= 2 && std::abs(grown.y + grown.h / 2 - cy) <= 2);
+    e.finger_motion(2, cx - 1000, cy);
+    CHECK(e.layout().groups[2].controls[0].w == 240);
+    e.finger_motion(2, cx - 10, cy);
+    CHECK(e.layout().groups[2].controls[0].w == 24);
+    e.finger_up(2);
+    e.finger_up(1);
+    // The wheel resizes the selection too, in 2 pt steps.
+    e.wheel(3);
+    CHECK(e.layout().groups[2].controls[0].w > 24);
+    CHECK(int(e.layout().groups[2].controls[0].w) % 2 == 0);
+
+    // A stick's pinch scales its travel and zone together.
+    Rect st = control_rect(e.layout(), 0, 0, s);
+    double sx = st.x + st.w / 2.0, sy = st.y + st.h / 2.0;
+    e.finger_down(1, sx, sy);
+    e.finger_down(2, sx + 50, sy);
+    e.finger_motion(2, sx + 75, sy);
+    const Control &stick = e.layout().groups[0].controls[0];
+    CHECK(stick.w == 180 && stick.h == 180 && stick.radius == 90);
+    e.finger_up(2);
+    e.finger_up(1);
+}
+
+static void test_editor_add_delete_bind() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    size_t groups = e.layout().groups.size();
+    tap_tool(e, Tool::Add);
+    CHECK(!e.picker().empty());
+    CHECK(e.picker().size() == 7);
+    Rect box = e.picker_rect();
+    CHECK(box.w == 400);
+    CHECK(box.y >= e.toolbar().front().rect.y + e.toolbar().front().rect.h);
+    CHECK(pick(e, "button"));
+    CHECK(pick(e, "button:circle"));
+    CHECK(e.picker().empty());
+    CHECK(e.layout().groups.size() == groups + 1);
+    const Group &custom = e.layout().groups.back();
+    CHECK(custom.id == "custom" && custom.controls.size() == 1);
+    CHECK(custom.controls[0].kind == Kind::Button &&
+          custom.controls[0].button == PadButton::Circle);
+    CHECK(e.selected_group() == int(groups) && e.selected_control() == 0);
+    // Placed at the centre of the area.
+    Rect nr = control_rect(e.layout(), int(groups), 0, s);
+    CHECK(std::abs(nr.x + nr.w / 2 - 1180) <= 1 && std::abs(nr.y + nr.h / 2 - 820) <= 1);
+
+    // A second add joins the same group.
+    tap_tool(e, Tool::Add);
+    CHECK(pick(e, "key"));
+    CHECK(e.layout().groups.back().controls.size() == 2);
+    CHECK(e.layout().groups.back().controls[1].kind == Kind::Key);
+    // Bind the key.
+    tap_tool(e, Tool::Bind);
+    CHECK(pick(e, "Q"));
+    CHECK(e.layout().groups.back().controls[1].scancode == kScanQ);
+    tap_tool(e, Tool::Delete);
+    CHECK(e.selected_group() == -1);
+    CHECK(e.layout().groups.back().controls.size() == 1);
+    tap_rect(e, control_rect(e.layout(), int(groups), 0, s));
+    tap_tool(e, Tool::Delete);
+    CHECK(e.layout().groups.size() == groups);
+    for (const auto &g : e.layout().groups)
+        CHECK(g.id != "custom");
+
+    // Bind in mapped mode: cross -> key:Space.
+    tap_rect(e, cross_rect(e, s));
+    tap_tool(e, Tool::Bind);
+    CHECK(pick(e, "key:Space"));
+    const Target &t = e.mapped().buttons[int(PadButton::Cross)];
+    CHECK(t.type == Target::Key && t.value == kScanSpace);
+    // A stick binds to a stick mode.
+    tap_rect(e, control_rect(e.layout(), 0, 1, s));
+    tap_tool(e, Tool::Bind);
+    CHECK(pick(e, "wasd"));
+    CHECK(e.mapped().right == StickMode::Wasd);
+    // Stick cycles floating/fixed and the dead zone.
+    double dz = e.layout().groups[0].controls[1].deadzone;
+    tap_tool(e, Tool::Stick);
+    CHECK(e.layout().groups[0].controls[1].deadzone != dz ||
+          !e.layout().groups[0].controls[1].floating);
+    for (int i = 0; i < 5; ++i)
+        tap_tool(e, Tool::Stick);
+    CHECK(e.layout().groups[0].controls[1].floating);
+    CHECK(e.layout().groups[0].controls[1].deadzone == dz);
+
+    // Tapping outside an open picker just closes it.
+    tap_tool(e, Tool::Add);
+    CHECK(!e.picker().empty());
+    tap(e, 1180, 1500);
+    CHECK(e.picker().empty());
+    CHECK(e.layout().groups.size() == groups);
+}
+
+static void test_editor_bind_native_button() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, true, true);
+    tap_rect(e, cross_rect(e, s));
+    tap_tool(e, Tool::Bind);
+    for (const auto &it : e.picker())
+        CHECK(it.value.rfind("key:", 0) != 0);
+    CHECK(pick(e, "start"));
+    CHECK(e.layout().groups[2].controls[0].button == PadButton::Start);
+    CHECK(e.mapped().buttons[int(PadButton::Cross)].type == Target::Mouse);
+}
+
+static void test_editor_grid_key_moves_its_group() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kTinyLayout, &l, &err));
+    l.safe_inset = true;
+    e.open(l, Form::Tablet, MappedTable{}, false, false);
+    Rect box = group_rect(e.layout(), 0, s);
+    Rect key = control_rect(e.layout(), 0, 0, s);
+    e.finger_down(1, key.x + 5, key.y + 5);
+    CHECK(e.selected_group() == 0 && e.selected_control() == 0);
+    e.finger_motion(1, key.x + 5 - 1400, key.y + 5 - 700);
+    e.finger_up(1);
+    Rect moved = group_rect(e.layout(), 0, s);
+    CHECK(moved.x == box.x - 1400 && moved.y == box.y - 700);
+    CHECK(e.layout().groups[0].anchor == Anchor::Center);
+    // Pinch scales the grid's key size, clamped to 24..60.
+    Rect k = control_rect(e.layout(), 0, 0, s);
+    e.finger_down(1, k.x + 5, k.y + 5);
+    e.finger_down(2, k.x + 105, k.y + 5);
+    e.finger_motion(2, k.x + 505, k.y + 5);
+    CHECK(e.layout().groups[0].grid.key == 60);
+    e.finger_up(2);
+    e.finger_up(1);
+    // A grid group survives losing its last control.
+    tap_rect(e, control_rect(e.layout(), 0, 1, s));
+    tap_tool(e, Tool::Delete);
+    tap_rect(e, control_rect(e.layout(), 0, 0, s));
+    tap_tool(e, Tool::Delete);
+    CHECK(e.layout().groups.size() == 2 && e.layout().groups[0].controls.empty());
+}
+
+static void test_editor_done_reset_and_layout_names() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.set_names({"pad", "keys", "pad+keys", "pad copy"});
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    CHECK(!e.take_save());
+    tap_tool(e, Tool::Done);
+    CHECK(e.take_save());
+    CHECK(!e.take_save());
+    tap_tool(e, Tool::Reset);
+    CHECK(e.take_reset());
+    CHECK(!e.take_reset());
+    CHECK(!e.take_cancel());
+
+    // A built-in refuses a rename.
+    std::string current;
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "rename"));
+    CHECK(!e.take_rename(&current));
+    CHECK(e.layout().name == "pad");
+
+    // Duplicate picks the first free "<name> copy N".
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "duplicate"));
+    CHECK(e.layout().name == "pad copy 2");
+
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "rename"));
+    CHECK(e.take_rename(&current));
+    CHECK(current == "pad copy 2");
+    CHECK(!e.take_rename(&current));
+    e.text("mi");
+    e.text("ne");
+    e.text_done();
+    CHECK(e.layout().name == "mine");
+    // Text outside a rename is ignored; a built-in name is refused.
+    e.text("x");
+    e.text_done();
+    CHECK(e.layout().name == "mine");
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "rename"));
+    CHECK(e.take_rename(&current));
+    e.text("keys");
+    e.text_done();
+    CHECK(e.layout().name == "mine");
+
+    // Toggle binding lists the layout names plus next.
+    tap_tool(e, Tool::Add);
+    CHECK(pick(e, "toggle"));
+    tap_tool(e, Tool::Bind);
+    CHECK(pick(e, "keys"));
+    CHECK(e.layout().groups.back().controls.back().target == "keys");
+
+    e.close();
+    CHECK(!e.is_open());
+}
+
+static void test_editor_tools_mid_gesture() {
+    Screen s = editor_screen();
+    {
+        // Finger 1 holds the cross, finger 2 taps Delete, then touches empty space.
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+        Rect cross = cross_rect(e, s);
+        std::vector<Rect> before;
+        for (int c = 1; c < 4; ++c)
+            before.push_back(control_rect(e.layout(), 2, c, s));
+        e.finger_down(1, cross.x + 60, cross.y + 60);
+        e.finger_motion(1, cross.x + 30, cross.y + 60);
+        tap_tool(e, Tool::Delete);
+        CHECK(e.selected_group() == -1);
+        CHECK(e.layout().groups[2].controls.size() == 3);
+        CHECK(e.guides().empty());
+        e.finger_down(2, 1180, 700);
+        e.finger_motion(2, 1000, 700);
+        e.finger_motion(1, cross.x - 300, cross.y - 300);
+        e.finger_up(2);
+        e.finger_up(1);
+        for (int c = 1; c < 4; ++c) {
+            Rect r = control_rect(e.layout(), 2, c - 1, s);
+            CHECK(r.x == before[c - 1].x && r.y == before[c - 1].y && r.w == before[c - 1].w);
+        }
+        CHECK(e.selected_group() == -1);
+    }
+    {
+        // Add during a drag: the drag is committed and ends; the new control stays put.
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, false);
+        Rect cross = cross_rect(e, s);
+        e.finger_down(1, cross.x + 60, cross.y + 60);
+        e.finger_motion(1, cross.x + 60 - 1000, cross.y + 60);
+        Rect moved = cross_rect(e, s);
+        tap_tool(e, Tool::Add);
+        CHECK(e.layout().groups[2].controls[0].anchor == Anchor::Bottom);
+        CHECK(pick(e, "dpad"));
+        const int g = e.selected_group();
+        CHECK(g == int(e.layout().groups.size()) - 1);
+        Rect added = control_rect(e.layout(), g, 0, s);
+        e.finger_motion(1, 100, 100);
+        e.finger_down(2, 1500, 300); // would pinch if the drag were still live
+        e.finger_motion(2, 1800, 300);
+        e.finger_up(2);
+        e.finger_up(1);
+        Rect after = control_rect(e.layout(), g, 0, s);
+        CHECK(after.x == added.x && after.y == added.y && after.w == added.w);
+        Rect c2 = cross_rect(e, s);
+        CHECK(c2.x == moved.x && c2.y == moved.y);
+        CHECK(std::abs(added.x + added.w / 2 - 1180) <= 1);
+    }
+    {
+        // close() drops the gesture and pending results.
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+        Rect cross = cross_rect(e, s);
+        e.finger_down(1, cross.x + 60, cross.y + 60);
+        tap_tool(e, Tool::Done);
+        e.close();
+        CHECK(!e.take_save());
+        CHECK(e.selected_group() == -1 && e.picker().empty() && e.guides().empty());
+        e.finger_motion(1, 0, 0);
+        e.finger_up(1);
+    }
+}
+
+static void test_editor_reanchor_every_side() {
+    Screen s = editor_screen();
+    struct Case {
+        double cx, cy;
+        Anchor want;
+    } cases[] = {
+        {300, 800, Anchor::Left},    {1180, 200, Anchor::Top},    {1180, 1400, Anchor::Bottom},
+        {300, 200, Anchor::TopLeft}, {1180, 800, Anchor::Center}, {300, 1400, Anchor::BottomLeft},
+    };
+    for (const Case &k : cases) {
+        Editor e;
+        e.set_screen(s);
+        e.open(editor_pad(), Form::Tablet, MappedTable{}, false, false);
+        Rect r = cross_rect(e, s);
+        e.finger_down(1, r.x + 60, r.y + 60);
+        e.finger_motion(1, k.cx, k.cy);
+        Rect moved = cross_rect(e, s);
+        e.finger_up(1);
+        const Control &c = e.layout().groups[2].controls[0];
+        CHECK(c.anchor == k.want);
+        Rect after = cross_rect(e, s);
+        CHECK(after.x == moved.x && after.y == moved.y);
+        CHECK(after.x + 60 == int(k.cx) && after.y + 60 == int(k.cy));
+    }
+}
+
+static void test_editor_picker_scroll_is_not_a_tap() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    CHECK(!e.mapped_changed());
+    tap_rect(e, cross_rect(e, s));
+    tap_tool(e, Tool::Bind);
+    CHECK(e.picker().size() == 12);
+    std::string first = e.picker().front().value;
+    Rect row = e.picker().front().rect;
+    e.finger_down(3, row.x + 10, row.y + 10);
+    e.finger_motion(3, row.x + 10, row.y + 10 - 100);
+    e.finger_up(3);
+    CHECK(!e.picker().empty());
+    CHECK(e.picker().front().value != first);
+    CHECK(!e.mapped_changed());
+    CHECK(e.mapped().buttons[int(PadButton::Cross)].type == Target::Mouse);
+    CHECK(pick(e, "wheel_up"));
+    CHECK(e.mapped_changed());
+    CHECK(e.mapped().buttons[int(PadButton::Cross)].type == Target::Wheel);
+
+    // Native: a button bind leaves the table untouched.
+    Editor n;
+    n.set_screen(s);
+    n.open(editor_pad(), Form::Tablet, MappedTable{}, true, true);
+    tap_rect(n, cross_rect(n, s));
+    tap_tool(n, Tool::Bind);
+    CHECK(pick(n, "circle"));
+    CHECK(!n.mapped_changed());
+}
+
+static void test_editor_pinch_keeps_aspect_and_area() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    // L1 is 100x50 at the top-left: growing is capped where w hits 240,
+    // shrinking where h hits 24; the result stays in the area.
+    Rect r = control_rect(e.layout(), 3, 0, s);
+    double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
+    e.finger_down(1, cx, cy);
+    e.finger_down(2, cx + 40, cy);
+    e.finger_motion(2, cx + 400, cy);
+    const Control &c = e.layout().groups[3].controls[0];
+    CHECK(c.w == 240 && c.h == 120);
+    Rect big = control_rect(e.layout(), 3, 0, s);
+    CHECK(big.x >= 0 && big.y >= 0);
+    e.finger_motion(2, cx + 1, cy);
+    CHECK(e.layout().groups[3].controls[0].h == 24);
+    CHECK(e.layout().groups[3].controls[0].w == 48);
+    e.finger_up(2);
+    e.finger_up(1);
+}
+
+static void test_editor_custom_group_beside_a_grid_custom() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kTinyLayout, &l, &err));
+    l.groups[0].id = "custom";
+    e.open(l, Form::Tablet, MappedTable{}, false, false);
+    tap_tool(e, Tool::Add);
+    CHECK(pick(e, "dpad"));
+    CHECK(e.layout().groups.back().id == "custom-2");
+    CHECK(!e.layout().groups.back().has_grid);
+    tap_tool(e, Tool::Add);
+    CHECK(pick(e, "action"));
+    CHECK(e.layout().groups.size() == 3);
+    CHECK(e.layout().groups.back().controls.size() == 2);
+}
+
+static void test_editor_layout_switch_and_delete() {
+    Editor e;
+    Screen s = editor_screen();
+    e.set_screen(s);
+    e.set_names({"pad", "keys", "pad+keys", "mine"});
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    std::string name;
+    // Built-in: delete is refused.
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "delete"));
+    CHECK(!e.take_delete(&name));
+    // Switch lists every other name.
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "switch"));
+    bool has_self = false, has_mine = false;
+    for (const auto &it : e.picker()) {
+        has_self |= it.value == "pad";
+        has_mine |= it.value == "mine";
+    }
+    CHECK(!has_self && has_mine);
+    CHECK(pick(e, "mine"));
+    CHECK(e.take_switch(&name));
+    CHECK(name == "mine");
+    CHECK(!e.take_switch(&name));
+
+    // A user layout can be deleted; a rename replaces its old name.
+    Layout mine = editor_pad();
+    mine.name = "mine";
+    e.open(mine, Form::Tablet, MappedTable{}, false, true);
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "delete"));
+    CHECK(e.take_delete(&name));
+    CHECK(name == "mine");
+    CHECK(!e.take_delete(&name));
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "rename"));
+    CHECK(e.take_rename(&name));
+    e.text("ours");
+    e.text_done();
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "switch"));
+    for (const auto &it : e.picker())
+        CHECK(it.value != "mine" && it.value != "ours");
+    CHECK(e.picker().size() == 3);
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--dump") == 0) {
         dump_builtins(argv[2]);
@@ -2767,6 +3396,20 @@ int main(int argc, char **argv) {
     test_rumble_router_controller_refresh();
     test_rumble_router_device_refresh();
     test_rumble_router_sink_change();
+    test_editor_open_and_toolbar();
+    test_editor_select_drag_and_reanchor();
+    test_editor_snap_off_and_snap_to_control();
+    test_editor_pinch();
+    test_editor_add_delete_bind();
+    test_editor_bind_native_button();
+    test_editor_grid_key_moves_its_group();
+    test_editor_done_reset_and_layout_names();
+    test_editor_tools_mid_gesture();
+    test_editor_reanchor_every_side();
+    test_editor_picker_scroll_is_not_a_tap();
+    test_editor_pinch_keeps_aspect_and_area();
+    test_editor_custom_group_beside_a_grid_custom();
+    test_editor_layout_switch_and_delete();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

@@ -81,6 +81,7 @@ add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.
                               ${HOST}/controls/raster.cpp ${HOST}/controls/overlay_paint.cpp
                               ${HOST}/controls/pad_art.cpp
                               ${HOST}/controls/haptics.cpp
+                              ${HOST}/controls/editor.cpp
                               ${HOST}/keypad_layout.cpp
                               ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
                               ${HOST}/tests/keypad_legacy_oracle.cpp ${POP_ROOT}/mods/font6x8.cpp)
