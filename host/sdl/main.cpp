@@ -1393,8 +1393,13 @@ int main(int argc, char **argv) {
             launcher::RunOptions options;
             options.known = game.exe;
             options.auto_play = !game.exe.empty() && !asked && mobile ? 1.5 : 0;
-            if (const char *dump = recomp_env("LAUNCHER_DUMP"))
+            // A relative dump path is under the app's home (a device's container).
+            if (const char *dump = recomp_env("LAUNCHER_DUMP")) {
                 options.dump_path = dump;
+                const char *home = getenv("HOME");
+                if (!options.dump_path.empty() && options.dump_path[0] != '/' && home && *home)
+                    options.dump_path = std::string(home) + "/" + options.dump_path;
+            }
             if (const char *keys = recomp_env("LAUNCHER_KEYS"))
                 options.keys = keys;
             const std::string chosen = launcher::run(g_window, g_gpu.get(), g_surface, *platform, options);

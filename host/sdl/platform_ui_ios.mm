@@ -1,15 +1,19 @@
 // platform_ui_ios.mm - the SDL host on iPadOS: one fullscreen Metal window, the
-// game seeded from the bundle into Documents/game (the bundle is read-only and
-// the guest writes its saves next to its data), and the app lifecycle mapped
-// onto audio and presentation.
+// game in Documents/game (imported by the launcher, from the bundle of a
+// developer build or from files the player chose), the launcher's platform,
+// and the app lifecycle mapped onto audio and presentation.
 #include "platform_ui.h"
 
 #include "../../platform/os.h"
+#include "../../runtime/layout.h"
 #include "../audio.h"
+#include "../launcher/launcher_sdl.h"
 #include "../present.h"
 #include "game_config.h"
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <filesystem>
 #include <fstream>
@@ -19,13 +23,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-std::string read_stamp(const fs::path &dir) {
-    std::ifstream in(dir / ".stamp");
-    std::string s;
-    std::getline(in, s);
-    return s;
-}
 
 std::string bundle_dir() {
     char path[4096];
@@ -53,35 +50,200 @@ void platform_ui_init_hints() {
     recomp_env_apply_file((documents_dir() + "/switches.txt").c_str());
 }
 
+// Documents/game when it is ready. Anything else - no game yet, a bundled copy
+// still to import, a wrong or partial import - is the launcher's to show.
 GamePath platform_ui_resolve_game(const char *, std::string *error) {
     GamePath g;
-    const fs::path bundled = fs::path(bundle_dir()) / "game";
-    const fs::path docs = fs::path(documents_dir()) / "game";
-    std::error_code ec;
-    if (!fs::is_regular_file(bundled / RECOMP_EXECUTABLE, ec)) {
-        if (error)
-            *error =
-                "the app bundle has no game/" RECOMP_EXECUTABLE
-                "; build with tools/build.py --target ios from a checkout with the game installed";
-        return g;
+    if (error)
+        error->clear();
+    const std::string docs = documents_dir() + "/game";
+    const launcher::Status st = launcher::check(launcher::spec_from_config(), docs);
+    if (st.state == launcher::State::Ready) {
+        g.exe = st.exe;
+        g.source = GamePathSource::Saved;
     }
-    const std::string want = read_stamp(bundled);
-    if (!fs::is_regular_file(docs / RECOMP_EXECUTABLE, ec) || read_stamp(docs) != want) {
-        fs::remove_all(docs, ec);
-        fs::create_directories(docs, ec);
-        fs::copy(bundled, docs, fs::copy_options::recursive | fs::copy_options::overwrite_existing,
-                 ec);
-        if (ec) {
-            fs::remove_all(docs);
-            if (error)
-                *error = "copying the game into Documents failed: " + ec.message();
-            return g;
-        }
-    }
-    g.exe = (docs / RECOMP_EXECUTABLE).string();
-    g.source = GamePathSource::Saved;
     return g;
 }
+
+// ---------------------------------------------------------------------------
+// The launcher's iPadOS platform: the document picker for a folder or a ZIP,
+// imports into Documents/game (kept out of iCloud backups), the Files app and
+// Finder as another way in, and a share sheet for exported saves.
+// ---------------------------------------------------------------------------
+@interface RecompPickerDelegate : NSObject <UIDocumentPickerDelegate>
+@property(nonatomic) launcher::PickDone done;
+@property(nonatomic) bool scoped;
+@end
+
+namespace {
+std::vector<NSURL *> g_scoped; // security-scoped URLs held for an import
+NSMutableArray *g_delegates;   // picker delegates alive until they answer
+UIBackgroundTaskIdentifier g_background = UIBackgroundTaskInvalid;
+}
+
+@implementation RecompPickerDelegate
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    std::vector<launcher::Picked> picked;
+    for (NSURL *url in urls) {
+        if (self.scoped && [url startAccessingSecurityScopedResource])
+            g_scoped.push_back(url);
+        launcher::Picked p;
+        p.path = url.fileSystemRepresentation;
+        p.name = url.lastPathComponent.UTF8String;
+        picked.push_back(p);
+    }
+    if (self.done)
+        self.done(picked, "");
+    [g_delegates removeObject:self];
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    if (self.done)
+        self.done({}, "");
+    [g_delegates removeObject:self];
+}
+@end
+
+namespace {
+
+UIViewController *top_controller(SDL_Window *window) {
+    UIWindow *uiwindow = (__bridge UIWindow *)SDL_GetPointerProperty(
+        SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, nullptr);
+    UIViewController *vc = uiwindow.rootViewController;
+    while (vc.presentedViewController)
+        vc = vc.presentedViewController;
+    return vc;
+}
+
+class IosPlatform final : public launcher::Platform {
+  public:
+    explicit IosPlatform(SDL_Window *window) : window_(window) {}
+
+    launcher::PlatformInfo info() override {
+        launcher::PlatformInfo i;
+        i.plays_in_place = false;
+        i.can_pick_folder = true;
+        i.can_pick_zip = true;
+        i.can_open_folder = false;
+        i.touch = true;
+        i.import_root = documents_dir() + "/game";
+        i.profile_dir = host_layout().profile_dir;
+        i.drop_hint = "Or copy the game folder into this app's files with Finder (iPad connected to a Mac) "
+                      "or the Files app, then open the app again.";
+        const fs::path bundled = fs::path(bundle_dir()) / "game";
+        std::error_code ec;
+        if (fs::is_regular_file(bundled / RECOMP_EXECUTABLE, ec))
+            i.auto_import = bundled.string();
+        return i;
+    }
+    void present(UIDocumentPickerViewController *picker, launcher::PickDone done, bool scoped) {
+        RecompPickerDelegate *delegate = [RecompPickerDelegate new];
+        delegate.done = std::move(done);
+        delegate.scoped = scoped;
+        if (!g_delegates)
+            g_delegates = [NSMutableArray new];
+        [g_delegates addObject:delegate];
+        picker.delegate = delegate;
+        picker.modalPresentationStyle = UIModalPresentationFormSheet;
+        [top_controller(window_) presentViewController:picker animated:YES completion:nil];
+    }
+    void pick_folder(launcher::PickDone done) override {
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeFolder ]];
+        present(picker, std::move(done), true);
+    }
+    void pick_zip(launcher::PickDone done) override {
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeZIP ]];
+        present(picker, std::move(done), true);
+    }
+    void pick_saves(launcher::PickDone done) override {
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeZIP ] asCopy:YES];
+        present(picker, std::move(done), false);
+    }
+    // Written to a temporary file first; export_ready offers it to the player.
+    void pick_export(const std::string &suggested, launcher::PickDone done) override {
+        launcher::Picked p;
+        p.path = std::string(NSTemporaryDirectory().fileSystemRepresentation) + "/" + suggested;
+        p.name = suggested;
+        done({p}, "");
+    }
+    void export_ready(const launcher::Picked &p) override {
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:p.path.c_str()]];
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForExportingURLs:@[ url ] asCopy:YES];
+        present(picker, nullptr, false);
+    }
+    std::vector<std::string> candidates(const launcher::Spec &spec) override {
+        // A game folder the player copied into Documents under any name.
+        std::vector<std::string> out;
+        const std::string docs = documents_dir();
+        std::error_code ec;
+        for (const auto &entry : fs::directory_iterator(docs, ec)) {
+            const std::string name = entry.path().filename().string();
+            if (!entry.is_directory(ec) || name == "game" || name[0] == '.')
+                continue;
+            const std::string root = launcher::find_root(spec, entry.path().string());
+            if (!root.empty())
+                out.push_back(root);
+        }
+        return out;
+    }
+    void open_url(const std::string &url) override {
+        NSURL *u = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
+        if (u)
+            [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
+    }
+    void import_activity(bool active, const launcher::Progress *progress) override {
+        if (progress)
+            return;
+        dispatch_block_t update = ^{
+          [UIApplication sharedApplication].idleTimerDisabled = active;
+          if (active && g_background == UIBackgroundTaskInvalid)
+              g_background = [[UIApplication sharedApplication]
+                  beginBackgroundTaskWithName:@"Import game"
+                            expirationHandler:^{
+                              [[UIApplication sharedApplication] endBackgroundTask:g_background];
+                              g_background = UIBackgroundTaskInvalid;
+                            }];
+          else if (!active && g_background != UIBackgroundTaskInvalid) {
+              [[UIApplication sharedApplication] endBackgroundTask:g_background];
+              g_background = UIBackgroundTaskInvalid;
+          }
+        };
+        if ([NSThread isMainThread])
+            update();
+        else
+            dispatch_async(dispatch_get_main_queue(), update);
+    }
+    void protect_import(const std::string &root) override {
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:root.c_str()] isDirectory:YES];
+        NSError *err = nil;
+        if (![url setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&err])
+            fprintf(stderr, "[ios] could not exclude %s from backup: %s\n", root.c_str(),
+                    err.localizedDescription.UTF8String);
+    }
+    void release(const launcher::Picked &p) override {
+        for (auto it = g_scoped.begin(); it != g_scoped.end(); ++it)
+            if (p.path == (*it).fileSystemRepresentation) {
+                [*it stopAccessingSecurityScopedResource];
+                g_scoped.erase(it);
+                return;
+            }
+    }
+
+  private:
+    SDL_Window *window_;
+};
+
+} // namespace
+
+namespace launcher {
+std::unique_ptr<Platform> make_platform(SDL_Window *window) {
+    return std::make_unique<IosPlatform>(window);
+}
+} // namespace launcher
 
 namespace {
 // SDL3 does not queue the app lifecycle events; it hands them to event
