@@ -118,6 +118,8 @@ class Launcher {
     // Mobile: a ready game starts after `seconds` unless the player touches
     // the screen. advance() moves the countdown.
     void set_auto_play(double seconds);
+    // The game cannot run here (no GPU): Play explains instead of starting.
+    void set_unplayable(const std::string &reason);
     void advance(double seconds);
     bool counting_down() const { return countdown_ > 0; }
     void key(Key k);
@@ -155,6 +157,7 @@ class Launcher {
     int pressed_ = -1;
     bool finished_ = false, quit_ = false, dirty_ = true, confirm_delete_ = false;
     double countdown_ = 0;
+    std::string unplayable_;
     Picked importing_;
 
     // Shared with picker callbacks and the import thread.

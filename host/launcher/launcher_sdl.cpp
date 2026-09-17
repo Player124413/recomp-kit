@@ -32,6 +32,11 @@ struct Presenter {
     int w = 0, h = 0, tex_w = 0, tex_h = 0;
 
     bool open(void *surface, int width, int height) {
+        if (!device) {
+            w = width;
+            h = height;
+            return SDL_GetWindowSurface(window) != nullptr;
+        }
         chain = device->create_swapchain(surface, width, height);
         if (!chain)
             return false;
@@ -43,11 +48,28 @@ struct Presenter {
     void resize(int width, int height) {
         if (width == w && height == h)
             return;
-        device->resize(chain, width, height);
+        if (device)
+            device->resize(chain, width, height);
         w = width;
         h = height;
     }
+    SDL_Window *window = nullptr; // software presentation when there is no device
     void show(const Canvas &c) {
+        if (!device) {
+            SDL_Surface *dst = SDL_GetWindowSurface(window);
+            if (!dst)
+                return;
+            SDL_Surface *src = SDL_CreateSurfaceFrom(c.width(), c.height(),
+                                                     format == gpu::Format::BGRA8 ? SDL_PIXELFORMAT_BGRA32
+                                                                                  : SDL_PIXELFORMAT_RGBA32,
+                                                     static_cast<void *>(const_cast<uint8_t *>(c.pixels())), c.width() * 4);
+            if (src) {
+                SDL_BlitSurface(src, nullptr, dst, nullptr);
+                SDL_DestroySurface(src);
+            }
+            SDL_UpdateWindowSurface(window);
+            return;
+        }
         if (!chain || c.width() <= 0 || c.height() <= 0)
             return;
         if (!texture || tex_w != c.width() || tex_h != c.height()) {
@@ -72,6 +94,10 @@ struct Presenter {
         device->wait(cb);
     }
     void close() {
+        if (!device) {
+            SDL_DestroyWindowSurface(window);
+            return;
+        }
         if (texture)
             device->destroy(texture);
         texture = {};
@@ -107,6 +133,8 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
     const Spec &spec = spec_from_config();
     Launcher launcher(spec, platform);
     launcher.start(options.known);
+    if (!options.unplayable.empty())
+        launcher.set_unplayable(options.unplayable);
     if (options.auto_play > 0)
         launcher.set_auto_play(options.auto_play);
 
@@ -118,6 +146,7 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
     SDL_GetWindowSize(window, &bw, &bh);
     Presenter presenter;
     presenter.device = device;
+    presenter.window = window;
     if (!presenter.open(native_surface, std::max(1, dw), std::max(1, dh))) {
         fprintf(stderr, "[launcher] no swapchain for the window\n");
         return "";

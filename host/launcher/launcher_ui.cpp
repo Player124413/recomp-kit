@@ -145,7 +145,15 @@ void Launcher::start(const std::string &known) {
     }
 }
 
+void Launcher::set_unplayable(const std::string &reason) {
+    unplayable_ = reason;
+    countdown_ = 0;
+    dirty_ = true;
+}
+
 void Launcher::set_auto_play(double seconds) {
+    if (!unplayable_.empty())
+        return;
     countdown_ = status_.state == State::Ready && screen_ == Screen::Main ? seconds : 0;
     dirty_ = true;
 }
@@ -437,6 +445,10 @@ void Launcher::activate(int id) {
     }
     switch (id) {
     case kPlay:
+        if (!unplayable_.empty()) {
+            show(unplayable_);
+            break;
+        }
         if (status_.state == State::Ready) {
             if (info_.plays_in_place)
                 remember_folder(info_.folders_file, status_.root);

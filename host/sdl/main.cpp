@@ -1362,6 +1362,27 @@ int main(int argc, char **argv) {
     if (!g_gpu) {
         fprintf(stderr, RECOMP_APP_NAME ": no GPU device is available (%s)\n",
                 gpu::default_backend_name());
+        // The launcher still runs, drawn in software: the game can be
+        // imported, and the player is told why it cannot start here.
+        int mode = 0;
+        g_window = platform_ui_create_window(RECOMP_GAME_NAME, g_mode_w, g_mode_h, 1, 0, &mode);
+        if (g_window) {
+            auto platform = launcher::make_platform(g_window);
+            launcher::RunOptions options;
+            options.known = game.exe;
+            options.unplayable = std::string("This device has no usable ") + gpu::default_backend_name() +
+                                 " graphics, which the game needs" +
+                                 (strcmp(gpu::default_backend_name(), "vulkan") == 0 ? " (Vulkan 1.1)." : ".");
+            if (const char *keys = recomp_env("LAUNCHER_KEYS"))
+                options.keys = keys;
+            if (const char *dump = recomp_env("LAUNCHER_DUMP")) {
+                options.dump_path = dump;
+                const char *home = getenv("HOME");
+                if (!options.dump_path.empty() && options.dump_path[0] != '/' && home && *home)
+                    options.dump_path = std::string(home) + "/" + options.dump_path;
+            }
+            launcher::run(g_window, nullptr, nullptr, *platform, options);
+        }
         return 3;
     }
 

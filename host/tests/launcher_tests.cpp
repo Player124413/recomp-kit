@@ -585,6 +585,16 @@ void test_ui_mobile() {
     CHECK(has_button(l, kPlay) && has_button(l, kImportFolder));
     CHECK(fp.protected_count == 1 && fp.released == 1);
 
+    // A device that cannot run the game still imports; Play explains why not.
+    Launcher cannot(s, fp);
+    cannot.start("");
+    cannot.set_unplayable("No usable graphics.");
+    cannot.set_auto_play(1.5);
+    CHECK(!cannot.counting_down());
+    cannot.activate(kPlay);
+    CHECK(!cannot.finished() && cannot.screen() == Screen::Message);
+    CHECK(cannot.message() == "No usable graphics.");
+
     // A ready game starts by itself unless the screen is touched.
     Launcher auto_play(s, fp);
     auto_play.start("");
