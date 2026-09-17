@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The launcher offers only folders holding the whole game: a folder with the
+  executable but without every `[setup] required_dirs` entry (an unpacked
+  patch in Downloads, say) is no longer listed.
+
 - The desktop app accepts `--launcher`; its argument check printed the usage
   and exited before the launcher could read the flag.
 
