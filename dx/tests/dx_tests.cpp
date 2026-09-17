@@ -1964,6 +1964,16 @@ static void test_display_abi() {
 // this test checks. host/controls/vpad_host_api.cpp's strong definitions
 // (a later task) are app-only and never link into dx_tests.
 static void test_host_pad_defaults() {
+    // Pinned like every other struct that crosses the host/guest ABI (see
+    // HostBlitRecord above): a size, alignment or offset drift here is a
+    // silent ABI break for dx/dinput_joystick.cpp and dx/xinput.cpp.
+    CHECK_EQ(sizeof(HostPadState), 14u);
+    CHECK_EQ(alignof(HostPadState), 2u);
+    CHECK_EQ(offsetof(HostPadState, l2), 12u);
+    CHECK_EQ(sizeof(HostPadEvent), 12u);
+    CHECK_EQ(alignof(HostPadEvent), 4u);
+    CHECK_EQ(offsetof(HostPadEvent, value), 8u);
+
     CHECK_EQ(host_pad_mode(), 0);
     CHECK_EQ(host_pad_native_apis(), 0);
 
