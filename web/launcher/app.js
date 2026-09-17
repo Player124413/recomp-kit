@@ -31,7 +31,8 @@ function setBusy(value) {
   busy = value;
   for (const c of cards.values())
     for (const b of c.el.querySelectorAll(".import-folder, .import-zip, .import-saves, .delete, .play"))
-      b.disabled = value || (b.classList.contains("play") && c.state !== "ready");
+      b.disabled = value || (b.classList.contains("play") && c.state !== "ready") ||
+                   (b.classList.contains("delete") && c.state === "notFound");
 }
 
 function show(card, text, bad = false) {
@@ -60,7 +61,6 @@ async function refresh(card) {
   else detail = `The imported ${card.game.executable} is not the supported version. Import again from the supported release.`;
   card.detailEl.textContent = detail;
   card.el.querySelector(".store").hidden = !card.game.store || status.state === "ready";
-  card.el.querySelector(".delete").disabled = busy || status.state === "notFound";
   setBusy(busy);
   updateStorage(estimate, persisted);
 }
