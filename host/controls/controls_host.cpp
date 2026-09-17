@@ -5,6 +5,7 @@
 #include "../../mods/mods_internal.h"
 #include "../../platform/os.h"
 #include "../present.h"
+#include "../sdl/platform_ui.h"
 #include "binding.h"
 #include "game_config.h"
 #include "layout_fallback.h"
@@ -29,6 +30,15 @@ Layout g_layout;
 Router g_router;
 Screen g_screen;
 bool g_keyboard_absent = false;
+bool g_controller_present = false;
+
+// RECOMP_CONTROLS_TRACE: log the merged pad on every change, and each
+// auto-hide decision.
+// Read on first use, after the host has applied its environment file.
+bool trace() {
+    static const bool on = recomp_env("CONTROLS_TRACE") != nullptr;
+    return on;
+}
 
 // The mapped binding: RECOMP_CONTROLS_PAD == 1 drives it from the shared
 // virtual pad every pump; the other pad modes (off, native) leave it unused.
@@ -72,6 +82,7 @@ Form g_loaded_form = Form::Tablet;
 double g_file_scale = 1.0;
 int g_size = -1;
 bool g_enabled = false;
+LayoutContent g_content = LayoutContent::Keys; // g_layout's, for auto-hide
 
 bool g_published = false;
 bool g_published_wanted = false;
@@ -164,6 +175,7 @@ void reload(const std::string &name, Form form) {
                 name.c_str());
     }
     g_layout = std::move(fresh);
+    g_content = layout_content(g_layout);
     g_file_scale = g_layout.scale;
     g_have_layout = true;
     g_router.set_layout(&g_layout, g_sink);
@@ -210,9 +222,8 @@ void host_pointer_moved(double x, double y) {
 }
 
 void host_set_wanted(bool keyboard_absent, bool controller_present) {
-    (void)controller_present; // Task 12
-    static const bool force = recomp_env("KEYPAD") != nullptr;
-    g_keyboard_absent = keyboard_absent || force;
+    g_keyboard_absent = keyboard_absent;
+    g_controller_present = controller_present;
 }
 
 bool host_finger_down(int64_t id, double px, double py, uint64_t now) {
@@ -268,10 +279,28 @@ void host_pump(uint64_t now) {
             apply_hidden_bits(g_layout, bits);
     }
 
-    const bool enabled = g_keyboard_absent && !name.empty() && g_have_layout;
+    // Desktop shows the controls only under RECOMP_KEYPAD, which also counts
+    // the keyboard as absent there (it is always attached). A connected
+    // controller still hides a pad layout, forced or not: layout_wanted's
+    // `forced` stays false here, so a desktop run can check that auto-hide.
+    static const bool forced = recomp_env("KEYPAD") != nullptr;
+    const bool enabled = (platform_ui_touch_device() || forced) && !name.empty() && g_have_layout;
     if (enabled != g_enabled || g_router.enabled() != enabled) {
         g_enabled = enabled;
         g_router.set_enabled(enabled, g_sink);
+    }
+    // An auto-hidden layout keeps only its toggles, so the player can switch.
+    const bool shown =
+        enabled && layout_wanted(g_content, !(g_keyboard_absent || forced), g_controller_present,
+                                 mods_controls_value(CONTROLS_PAD_WITH_CONTROLLER_ROW) != 0, false);
+    const bool toggles_only = enabled && !shown;
+    if (g_router.toggles_only() != toggles_only) {
+        g_router.set_toggles_only(toggles_only, g_sink);
+        if (trace())
+            fprintf(stderr, "[controls] layout \"%s\" %s (keyboard %s, controller %s)\n",
+                    name.c_str(), toggles_only ? "hidden, toggles only" : "shown",
+                    g_keyboard_absent ? "absent" : "present",
+                    g_controller_present ? "present" : "absent");
     }
     vpad().set_source(kPadSourceTouch, g_router.pad());
 
@@ -289,6 +318,18 @@ void host_pump(uint64_t now) {
             g_sink.action(name);
     }
 #endif
+
+    if (trace()) {
+        static PadState last;
+        const PadState pad = vpad().state();
+        if (pad != last) {
+            last = pad;
+            fprintf(
+                stderr,
+                "[controls] pad buttons %04x hat %x l %.2f,%.2f r %.2f,%.2f triggers %.2f,%.2f\n",
+                pad.buttons, pad.hat, pad.lx, pad.ly, pad.rx, pad.ry, pad.l2, pad.r2);
+        }
+    }
 
     publish();
 }

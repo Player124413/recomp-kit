@@ -321,6 +321,10 @@ bool platform_ui_keypad_wanted() {
     return !SDL_HasKeyboard();
 }
 
+bool platform_ui_touch_device() {
+    return true;
+}
+
 bool platform_ui_pointer_capture_supported() {
     return false;
 }

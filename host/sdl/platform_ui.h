@@ -35,6 +35,11 @@ bool platform_ui_handle_lifecycle(const SDL_Event &e);
 // iOS/Android without a hardware keyboard. Desktop: never.
 bool platform_ui_keypad_wanted();
 
+// Whether this is a phone or tablet: the on-screen controls may show at all
+// (desktop shows them only under RECOMP_KEYPAD), and a device motor can stand
+// in for controller rumble. iOS and Android: true. Desktop: false.
+bool platform_ui_touch_device();
+
 // Whether this platform has a pointer the host may hide and confine. Desktop:
 // yes. iOS/Android: no; fingers are placed absolutely and a captured host would read
 // the OS pointer, which touch never moves.
