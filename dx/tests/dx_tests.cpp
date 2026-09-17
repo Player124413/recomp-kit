@@ -1958,6 +1958,39 @@ static void test_display_abi() {
     CHECK_EQ(counts.clean_reads, 0u);
 }
 
+// This file overrides most host_api.h callbacks with its own strong
+// definitions above, but deliberately leaves host_pad_* untouched: that's
+// the only way to reach host_api.cpp's weak no-op defaults, which is what
+// this test checks. host/controls/vpad_host_api.cpp's strong definitions
+// (a later task) are app-only and never link into dx_tests.
+static void test_host_pad_defaults() {
+    CHECK_EQ(host_pad_mode(), 0);
+    CHECK_EQ(host_pad_native_apis(), 0);
+
+    HostPadState pad;
+    memset(&pad, 0xcd, sizeof pad);
+    CHECK_EQ(host_pad_state(&pad), 0u);
+    CHECK_EQ(pad.buttons, 0u);
+    CHECK_EQ(pad.hat, 0u);
+    CHECK_EQ(pad.reserved, 0u);
+    CHECK_EQ((uint16_t)pad.lx, 0u);
+    CHECK_EQ((uint16_t)pad.ly, 0u);
+    CHECK_EQ((uint16_t)pad.rx, 0u);
+    CHECK_EQ((uint16_t)pad.ry, 0u);
+    CHECK_EQ(pad.l2, 0u);
+    CHECK_EQ(pad.r2, 0u);
+
+    HostPadEvent event;
+    memset(&event, 0xcd, sizeof event);
+    CHECK_EQ(host_pad_next_event(0u, &event), 0);
+
+    host_pad_rumble(1000, 2000); // no-op default: just must not crash
+
+    CHECK(!strcmp(host_pad_native_axes(), "x,y,z,rz,rx,ry"));
+    CHECK(!strcmp(host_pad_native_buttons(),
+                  "square,cross,circle,triangle,l1,r1,l2,r2,select,start,l3,r3,ps"));
+}
+
 // ===========================================================================
 // The frame recorder (DISP-T2).
 //
@@ -12131,6 +12164,7 @@ int main() {
         {"presenter seal and retire", test_presenter_seal_hook_and_retirement_queue},
         {"screen class", test_screen_class},
         {"access counts", test_access_counts_by_reason},
+        {"pad callback defaults", test_host_pad_defaults},
         {"cursor learned", test_cursor_surface_learned},
         {"palette-only frames", test_palette_only_frames_seal},
         {"offscreen flip", test_offscreen_flip_does_not_seal},

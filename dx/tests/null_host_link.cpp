@@ -14,6 +14,8 @@ int main() {
     host_present(nullptr, 0, 0, 8, nullptr, 0);
     host_d3d_begin_scene();
     host_d3d_end_scene();
+    host_pad_mode();
+    host_pad_native_axes();
     boot_report_lock();
     boot_report_unlock();
     puts("null host linked: weak defaults resolved");
