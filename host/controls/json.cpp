@@ -36,6 +36,8 @@ class Parser {
     std::string *error_;
     int line_ = 1;
     bool failed_ = false;
+    int depth_ = 0; // arrays and objects open right now; see value()
+    static constexpr int kMaxDepth = 64;
 
     bool fail(const char *what) {
         if (!failed_) {
@@ -70,10 +72,20 @@ class Parser {
         if (at_end())
             return fail("unexpected end of input");
         char c = *p_;
-        if (c == '{')
-            return object(out);
-        if (c == '[')
-            return array(out);
+        if (c == '{' || c == '[') {
+            // An array or object is parsed by recursion, so the document's
+            // nesting is this thread's stack depth. Layout files are the
+            // player's to edit and a truncated download is a file of nothing
+            // but '[', so an over-deep document has to come back as an error
+            // and not as a smashed stack. 64 is far past anything a layout
+            // file needs (its deepest value is a group's control's "zone").
+            if (depth_ >= kMaxDepth)
+                return fail("too deeply nested");
+            ++depth_;
+            const bool ok = c == '{' ? object(out) : array(out);
+            --depth_;
+            return ok;
+        }
         if (c == '"')
             return string_value(out);
         if (c == 't' || c == 'f')

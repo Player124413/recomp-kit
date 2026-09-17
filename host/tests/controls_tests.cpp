@@ -80,6 +80,28 @@ static const char *kTinyLayout = R"({
         "anchor": "bottom-right", "w": 64, "h": 20, "stack_on": "g"}]}
   ]})";
 
+// A layout file is the player's to edit, so a document nested past the
+// parser's depth limit has to come back as an error rather than run the
+// recursion into the stack's end.
+static void test_json_depth_is_bounded() {
+    Json v;
+    std::string err;
+    CHECK(json_parse(std::string(60, '[') + std::string(60, ']'), &v, &err));
+    err.clear();
+    CHECK(!json_parse(std::string(2000, '[') + std::string(2000, ']'), &v, &err));
+    CHECK(err.find("too deeply nested") != std::string::npos);
+    err.clear();
+    std::string deep_object;
+    for (int i = 0; i < 2000; ++i)
+        deep_object += "{\"a\":";
+    deep_object += "1";
+    for (int i = 0; i < 2000; ++i)
+        deep_object += "}";
+    CHECK(!json_parse(deep_object, &v, &err));
+    CHECK(err.find("too deeply nested") != std::string::npos);
+    CHECK(v.type == Json::Null); // a failed parse leaves nothing half-built
+}
+
 static void test_layout_parse_and_write() {
     Layout l;
     std::string err;
@@ -176,6 +198,45 @@ static void test_layout_geometry_and_hits() {
     CHECK(control_rect(l, 0, 0, s).w == lround((40 + 4) * 2.0) - 8);
     Screen none;
     CHECK(hit_test(l, none, 0, 0).group == -1);
+}
+
+// Two cycles a hand-edited layout file can hold: a toggle stacked on its own
+// group, and two groups whose toggles stack on each other. Both have to
+// resolve to a rect instead of recursing control_rect -> group_rect ->
+// control_rect until the stack runs out.
+static const char *kStackCycleLayout = R"({
+  "version": 1, "name": "cycles", "safe_inset": false,
+  "groups": [
+    {"id": "a", "controls": [
+       {"kind": "toggle", "target": "b", "label": "B", "stack_on": "b",
+        "anchor": "bottom-left", "x": 8, "y": 0, "w": 44, "h": 18}]},
+    {"id": "b", "controls": [
+       {"kind": "toggle", "target": "a", "label": "A", "stack_on": "a",
+        "anchor": "bottom-right", "x": 8, "y": 0, "w": 44, "h": 18}]},
+    {"id": "self", "controls": [
+       {"kind": "toggle", "target": "self", "label": "S", "stack_on": "self",
+        "anchor": "top-left", "x": 10, "y": 10, "w": 40, "h": 16}]}
+  ]})";
+
+static void test_stack_on_cycles_are_bounded() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kStackCycleLayout, &l, &err));
+    const Screen s = screen(2000, 1000, 2.0);
+    // Self-reference: stacking is skipped, so the plain anchored rect stands.
+    const Rect self = control_rect(l, 2, 0, s);
+    CHECK(self.x == 20 && self.y == 20 && self.w == 80 && self.h == 32);
+    // Mutual stacking: whatever the depth limit settles on, both rects are
+    // real and on screen -- the test is that this returns at all.
+    const Rect a = control_rect(l, 0, 0, s);
+    const Rect b = control_rect(l, 1, 0, s);
+    CHECK(!a.empty() && !b.empty());
+    CHECK(a.x == 16 && a.w == 88 && a.h == 36);
+    CHECK(b.x == 2000 - 16 - 88 && b.w == 88 && b.h == 36);
+    CHECK(a.y > -10000 && a.y < 10000 && b.y > -10000 && b.y < 10000);
+    // group_rect and hit_test walk the same path.
+    CHECK(!group_rect(l, 0, s).empty());
+    CHECK(hit_test(l, s, a.x + 1, a.y + 1).group >= 0);
 }
 
 // The built-in "keys" tablet layout must reproduce host/keypad_layout.cpp's
@@ -3804,9 +3865,11 @@ int main(int argc, char **argv) {
     }
     test_json_round_trip();
     test_json_errors_name_the_line();
+    test_json_depth_is_bounded();
     test_layout_parse_and_write();
     test_stick_radius_and_zone_round_trip();
     test_layout_geometry_and_hits();
+    test_stack_on_cycles_are_bounded();
     test_builtin_keys_matches_the_old_keypad();
     test_form_for();
     test_layout_store();

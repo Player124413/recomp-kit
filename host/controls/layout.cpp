@@ -617,10 +617,22 @@ Rect control_rect(const Layout &l, int group, int control, const Screen &s) {
     Rect r = place(area, w, h, c.anchor, ox, oy);
 
     if (!c.stack_on.empty()) {
-        int target = find_group_index(l, c.stack_on);
-        if (target >= 0 && target != group && l.groups[target].visible) {
-            Rect tr = group_rect(l, target, s);
-            r.y = tr.y - h;
+        // A toggle stacked on its own group is the obvious cycle, and
+        // `target != group` catches it; two groups whose toggles stack on
+        // each other are the same cycle one step longer, and that one would
+        // recurse control_rect -> group_rect -> control_rect until the stack
+        // ran out. Layout files are the player's to edit and are re-read
+        // every load, so a file like that must not be a crash: past two
+        // levels of stacking the toggle keeps its plain anchored rect.
+        static thread_local int depth = 0;
+        if (depth < 2) {
+            ++depth;
+            int target = find_group_index(l, c.stack_on);
+            if (target >= 0 && target != group && l.groups[target].visible) {
+                Rect tr = group_rect(l, target, s);
+                r.y = tr.y - h;
+            }
+            --depth;
         }
     }
     return r;
