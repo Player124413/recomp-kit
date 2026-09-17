@@ -1473,7 +1473,8 @@ int main(int argc, char **argv) {
         // The launcher still runs, drawn in software: the game can be
         // imported, and the player is told why it cannot start here.
         int mode = 0;
-        g_window = platform_ui_create_window(RECOMP_GAME_NAME, g_mode_w, g_mode_h, 1, 0, &mode);
+        const HostWindowSize ws = window_size_for(g_mode_w, g_mode_h);
+        g_window = platform_ui_create_window(RECOMP_GAME_NAME, ws.w, ws.h, ws.min_w, ws.min_h, 0, &mode);
         if (g_window) {
             auto platform = launcher::make_platform(g_window);
             launcher::RunOptions options;
