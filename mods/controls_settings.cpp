@@ -35,6 +35,7 @@ const int kMax[kStoredRowCount] = {0, 2, 100, 1, 1, 1};
 std::atomic<int> values[CONTROLS_ROW_COUNT] = {0, 1, 100, 1, 0, 1, 0};
 std::atomic<uint32_t> hidden_groups{0};
 std::atomic<bool> edit_request{false};
+std::atomic<bool> editing{false};
 std::atomic<bool> initialized{false};
 
 int layout_max() {
@@ -66,6 +67,10 @@ void mods_controls_set_names(std::vector<std::string> names) {
 void mods_controls_refresh_names() {
     if (!initialized)
         return;
+    // The row was declared with the old name count, and mods_settings_declare
+    // is a no-op once a key exists, so the maximum is moved in place. Without
+    // this a layout saved under a new name could not be selected.
+    mods_settings_set_range(MODS_OWNER_RUNTIME, kKeys[CONTROLS_LAYOUT_ROW], 0, layout_max());
     mods_controls_set(CONTROLS_LAYOUT_ROW,
                       std::clamp(values[CONTROLS_LAYOUT_ROW].load(), 0, layout_max()));
 }
@@ -140,6 +145,7 @@ void mods_controls_reset() {
     values[CONTROLS_EDIT_ROW] = 0;
     hidden_groups = 0;
     edit_request = false;
+    editing = false;
 }
 
 int mods_controls_value(ControlsRow row) {
@@ -242,4 +248,12 @@ void mods_controls_set_hidden_groups(uint32_t bits) {
 
 bool mods_controls_take_edit_request() {
     return edit_request.exchange(false);
+}
+
+bool mods_controls_editing() {
+    return editing.load();
+}
+
+void mods_controls_set_editing(bool on) {
+    editing = on;
 }

@@ -945,6 +945,10 @@ void Editor::cancel() {
     cancel_ = true;
 }
 
+void Editor::done() {
+    run_tool(Tool::Done);
+}
+
 bool Editor::take_switch(std::string *name) {
     if (!std::exchange(switch_pending_, false))
         return false;

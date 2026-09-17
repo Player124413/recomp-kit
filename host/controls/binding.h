@@ -60,6 +60,11 @@ struct MappedTable {
 bool parse_mapped(const std::string &text, MappedTable *table, std::string *error);
 // Writes every key, sorted, in the same syntax; parse_mapped(write_mapped(t), ...) round-trips.
 std::string write_mapped(const MappedTable &table);
+// Only the keys of `table` that differ from `base`, in the same syntax (""
+// when none do). The editor saves this over RECOMP_CONTROLS_MAPPED's table,
+// so <profile>/controls/binding.txt holds the player's changes alone and the
+// game's own defaults stay free to move.
+std::string write_mapped_diff(const MappedTable &base, const MappedTable &table);
 // A target's spelling: "key:Space", "mouse_left", "wheel_up", "action:settings", "none".
 std::string target_name(const Target &t);
 
@@ -71,6 +76,10 @@ class Binding {
   public:
     void set_table(const MappedTable &t) {
         table_ = t;
+    }
+    // What the editor opens on, and edits a copy of.
+    const MappedTable &table() const {
+        return table_;
     }
     // The window's size in points, for the Cursor stick mode's clamp. The
     // first call while no real position is known (no set_cursor yet) centres

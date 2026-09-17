@@ -20,6 +20,7 @@
 namespace controls {
 
 class Router;
+class Editor;
 
 // One control, resolved for drawing.
 struct DrawControl {
@@ -45,12 +46,22 @@ struct ControlsView {
     int dw = 0, dh = 0;
     double opacity = 1.0;
     std::vector<DrawControl> controls;
-    std::vector<Rect> backdrops;      // visible grid groups' boxes, drawn under their keys
-    Rect controls_area;               // portrait: fill with the backdrop colour (Task 17)
-    bool editing = false;             // Task 20
-    std::vector<Rect> guides;         // Task 20
-    int selected = -1;                // Task 20
-    std::vector<DrawControl> toolbar; // Task 20
+    std::vector<Rect> backdrops; // visible grid groups' boxes, drawn under their keys
+    Rect controls_area;          // portrait: fill with the backdrop colour (Task 17)
+    // The editor (editor.h), while it is open: one layer over the whole
+    // drawable, dimmed, with the edited layout drawn on it. `selected` is
+    // the index in `controls` of the selected control, `toolbar` and
+    // `picker_rows` are drawn as key-style round rects, `picker` is the open
+    // picker's box (empty: none), and `grid_step` is the snap grid's pitch
+    // in drawable pixels, measured from `grid_area`'s top-left (0: no grid).
+    bool editing = false;
+    std::vector<Rect> guides;
+    int selected = -1;
+    std::vector<DrawControl> toolbar;
+    std::vector<DrawControl> picker_rows;
+    Rect picker;
+    Rect grid_area;
+    int grid_step = 0;
     // One raster each: layers[0] is the controls area, layers[g + 1] layout
     // group g (its backdrop and controls). `rect` is the union of what the
     // layer draws (empty: nothing), `revision` a hash of it alone.
@@ -70,6 +81,14 @@ struct ControlsView {
 // and a change nothing draws (a plain key's press, a knob's offset) forces
 // no new raster. The view's own `revision` combines them all.
 ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double opacity);
+
+// The open editor's own view: the layout it is editing (every group, hidden
+// ones included, since the editor's hit test reaches them), its selection,
+// guides, toolbar and picker, on one layer covering the whole drawable. No
+// router state and no opacity setting: an edited control is drawn at rest
+// and in full. The revision follows Editor::generation(), which bumps on
+// everything drawn here.
+ControlsView make_view(const Editor &e, const Screen &s);
 
 class Overlay {
   public:

@@ -44,6 +44,23 @@ bool host_finger_cancel(int64_t id);
 void host_pointer_moved(double x, double y);
 // Focus loss or backgrounding: every finger is gone, every key and modifier up.
 void host_release_all();
+
+// --- the layout editor (editor.h) -------------------------------------------
+// It opens on the settings page's EDIT row or an edit_layout action, both
+// polled in host_pump. While it is open every finger above goes to it, the
+// router and the mapped binding stand still, and the host must send it the
+// desktop's pointer, wheel, Escape and typing through the calls below. The
+// F10 page's gates see it through mods_controls_editing().
+bool host_editing();
+// The desktop mouse, as finger id -1 (host_finger_* take the real fingers).
+void host_editor_pointer(double px, double py, int state); // state: -1 up, 0 move, 1 down
+void host_editor_wheel(double notches);
+void host_editor_escape(); // Escape is Done
+// True while a rename is waiting to be typed: the host turns SDL's text
+// input on, feeds host_editor_text, and commits with host_editor_text_done.
+bool host_editor_text_wanted();
+void host_editor_text(const char *utf8);
+void host_editor_text_done();
 // After the events: follow the settings (layout, size, hidden groups), enable
 // the router, and publish the view when it changed.
 void host_pump(uint64_t now);

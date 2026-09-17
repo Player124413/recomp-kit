@@ -23,4 +23,11 @@ void paint_layer(Canvas &c, const ControlsView &view, int layer, const Rect &r);
 // when composed (layers never overlap outside portrait's controls area).
 void paint_overlay(Canvas &c, const ControlsView &view, const Rect &r);
 
+// An editing view's one layer (make_view(const Editor &, ...)): the dimmer
+// over the whole drawable, the snap grid, the edited layout drawn the way it
+// is in play, the selection's 3 px accent outline, the snap guides, and the
+// toolbar and picker as key-style round rects. paint_layer calls this for
+// every layer of an editing view, so the play path is untouched.
+void paint_editor(Canvas &c, const ControlsView &view, const Rect &r);
+
 } // namespace controls

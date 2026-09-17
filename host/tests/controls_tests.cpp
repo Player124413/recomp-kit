@@ -3,6 +3,7 @@
 #include "../controls/binding.h"
 #include "../controls/builtin_layouts.h"
 #include "../controls/editor.h"
+#include "../controls/editor_actions.h"
 #include "../controls/haptics.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
@@ -2273,6 +2274,9 @@ static void dump_form(const char *dir, Form form, const Screen &s) {
     }
 }
 
+// Defined below, with the editor's own tests and their helpers.
+static void dump_editor(const char *dir, const Screen &s);
+
 static void dump_builtins(const char *dir) {
     dump_form(dir, Form::Tablet, screen(2360, 1640, 2.0));
     Screen land = screen(1688, 780, 2.0);
@@ -2282,6 +2286,7 @@ static void dump_builtins(const char *dir) {
     port.safe = {0, 118, 780, 1688 - 118};
     port.controls_area = controls_area_below(port.dw, port.dh, Rect{0, 118, 780, 585}, 0);
     dump_form(dir, Form::PhonePortrait, port);
+    dump_editor(dir, screen(2360, 1640, 2.0));
 }
 
 // Each layer's revision follows only its own group: a pad press changes
@@ -3311,6 +3316,344 @@ static void test_editor_layout_switch_and_delete() {
     CHECK(e.picker().size() == 3);
 }
 
+// --- the editor in the app ---------------------------------------------------
+
+// make_view(Editor, Screen): what the editor's own layer draws.
+static void test_editor_view() {
+    Editor e;
+    const Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+
+    ControlsView v = make_view(e, s);
+    CHECK(v.wanted && v.editing);
+    CHECK(v.dw == s.dw && v.dh == s.dh);
+    CHECK(v.opacity == 1.0);
+    // One layer, the whole drawable: the dimmer reaches where no control is.
+    CHECK(v.layers.size() == 1);
+    CHECK(v.layers[0].rect.x == 0 && v.layers[0].rect.y == 0);
+    CHECK(v.layers[0].rect.w == s.dw && v.layers[0].rect.h == s.dh);
+    // Every control of every group, even a hidden one: the editor's hit test
+    // reaches them all.
+    size_t total = 0;
+    for (const Group &g : e.layout().groups)
+        total += g.controls.size();
+    CHECK(v.controls.size() == total);
+    for (const DrawControl &d : v.controls)
+        CHECK(d.layer == 0);
+    CHECK(v.toolbar.size() == 8);
+    for (size_t i = 0; i < v.toolbar.size() && i < e.toolbar().size(); ++i) {
+        CHECK(v.toolbar[i].rect.w == e.toolbar()[i].rect.w);
+        CHECK(!v.toolbar[i].label.empty());
+    }
+    CHECK(v.selected == -1);
+    CHECK(v.guides.empty());
+    CHECK(v.picker_rows.empty());
+    // Snapping on: the 10 pt grid, from the anchor area's corner.
+    CHECK(v.grid_step == 20);
+    CHECK(v.grid_area.x == anchor_area(e.layout(), s).x);
+
+    // A tap selects, and the selection names a control of the view.
+    const Rect cross = cross_rect(e, s);
+    tap_rect(e, cross);
+    const uint64_t selected_revision = make_view(e, s).revision;
+    CHECK(selected_revision != v.revision);
+    v = make_view(e, s);
+    CHECK(v.selected >= 0 && v.selected < int(v.controls.size()));
+    CHECK(v.controls[v.selected].rect.x == cross.x && v.controls[v.selected].rect.y == cross.y);
+
+    // A drag moves it, so the view changes and the snap guides show.
+    e.finger_down(1, cross.x + cross.w / 2.0, cross.y + cross.h / 2.0);
+    e.finger_motion(1, cross.x + cross.w / 2.0 - 97, cross.y + cross.h / 2.0 - 43);
+    v = make_view(e, s);
+    CHECK(v.revision != selected_revision);
+    CHECK(v.controls[v.selected].rect.x != cross.x);
+    CHECK(v.guides.size() == e.guides().size());
+    e.finger_up(1);
+
+    // Snapping off: no grid.
+    tap_tool(e, Tool::Snap);
+    CHECK(!e.snap());
+    CHECK(make_view(e, s).grid_step == 0);
+
+    // An open picker publishes its box and its rows.
+    tap_tool(e, Tool::Add);
+    v = make_view(e, s);
+    CHECK(!v.picker.empty());
+    CHECK(!v.picker_rows.empty());
+    CHECK(v.picker_rows.size() == e.picker().size());
+    CHECK(!v.picker_rows.front().label.empty());
+}
+
+// The editor's layer: the dimmer everywhere, the accent outline on the
+// selection, a grid dot, and none of it while the view is not editing.
+static void test_editor_paints_its_layer() {
+    Editor e;
+    const Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    const Rect cross = cross_rect(e, s);
+    tap_rect(e, cross);
+    const ControlsView v = make_view(e, s);
+
+    std::vector<uint8_t> px(size_t(s.dw) * s.dh * 4, 0);
+    Canvas c(px, s.dw, s.dh, v.opacity);
+    paint_overlay(c, v, Rect{0, 0, s.dw, s.dh});
+
+    // The far corner has no control on it: only the dimmer.
+    const Rgba corner = c.at(s.dw - 2, s.dh - 2);
+    CHECK(corner.a == 110 && corner.r == 0 && corner.g == 0 && corner.b == 0);
+    // The selection's outline, on the control's own edge.
+    bool accent = false;
+    for (int x = cross.x; x < cross.x + cross.w; ++x) {
+        const Rgba p = c.at(x, cross.y + 1);
+        if (p.r > 200 && p.g > 150 && p.g < 230 && p.b < 110)
+            accent = true;
+    }
+    CHECK(accent);
+    // A grid dot on the anchor area's corner, where no control sits.
+    const Rect area = anchor_area(e.layout(), s);
+    const Rgba dot = c.at(area.x + 4 * v.grid_step, area.y);
+    CHECK(dot.a == 40);
+    // The play view is unchanged: nothing dims it.
+    Router r;
+    Rec rec;
+    Layout l = editor_pad();
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    const ControlsView play = make_view(l, r, s, 1.0);
+    CHECK(!play.editing);
+    std::vector<uint8_t> px2(size_t(s.dw) * s.dh * 4, 0);
+    Canvas c2(px2, s.dw, s.dh, 1.0);
+    paint_overlay(c2, play, Rect{0, 0, s.dw, s.dh});
+    CHECK(c2.at(s.dw - 2, s.dh - 2).a == 0);
+}
+
+// binding.txt holds the player's changes alone, not the whole table.
+static void test_write_mapped_diff() {
+    MappedTable base;
+    CHECK(write_mapped_diff(base, base).empty());
+    MappedTable changed = base;
+    changed.buttons[int(PadButton::Cross)] = Target{Target::Key, kScanSpace, ""};
+    changed.left = StickMode::Cursor;
+    const std::string text = write_mapped_diff(base, changed);
+    CHECK(text == "cross=key:Space;left_stick=cursor");
+    // It reads back as the same table, applied over the base.
+    MappedTable round = base;
+    std::string err;
+    CHECK(parse_mapped(text, &round, &err));
+    CHECK(round.buttons[int(PadButton::Cross)].type == Target::Key);
+    CHECK(round.buttons[int(PadButton::Cross)].value == kScanSpace);
+    CHECK(round.left == StickMode::Cursor);
+    CHECK(round.right == base.right);
+}
+
+// Records what apply_editor_results asks the host for.
+namespace {
+struct FakeEditorHost : EditorHost {
+    std::vector<std::string> calls;
+    std::vector<std::string> name_list{"pad", "keys", "pad+keys"};
+    void save_layout(const Layout &l, Form form) override {
+        calls.push_back("save:" + l.name + "." + form_name(form));
+    }
+    void delete_layout(const std::string &name, Form form) override {
+        calls.push_back("delete:" + name + "." + form_name(form));
+    }
+    void write_binding(const std::string &text) override {
+        calls.push_back(text.empty() ? "binding:none" : "binding:" + text);
+    }
+    void apply_mapped(const MappedTable &) override {
+        calls.push_back("apply_mapped");
+    }
+    std::vector<std::string> names() override {
+        return name_list;
+    }
+    void set_names(const std::vector<std::string> &) override {
+        calls.push_back("set_names");
+    }
+    void select_layout(const std::string &name) override {
+        calls.push_back("select:" + name);
+    }
+    void set_snap(bool on) override {
+        calls.push_back(on ? "snap:on" : "snap:off");
+    }
+};
+} // namespace
+
+// An editor open on the stand-in pad layout, with the built-in names.
+static void open_for_results(Editor &e, const Screen &s) {
+    e.set_screen(s);
+    e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
+    e.set_names({"pad", "keys", "pad+keys"});
+}
+
+// Done saves the layout and leaves; the mapping is written only when it moved.
+static void test_apply_results_save() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    FakeEditorHost host;
+    MappedTable base;
+    bool renamed = false;
+    tap_tool(e, Tool::Done);
+    CHECK(apply_editor_results(e, host, "pad", base, &renamed) == EditorNext::Close);
+    CHECK(!renamed);
+    CHECK((host.calls == std::vector<std::string>{"save:pad.tablet", "snap:on"}));
+
+    // Nothing pending: nothing happens, and the editor stays open.
+    host.calls.clear();
+    CHECK(apply_editor_results(e, host, "pad", base, &renamed) == EditorNext::Keep);
+    CHECK(host.calls.empty());
+}
+
+// A bind that changes the mapped table writes the binding difference too.
+static void test_apply_results_save_binding() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    tap_rect(e, cross_rect(e, s));
+    tap_tool(e, Tool::Bind);
+    CHECK(pick(e, "key:Space"));
+    CHECK(e.mapped_changed());
+    tap_tool(e, Tool::Done);
+    FakeEditorHost host;
+    CHECK(apply_editor_results(e, host, "pad", MappedTable{}, nullptr) == EditorNext::Close);
+    CHECK(host.calls.size() == 4);
+    CHECK(host.calls[0] == "save:pad.tablet");
+    CHECK(host.calls[1] == "binding:cross=key:Space");
+    CHECK(host.calls[2] == "apply_mapped");
+    CHECK(host.calls[3] == "snap:on");
+}
+
+// Reset removes the player's copy and the binding, and the editor reopens.
+static void test_apply_results_reset() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    tap_tool(e, Tool::Reset);
+    FakeEditorHost host;
+    CHECK(apply_editor_results(e, host, "pad", MappedTable{}, nullptr) == EditorNext::Reopen);
+    CHECK(
+        (host.calls == std::vector<std::string>{"delete:pad.tablet", "binding:none", "set_names"}));
+}
+
+// A duplicate keeps the original; a rename replaces it. Both save under the
+// new name, refresh the name list and select it.
+static void test_apply_results_duplicate_and_rename() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "duplicate"));
+    CHECK(e.layout().name == "pad copy");
+    FakeEditorHost host;
+    bool renamed = false;
+    tap_tool(e, Tool::Done);
+    host.name_list = {"pad", "keys", "pad+keys", "pad copy"};
+    CHECK(apply_editor_results(e, host, "pad", MappedTable{}, &renamed) == EditorNext::Close);
+    CHECK(!renamed);
+    // No delete: "pad" is still there.
+    CHECK((host.calls == std::vector<std::string>{"save:pad copy.tablet", "snap:on", "set_names",
+                                                  "select:pad copy"}));
+
+    // Rename: the typing is asked for first, and the old copy goes.
+    Editor r;
+    open_for_results(r, s);
+    tap_tool(r, Tool::Layout);
+    CHECK(pick(r, "duplicate"));
+    tap_tool(r, Tool::Layout);
+    CHECK(pick(r, "rename"));
+    FakeEditorHost host2;
+    renamed = false;
+    CHECK(apply_editor_results(r, host2, "pad copy", MappedTable{}, &renamed) == EditorNext::Keep);
+    CHECK(renamed);
+    CHECK(host2.calls.empty());
+    r.text("mine");
+    r.text_done();
+    CHECK(r.layout().name == "mine");
+    tap_tool(r, Tool::Done);
+    host2.name_list = {"pad", "keys", "pad+keys", "mine"};
+    CHECK(apply_editor_results(r, host2, "pad copy", MappedTable{}, &renamed) == EditorNext::Close);
+    CHECK((host2.calls == std::vector<std::string>{"save:mine.tablet", "snap:on",
+                                                   "delete:pad copy.tablet", "set_names",
+                                                   "select:mine"}));
+}
+
+// Layout > Switch selects that layout and reopens; Delete removes the user
+// copy of the edited one.
+static void test_apply_results_switch_and_delete() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "switch"));
+    CHECK(pick(e, "keys"));
+    FakeEditorHost host;
+    CHECK(apply_editor_results(e, host, "pad", MappedTable{}, nullptr) == EditorNext::Reopen);
+    CHECK((host.calls == std::vector<std::string>{"select:keys"}));
+
+    // Delete works on a user layout: duplicate first, so the name is not a
+    // built-in.
+    Editor d;
+    open_for_results(d, s);
+    tap_tool(d, Tool::Layout);
+    CHECK(pick(d, "duplicate"));
+    tap_tool(d, Tool::Layout);
+    CHECK(pick(d, "delete"));
+    FakeEditorHost host2;
+    CHECK(apply_editor_results(d, host2, "pad", MappedTable{}, nullptr) == EditorNext::Reopen);
+    CHECK((host2.calls == std::vector<std::string>{"delete:pad copy.tablet", "set_names"}));
+}
+
+// Escape is Done, without a tap on the toolbar.
+static void test_editor_done_without_a_tap() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    e.done();
+    FakeEditorHost host;
+    CHECK(apply_editor_results(e, host, "pad", MappedTable{}, nullptr) == EditorNext::Close);
+    CHECK(host.calls.front() == "save:pad.tablet");
+}
+
+// The editor's own layer, for the same viewing: idle, with a control
+// selected and dragged (its guides showing), and with the Add picker open.
+static void dump_editor(const char *dir, const Screen &s) {
+    static const char *const kStates[] = {"idle", "selected", "picker"};
+    for (int state = 0; state < 3; ++state) {
+        Editor e;
+        e.set_screen(s);
+        Layout l = editor_pad();
+        std::string err;
+        if (builtin_layout("pad", Form::Tablet))
+            (void)parse_layout(builtin_layout("pad", Form::Tablet), &l, &err);
+        e.open(l, Form::Tablet, MappedTable{}, false, true);
+        e.set_names({"pad", "keys", "pad+keys"});
+        if (state > 0) {
+            // Select the first control and drag it a little, so the
+            // selection outline and the snap guides both show.
+            const Rect first = control_rect(e.layout(), 0, 0, s);
+            const double cx = first.x + first.w / 2.0, cy = first.y + first.h / 2.0;
+            e.finger_down(1, cx, cy);
+            e.finger_motion(1, cx + 57, cy - 39);
+            if (state == 2)
+                e.finger_up(1);
+        }
+        if (state == 2)
+            tap_tool(e, Tool::Add);
+        const ControlsView v = make_view(e, s);
+        std::vector<uint8_t> px(size_t(s.dw) * s.dh * 4, 0);
+        Canvas c(px, s.dw, s.dh, v.opacity);
+        paint_overlay(c, v, Rect{0, 0, s.dw, s.dh});
+        char tail[96];
+        snprintf(tail, sizeof tail, "/editor-%s.%s.%dx%d.rgba", kStates[state],
+                 form_name(Form::Tablet), s.dw, s.dh);
+        const std::string file = std::string(dir) + tail;
+        write_file(file, std::string(px.begin(), px.end()));
+        printf("wrote %s\n", file.c_str());
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--dump") == 0) {
         dump_builtins(argv[2]);
@@ -3410,6 +3753,15 @@ int main(int argc, char **argv) {
     test_editor_pinch_keeps_aspect_and_area();
     test_editor_custom_group_beside_a_grid_custom();
     test_editor_layout_switch_and_delete();
+    test_editor_view();
+    test_editor_paints_its_layer();
+    test_write_mapped_diff();
+    test_apply_results_save();
+    test_apply_results_save_binding();
+    test_apply_results_reset();
+    test_apply_results_duplicate_and_rename();
+    test_apply_results_switch_and_delete();
+    test_editor_done_without_a_tap();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

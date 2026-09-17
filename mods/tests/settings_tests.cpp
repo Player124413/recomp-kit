@@ -205,6 +205,46 @@ MOD_TEST_SUITE(controls_settings_hidden_choice) {
     mods_settings_reset();
 }
 
+// The editor saved a layout under a new name: the row has to reach it, so
+// mods_controls_refresh_names moves the declared maximum, which
+// mods_settings_declare alone cannot do once the key exists.
+MOD_TEST_SUITE(controls_settings_refresh_names) {
+    fresh();
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("pad");
+    // Hidden is index 3; there is no index 4 yet.
+    MOD_CHECK_EQ(mods_controls_set(CONTROLS_LAYOUT_ROW, 4), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 3);
+
+    mods_controls_set_names({"pad", "keys", "pad+keys", "mine"});
+    mods_controls_refresh_names();
+    MOD_CHECK_EQ(mods_controls_set(CONTROLS_LAYOUT_ROW, 3), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 3);
+    MOD_CHECK(mods_controls_layout_name() == "mine");
+    // The value survives the round trip through the settings store.
+    int64_t stored = 0;
+    MOD_CHECK_EQ(mods_settings_get(MODS_OWNER_RUNTIME, "layout", &stored), POP_OK);
+    MOD_CHECK_EQ((int)stored, 3);
+
+    // A shorter list clamps the row back into range.
+    mods_controls_set_names({"pad"});
+    mods_controls_refresh_names();
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// The host sets the editing flag; the F10 page's gates read it.
+MOD_TEST_SUITE(controls_settings_editing_flag) {
+    mods_controls_reset();
+    MOD_CHECK(!mods_controls_editing());
+    mods_controls_set_editing(true);
+    MOD_CHECK(mods_controls_editing());
+    mods_controls_set_editing(false);
+    MOD_CHECK(!mods_controls_editing());
+}
+
 MOD_TEST_SUITE(controls_settings_edit_request) {
     fresh();
     mods_controls_reset();

@@ -33,6 +33,7 @@
 #include "../input_gate.h"
 #include "../input_touch.h"
 #include "../controls/controls_host.h"
+#include "../../mods/controls_settings.h"
 #include "../controls/gamepad_sdl.h"
 #include "../../mods/mods_internal.h"
 #include "../midi.h"
@@ -390,7 +391,7 @@ bool pointer_capture_wanted() {
         return false;
     if (window_minimized_or_hidden())
         return false;
-    if (mods_page_visible())
+    if (mods_page_visible() || mods_controls_editing())
         return false;
     return true;
 }
@@ -591,8 +592,9 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
         hit.gx = g_cursor_x;
         hit.gy = g_cursor_y;
     }
-    if (!host_pointer_captured() && host_pointer_can_capture(pointer_capture_wanted(), inside, down,
-                                                             g_escape_held, mods_page_visible()))
+    if (!host_pointer_captured() &&
+        host_pointer_can_capture(pointer_capture_wanted(), inside, down, g_escape_held,
+                                 mods_page_visible() || mods_controls_editing()))
         apply_pointer_capture(true);
     x = hit.gx;
     y = hit.gy;
@@ -933,10 +935,80 @@ TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
     return {(int64_t)f.fingerID, f.x * w, f.y * h};
 }
 
+// A window point in drawable pixels, where the on-screen controls and the
+// editor are laid out (unlike view_point_to_drawable, which lands in the
+// game image's own coordinates).
+void window_point_to_drawable(double px, double py, double *dx, double *dy) {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    *dx = bw > 0 ? px / bw * dw : 0;
+    *dy = bh > 0 ? py / bh * dh : 0;
+}
+
+// While the layout editor is open it owns the keyboard, the mouse and the
+// wheel: nothing here reaches the game, so the simulation sees frozen input
+// for as long as the editor is up (the F10 page freezes it the same way, by
+// consuming keys). Fingers go to the editor through host_finger_*, which the
+// normal path already calls first. True: the event is spent.
+bool handle_editor_event(const SDL_Event &event) {
+    if (!controls::host_editing())
+        return false;
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION: {
+        double dx, dy;
+        window_point_to_drawable(event.motion.x, event.motion.y, &dx, &dy);
+        controls::host_editor_pointer(dx, dy, 0);
+        return true;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        if (event.button.button != SDL_BUTTON_LEFT)
+            return true;
+        double dx, dy;
+        window_point_to_drawable(event.button.x, event.button.y, &dx, &dy);
+        controls::host_editor_pointer(dx, dy, event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? 1 : -1);
+        return true;
+    }
+    case SDL_EVENT_MOUSE_WHEEL:
+        controls::host_editor_wheel(
+            event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y);
+        return true;
+    case SDL_EVENT_TEXT_INPUT:
+        controls::host_editor_text(event.text.text);
+        return true;
+    case SDL_EVENT_KEY_UP:
+        return true;
+    case SDL_EVENT_KEY_DOWN:
+        if (event.key.scancode == SDL_SCANCODE_ESCAPE)
+            controls::host_editor_escape(); // Escape is Done
+        else if (event.key.scancode == SDL_SCANCODE_RETURN ||
+                 event.key.scancode == SDL_SCANCODE_KP_ENTER)
+            controls::host_editor_text_done();
+        return true;
+    default:
+        return false;
+    }
+}
+
+// SDL's text input follows the editor's rename prompt.
+void update_editor_text_input() {
+    static bool on = false;
+    const bool want = controls::host_editor_text_wanted();
+    if (want == on || !g_window)
+        return;
+    on = want;
+    if (want)
+        SDL_StartTextInput(g_window);
+    else
+        SDL_StopTextInput(g_window);
+}
+
 // One SDL event, translated into both of the input paths the game reads: the
 // DirectInput device state, and the Win32 message queue.
 void handle_event(const SDL_Event &event) {
     if (platform_ui_handle_lifecycle(event))
+        return;
+    if (handle_editor_event(event))
         return;
     const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
     switch (event.type) {
@@ -1210,6 +1282,7 @@ void after_events() {
         controls::gamepad_poll();
         controls::host_set_wanted(absent, controls::gamepad_connected());
         controls::host_pump(SDL_GetTicksNS());
+        update_editor_text_input();
     }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,

@@ -24,7 +24,9 @@ enum ControlsRow {
 // does, the built-in defaults {"pad","keys","pad+keys"} apply. The layout
 // setting's range is 0..names.size(); the last index is the Hidden choice.
 void mods_controls_set_names(std::vector<std::string> names);
-// Re-clamp the layout row after the names changed (Task 21).
+// After mods_controls_set_names: re-declares the layout row's maximum (the
+// name list grows when the editor saves a layout under a new name) and
+// re-clamps its value.
 void mods_controls_refresh_names();
 // default_layout: RECOMP_CONTROLS_DEFAULT_LAYOUT, e.g. "pad", "keys",
 // "pad+keys" or "hidden". Idempotent; mods_controls_reset() lets the tests
@@ -48,3 +50,8 @@ uint32_t mods_controls_hidden_groups();
 void mods_controls_set_hidden_groups(uint32_t bits);
 // Set by the EDIT row; the host polls this and clears it.
 bool mods_controls_take_edit_request();
+// True while the layout editor is open (the host sets it). The F10 page's
+// gates read it too, so the editor takes the pointer and the page's own
+// drawing the same way the page does.
+bool mods_controls_editing();
+void mods_controls_set_editing(bool editing);

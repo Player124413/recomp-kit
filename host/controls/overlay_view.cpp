@@ -2,6 +2,7 @@
 #include "overlay.h"
 
 #include "../keypad_layout.h"
+#include "editor.h"
 #include "router.h"
 
 #include <algorithm>
@@ -174,6 +175,90 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
         v.layers[i].revision = hashes[i].h;
         h.num(int64_t(hashes[i].h));
     }
+    v.revision = h.h;
+    return v;
+}
+
+namespace {
+
+// One toolbar item or picker row, as the key-style round rect the editor's
+// layer draws: `lit` marks a tool that is on (Snap).
+DrawControl editor_key(const Rect &r, const std::string &label, bool lit) {
+    DrawControl d;
+    d.kind = Kind::Key;
+    d.rect = r;
+    d.label = label;
+    d.lit = lit;
+    d.layer = 0;
+    return d;
+}
+
+} // namespace
+
+ControlsView make_view(const Editor &e, const Screen &s) {
+    const Layout &l = e.layout();
+    ControlsView v;
+    v.wanted = true;
+    v.editing = true;
+    v.dw = s.dw;
+    v.dh = s.dh;
+    v.opacity = 1.0;
+    // The dimmer, the grid and the toolbar all reach outside any control, so
+    // the single layer is the whole drawable.
+    v.layers.assign(1, ControlsView::Layer{});
+    v.layers[0].rect = Rect{0, 0, s.dw, s.dh};
+
+    for (int g = 0; g < int(l.groups.size()); ++g) {
+        const Group &grp = l.groups[g];
+        if (grp.has_grid) {
+            v.backdrops.push_back(group_rect(l, g, s));
+            v.backdrop_layers.push_back(0);
+        }
+        for (int c = 0; c < int(grp.controls.size()); ++c) {
+            const Control &ctl = grp.controls[c];
+            DrawControl d;
+            d.kind = ctl.kind;
+            d.rect = control_rect(l, g, c, s);
+            d.label = ctl.label;
+            d.button = ctl.button;
+            d.floating = ctl.floating;
+            d.layer = 0;
+            if (ctl.kind == Kind::Stick)
+                d.radius_px = int(std::lround(ctl.radius * l.scale * s.scale));
+            if (ctl.kind == Kind::Toggle) {
+                const int target = group_named(l, ctl.target);
+                d.group_visible = target < 0 || l.groups[target].visible;
+                d.label_off = ctl.label_off;
+            }
+            if (g == e.selected_group() && c == e.selected_control())
+                v.selected = int(v.controls.size());
+            v.controls.push_back(d);
+        }
+    }
+
+    v.guides = e.guides();
+    for (const ToolbarItem &item : e.toolbar())
+        v.toolbar.push_back(editor_key(item.rect, item.label ? item.label : "",
+                                       item.tool == Tool::Snap && e.snap()));
+    v.picker = e.picker_rect();
+    for (const PickerItem &item : e.picker())
+        v.picker_rows.push_back(editor_key(item.rect, item.label, false));
+    // The 10 pt grid the drag snaps to, from the same origin editor.cpp
+    // measures it from (the anchor area's top-left corner).
+    if (e.snap()) {
+        v.grid_area = anchor_area(l, s);
+        v.grid_step = int(std::lround(10.0 * s.scale));
+        if (v.grid_step < 2)
+            v.grid_step = 0;
+    }
+
+    // Editor::generation() bumps on every selection, rect, guide, picker,
+    // toolbar and snap change, so it stands in for hashing all of it.
+    Hash h;
+    h.num(v.dw);
+    h.num(v.dh);
+    h.num(int64_t(e.generation()));
+    v.layers[0].revision = h.h;
     v.revision = h.h;
     return v;
 }

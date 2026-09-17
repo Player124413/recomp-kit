@@ -207,7 +207,10 @@ bool parse_mapped(const std::string &text, MappedTable *table, std::string *erro
     return true;
 }
 
-std::string write_mapped(const MappedTable &t) {
+namespace {
+
+// Every key of a table, in write order: the same spellings parse_mapped reads.
+std::vector<std::pair<std::string, std::string>> mapped_pairs(const MappedTable &t) {
     std::vector<std::pair<std::string, std::string>> kv;
     for (int i = 0; i < int(PadButton::Count); ++i)
         kv.emplace_back(pad_button_name(PadButton(i)), target_name(t.buttons[i]));
@@ -216,6 +219,10 @@ std::string write_mapped(const MappedTable &t) {
     kv.emplace_back("dpad", stick_mode_name(t.dpad));
     kv.emplace_back("cursor_speed", format_number(t.cursor_speed));
     std::sort(kv.begin(), kv.end());
+    return kv;
+}
+
+std::string join_pairs(const std::vector<std::pair<std::string, std::string>> &kv) {
     std::string out;
     for (size_t i = 0; i < kv.size(); ++i) {
         if (i)
@@ -223,6 +230,22 @@ std::string write_mapped(const MappedTable &t) {
         out += kv[i].first + "=" + kv[i].second;
     }
     return out;
+}
+
+} // namespace
+
+std::string write_mapped(const MappedTable &t) {
+    return join_pairs(mapped_pairs(t));
+}
+
+std::string write_mapped_diff(const MappedTable &base, const MappedTable &t) {
+    const std::vector<std::pair<std::string, std::string>> want = mapped_pairs(t);
+    const std::vector<std::pair<std::string, std::string>> have = mapped_pairs(base);
+    std::vector<std::pair<std::string, std::string>> kv;
+    for (size_t i = 0; i < want.size() && i < have.size(); ++i)
+        if (want[i].second != have[i].second)
+            kv.push_back(want[i]);
+    return join_pairs(kv);
 }
 
 // ---------------------------------------------------------------------------

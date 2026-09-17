@@ -82,6 +82,7 @@ add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.
                               ${HOST}/controls/pad_art.cpp
                               ${HOST}/controls/haptics.cpp
                               ${HOST}/controls/editor.cpp
+                              ${HOST}/controls/editor_actions.cpp
                               ${HOST}/keypad_layout.cpp
                               ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
                               ${HOST}/tests/keypad_legacy_oracle.cpp ${POP_ROOT}/mods/font6x8.cpp)
@@ -164,6 +165,7 @@ set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                          ${HOST}/controls/overlay.cpp ${HOST}/controls/raster.cpp
                           ${HOST}/controls/overlay_paint.cpp ${HOST}/controls/pad_art.cpp
                           ${HOST}/controls/haptics.cpp
+                          ${HOST}/controls/editor.cpp ${HOST}/controls/editor_actions.cpp
                          ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp)
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
                         ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${POP_CONTROLS_SOURCES}

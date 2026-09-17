@@ -8,6 +8,8 @@
 #include "../present.h"
 #include "../sdl/platform_ui.h"
 #include "binding.h"
+#include "editor.h"
+#include "editor_actions.h"
 #include "game_config.h"
 #include "gamepad_sdl.h"
 #include "haptics.h"
@@ -17,8 +19,10 @@
 #include "router.h"
 #include "vpad.h"
 
+#include <filesystem>
 #include <stdio.h>
 #include <string>
+#include <vector>
 
 namespace controls {
 
@@ -26,6 +30,10 @@ namespace {
 
 // The settings' key sizes: small, medium (the layout's own) and large.
 constexpr double kSizePt[3] = {32, 36, 40};
+
+// The desktop mouse, as one more finger of the editor's: no real touch id
+// is negative, so it can never collide with one.
+constexpr int64_t kMouseFinger = -1;
 
 HostHooks g_hooks;
 LayoutStore g_store;
@@ -91,6 +99,14 @@ bool g_published = false;
 bool g_published_wanted = false;
 uint64_t g_published_revision = 0;
 
+// The size setting's multiplier over a layout file's own scale: the layout
+// the router and the editor work on is g_file_scale * this.
+double size_factor() {
+    int size = mods_controls_value(CONTROLS_SIZE_ROW);
+    size = size < 0 ? 0 : size > 2 ? 2 : size;
+    return kSizePt[size] / 36.0;
+}
+
 // The groups the player has hidden, as the settings row stores them: bit i
 // is groups[i], for the first kHiddenBits groups (layout_fallback.h).
 uint32_t hidden_bits(const Layout &l) {
@@ -117,7 +133,10 @@ class HostSink : public ControlsSink {
             g_hooks.open_settings();
         else if (name == "system_keyboard" && g_hooks.system_keyboard)
             g_hooks.system_keyboard();
-        // "edit_layout" arrives with the editor (Task 20).
+        else if (name == "edit_layout")
+            // The same request the settings page's EDIT row makes; host_pump
+            // takes it, so the editor never opens under the finger that asked.
+            (void)mods_controls_set(CONTROLS_EDIT_ROW, 0);
     }
     // "next" steps to the following layout name, wrapping and never landing
     // on the Hidden choice; any other target selects that name.
@@ -199,7 +218,127 @@ void reload(const std::string &name, Form form) {
     g_router.set_layout(&g_layout, g_sink);
 }
 
+// --- the layout editor ------------------------------------------------------
+
+Editor g_editor;
+std::string g_editor_name;     // the name the editor was opened on
+bool g_editor_renamed = false; // a rename was started this session
+bool g_editor_text = false;    // SDL text input is wanted (a rename is typing)
+bool g_force_reload = false;   // the editor wrote a file: re-read the layout
+
+// RECOMP_CONTROLS_MAPPED alone, without <profile>/controls/binding.txt: what
+// the editor's changes are written as a difference from.
+const MappedTable &base_mapped_table() {
+    static const MappedTable table = [] {
+        MappedTable t;
+        std::string error;
+        (void)parse_mapped(RECOMP_CONTROLS_MAPPED, &t, &error);
+        return t;
+    }();
+    return table;
+}
+
+std::string binding_path() {
+    return std::string(mods_overlay_profile_dir()) + "/controls/binding.txt";
+}
+
+// The editor's results, as files and settings (editor_actions.h).
+class HostEditorHost : public EditorHost {
+  public:
+    void save_layout(const Layout &l, Form form) override {
+        // The editor works on the layout as it is drawn, size setting and
+        // all; the file keeps the layout's own scale, so Large does not bake
+        // itself into every save.
+        Layout copy = l;
+        const double factor = size_factor();
+        if (factor > 0)
+            copy.scale = l.scale / factor;
+        std::string error;
+        if (!g_store.save_user_copy(copy, form, &error))
+            fprintf(stderr, "[controls] could not save layout \"%s\": %s\n", l.name.c_str(),
+                    error.c_str());
+    }
+    void delete_layout(const std::string &name, Form form) override {
+        (void)g_store.delete_user_copy(name, form);
+    }
+    void write_binding(const std::string &text) override {
+        const std::string path = binding_path();
+        if (text.empty()) {
+            os_unlink(path.c_str());
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(std::string(mods_overlay_profile_dir()) + "/controls",
+                                            ec);
+        FILE *f = fopen(path.c_str(), "wb");
+        if (!f) {
+            fprintf(stderr, "[controls] could not write %s\n", path.c_str());
+            return;
+        }
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    }
+    void apply_mapped(const MappedTable &table) override {
+        g_binding.set_table(table);
+    }
+    std::vector<std::string> names() override {
+        return g_store.names();
+    }
+    void set_names(const std::vector<std::string> &names) override {
+        mods_controls_set_names(names);
+        mods_controls_refresh_names();
+    }
+    void select_layout(const std::string &name) override {
+        const std::vector<std::string> all = g_store.names();
+        for (size_t i = 0; i < all.size(); ++i)
+            if (all[i] == name)
+                (void)mods_controls_set(CONTROLS_LAYOUT_ROW, int(i));
+    }
+    void set_snap(bool on) override {
+        (void)mods_controls_set(CONTROLS_SNAP_ROW, on ? 1 : 0);
+    }
+};
+
+HostEditorHost g_editor_host;
+
+// Opens the editor on the layout the player is looking at, and closes the
+// F10 page behind it.
+void open_editor() {
+    if (!g_have_layout)
+        return; // the Hidden choice, or a layout that would not load
+    // A reload just before this (a reset, a switch) left the file's own
+    // scale; the editor shows what the player sees, size setting included.
+    g_size = mods_controls_value(CONTROLS_SIZE_ROW);
+    g_size = g_size < 0 ? 0 : g_size > 2 ? 2 : g_size;
+    g_layout.scale = g_file_scale * size_factor();
+    g_editor.set_screen(g_screen);
+    g_editor.set_names(g_store.names());
+    // RECOMP_CONTROLS_PAD == 1 is the mapped binding; the other pad modes
+    // drive the guest's pad directly, so Bind edits the button itself.
+    g_editor.open(g_layout, g_loaded_form, g_binding.table(), RECOMP_CONTROLS_PAD != 1,
+                  mods_controls_value(CONTROLS_SNAP_ROW) != 0);
+    g_editor_name = g_layout.name;
+    g_editor_renamed = false;
+    g_editor_text = false;
+    mods_controls_set_editing(true);
+    mods_page_close();
+}
+
+void close_editor() {
+    g_editor.close();
+    g_editor_renamed = false;
+    g_editor_text = false;
+    mods_controls_set_editing(false);
+}
+
 void publish() {
+    if (g_editor.is_open()) {
+        host_present_set_controls(make_view(g_editor, g_screen));
+        // The editor's revision follows its generation, which only ever
+        // rises, so the next published view never matches this one.
+        g_published = false;
+        return;
+    }
     const bool wanted = g_have_layout && g_enabled;
     ControlsView view;
     if (wanted)
@@ -245,23 +384,84 @@ void host_set_wanted(bool keyboard_absent, bool controller_present) {
     g_controller_present = controller_present;
 }
 
+// While the editor is open every finger is its own: the router sees none of
+// them, so a control never fires while it is being moved.
 bool host_finger_down(int64_t id, double px, double py, uint64_t now) {
+    if (g_editor.is_open()) {
+        g_editor.finger_down(id, px, py);
+        return true;
+    }
     return g_router.finger_down(id, px, py, now, g_sink);
 }
 
 bool host_finger_motion(int64_t id, double px, double py, uint64_t now) {
+    if (g_editor.is_open()) {
+        g_editor.finger_motion(id, px, py);
+        return true;
+    }
     return g_router.finger_motion(id, px, py, now, g_sink);
 }
 
 bool host_finger_up(int64_t id, uint64_t now) {
+    if (g_editor.is_open()) {
+        g_editor.finger_up(id);
+        return true;
+    }
     return g_router.finger_up(id, now, g_sink);
 }
 
 bool host_finger_cancel(int64_t id) {
+    if (g_editor.is_open()) {
+        g_editor.finger_up(id);
+        return true;
+    }
     return g_router.finger_cancel(id, g_sink);
 }
 
+bool host_editing() {
+    return g_editor.is_open();
+}
+
+void host_editor_pointer(double px, double py, int state) {
+    if (!g_editor.is_open())
+        return;
+    if (state > 0)
+        g_editor.finger_down(kMouseFinger, px, py);
+    else if (state < 0)
+        g_editor.finger_up(kMouseFinger);
+    else
+        g_editor.finger_motion(kMouseFinger, px, py);
+}
+
+void host_editor_wheel(double notches) {
+    if (g_editor.is_open())
+        g_editor.wheel(notches);
+}
+
+void host_editor_escape() {
+    if (g_editor.is_open())
+        g_editor.done();
+}
+
+bool host_editor_text_wanted() {
+    return g_editor.is_open() && g_editor_text;
+}
+
+void host_editor_text(const char *utf8) {
+    if (g_editor.is_open() && utf8)
+        g_editor.text(utf8);
+}
+
+void host_editor_text_done() {
+    if (!g_editor.is_open())
+        return;
+    g_editor.text_done();
+    g_editor_text = false;
+}
+
 void host_release_all() {
+    if (g_editor.is_open())
+        g_editor.finger_up(kMouseFinger);
     g_router.cancel_all(g_sink);
     std::vector<TouchAction> actions;
     g_binding.release_all(&actions);
@@ -277,19 +477,50 @@ void host_pump(uint64_t now) {
         publish();
         return;
     }
+    // The settings page's "Edit controls" row, and the edit_layout action.
+    if (mods_controls_take_edit_request() && !g_editor.is_open())
+        open_editor();
+    // The editor's pending results, before anything reloads: a save or a
+    // rename writes files and may move the layout row, and close() (below)
+    // would clear them.
+    EditorNext next = EditorNext::Keep;
+    if (g_editor.is_open())
+        next = apply_editor_results(g_editor, g_editor_host, g_editor_name, base_mapped_table(),
+                                    &g_editor_renamed);
+    if (g_editor_renamed && !g_editor_text && g_editor.is_open() && next == EditorNext::Keep)
+        g_editor_text = true; // a rename is waiting to be typed
+
     const std::string name = mods_controls_layout_name();
     const Form form = g_screen.dw > 0 && g_screen.dh > 0
                           ? form_for(g_screen.dw, g_screen.dh, g_screen.scale)
                           : g_loaded_form;
-    if (!g_loaded || name != g_loaded_name || form != g_loaded_form)
-        reload(name, form);
+    // The editor wrote or removed a file under the layout's feet, so the
+    // active layout is read again even when its name did not change.
+    if (next != EditorNext::Keep)
+        g_force_reload = true;
+    if (g_force_reload || !g_loaded || name != g_loaded_name || form != g_loaded_form) {
+        g_force_reload = false;
+        reload(mods_controls_layout_name(), form);
+    }
+    if (next == EditorNext::Close)
+        close_editor();
+    else if (next == EditorNext::Reopen)
+        open_editor();
+
+    // Editing: the router, the mapped binding and the rumble stand still, and
+    // the presenter gets the editor's view instead of the layout's.
+    if (g_editor.is_open()) {
+        g_editor.set_screen(g_screen);
+        publish();
+        return;
+    }
 
     if (g_have_layout) {
         int size = mods_controls_value(CONTROLS_SIZE_ROW);
         size = size < 0 ? 0 : size > 2 ? 2 : size;
         if (size != g_size) {
             g_size = size;
-            g_layout.scale = g_file_scale * kSizePt[size] / 36.0;
+            g_layout.scale = g_file_scale * size_factor();
         }
         // The hidden groups follow the row whoever set it: a toggle writes it
         // (group_visibility_changed), and a settings load or reset may too.

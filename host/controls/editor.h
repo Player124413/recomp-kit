@@ -102,6 +102,8 @@ class Editor {
     bool take_reset();  // Reset: host deletes the user copy, reloads, reopens
     bool take_cancel(); // back gesture (cancel()): host closes without saving
     void cancel();
+    // The Done tool, without a tap on it: the desktop's Escape key.
+    void done();
     // Layout > Switch chose another layout: the host saves nothing, loads
     // *name and reopens the editor on it.
     bool take_switch(std::string *name);
