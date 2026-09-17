@@ -25,9 +25,12 @@ struct RunOptions {
     // 300 ms: up, down, left, right, next, previous, enter, back, drop:<path>,
     // wait (a step that does nothing).
     std::string keys;
+    // Why the game cannot start here (no GPU device); "" when it can.
+    std::string unplayable;
 };
 
-// Shows the launcher until the player plays or quits. Returns the game's
+// Shows the launcher until the player plays or quits. With no `device`
+// (a GPU the host cannot use), it draws through SDL's window surface. Returns the game's
 // executable, or "" when the player quit. The window keeps its surface; the
 // launcher's swapchain is gone when this returns.
 std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, Platform &platform,
