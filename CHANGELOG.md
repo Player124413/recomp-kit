@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- DXGI swap chains no longer choose the host window. A fullscreen chain
+  posted fullscreen into the same slot as the Display setting, so Siege of
+  Avalon's `ForceD3DFullscreen=1` overrode the player's choice after the
+  launcher. A chain now sets only the guest's display mode and window bounds,
+  and the host window follows the Display setting, which defaults to windowed.
+
+- `game.toml [settings] rows` lists the settings rows a game shows, as
+  `RECOMP_SETTINGS_ROWS`; without the key every row shows. The F10 page and the
+  native Options tabs show only those rows, and a row a game does not list
+  keeps its neutral value. The keypad rows wrap like the display rows, and
+  their values are atomics. With Wide view off, a 4:3 scene on a wide drawable
+  is boxed at the guest's aspect, with its HUD, pointer and input mapped
+  through the same box. The page's scale is capped to what the drawable holds.
+
+- Leaving or entering fullscreen with the window's own button changes the
+  Display setting, so the next frame no longer puts the window back.
+
+- `game.toml [mods] builtin = "none"` compiles out the mod runtime's Populous
+  hooks, which name Populous routines by address. In any other game the first
+  hook was refused and the loader stopped before Lua, so no mods loaded. An
+  event a game names no routine for is now skipped instead of failing the load.
+
 - The kit no longer carries Siege of Avalon's HLSL. `dx/d3d11.cpp` describes
   the shader contract in words instead of quoting the LGPL source, and
   `dx_tests` hands the shim the tagged blobs `D3DCompile` would make - entry
