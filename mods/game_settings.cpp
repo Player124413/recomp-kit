@@ -1,6 +1,7 @@
 // Keep the original CONFIG00 format and option masks. The original game only
 // calls its writer at shutdown, yet reloads the file when starting a game.
 #include "mods_internal.h"
+#include "game_config.h"
 #include "options_menu.h"
 #include "../runtime/win32.h"
 #include "../runtime/memory.h"
@@ -303,6 +304,9 @@ void apply_quick_defaults(const PopModApi *api, pop_cpu_v1 *cpu, PopHookInvocati
 
 // Install persistence, mode enumeration, camera and minimap hooks with rollback on partial failure.
 bool mods_game_settings_init() {
+#if !RECOMP_MODS_BUILTIN_POPULOUS
+    return true; // this game has none of Populous's routines (game.toml [mods] builtin)
+#endif
     if (installed)
         return true;
     mods_settings_declare(MODS_OWNER_RUNTIME, "guest.options", quick_key, "Quick Defaults",

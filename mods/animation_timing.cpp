@@ -1,4 +1,5 @@
 #include "animation_clock.h"
+#include "game_config.h"
 #include "display_settings.h"
 #include "mods_internal.h"
 #include "../runtime/win32.h"
@@ -79,6 +80,9 @@ extern "C" uint32_t recomp_visual_animation_tick(uint32_t original) {
 }
 
 bool mods_animation_init() {
+#if !RECOMP_MODS_BUILTIN_POPULOUS
+    return true; // this game has none of Populous's routines (game.toml [mods] builtin)
+#endif
     if (installed)
         return true;
     uint32_t ids[2]{};

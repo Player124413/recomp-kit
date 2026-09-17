@@ -1,6 +1,7 @@
 // Extend the pinned game's Options page without replacing its navigation,
 // pause/audio lifecycle, font renderer, hit testing or resolution rebuild.
 #include "options_menu.h"
+#include "game_config.h"
 #include "display_settings.h"
 #include "mods_internal.h"
 #include "../runtime/imports.h"
@@ -331,6 +332,9 @@ void attach(const PopModApi *, pop_cpu_v1 *, PopHookInvocation *, void *) {
 
 // Install the menu/font hooks as one operation, rolling back earlier hooks if any registration fails.
 bool mods_options_init() {
+#if !RECOMP_MODS_BUILTIN_POPULOUS
+    return true; // this game has none of Populous's routines (game.toml [mods] builtin)
+#endif
     if (installed)
         return true;
     const uint32_t addresses[] = {0x459f40, 0x45b6e0, 0x516b80, 0x516bb0, 0x516c80, 0x4f95a0};

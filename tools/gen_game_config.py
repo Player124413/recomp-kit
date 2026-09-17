@@ -43,6 +43,13 @@ def render_header(cfg):
     lines.append("#define RECOMP_KIT_DIR %s" % c_string(Path(__file__).resolve().parents[1].as_posix()))
     # The on-screen keypad's starting visibility: "auto" shows it when no hardware keyboard is attached.
     lines.append("#define RECOMP_TOUCH_KEYPAD_HIDDEN %d" % (1 if cfg["touch"]["keypad"] == "hidden" else 0))
+    # The mod runtime's built-in game integrations (animation clock, native
+    # options menu, settings persistence, sprite view) were written against
+    # Populous and hook its routines by address. Another game turns them off.
+    builtin = cfg.get("mods", {}).get("builtin", "populous")
+    if builtin not in ("populous", "none"):
+        raise ValueError('[mods] builtin must be "populous" or "none", not %r' % builtin)
+    lines.append("#define RECOMP_MODS_BUILTIN_POPULOUS %d" % (1 if builtin == "populous" else 0))
     for key, value in sorted(cfg.get("hooks", {}).items()):
         macro = "RECOMP_HOOK_" + key.upper()
         if isinstance(value, list):
