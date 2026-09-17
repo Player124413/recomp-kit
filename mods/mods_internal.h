@@ -185,6 +185,11 @@ bool mods_settings_entry(uint32_t i, uint32_t *owner, const char **mod_id, const
                          int64_t *max);
 void mods_settings_declare(uint32_t owner, const char *mod_id, const char *key, const char *label,
                            int32_t kind, int64_t def, int64_t min, int64_t max);
+// The persisted value under "mod_id/key", whether or not anything has
+// declared that key this run. Used for one-time migrations that read an
+// older owner's settings without declaring them (controls_settings.cpp
+// reading host.keypad/*).
+bool mods_settings_stored_value(const char *mod_id_slash_key, int64_t *out);
 
 // ---- host services and the page (T9) --------------------------------------
 void mods_host_set_main_thread(void);

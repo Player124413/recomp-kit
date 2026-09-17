@@ -3,7 +3,7 @@
 #include "options_menu.h"
 #include "game_config.h"
 #include "display_settings.h"
-#include "keypad_settings.h"
+#include "controls_settings.h"
 #include "mods_internal.h"
 #include "../runtime/imports.h"
 #include "../runtime/memory.h"
@@ -151,10 +151,10 @@ const DisplayRow enhanced[] = {DISPLAY_RENDERING, DISPLAY_TEXTURES, DISPLAY_FILT
                                DISPLAY_UI_SCALE, DISPLAY_WIDE};
 // Resolution stays in the original Graphics tab, with the game's live rebuild.
 const DisplayRow display[] = {DISPLAY_WINDOW, DISPLAY_FPS, DISPLAY_OVERLAY};
-// An entry of an added tab: a display row, or kKeypad + a keypad row.
-constexpr int kKeypad = 100;
-// The rows a tab shows: the ones game.toml [settings] rows lists, the keypad's
-// three after the Display tab's own. Eight fit a tab (rows_per_page).
+// An entry of an added tab: a display row, or kControls + a controls row.
+constexpr int kControls = 100;
+// The rows a tab shows: the ones game.toml [settings] rows lists, the
+// controls rows after the Display tab's own. Eight fit a tab (rows_per_page).
 std::vector<int> tab_rows(unsigned tab) {
     std::vector<int> rows;
     if (tab == 4)
@@ -165,19 +165,19 @@ std::vector<int> tab_rows(unsigned tab) {
         for (auto r : display)
             if (mods_display_row_applies(r))
                 rows.push_back(r);
-        if (mods_settings_row_listed(DISPLAY_KEYPAD_BIT))
-            for (int k = 0; k < KEYPAD_ROW_COUNT; ++k)
-                rows.push_back(kKeypad + k);
+        if (mods_settings_row_listed(DISPLAY_CONTROLS_BIT))
+            for (int k = 0; k < CONTROLS_ROW_COUNT; ++k)
+                rows.push_back(kControls + k);
     }
     return rows;
 }
 PopModStatus nudge_row(int entry, int delta) {
-    return entry >= kKeypad ? mods_keypad_nudge(KeypadRow(entry - kKeypad), delta)
-                            : mods_display_nudge(DisplayRow(entry), delta);
+    return entry >= kControls ? mods_controls_nudge(ControlsRow(entry - kControls), delta)
+                              : mods_display_nudge(DisplayRow(entry), delta);
 }
 std::string row_line(int entry) {
-    return entry >= kKeypad ? mods_keypad_line(KeypadRow(entry - kKeypad))
-                            : mods_display_line(DisplayRow(entry));
+    return entry >= kControls ? mods_controls_line(ControlsRow(entry - kControls))
+                              : mods_display_line(DisplayRow(entry));
 }
 // Dispatch one native Options control to a display setting, mod action or page navigation.
 // Use the shared setters so successful changes apply live and follow normal persistence.

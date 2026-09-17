@@ -185,19 +185,49 @@ class LoadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 game_config.load(game)   # a module needs an arena that reaches it: checked at load
 
-    def test_touch_keypad_knob(self):
+    def test_controls_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)
             (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
             stub = (ROOT / "games/stub/game.toml").read_text()
-            base = stub[:stub.index("[touch]")] + stub[stub.index("[bundle]"):]  # without the stub's own [touch]
+            base = stub[:stub.index("[controls]")] + stub[stub.index("[bundle]"):]  # without the stub's own [controls]
             (game / "game.toml").write_text(base)
-            self.assertIn("#define RECOMP_TOUCH_KEYPAD_HIDDEN 0", gen_game_config.render_header(game_config.load(game)))
+            cfg = game_config.load(game)
+            self.assertEqual(cfg["controls"]["default_layout"], "keys")
+            self.assertEqual(cfg["controls"]["pad"], "mapped")
+            self.assertEqual(cfg["controls"]["mapped"], game_config.MAPPED_DEFAULTS)
+
+            # The old [touch] keypad knob maps onto default_layout when the
+            # game names no default_layout of its own.
             (game / "game.toml").write_text(base + '\n[touch]\nkeypad = "hidden"\n')
-            self.assertIn("#define RECOMP_TOUCH_KEYPAD_HIDDEN 1", gen_game_config.render_header(game_config.load(game)))
-            (game / "game.toml").write_text(base + '\n[touch]\nkeypad = "sometimes"\n')
+            self.assertEqual(game_config.load(game)["controls"]["default_layout"], "hidden")
+
+            # Validation.
+            (game / "game.toml").write_text(base + '\n[controls]\npad = "sometimes"\n')
             with self.assertRaises(ValueError):
                 game_config.load(game)
+            (game / "game.toml").write_text(
+                base + '\n[controls]\n[controls.mapped]\ncross = "key:Nope"\n')  # bad button target
+            with self.assertRaises(ValueError):
+                game_config.load(game)
+            (game / "game.toml").write_text(
+                base + '\n[controls]\n[controls.mapped]\nnot_a_button = "key:Space"\n')  # unknown key
+            with self.assertRaises(ValueError):
+                game_config.load(game)
+            (game / "game.toml").write_text(
+                base + '\n[controls]\n[controls.native]\naxes = ["x", "y", "z"]\n')  # wrong length
+            with self.assertRaises(ValueError):
+                game_config.load(game)
+
+            # The header.
+            (game / "game.toml").write_text(base)
+            header = gen_game_config.render_header(game_config.load(game))
+            self.assertIn("#define RECOMP_CONTROLS_PAD 1", header)
+            self.assertIn("cross=mouse_left", header)
+
+            # The old rows spelling still loads.
+            (game / "game.toml").write_text(base + '\n[settings]\nrows = ["window", "keypad"]\n')
+            game_config.load(game)
 
     def test_settings_rows_knob(self):
         with tempfile.TemporaryDirectory() as tmp:

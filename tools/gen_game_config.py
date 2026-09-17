@@ -49,8 +49,18 @@ def render_header(cfg):
     lines.append("#define RECOMP_DEVELOPER_GAME_DIR %s" % c_string(cfg["developer_exe_path"].parent.as_posix()))
     lines.append("#define RECOMP_GAME_DIR %s" % c_string(Path(cfg["dir"]).resolve().as_posix()))
     lines.append("#define RECOMP_KIT_DIR %s" % c_string(Path(__file__).resolve().parents[1].as_posix()))
-    # The on-screen keypad's starting visibility: "auto" shows it when no hardware keyboard is attached.
-    lines.append("#define RECOMP_TOUCH_KEYPAD_HIDDEN %d" % (1 if cfg["touch"]["keypad"] == "hidden" else 0))
+    # The on-screen controls a fresh profile starts with, and how the pad maps
+    # onto the keyboard/mouse or a real controller (games/stub/game.toml [controls]).
+    controls = cfg["controls"]
+    lines.append("#define RECOMP_CONTROLS_DEFAULT_LAYOUT %s" % c_string(controls["default_layout"]))
+    lines.append("#define RECOMP_CONTROLS_PAD %d" % ("off", "mapped", "native").index(controls["pad"]))
+    lines.append("#define RECOMP_CONTROLS_MAPPED %s" % c_string(
+        ";".join("%s=%s" % (k, controls["mapped"][k]) for k in sorted(controls["mapped"]))))
+    native = controls["native"]
+    lines.append("#define RECOMP_CONTROLS_XINPUT %d" % int(native["xinput"]))
+    lines.append("#define RECOMP_CONTROLS_DINPUT %d" % int(native["dinput"]))
+    lines.append("#define RECOMP_CONTROLS_NATIVE_AXES %s" % c_string(",".join(native["axes"])))
+    lines.append("#define RECOMP_CONTROLS_NATIVE_BUTTONS %s" % c_string(",".join(native["buttons"])))
     lines.append("#define RECOMP_GUEST_SIZE %s" % c_hex(game["guest_size"]))
     # Auxiliary modules the loader maps beside the image: {name, developer path, sha256, base, size}.
     lines.append("#define RECOMP_AUX_MODULE_COUNT %d" % len(cfg["aux_modules"]))

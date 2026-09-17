@@ -34,7 +34,7 @@
 #include "../input_touch.h"
 #include "../keypad_layout.h"
 #include "../keypad_modifiers.h"
-#include "../../mods/keypad_settings.h"
+#include "../../mods/controls_settings.h"
 
 #include <map>
 #include "../midi.h"
@@ -827,9 +827,11 @@ KeypadView keypad_view() {
     window_sizes(&bw, &bh, &dw, &dh);
     KeypadView v;
     v.wanted = g_keypad_wanted;
-    v.left = mods_keypad_value(KEYPAD_LEFT_ROW) != 0;
-    v.right = mods_keypad_value(KEYPAD_RIGHT_ROW) != 0;
-    v.size = mods_keypad_value(KEYPAD_SIZE_ROW);
+    // Temporary adapter (Task 6): the router that reads the layout's own
+    // hidden groups directly lands in Task 7, which removes this.
+    v.left = !(mods_controls_hidden_groups() & 1);
+    v.right = !(mods_controls_hidden_groups() & 2);
+    v.size = mods_controls_value(CONTROLS_SIZE_ROW);
     v.lit = g_keypad_modifiers.lit();
     v.scale = bw > 0 ? double(dw) / bw : 1.0;
     return v;
@@ -1057,8 +1059,8 @@ void handle_event(const SDL_Event &event) {
         if (event.type == SDL_EVENT_FINGER_DOWN) {
             const KeypadHit hit = keypad_hit_at(event.tfinger);
             if (hit.kind == KeypadHit::Toggle) {
-                const KeypadRow row = hit.side == KEYPAD_LEFT ? KEYPAD_LEFT_ROW : KEYPAD_RIGHT_ROW;
-                mods_keypad_set(row, mods_keypad_value(row) ? 0 : 1);
+                // Temporary adapter (Task 6); Task 7 removes it.
+                mods_controls_set_hidden_groups(mods_controls_hidden_groups() ^ (1 << hit.side));
                 g_keypad_fingers[finger] = 0; // the tab's finger presses nothing more
                 publish_keypad();
                 break;

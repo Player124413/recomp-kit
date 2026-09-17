@@ -63,13 +63,13 @@ void mods_display_default_overlay(int mode) {
 }
 namespace {
 #ifdef POPM_TESTING
-unsigned listed_rows = (2u << DISPLAY_KEYPAD_BIT) - 1;
+unsigned listed_rows = (2u << DISPLAY_CONTROLS_BIT) - 1;
 #else
 const unsigned listed_rows = RECOMP_SETTINGS_ROWS;
 #endif
 } // namespace
 bool mods_settings_row_listed(int bit) {
-    return bit >= 0 && bit <= DISPLAY_KEYPAD_BIT && (listed_rows >> bit & 1);
+    return bit >= 0 && bit <= DISPLAY_CONTROLS_BIT && (listed_rows >> bit & 1);
 }
 #ifdef POPM_TESTING
 void mods_settings_rows_for_test(unsigned mask) {
