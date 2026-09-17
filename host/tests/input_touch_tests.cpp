@@ -476,6 +476,38 @@ static void test_the_edge_outlasts_the_pointer_glide_off_the_strip() {
     CHECK(latch.apply(40, 0) == 40);  // no strip: never latches
 }
 
+// Portrait: the game image is a rectangle inside the window, not the whole
+// window. With an origin the edges are that rectangle's edges, so an edge hold
+// scrolls at the image's top and bottom rather than at the window's.
+static void test_origin_moves_the_edges_onto_the_game_rectangle() {
+    TouchMapper m;
+    m.set_bounds(390, 293); // the game image, in points
+    m.set_origin(0, 47);    // pinned below a 47-point status bar
+    std::vector<TouchAction> out;
+    m.finger_down({1, 200, 50}, 0, &out); // 3 points into the image
+    m.tick(360 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 200 &&
+          out[0].y == 47); // snapped onto the image's top edge
+    out.clear();
+    m.finger_up({1, 200, 50}, 2000 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].x == 200 &&
+          out[0].y == 47 + kTouchEdgeRelease); // moved back inside the image
+    m.tick(3000 * MS, &out);
+    out.clear();
+    m.finger_down({2, 200, 335}, 4000 * MS, &out); // 3 points above the image's bottom
+    m.tick(4360 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion &&
+          out[0].y == 47 + 293 - 1); // the image's last row, not the window's
+    out.clear();
+    m.finger_up({2, 200, 335}, 6000 * MS, &out);
+    CHECK(out.size() == 1 && out[0].y == 47 + 293 - 1 - kTouchEdgeRelease);
+    m.tick(7000 * MS, &out);
+    out.clear();
+    m.finger_down({3, 200, 70}, 8000 * MS, &out); // 23 points in: not an edge
+    m.tick(8360 * MS, &out);
+    CHECK(out.size() == 1 && out[0].y == 70);
+}
+
 int main() {
     test_tap_places_one_presented_frame_before_pressing();
     test_tap_without_presents_presses_after_60_ms();
@@ -497,6 +529,7 @@ int main() {
     test_edge_hold_scrolls_then_moves_the_cursor_inside();
     test_tap_near_an_edge_clicks_at_the_finger();
     test_no_bounds_means_no_snapping();
+    test_origin_moves_the_edges_onto_the_game_rectangle();
     test_drag_is_left_drag();
     test_two_finger_drag_pans_with_arrows();
     test_two_finger_tap_is_escape_three_is_f10_four_toggles_keyboard();

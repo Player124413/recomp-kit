@@ -134,6 +134,29 @@ struct Service : std::enable_shared_from_this<Service> {
     AtomicShared<Message> message;
     std::atomic<int> drawable_w{640}, drawable_h{480};
     int guest_w = 640, guest_h = 480, requested_w = 0;
+    // The game rectangle's size as last told to the input gate; zero until a
+    // resize first publishes one.
+    int gate_rect_w = 0, gate_rect_h = 0;
+    // Mutex held. Where this frame is composed (present.h): the whole drawable
+    // in landscape, the top of it in portrait. A portrait rectangle follows the
+    // guest mode, so a mode change re-publishes its size to the input gate the
+    // way a resize does; in landscape it never differs from what resize sent.
+    // `placed` is set when the rectangle is not the whole drawable.
+    HostGameRect game_rect(bool *placed = nullptr) {
+        const int dw = drawable_w, dh = drawable_h;
+        const HostGameRect r =
+            host_present_game_rect(dw, dh, guest_w, guest_h, host_present_safe_top());
+        if (placed)
+            *placed = r.x != 0 || r.y != 0 || r.w != dw || r.h != dh;
+        if (gate_rect_w > 0 && (r.w != gate_rect_w || r.h != gate_rect_h))
+            publish_gate_size(r);
+        return r;
+    }
+    void publish_gate_size(const HostGameRect &r) { // mutex held
+        gate_rect_w = r.w;
+        gate_rect_h = r.h;
+        host_gate_publish_drawable_size(r.w, r.h);
+    }
     unsigned fail_allocations = 0;
     gpu::Device *device = nullptr;
     gpu::Swapchain chain;
@@ -424,13 +447,14 @@ struct Service : std::enable_shared_from_this<Service> {
             return;
         }
         f->input.cls = cls;
-        f->input.drawable_w = drawable_w;
-        f->input.drawable_h = drawable_h;
+        const HostGameRect rect = game_rect();
+        f->input.drawable_w = rect.w;
+        f->input.drawable_h = rect.h;
         if (f->input.world && f->input.guest_w > 0 && f->input.guest_h > 0) {
             const int domain =
                 f->input.scene.domain_w > 0 ? f->input.scene.domain_w : f->input.guest_w;
-            f->input.scene = {float(drawable_w) / domain, float(drawable_h) / f->input.guest_h, 0,
-                              0, domain};
+            f->input.scene = {float(rect.w) / domain, float(rect.h) / f->input.guest_h, 0, 0,
+                              domain};
         }
         if (!f->supplied) {
             // Explicit CPU-staged/legacy compatibility input. Incremental
@@ -486,16 +510,17 @@ struct Service : std::enable_shared_from_this<Service> {
             return {};
         if (writing)
             return writing->target ? writing->target->scene : HostSceneTarget{};
+        guest_w = gw;
+        guest_h = gh;
+        const HostGameRect rect = game_rect();
         if (rw <= 0)
-            rw = drawable_w;
+            rw = rect.w;
         if (rh <= 0)
-            rh = drawable_h;
+            rh = rect.h;
         if (mods_display_classic()) {
             rw = gw;
             rh = gh;
         }
-        guest_w = gw;
-        guest_h = gh;
         requested_w = rw;
         auto free_slot = [&]() -> int {
             for (size_t i = 0; i < (flight_limit == 1 ? 4 : flight_limit + 4); ++i)
@@ -603,12 +628,15 @@ struct Service : std::enable_shared_from_this<Service> {
                 device->resize(chain, m->w, m->h);
         }
         std::shared_ptr<Frame> f;
+        HostGameRect rect{};
+        bool placed = false;
         {
             std::lock_guard lock(mutex);
             if (stop)
                 return;
             if (fake)
                 fake_now = ts;
+            rect = game_rect(&placed);
             if (class_known && last_class == HOST_SCREEN_GAMEPLAY)
                 metric.tick(ts);
             sweep();
@@ -649,8 +677,8 @@ struct Service : std::enable_shared_from_this<Service> {
                 // size to be guest coordinates corrupts picking on repeats.
                 // cached_target keeps the original texture out of the pool.
                 if (cached_input.drawable_w > 0 && cached_input.drawable_h > 0) {
-                    float sx = float(drawable_w) / cached_input.drawable_w;
-                    float sy = float(drawable_h) / cached_input.drawable_h;
+                    float sx = float(rect.w) / cached_input.drawable_w;
+                    float sy = float(rect.h) / cached_input.drawable_h;
                     f->input.scene.scale_x *= sx;
                     f->input.scene.offset_x *= sx;
                     f->input.scene.scale_y *= sy;
@@ -680,8 +708,8 @@ struct Service : std::enable_shared_from_this<Service> {
             seal_pending = !mailbox.empty();
             f->submitted_ts = ts;
             f->acknowledgement_deadline = ts + acknowledgement_grace();
-            f->input.drawable_w = drawable_w;
-            f->input.drawable_h = drawable_h;
+            f->input.drawable_w = rect.w;
+            f->input.drawable_h = rect.h;
         }
         auto prepare = [&] {
             std::lock_guard lock(mutex);
@@ -734,7 +762,7 @@ struct Service : std::enable_shared_from_this<Service> {
                 }
                 return;
             }
-            int w = drawable_w, h = drawable_h;
+            int w = rect.w, h = rect.h;
             const gpu::TextureDesc drawable_desc =
                 drawable ? device->describe(drawable) : gpu::TextureDesc{};
             const gpu::Format out_format = offscreen ? gpu::Format::RGBA8 : drawable_desc.format;
@@ -762,6 +790,24 @@ struct Service : std::enable_shared_from_this<Service> {
                 if (out->w == drawable_desc.width && out->h == drawable_desc.height &&
                     out->format == drawable_desc.format) {
                     device->blit(cb, out->texture, {0, 0, out->w, out->h}, drawable, 0, 0);
+                } else if (placed && out->w == rect.w && out->h == rect.h &&
+                           rect.x + rect.w <= drawable_desc.width &&
+                           rect.y + rect.h <= drawable_desc.height &&
+                           out->format == drawable_desc.format) {
+                    // Portrait: the game sits at its rectangle. Clear the rest
+                    // (the strip above it; the controls fill the area below).
+                    gpu::RenderPass clear;
+                    clear.color_count = 1;
+                    clear.color[0].texture = drawable;
+                    clear.color[0].load = gpu::Load::Clear;
+                    clear.color[0].store = gpu::Store::Store;
+                    clear.color[0].clear[0] = clear.color[0].clear[1] = 0;
+                    clear.color[0].clear[2] = 0;
+                    clear.color[0].clear[3] = 1;
+                    device->begin_render_pass(cb, clear);
+                    device->end_render_pass(cb);
+                    device->blit(cb, out->texture, {0, 0, out->w, out->h}, drawable, rect.x,
+                                 rect.y);
                 } else {
                     CompositorInput in{};
                     in.legacy = true;
@@ -998,7 +1044,11 @@ void host_present_resize(int w, int h) {
         return;
     s->drawable_w = w;
     s->drawable_h = h;
-    host_gate_publish_drawable_size(w, h);
+    {
+        std::lock_guard lock(s->mutex);
+        s->publish_gate_size(
+            host_present_game_rect(w, h, s->guest_w, s->guest_h, host_present_safe_top()));
+    }
     auto m = std::make_shared<Message>();
     m->w = w;
     m->h = h;
@@ -1016,7 +1066,11 @@ void host_present_install_surface(void *native_surface, int w, int h) {
         return;
     s->drawable_w = w;
     s->drawable_h = h;
-    host_gate_publish_drawable_size(w, h);
+    {
+        std::lock_guard lock(s->mutex);
+        s->publish_gate_size(
+            host_present_game_rect(w, h, s->guest_w, s->guest_h, host_present_safe_top()));
+    }
     auto m = std::make_shared<Message>();
     m->surface = native_surface;
     m->w = w;
@@ -1122,7 +1176,7 @@ extern "C" void host_present_first_write() {
     host_d3d_collect_present_targets();
     int w = 0, h = 0, bpp = 0;
     host_present_mode(&w, &h, &bpp);
-    s->acquire(w > 0 ? w : s->guest_w, h > 0 ? h : s->guest_h, s->drawable_w, s->drawable_h);
+    s->acquire(w > 0 ? w : s->guest_w, h > 0 ? h : s->guest_h, 0, 0);
 }
 extern "C" int host_present_needs_legacy_pixels() {
 #ifdef POPM_PRESENT_HAS_UI_LAYER
@@ -1144,7 +1198,7 @@ extern "C" void host_present_stage_rgba(const uint8_t *rgba, int w, int h) {
     auto s = active.load();
     if (!s || !rgba || w <= 0 || h <= 0)
         return;
-    s->acquire(w, h, s->drawable_w, s->drawable_h);
+    s->acquire(w, h, 0, 0);
     std::lock_guard lock(s->mutex);
     if (s->stop || !s->writing || !s->writing->target)
         return;
@@ -1180,7 +1234,7 @@ bool host_present_stage_texture(gpu::Texture src, int w, int h, gpu::CommandBuff
     auto s = active.load();
     if (!s || s->fake || !src || !cb || w <= 0 || h <= 0)
         return false;
-    s->acquire(w, h, s->drawable_w, s->drawable_h);
+    s->acquire(w, h, 0, 0);
     std::lock_guard lock(s->mutex);
     if (s->stop || !s->writing || !s->writing->target)
         return false;
@@ -1352,8 +1406,9 @@ extern "C" void host_frame_seal() {
             auto &in = s->writing->input;
             in.guest_w = s->guest_w;
             in.guest_h = s->guest_h;
-            in.drawable_w = s->drawable_w;
-            in.drawable_h = s->drawable_h;
+            const HostGameRect rect = s->game_rect();
+            in.drawable_w = rect.w;
+            in.drawable_h = rect.h;
             if (host_frame_class(f) == HOST_SCREEN_GAMEPLAY && !host_frame_legacy(f)) {
                 s->writing->supplied = true;
                 in.legacy = false; // compositor supplies the last scene on a no-draw frame
@@ -1451,7 +1506,7 @@ void host_present_test_seal(uint64_t id, HostScreenClass cls, bool had_draws, bo
     auto s = active.load();
     if (!s)
         return;
-    s->acquire(s->guest_w, s->guest_h, s->drawable_w, s->drawable_h);
+    s->acquire(s->guest_w, s->guest_h, 0, 0);
     s->seal(id, cls, had_draws, prefix_pending);
 }
 void host_present_test_command_done(uint64_t id) {
@@ -1623,8 +1678,8 @@ extern "C" float host_display_aspect() {
     if (!s)
         return 4.0f / 3.0f;
     std::lock_guard lock(s->mutex);
-    return s->drawable_w > 0 && s->drawable_h > 0 ? float(s->drawable_w) / s->drawable_h
-                                                  : 4.0f / 3.0f;
+    const HostGameRect rect = s->game_rect();
+    return rect.w > 0 && rect.h > 0 ? float(rect.w) / rect.h : 4.0f / 3.0f;
 }
 extern "C" uint64_t host_display_epoch() {
     return host_present_transition_epoch();
@@ -1647,6 +1702,14 @@ void host_present_suspend(bool suspended) {
         s->sweep();
         return s->flights.empty() && s->pending_commands == 0;
     });
+}
+
+extern "C" HostGameRect host_present_current_game_rect() {
+    auto s = active.load();
+    if (!s)
+        return {0, 0, 0, 0};
+    std::lock_guard lock(s->mutex);
+    return s->game_rect();
 }
 
 void host_present_set_controls(const controls::ControlsView &view) {

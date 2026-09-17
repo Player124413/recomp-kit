@@ -25,8 +25,11 @@ struct HostHooks {
 // Finds the layouts and registers their names with the settings rows; must
 // run before mods_page_init (the first presented frame).
 void host_init(const HostHooks &hooks);
-// The drawable, its scale and safe area, as of this pump.
-void host_set_screen(const Screen &s);
+// The drawable, its scale and safe area, as of this pump, and where the game
+// image is (the presenter's game rectangle) with the safe area's bottom inset,
+// in drawable pixels. In portrait the space below the image becomes the
+// controls area: the layout anchors in it and every finger there is claimed.
+void host_set_screen(const Screen &s, const Rect &game, int safe_bottom);
 // keyboard_absent: no hardware keyboard is attached (or RECOMP_KEYPAD forces
 // the controls on). controller_present: reserved for Task 12.
 void host_set_wanted(bool keyboard_absent, bool controller_present);

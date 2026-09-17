@@ -26,6 +26,10 @@ Rect unite(const Rect &a, const Rect &b) {
 // place on the drawable, so rects are drawn at (x - r.x, y - r.y).
 void paint(Canvas &c, const ControlsView &view, const Rect &r) {
     const auto alpha = [&](int a) { return int(lround(a * std::clamp(view.opacity, 0.0, 1.0))); };
+    // Portrait: the area below the game is opaque, whatever the opacity.
+    if (!view.controls_area.empty())
+        c.fill(view.controls_area.x - r.x, view.controls_area.y - r.y, view.controls_area.w,
+               view.controls_area.h, 12, 14, 18, 255);
     for (const Rect &b : view.backdrops)
         c.fill(b.x - r.x, b.y - r.y, b.w, b.h, 6, 9, 15, alpha(150));
     for (const DrawControl &d : view.controls) {
@@ -67,7 +71,7 @@ Overlay::~Overlay() {
 void Overlay::update(gpu::Device *device, const ControlsView &view, int w, int h) {
     if (device_ == device && built_ && revision_ == view.revision && dw_ == w && dh_ == h)
         return;
-    Rect r;
+    Rect r = view.controls_area;
     for (const Rect &b : view.backdrops)
         r = unite(r, b);
     for (const DrawControl &d : view.controls)

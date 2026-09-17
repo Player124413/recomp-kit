@@ -111,6 +111,11 @@ struct Screen {
     Rect controls_area; // portrait: the space below the game; empty otherwise
 };
 
+// Portrait on a phone: the strip below the game image `game`, down to the
+// safe area's bottom inset `safe_bottom`, in drawable pixels. Empty in
+// landscape (dh <= dw) or when the game image leaves no room below it.
+Rect controls_area_below(int dw, int dh, const Rect &game, int safe_bottom);
+
 // The rectangle anchors resolve in: controls_area if set, else safe (if the
 // layout wants it), else the whole drawable.
 Rect anchor_area(const Layout &l, const Screen &s);

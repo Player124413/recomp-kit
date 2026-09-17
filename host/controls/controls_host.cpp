@@ -158,9 +158,11 @@ void host_init(const HostHooks &hooks) {
     mods_controls_set_names(g_store.names());
 }
 
-void host_set_screen(const Screen &s) {
+void host_set_screen(const Screen &s, const Rect &game, int safe_bottom) {
     g_screen = s;
-    g_router.set_screen(s);
+    g_screen.controls_area = controls_area_below(s.dw, s.dh, game, safe_bottom);
+    g_router.set_screen(g_screen);
+    g_router.set_claim_area(g_screen.controls_area);
 }
 
 void host_set_wanted(bool keyboard_absent, bool controller_present) {

@@ -32,6 +32,10 @@ void Router::set_screen(const Screen &s) {
     screen_ = s;
 }
 
+void Router::set_claim_area(const Rect &area) {
+    claim_area_ = area;
+}
+
 void Router::set_enabled(bool on, ControlsSink &sink) {
     enabled_ = on;
     if (!on)
@@ -93,8 +97,12 @@ bool Router::finger_down(int64_t id, double px, double py, uint64_t now_ns, Cont
     if (!enabled_ || !layout_)
         return false;
     const Hit h = hit_test(*layout_, screen_, px, py);
-    if (h.group < 0)
-        return false; // the game's own area
+    if (h.group < 0) {
+        if (!claim_area_.contains(px, py))
+            return false; // the game's own area
+        fingers_[id] = Owned{-1, -1, true};
+        return true; // the controls area: claimed, and does nothing
+    }
 
     if (h.gap) {
         fingers_[id] = Owned{h.group, -1, true};

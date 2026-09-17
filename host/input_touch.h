@@ -90,6 +90,10 @@ class TouchMapper {
   public:
     // The window's size in points. Enables edge snapping; zero disables it.
     void set_bounds(double w, double h);
+    // Where those bounds start, in window points: the game image's top-left
+    // corner when it does not fill the window (portrait on a phone). Edge
+    // snapping then works on the image's edges. Zero by default.
+    void set_origin(double x, double y);
     // Strips along the window's edges the system keeps for itself (a status
     // bar, a gesture zone), in points. A finger never reaches the app from
     // inside one, so the snap margin on that edge grows by the strip's depth.
@@ -126,6 +130,7 @@ class TouchMapper {
     bool text_input_ = false;
     double pan_cx_ = 0, pan_cy_ = 0, pan_acc_x_ = 0, pan_acc_y_ = 0;
     double bounds_w_ = 0, bounds_h_ = 0;
+    double origin_x_ = 0, origin_y_ = 0;
     double inset_l_ = 0, inset_t_ = 0, inset_r_ = 0, inset_b_ = 0;
     bool snapped_ = false;               // the gesture's placed point sits on a window edge
     double placed_x_ = 0, placed_y_ = 0; // the last placed point
