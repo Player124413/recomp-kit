@@ -19,6 +19,7 @@
 //     every tracked resource reclaimed, then the Lua runtime last.
 #include "mods_internal.h"
 #include "../runtime/layout.h"
+#include "controls_settings.h"
 #include "options_menu.h"
 #include "sprite_view.h"
 #include "manifest_types.h"
@@ -823,6 +824,9 @@ void shutdown_now() {
             os_dlclose(contexts()[i].handle);
             contexts()[i].handle = nullptr;
         }
+    // The on-screen controls hold their last hidden-group change until a pump
+    // flushes it; there is no pump after this one.
+    mods_controls_flush();
     mods_settings_save();
     // The runtime's own registrations go last, so nothing is left believing it
     // has hooks in a registry that is about to be gone.

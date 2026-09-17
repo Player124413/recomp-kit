@@ -508,6 +508,9 @@ void host_editor_text_done() {
 
 void host_release_all() {
     release_everything();
+    // Backgrounding or losing focus: the pump may not run again, so a toggle
+    // press from the last frame is written now rather than waiting for one.
+    mods_controls_flush();
     publish();
 }
 

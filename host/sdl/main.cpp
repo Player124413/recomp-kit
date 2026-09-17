@@ -977,11 +977,13 @@ bool handle_editor_event(const SDL_Event &event) {
         controls::host_editor_text(event.text.text);
         return true;
     case SDL_EVENT_KEY_UP:
-        // Only Escape's own release is swallowed (its press was Done). Every
-        // other key-up takes the normal path, so a key the player was holding
-        // when the editor opened is released to the game instead of staying
-        // down for the whole editing session.
-        return event.key.scancode == SDL_SCANCODE_ESCAPE;
+        // No key-up is ever swallowed, Escape's included: a key the player was
+        // holding when the editor opened has to be released to the game, and
+        // Escape also has host state behind it (g_escape_held, the pointer
+        // capture) that only its key-up clears. The editor takes key presses
+        // alone, so an Escape release with no press it knows about is the one
+        // the game and the host both still need.
+        return false;
     case SDL_EVENT_KEY_DOWN:
         if (event.key.scancode == SDL_SCANCODE_ESCAPE)
             controls::host_editor_escape(); // Escape is Done
