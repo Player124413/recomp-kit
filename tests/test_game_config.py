@@ -228,6 +228,36 @@ class LoadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 gen_game_config.render_header(game_config.load(game))
 
+    def test_launcher_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "game.toml").write_text(base)
+            header = gen_game_config.render_header(game_config.load(game))
+            self.assertIn('#define RECOMP_LAUNCHER_TITLE "Stub Game"', header)
+            self.assertIn('#define RECOMP_LAUNCHER_STORE_URL ""', header)
+            self.assertIn("#define RECOMP_LAUNCHER_INSTALL_NAMES {0}", header)
+            self.assertIn("#define RECOMP_LAUNCHER_MIN_FREE_MB 0u", header)
+            self.assertIn("#define RECOMP_REQUIRED_DIRS {0}", header)
+            (game / "game.toml").write_text(
+                base.replace("[bundle]\nexclude = []", '[bundle]\nexclude = ["*.dll", "app"]')
+                + '\n[launcher]\ntitle = "Stub \\"Deluxe\\""\nstore = "https://example.test/stub"\n'
+                  'install_names = ["Stub Game", "STUB"]\ngog_ids = ["123"]\nmin_free_mb = 50\n'
+                  '\n[setup]\nrequired_dirs = ["data", "levels"]\n')
+            header = gen_game_config.render_header(game_config.load(game))
+            self.assertIn('#define RECOMP_LAUNCHER_TITLE "Stub \\"Deluxe\\""', header)
+            self.assertIn('#define RECOMP_LAUNCHER_INSTALL_NAMES {"Stub Game", "STUB", 0}', header)
+            self.assertIn('#define RECOMP_LAUNCHER_GOG_IDS {"123", 0}', header)
+            self.assertIn("#define RECOMP_LAUNCHER_STEAM_IDS {0}", header)
+            self.assertIn("#define RECOMP_LAUNCHER_MIN_FREE_MB 50u", header)
+            self.assertIn('#define RECOMP_REQUIRED_DIRS {"data", "levels", 0}', header)
+            self.assertIn('#define RECOMP_BUNDLE_EXCLUDE {"*.dll", "app", 0}', header)
+            for bad in ('min_free_mb = -1', 'gog_ids = "123"', 'title = 5'):
+                (game / "game.toml").write_text(base + "\n[launcher]\n" + bad + "\n")
+                with self.assertRaises(ValueError):
+                    game_config.load(game)
+
     def test_missing_key_is_an_error_naming_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)
