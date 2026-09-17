@@ -2,7 +2,7 @@
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
   memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp oleaut32.cpp
-  mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp media_foundation.cpp layout.cpp)
+  mods_seam.cpp interp.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp media_foundation.cpp layout.cpp)
 
 # The faces the runtime's GDI draws Windows' own UI fonts with
 # (third_party/fonts/opensans/README.md), embedded as byte arrays.
@@ -35,6 +35,17 @@ target_link_libraries(recomp_runtime_testing PUBLIC recomp_platform)
 target_compile_definitions(recomp_runtime_testing PUBLIC POPM_TESTING=1)
 target_compile_options(recomp_runtime_testing PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_runtime_testing 1)
+endif()
+
+# The interpreter for heap code, on its own: it needs guest memory and
+# recomp_call, which the test provides.
+if(NOT IOS AND NOT ANDROID)
+add_executable(interp_tests tests/interp_tests.cpp interp.cpp)
+target_include_directories(interp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(interp_tests PRIVATE ${POP_WARN_HOST})
+pop_test_binary(interp_tests)
+add_test(NAME interp_tests COMMAND interp_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(interp_tests PROPERTIES LABELS nogame)
 endif()
 
 # Linked by the hosts, the fixture and the mod tests, not by the unit tests.

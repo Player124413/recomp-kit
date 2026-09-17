@@ -5,8 +5,10 @@
 #include "profile.h"
 #include "mods_seam.h"
 #include "intrinsics.h"
+#include "interp.h"
 #include "win32.h"
 #include "thunks.h"
+#include "loader.h"
 #include "seh.h"
 #include "../platform/os.h"
 
@@ -165,6 +167,11 @@ void recomp_shim_call(X86 *c, uint32_t target) {
 // so it is logged with the target and the guest continues with EAX = 0.
 void recomp_unknown_call(X86 *c, uint32_t target) {
     if (recomp_run_thunk(c, target))
+        return;
+    // Code the guest built or copied into its heap at run time, which no
+    // translation covers, runs in the interpreter when every instruction in
+    // it decodes.
+    if (!loader_in_image(target) && interp_call(c, target))
         return;
     if (target == GUEST_RETURN_SENTINEL) {
         recomp_callback_return(c);
