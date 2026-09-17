@@ -7,7 +7,9 @@ namespace {
 
 // The split on-screen keyboard. Pinned to host/keypad_layout.cpp's geometry
 // (a fixed 8x5 grid of 32/36/40pt keys, 4pt gap, bottom-corner halves, with
-// a HIDE/KEYS tab above each) by controls_tests.cpp's legacy oracle.
+// a HIDE/KEYS tab above each) by controls_tests.cpp's legacy oracle. The
+// PAD tab (the next layout) sits at the bottom centre, leaving the top of
+// the screen, where games keep their menus, to the game.
 const char *kKeysTablet = R"JSON({
   "version": 1,
   "name": "keys",
@@ -111,8 +113,8 @@ const char *kKeysTablet = R"JSON({
          "anchor": "bottom-left", "w": 64, "h": 20, "stack_on": "left"},
         {"kind": "toggle", "target": "right", "label": "HIDE", "label_off": "KEYS",
          "anchor": "bottom-right", "w": 64, "h": 20, "stack_on": "right"},
-        {"kind": "toggle", "target": "next", "label": "PAD", "anchor": "top-center",
-         "y": 8, "w": 72, "h": 28}
+        {"kind": "toggle", "target": "next", "label": "PAD", "anchor": "bottom-center",
+         "w": 64, "h": 20}
       ]
     }
   ]
@@ -166,7 +168,8 @@ const char *kPadTablet = R"JSON({
 // The pad+keys layout: the keyboard halves at 30pt keys, the two sticks at
 // mid-height on either side, and a smaller face diamond above the right
 // half (the pad layout's diamond at 52pt, raised by the half's 5 * 34pt
-// height plus 12).
+// height plus 12). Its NEXT tab stays where keys puts its PAD tab, at the
+// bottom centre between the halves.
 std::string pad_and_keys_tablet() {
     std::string s = kKeysTablet;
     const auto replace_all = [&s](const std::string &from, const std::string &to) {

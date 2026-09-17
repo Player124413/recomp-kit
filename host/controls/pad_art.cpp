@@ -8,6 +8,10 @@
 #include <utility>
 #include <vector>
 
+#ifndef M_PI // MSVC headers define it only on request
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace controls {
 
 namespace {

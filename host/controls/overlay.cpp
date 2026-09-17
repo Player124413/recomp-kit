@@ -1,4 +1,4 @@
-// overlay.cpp - the GPU half of overlay.h: one raster for the whole view.
+// overlay.cpp - the GPU half of overlay.h: one raster per layer, and the knobs.
 #include "overlay.h"
 
 #include "overlay_paint.h"
@@ -12,28 +12,9 @@ namespace controls {
 
 namespace {
 
-Rect unite(const Rect &a, const Rect &b) {
-    if (a.empty())
-        return b;
-    if (b.empty())
-        return a;
-    const int x0 = std::min(a.x, b.x), y0 = std::min(a.y, b.y);
-    const int x1 = std::max(a.x + a.w, b.x + b.w), y1 = std::max(a.y + a.h, b.y + b.h);
-    return Rect{x0, y0, x1 - x0, y1 - y0};
-}
-
-// The knob texture's side: big enough for an iPad's largest stick, and
-// scaled linearly for any other.
-constexpr int kKnobSize = 128;
-
-// Where a control can draw: its rect, and for a stick the whole base circle
-// around a finger anywhere in its zone.
-Rect drawn_rect(const DrawControl &d) {
-    if (d.kind != Kind::Stick || d.radius_px <= 0)
-        return d.rect;
-    const int r = d.radius_px + 1;
-    return Rect{d.rect.x - r, d.rect.y - r, d.rect.w + 2 * r, d.rect.h + 2 * r};
-}
+// The knob texture's side: big enough for the largest stick on a 3x screen,
+// and scaled linearly for any other.
+constexpr int kKnobSize = 256;
 
 } // namespace
 
@@ -42,50 +23,48 @@ Overlay::~Overlay() {
 }
 
 void Overlay::release() {
-    if (device_ && texture_)
-        device_->destroy(texture_);
-    if (device_ && knob_)
-        device_->destroy(knob_);
-    texture_ = gpu::Texture();
+    if (device_) {
+        for (LayerTexture &t : layers_)
+            if (t.texture)
+                device_->destroy(t.texture);
+        if (knob_)
+            device_->destroy(knob_);
+    }
+    layers_.clear();
     knob_ = gpu::Texture();
     knob_opacity_ = -1;
 }
 
-void Overlay::update(gpu::Device *device, const ControlsView &view, int w, int h) {
-    if (device_ == device && built_ && revision_ == view.revision && dw_ == w && dh_ == h)
+// Re-rasterizes and re-uploads layer `index` when its revision or the
+// drawable size changed; any other layer's texture is left alone.
+void Overlay::update_layer(gpu::Device *device, const ControlsView &view, int index, int w, int h) {
+    LayerTexture &t = layers_[index];
+    const ControlsView::Layer &layer = view.layers[index];
+    if (t.built && t.revision == layer.revision && dw_ == w && dh_ == h)
         return;
-    Rect r = view.controls_area;
-    for (const Rect &b : view.backdrops)
-        r = unite(r, b);
-    for (const DrawControl &d : view.controls)
-        r = unite(r, drawn_rect(d));
     // Clip to the drawable.
+    const Rect &r = layer.rect;
     const int x0 = std::max(0, r.x), y0 = std::max(0, r.y);
     const int x1 = std::min(w, r.x + r.w), y1 = std::min(h, r.y + r.h);
-    r = Rect{x0, y0, x1 - x0, y1 - y0};
-    built_ = true;
-    revision_ = view.revision;
-    dw_ = w;
-    dh_ = h;
-    rect_ = r;
-    if (r.empty())
+    const Rect clipped{x0, y0, x1 - x0, y1 - y0};
+    t.built = true;
+    t.revision = layer.revision;
+    t.rect = clipped.empty() ? Rect{} : clipped;
+    if (t.rect.empty())
         return;
-    pixels_.assign(size_t(r.w) * r.h * 4, 0);
-    Canvas c(pixels_, r.w, r.h, view.opacity);
-    paint_overlay(c, view, r);
-    if (device_ != device)
-        release();
-    if (!texture_ || tex_w_ != r.w || tex_h_ != r.h) {
-        if (texture_)
-            device->destroy(texture_);
-        texture_ = device->create_texture(
-            {r.w, r.h, gpu::Format::RGBA8, gpu::UsageSampled | gpu::UsageCpu, 1});
-        tex_w_ = r.w;
-        tex_h_ = r.h;
+    pixels_.assign(size_t(t.rect.w) * t.rect.h * 4, 0);
+    Canvas c(pixels_, t.rect.w, t.rect.h, view.opacity);
+    paint_layer(c, view, index, t.rect);
+    if (!t.texture || t.tex_w != t.rect.w || t.tex_h != t.rect.h) {
+        if (t.texture)
+            device->destroy(t.texture);
+        t.texture = device->create_texture(
+            {t.rect.w, t.rect.h, gpu::Format::RGBA8, gpu::UsageSampled | gpu::UsageCpu, 1});
+        t.tex_w = t.rect.w;
+        t.tex_h = t.rect.h;
     }
-    device_ = device;
-    if (texture_)
-        device->upload(texture_, {0, 0, r.w, r.h}, pixels_.data(), r.w * 4);
+    if (t.texture)
+        device->upload(t.texture, {0, 0, t.rect.w, t.rect.h}, pixels_.data(), t.rect.w * 4);
 }
 
 // Paints the knob once, and again only when the opacity changes.
@@ -104,8 +83,7 @@ void Overlay::update_knob(gpu::Device *device, double opacity) {
     knob_opacity_ = opacity;
 }
 
-void Overlay::blit(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h,
-                   const std::vector<Quad> &quads) {
+void Overlay::blit(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture target, int w, int h) {
     gpu::RenderState state;
     state.color_format[0] = device->describe(target).format;
     state.color_count = 1;
@@ -124,7 +102,7 @@ void Overlay::blit(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture targ
     device->set_pipeline(cb, pipeline);
     gpu::SamplerState linear;
     linear.mag = linear.min = gpu::Filter::Linear;
-    for (const Quad &q : quads) {
+    for (const Quad &q : quads_) {
         // Clip-space rectangle: x, y of the top-left corner, width, and a
         // negative height (y up), the encoding the hud pipeline's strip used.
         const float x0 = -1.0f + 2.0f * float(q.rect.x) / float(w);
@@ -143,27 +121,41 @@ void Overlay::draw(gpu::Device *device, gpu::CommandBuffer cb, gpu::Texture targ
                    const ControlsView &view) {
     if (!device || !target || !cb || w <= 0 || h <= 0 || !view.wanted)
         return;
-    update(device, view, w, h);
-    std::vector<Quad> quads;
-    if (texture_ && device_ == device && !rect_.empty() && tex_w_ == rect_.w && tex_h_ == rect_.h)
-        quads.push_back({texture_, rect_});
+    if (device_ != device) {
+        release();
+        device_ = device;
+    }
+    // A different layer count (a new layout) starts every layer afresh.
+    if (layers_.size() != view.layers.size()) {
+        for (LayerTexture &t : layers_)
+            if (t.texture)
+                device->destroy(t.texture);
+        layers_.assign(view.layers.size(), LayerTexture{});
+    }
+    quads_.clear();
+    for (int i = 0; i < int(layers_.size()); ++i) {
+        update_layer(device, view, i, w, h);
+        const LayerTexture &t = layers_[i];
+        if (t.texture && !t.rect.empty() && t.tex_w == t.rect.w && t.tex_h == t.rect.h)
+            quads_.push_back({t.texture, t.rect});
+    }
+    dw_ = w;
+    dh_ = h;
     // Every held stick's knob, at its base plus the offset.
     for (const DrawControl &d : view.controls) {
         if (d.kind != Kind::Stick || !d.pressed || d.radius_px <= 0)
             continue;
-        if (device_ != device)
-            break; // update() found nothing to draw on this device yet
         update_knob(device, view.opacity);
         if (!knob_)
             break;
         const int kr = int(std::lround(knob_radius(d.radius_px)));
         const double cx = d.base_x + d.knob_x * d.radius_px;
         const double cy = d.base_y + d.knob_y * d.radius_px;
-        quads.push_back(
+        quads_.push_back(
             {knob_, Rect{int(std::lround(cx)) - kr, int(std::lround(cy)) - kr, 2 * kr, 2 * kr}});
     }
-    if (!quads.empty())
-        blit(device, cb, target, w, h, quads);
+    if (!quads_.empty())
+        blit(device, cb, target, w, h);
 }
 
 } // namespace controls

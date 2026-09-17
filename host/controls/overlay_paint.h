@@ -15,6 +15,12 @@ namespace controls {
 // 220 overwrites the backdrop drawn under it at alpha 150 rather than
 // blending with it. `r` is the raster's place on the drawable, so controls
 // are drawn at (x - r.x, y - r.y).
+// Layer `layer` of the view (ControlsView::layers) only: the controls area
+// for layer 0, else that layout group's backdrop and controls.
+void paint_layer(Canvas &c, const ControlsView &view, int layer, const Rect &r);
+
+// Every layer in order, onto one canvas: what the per-layer rasters show
+// when composed (layers never overlap outside portrait's controls area).
 void paint_overlay(Canvas &c, const ControlsView &view, const Rect &r);
 
 } // namespace controls

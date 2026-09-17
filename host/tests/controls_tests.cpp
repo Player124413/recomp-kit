@@ -526,7 +526,9 @@ static Layout keys_layout() {
 
 // The tablet "keys" layout, rendered through the frozen legacy_raster::paint
 // and through overlay_paint.cpp's new Canvas path, must produce identical
-// buffers: the keypad's look must not move a single pixel under Task 8.
+// buffers: the keypad's look must not move a single pixel under Task 8. The
+// new path is rasterized the way Overlay does it, one layer at a time into
+// its own rect, then composed.
 static void test_raster_matches_legacy_keypad_pixels() {
     Layout l = keys_layout();
     const int dw = 2360, dh = 1640;
@@ -543,10 +545,29 @@ static void test_raster_matches_legacy_keypad_pixels() {
     legacy_raster::paint(old_c, v, full);
 
     std::vector<uint8_t> new_px(size_t(dw) * dh * 4, 0);
-    Canvas new_c(new_px, dw, dh, v.opacity);
-    paint_overlay(new_c, v, full);
-
+    for (int i = 0; i < int(v.layers.size()); ++i) {
+        const Rect lr = v.layers[i].rect;
+        if (lr.empty())
+            continue;
+        CHECK(lr.x >= 0 && lr.y >= 0 && lr.x + lr.w <= dw && lr.y + lr.h <= dh);
+        std::vector<uint8_t> layer_px(size_t(lr.w) * lr.h * 4, 0);
+        Canvas layer_c(layer_px, lr.w, lr.h, v.opacity);
+        paint_layer(layer_c, v, i, lr);
+        // Layers never overlap here, so composing is copying the drawn pixels.
+        for (int y = 0; y < lr.h; ++y)
+            for (int x = 0; x < lr.w; ++x) {
+                const uint8_t *src = &layer_px[(size_t(y) * lr.w + x) * 4];
+                if (src[0] | src[1] | src[2] | src[3])
+                    memcpy(&new_px[(size_t(lr.y + y) * dw + lr.x + x) * 4], src, 4);
+            }
+    }
     CHECK(old_px == new_px);
+
+    // The one-canvas path agrees.
+    std::vector<uint8_t> whole_px(size_t(dw) * dh * 4, 0);
+    Canvas whole_c(whole_px, dw, dh, v.opacity);
+    paint_overlay(whole_c, v, full);
+    CHECK(old_px == whole_px);
 }
 
 static int find_key(const Layout &l, int group, int scancode) {
@@ -1756,22 +1777,22 @@ static void test_router_claims_the_controls_area() {
     Rec rec;
     r.set_layout(&l, rec);
     r.set_screen(s);
-    // A point no control covers (clear of the top-centre layout tab), inside the claim area, and another outside it.
-    CHECK(hit_test(l, s, 300, 20).group < 0);
+    // A point no control covers, inside the claim area, and another outside it.
+    CHECK(hit_test(l, s, 590, 20).group < 0);
     CHECK(hit_test(l, s, 590, 300).group < 0);
-    CHECK(!r.finger_down(1, 300, 20, 0, rec));
+    CHECK(!r.finger_down(1, 590, 20, 0, rec));
     r.set_claim_area(Rect{0, 0, 1180, 100});
-    CHECK(r.finger_down(2, 300, 20, 0, rec));
+    CHECK(r.finger_down(2, 590, 20, 0, rec));
     CHECK(r.owns(2));
     CHECK(rec.calls.empty()); // claimed, and does nothing
-    CHECK(r.finger_motion(2, 310, 30, 5, rec));
+    CHECK(r.finger_motion(2, 600, 30, 5, rec));
     CHECK(r.finger_up(2, 10, rec));
     CHECK(!r.owns(2));
     CHECK(rec.calls.empty());
-    CHECK(!r.finger_down(3, 590, 300, 20, rec)); // outside the area: the game's
-    CHECK(r.finger_down(4, 300, 20, 30, rec));
+    CHECK(!r.finger_down(3, 590, 590, 20, rec)); // outside the area: the game's
+    CHECK(r.finger_down(4, 590, 20, 30, rec));
     CHECK(r.finger_cancel(4, rec));
-    CHECK(r.finger_down(5, 300, 20, 40, rec));
+    CHECK(r.finger_down(5, 590, 20, 40, rec));
     r.cancel_all(rec);
     CHECK(!r.owns(5));
     CHECK(rec.calls.empty());
@@ -1782,7 +1803,7 @@ static void test_router_claims_the_controls_area() {
     CHECK(r.finger_down(6, x, y, 50, rec));
     CHECK((rec.calls == std::vector<std::string>{"k44+", "tap"}));
     r.set_claim_area(Rect{});
-    CHECK(!r.finger_down(7, 300, 20, 60, rec));
+    CHECK(!r.finger_down(7, 590, 20, 60, rec));
 }
 
 // make_view copies the controls area, and a new area is a new raster.
@@ -2055,6 +2076,108 @@ static void dump_builtins(const char *dir) {
     }
 }
 
+// Each layer's revision follows only its own group: a pad press changes
+// one, hiding a keyboard half changes that half's (and its tab's label,
+// in the tabs group), never the other half's.
+static void test_layer_revisions_are_per_group() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("pad", Form::Tablet), &l, &err));
+    const Screen s = screen(2360, 1640, 2.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    const ControlsView idle = make_view(l, r, s, 1.0);
+    CHECK(idle.layers.size() == l.groups.size() + 1);
+    int cross_group = -1, cross = -1;
+    for (int g = 0; g < int(l.groups.size()); ++g)
+        for (int c = 0; c < int(l.groups[g].controls.size()); ++c)
+            if (l.groups[g].controls[c].kind == Kind::Button &&
+                l.groups[g].controls[c].button == PadButton::Cross) {
+                cross_group = g;
+                cross = c;
+            }
+    CHECK(cross >= 0);
+    if (cross < 0)
+        return;
+    double x, y;
+    center(l, cross_group, cross, s, &x, &y);
+    CHECK(r.finger_down(1, x, y, 0, rec));
+    const ControlsView pressed = make_view(l, r, s, 1.0);
+    int changed = 0;
+    for (size_t i = 0; i < idle.layers.size(); ++i)
+        if (pressed.layers[i].revision != idle.layers[i].revision) {
+            ++changed;
+            CHECK(int(i) == cross_group + 1);
+        }
+    CHECK(changed == 1);
+
+    Layout keys = keys_layout();
+    Router kr;
+    kr.set_layout(&keys, rec);
+    kr.set_screen(s);
+    const ControlsView shown = make_view(keys, kr, s, 1.0);
+    CHECK(shown.layers.size() == 4);
+    CHECK(shown.layers[0].rect.empty());
+    CHECK(shown.layers[1].rect.w == shown.backdrops[0].w);
+    keys.groups[0].visible = false;
+    const ControlsView hidden = make_view(keys, kr, s, 1.0);
+    CHECK(hidden.layers[0].revision == shown.layers[0].revision);
+    CHECK(hidden.layers[1].revision != shown.layers[1].revision); // the left half
+    CHECK(hidden.layers[1].rect.empty());
+    CHECK(hidden.layers[2].revision == shown.layers[2].revision); // the right half
+    CHECK(hidden.layers[3].revision != shown.layers[3].revision); // its tab reads KEYS
+}
+
+// A label wider than a small key (Shift on a 30pt key at 2x) drops to the
+// 1x font and stays inside the key's 2px margin.
+static void test_small_key_label_fits() {
+    Layout l = keys_layout();
+    l.scale = 30.0 / 36.0;
+    const Screen s = screen(2360, 1640, 2.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    const ControlsView v = make_view(l, r, s, 1.0);
+    const DrawControl *shift = nullptr;
+    for (const DrawControl &d : v.controls)
+        if (d.label == "Shift")
+            shift = &d;
+    CHECK(shift != nullptr);
+    if (!shift)
+        return;
+    CHECK(shift->rect.w < 12 * 5 + 4); // too narrow for 2x
+    ControlsView one;
+    one.controls.push_back(*shift);
+    one.controls.back().layer = 0;
+    const Rect k = shift->rect;
+    const Rect area{k.x - 20, k.y - 20, k.w + 40, k.h + 40};
+    std::vector<uint8_t> px(size_t(area.w) * area.h * 4, 0);
+    Canvas c(px, area.w, area.h);
+    paint_layer(c, one, 0, area);
+    int text = 0, outside = 0;
+    for (int y = 0; y < area.h; ++y)
+        for (int x = 0; x < area.w; ++x) {
+            const Rgba p = c.at(x, y);
+            if (!p.a)
+                continue;
+            const double px_ = area.x + x + 0.5, py_ = area.y + y + 0.5;
+            if (!k.contains(px_, py_))
+                ++outside;
+            else if (p.r == 235) {
+                ++text;
+                // The text keeps the 2px margin inside the key.
+                const Rect inner{k.x + 2, k.y + 2, k.w - 4, k.h - 4};
+                if (!inner.contains(px_, py_))
+                    ++outside;
+            }
+        }
+    CHECK(outside == 0);
+    CHECK(text > 0);
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--dump") == 0) {
         dump_builtins(argv[2]);
@@ -2127,6 +2250,8 @@ int main(int argc, char **argv) {
     test_pad_art_stays_in_its_rect();
     test_builtin_layouts_fit_and_do_not_overlap();
     test_make_view_pad_revision();
+    test_layer_revisions_are_per_group();
+    test_small_key_label_fits();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

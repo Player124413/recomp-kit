@@ -4,6 +4,7 @@
 #include "../keypad_layout.h"
 #include "router.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -39,6 +40,54 @@ struct Hash {
     }
 };
 
+Rect unite(const Rect &a, const Rect &b) {
+    if (a.empty())
+        return b;
+    if (b.empty())
+        return a;
+    const int x0 = std::min(a.x, b.x), y0 = std::min(a.y, b.y);
+    const int x1 = std::max(a.x + a.w, b.x + b.w), y1 = std::max(a.y + a.h, b.y + b.h);
+    return Rect{x0, y0, x1 - x0, y1 - y0};
+}
+
+// Where a control can draw: its rect, and for a stick the whole base circle
+// around a finger anywhere in its zone.
+Rect drawn_rect(const DrawControl &d) {
+    if (d.kind != Kind::Stick || d.radius_px <= 0)
+        return d.rect;
+    const int r = d.radius_px + 1;
+    return Rect{d.rect.x - r, d.rect.y - r, d.rect.w + 2 * r, d.rect.h + 2 * r};
+}
+
+// What paint_overlay draws for one control: a key's press or a stick's knob
+// offset is not drawn (the knob is its own quad), so neither is hashed.
+// Extend this with every field a later task starts drawing.
+void hash_control(Hash &h, const DrawControl &d) {
+    h.num(int(d.kind));
+    h.rect(d.rect);
+    if (d.kind == Kind::Key) {
+        h.str(d.label);
+        h.num(d.lit ? 1 : 0);
+    } else if (d.kind == Kind::Toggle) {
+        h.str(d.group_visible ? d.label : d.label_off);
+    } else {
+        // The pad art (pad_art.cpp): labels, the button's glyph, its press,
+        // the dpad's lit arrows and a stick's base.
+        h.str(d.label);
+        h.num(int(d.button));
+        h.num(d.pressed ? 1 : 0);
+        h.num(d.hat);
+        if (d.kind == Kind::Stick) {
+            h.num(d.radius_px);
+            h.num(d.floating ? 1 : 0);
+            if (d.pressed) { // at rest the base sits at the rect's centre
+                h.real(d.base_x);
+                h.real(d.base_y);
+            }
+        }
+    }
+}
+
 int group_named(const Layout &l, const std::string &id) {
     for (size_t i = 0; i < l.groups.size(); ++i)
         if (l.groups[i].id == id)
@@ -57,8 +106,10 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
     v.controls_area = s.controls_area;
     for (int g = 0; g < int(l.groups.size()); ++g) {
         const Group &grp = l.groups[g];
-        if (grp.visible && grp.has_grid)
+        if (grp.visible && grp.has_grid) {
             v.backdrops.push_back(group_rect(l, g, s));
+            v.backdrop_layers.push_back(g + 1);
+        }
         for (int c = 0; c < int(grp.controls.size()); ++c) {
             const Control &ctl = grp.controls[c];
             // A toggle's tab is drawn even while its own group is hidden.
@@ -78,6 +129,7 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
             d.base_y = st.base_y;
             d.hat = st.hat;
             d.floating = ctl.floating;
+            d.layer = g + 1;
             // Scaled like the router's own travel (router.cpp), so the knob
             // quad lands where the stick's output says it is.
             if (ctl.kind == Kind::Stick)
@@ -91,43 +143,32 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
         }
     }
 
-    // Only what paint_overlay draws: a key's press must not re-rasterize the
-    // whole canvas, and neither may a stick's knob offset, which Overlay
-    // draws as its own quad. Extend this with every field a later task
-    // starts drawing.
-    Hash h;
-    h.num(v.dw);
-    h.num(v.dh);
-    h.real(v.opacity);
-    h.rect(v.controls_area);
-    h.num(int64_t(v.backdrops.size()));
-    for (const Rect &b : v.backdrops)
-        h.rect(b);
-    h.num(int64_t(v.controls.size()));
+    // One hash per layer, each seeded with what every layer depends on.
+    const size_t n = l.groups.size() + 1;
+    std::vector<Hash> hashes(n);
+    v.layers.assign(n, ControlsView::Layer{});
+    for (Hash &h : hashes) {
+        h.num(v.dw);
+        h.num(v.dh);
+        h.real(v.opacity);
+    }
+    v.layers[0].rect = v.controls_area;
+    hashes[0].rect(v.controls_area);
+    for (size_t i = 0; i < v.backdrops.size(); ++i) {
+        const int layer = v.backdrop_layers[i];
+        v.layers[layer].rect = unite(v.layers[layer].rect, v.backdrops[i]);
+        hashes[layer].num(1);
+        hashes[layer].rect(v.backdrops[i]);
+    }
     for (const DrawControl &d : v.controls) {
-        h.num(int(d.kind));
-        h.rect(d.rect);
-        if (d.kind == Kind::Key) {
-            h.str(d.label);
-            h.num(d.lit ? 1 : 0);
-        } else if (d.kind == Kind::Toggle) {
-            h.str(d.group_visible ? d.label : d.label_off);
-        } else {
-            // The pad art (pad_art.cpp): labels, the button's glyph, its
-            // press, the dpad's lit arrows and a stick's base.
-            h.str(d.label);
-            h.num(int(d.button));
-            h.num(d.pressed ? 1 : 0);
-            h.num(d.hat);
-            if (d.kind == Kind::Stick) {
-                h.num(d.radius_px);
-                h.num(d.floating ? 1 : 0);
-                if (d.pressed) { // at rest the base sits at the rect's centre
-                    h.real(d.base_x);
-                    h.real(d.base_y);
-                }
-            }
-        }
+        v.layers[d.layer].rect = unite(v.layers[d.layer].rect, drawn_rect(d));
+        hash_control(hashes[d.layer], d);
+    }
+    Hash h;
+    for (size_t i = 0; i < n; ++i) {
+        hashes[i].rect(v.layers[i].rect);
+        v.layers[i].revision = hashes[i].h;
+        h.num(int64_t(hashes[i].h));
     }
     v.revision = h.h;
     return v;
