@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- DirectDraw write tracking keeps one baseline copy per surface instead of a
+  copy per Lock and a hash of the whole surface at every final Unlock. A
+  program that draws text a glyph at a time locks its whole back buffer for
+  each glyph, and each paid three full passes over it - a copy, a compare and
+  an FNV hash; hovering a conversation's replies in Siege of Avalon at
+  1920x1080 spent half a core there. The baseline is the "before" of every
+  write lock, the Unlock diff compares with it and brings the changed band up
+  to date, a retained pointer's stores are found by comparing with it, and a
+  Lock skips even that compare when nothing has written the surface since -
+  blits copy their own rectangle into it. What is left is the one compare the
+  diff needs; `Surface_Unlock` no longer shows in the profile. Baselines
+  belong to their surfaces: a recorder reset keeps them, a surface's release
+  and a full DirectDraw reset drop them.
+
 - `IDXGISwapChain::Present`'s refresh wait is a scheduler sleep, as `Sleep`
   is, instead of a host sleep. Guest threads run one at a time, and a game
   that presents from its own thread slept through every refresh holding the

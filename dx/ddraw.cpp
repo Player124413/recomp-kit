@@ -126,6 +126,9 @@ uint32_t palette_version_for(const ComObj *dst);
 void note_palette_write(void);
 void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr);
 bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_ptr);
+void baseline_note_revision(const ComObj *s, uint32_t was_current_at);
+void baseline_resync(const ComObj *s);
+void baseline_absorb(const ComObj *s, const int32_t r[4], uint32_t was_current_at);
 void lock_shadow_forget(const ComObj *s);
 // The primary the shim presents. Set when one is created and again whenever
 // one is presented, because "the display" is a live object and not an id from
@@ -315,38 +318,6 @@ uint32_t bytes_per_pixel(uint32_t bpp) {
     return bpp <= 8 ? 1u : (bpp <= 16 ? 2u : 4u);
 }
 
-// FNV-1a over every byte in the guest rectangle, without pitch padding or
-// sampling: even a one-pixel sprite must change the retained-pointer hash.
-// Compared only with itself, to notice stores made through a pointer kept
-// after Unlock. It runs at every final Unlock of such a surface, and a DXR
-// text draw locks the whole back buffer, so it takes eight bytes a step: a
-// byte at a time was most of a hovered menu's frame. Each step is a bijection
-// of the running value, so one changed word always changes the result.
-uint64_t hash_rect(const ComObj *s, const int32_t r[4]) {
-    uint64_t h = 1469598103934665603ull;
-    const uint32_t bb = bytes_per_pixel(s->bpp);
-    if (r[2] <= r[0])
-        return h;
-    const size_t n = size_t(r[2] - r[0]) * bb;
-    auto mix = [](uint64_t acc, uint64_t v) {
-        acc = (acc ^ v) * 0x9e3779b97f4a7c15ull;
-        return acc ^ (acc >> 29);
-    };
-    for (int32_t y = r[1]; y < r[3]; ++y) {
-        const uint8_t *row =
-            (const uint8_t *)gm_ptr(s->pixels + (uint32_t)y * s->pitch + (uint32_t)r[0] * bb);
-        size_t i = 0;
-        for (; i + 8 <= n; i += 8) {
-            uint64_t v;
-            memcpy(&v, row + i, 8);
-            h = mix(h, v);
-        }
-        uint64_t tail = 0;
-        memcpy(&tail, row + i, n - i);
-        h = mix(h, tail ^ (uint64_t(n - i) << 56)); // under 8 bytes, so the length has its own byte
-    }
-    return h;
-}
 
 // The recorder, defined below with the rest of the frame machinery. Declared
 // here because every write path above it has to call in.
@@ -845,10 +816,8 @@ void surface_pixels_changed(ComObj *s) {
     if (s->is_primary) {
         // This write already has a record. Do not rediscover it as a retained
         // pointer write when presenting the primary below.
-        if (s->retained_pointer) {
-            int32_t full[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
-            s->retained_hash = hash_rect(s, full);
-        }
+        if (s->retained_pointer)
+            baseline_resync(s);
         ddraw_present(s);
     }
     if (s->texture_handle)
@@ -1353,7 +1322,8 @@ void note_palette_write(void) {
 // outstanding write lock, which is the price of recording writes the shim is
 // structurally unable to observe.
 struct LockShadow {
-    std::vector<uint8_t> bytes; // the region as it was at Lock, tightly packed
+    std::vector<uint8_t> bytes; // the region as it was at Lock, tightly packed; empty for a baseline lock
+    bool baseline = false;      // "before" is the surface's baseline, not `bytes`
     int32_t r[4] = {0, 0, 0, 0};
     int32_t row_bytes = 0;
     uint32_t bpp = 0;
@@ -1371,6 +1341,26 @@ struct LockShadow {
 // accepted Unlock pops the one it paired with.
 std::map<uint32_t, std::vector<LockShadow>> &lock_shadows() {
     static std::map<uint32_t, std::vector<LockShadow>> m;
+    return m;
+}
+
+// A surface's pixels as the recorder last accounted for them: the "before" of
+// every write lock on it, and what a retained pointer's stores are found
+// against. One copy per surface, kept between locks. A copy per Lock and a
+// hash of the whole surface at every final Unlock cost a program that draws
+// text a glyph at a time, locking its whole back buffer for each, three full
+// passes over the surface per glyph; this is one compare, and none at all at
+// a Lock when nothing has written the surface since the baseline was taken.
+struct Baseline {
+    std::vector<uint8_t> bytes; // the whole surface, rows packed without pitch padding
+    uint32_t pixels = 0, width = 0, height = 0, bpp = 0;
+    // The surface revision the whole baseline matches, or 0 when some of it
+    // may be behind the pixels (a write the recorder made itself, or a sync of
+    // only part of the surface).
+    uint32_t revision = 0;
+};
+std::map<uint32_t, Baseline> &baselines() {
+    static std::map<uint32_t, Baseline> m;
     return m;
 }
 
@@ -1895,6 +1885,8 @@ void reset_ddraw_for_test(void) {
     generations().clear();
     palettes().clear();
     lock_shadows().clear();
+    // Not the baselines: like the retained-pointer flag they sit beside, they
+    // belong to the surfaces, which outlive a recorder reset.
     g_frame_id = 1;
     g_seq = 0;
     g_after_first_draw = g_after_first_hud = false;
@@ -2131,8 +2123,10 @@ void ddraw_note_cpu_write_impl(ComObj *s) {
 }
 
 void lock_shadow_forget(const ComObj *s) {
-    if (s)
+    if (s) {
         lock_shadows().erase(s->id);
+        baselines().erase(s->id);
+    }
 }
 
 // What a write lock is about to change, remembered so Unlock can say what it
@@ -2165,6 +2159,113 @@ void shadow_recycle(std::vector<uint8_t> &&v) {
 }
 } // namespace
 
+namespace {
+const uint8_t *surface_row(const ComObj *s, int32_t y) {
+    return (const uint8_t *)gm_ptr(s->pixels + (uint32_t)y * s->pitch);
+}
+size_t baseline_row_bytes(const Baseline &b) {
+    return (size_t)b.width * bytes_per_pixel(b.bpp);
+}
+uint8_t *baseline_row(Baseline &b, int32_t y) {
+    return b.bytes.data() + (size_t)y * baseline_row_bytes(b);
+}
+bool baseline_matches(const Baseline &b, const ComObj *s) {
+    return !b.bytes.empty() && b.pixels == s->pixels && b.width == s->width &&
+           b.height == s->height && b.bpp == s->bpp;
+}
+// The surface's baseline, taken now if it has none or its storage changed
+// under it (a flip, SetSurfaceDesc). `fresh` says it was.
+Baseline &baseline_of(const ComObj *s, bool *fresh) {
+    Baseline &b = baselines()[s->id];
+    *fresh = !baseline_matches(b, s);
+    if (*fresh) {
+        b.pixels = s->pixels;
+        b.width = s->width;
+        b.height = s->height;
+        b.bpp = s->bpp;
+        const size_t row = baseline_row_bytes(b);
+        b.bytes.resize(row * s->height);
+        for (uint32_t y = 0; y < s->height; ++y)
+            memcpy(b.bytes.data() + (size_t)y * row, surface_row(s, (int32_t)y), row);
+        b.revision = ddraw_surface_revision(s->id);
+    }
+    return b;
+}
+// Brings the rows of `r` in the baseline up to the pixels, without recording
+// anything, and returns the band that differed (rows y0 < y1; y0 == y1 when
+// nothing did). Columns outside `r` are left as they were.
+std::pair<int32_t, int32_t> baseline_sync(Baseline &b, const ComObj *s, const int32_t r[4]) {
+    const size_t bb = bytes_per_pixel(b.bpp);
+    const size_t off = (size_t)r[0] * bb, n = (size_t)(r[2] - r[0]) * bb;
+    int32_t y0 = r[3], y1 = r[1];
+    if (!n)
+        return {r[1], r[1]};
+    for (int32_t y = r[1]; y < r[3]; ++y) {
+        uint8_t *was = baseline_row(b, y) + off;
+        const uint8_t *now = surface_row(s, y) + off;
+        if (!memcmp(was, now, n))
+            continue;
+        memcpy(was, now, n);
+        if (y < y0)
+            y0 = y;
+        y1 = y + 1;
+    }
+    return y0 < y1 ? std::make_pair(y0, y1) : std::make_pair(r[1], r[1]);
+}
+bool covers_surface(const ComObj *s, const int32_t r[4]) {
+    return r[0] == 0 && r[1] == 0 && r[2] == (int32_t)s->width && r[3] == (int32_t)s->height;
+}
+} // namespace
+
+// After a write the recorder made itself: the baseline was current at
+// `was_current_at`, so it is current again at the revision that write made.
+void baseline_note_revision(const ComObj *s, uint32_t was_current_at) {
+    if (!s)
+        return;
+    auto it = baselines().find(s->id);
+    if (it == baselines().end() || !baseline_matches(it->second, s))
+        return;
+    if (it->second.revision == was_current_at)
+        it->second.revision = ddraw_surface_revision(s->id);
+}
+// A write the shim made itself, to `r`, is already recorded. When the
+// baseline was current before it, copying that rectangle in keeps it current,
+// so the next Lock does not compare the whole surface to find one blit.
+void baseline_absorb(const ComObj *s, const int32_t r[4], uint32_t was_current_at) {
+    if (!s || !s->pixels)
+        return;
+    auto it = baselines().find(s->id);
+    if (it == baselines().end() || !baseline_matches(it->second, s))
+        return;
+    Baseline &b = it->second;
+    if (b.revision != was_current_at)
+        return;
+    const int32_t x0 = std::max(r[0], 0), y0 = std::max(r[1], 0);
+    const int32_t x1 = std::min(r[2], (int32_t)s->width), y1 = std::min(r[3], (int32_t)s->height);
+    const size_t bb = bytes_per_pixel(b.bpp);
+    for (int32_t y = y0; y < y1 && x0 < x1; ++y)
+        memcpy(baseline_row(b, y) + (size_t)x0 * bb, surface_row(s, y) + (size_t)x0 * bb,
+               (size_t)(x1 - x0) * bb);
+    b.revision = ddraw_surface_revision(s->id);
+}
+// The whole surface, taken as it is now and accounted for: what the pixels
+// hold is not news any more. Used where the recorder has just published the
+// content itself.
+void baseline_resync(const ComObj *s) {
+    if (!s || !s->pixels)
+        return;
+    auto it = baselines().find(s->id);
+    if (it == baselines().end())
+        return;
+    bool fresh = false;
+    Baseline &b = baseline_of(s, &fresh);
+    if (!fresh) {
+        const int32_t full[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
+        baseline_sync(b, s, full);
+    }
+    b.revision = ddraw_surface_revision(s->id);
+}
+
 void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lock_ptr) {
     std::vector<LockShadow> &stack = lock_shadows()[s->id];
     stack.emplace_back();
@@ -2182,11 +2283,17 @@ void lock_shadow_take(ComObj *s, const int32_t r[4], uint32_t flags, uint32_t lo
     sh.bpp = s->bpp;
     for (int i = 0; i < 4; ++i)
         sh.r[i] = r[i];
-    sh.bytes = shadow_buffer((size_t)sh.row_bytes * h);
-    for (int32_t y = 0; y < h; ++y) {
-        uint32_t row = s->pixels + (uint32_t)((r[1] + y) * (int32_t)s->pitch + r[0] * (int32_t)bb);
-        memcpy(sh.bytes.data() + (size_t)y * sh.row_bytes, gm_ptr(row), (size_t)sh.row_bytes);
+    // The region's "before" is the baseline, brought up to the pixels first
+    // unless nothing has written the surface since it was: what was there at
+    // Lock is what Unlock compares with, exactly as a copy taken now would be.
+    bool fresh = false;
+    Baseline &b = baseline_of(s, &fresh);
+    const uint32_t revision = ddraw_surface_revision(s->id);
+    if (!fresh && b.revision != revision) {
+        baseline_sync(b, s, r);
+        b.revision = covers_surface(s, r) ? revision : 0;
     }
+    sh.baseline = true;
     sh.armed = true;
 }
 
@@ -2254,13 +2361,23 @@ void record_cpu_write_rects(ComObj *s, const std::vector<HostDirtyRect> &boxes) 
 void ddraw_refresh_retained_writes(ComObj *s, const int32_t rect[4]) {
     if (!s || !s->retained_pointer || !s->pixels)
         return;
-    uint64_t hash = hash_rect(s, rect);
-    if (hash == s->retained_hash)
-        return;
-    s->retained_hash = hash;
-    record_cpu_write_rects(s, {{rect[0], rect[1], rect[2], rect[3]}});
+    bool fresh = false;
+    Baseline &b = baseline_of(s, &fresh);
+    int32_t y0 = rect[1], y1 = rect[3];
+    if (!fresh) {
+        // Only the rows that changed since the baseline are news.
+        auto band = baseline_sync(b, s, rect);
+        if (band.first == band.second)
+            return;
+        y0 = band.first;
+        y1 = band.second;
+    }
+    // A baseline taken just now knows nothing about what came before it, so
+    // the whole rectangle is reported, as a first look always was.
+    record_cpu_write_rects(s, {{rect[0], y0, rect[2], y1}});
     ddraw_note_cpu_write_impl(s);
     surface_pixels_changed(s);
+    b.revision = covers_surface(s, rect) ? ddraw_surface_revision(s->id) : 0;
 }
 
 // The diff, at the Unlock that closes this lock: one record for what the
@@ -2321,9 +2438,21 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
         return (const uint8_t *)gm_ptr(s->pixels + (uint32_t)((sh.r[1] + y) * (int32_t)s->pitch +
                                                               sh.r[0] * (int32_t)bb));
     };
+    Baseline *base = nullptr;
+    if (sh.baseline) {
+        bool fresh = false;
+        base = &baseline_of(s, &fresh);
+        if (fresh)
+            return false; // the storage changed under the lock: nothing to compare with
+    }
+    // The region as it was at Lock, row by row.
+    auto row_was = [&](int32_t y) -> const uint8_t * {
+        if (base)
+            return baseline_row(*base, sh.r[1] + y) + (size_t)sh.r[0] * bb;
+        return sh.bytes.data() + (size_t)y * sh.row_bytes;
+    };
     auto row_differs = [&](int32_t y) {
-        return memcmp(sh.bytes.data() + (size_t)y * sh.row_bytes, row_now(y),
-                      (size_t)sh.row_bytes) != 0;
+        return memcmp(row_was(y), row_now(y), (size_t)sh.row_bytes) != 0;
     };
     int32_t band0 = 0, band1 = lh - 1;
     while (band0 < lh && !row_differs(band0))
@@ -2336,7 +2465,7 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
     std::vector<uint8_t> changed((size_t)lw * band_h, 0);
     int32_t x0 = lw, y0 = lh, x1 = -1, y1 = -1;
     for (int32_t y = band0; y <= band1; ++y) {
-        const uint8_t *was = sh.bytes.data() + (size_t)y * sh.row_bytes;
+        const uint8_t *was = row_was(y);
         const uint8_t *now = row_now(y);
         if (!memcmp(was, now, (size_t)sh.row_bytes))
             continue;
@@ -2389,6 +2518,14 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
         box.y1 += sh.r[1];
     }
     record_cpu_write_rects(s, boxes);
+    // The baseline is the "before" of every open lock on this surface too, so
+    // bringing the changed band up to date re-bases them all at once - the
+    // same thing the loop below does for a lock with bytes of its own.
+    if (base) {
+        const size_t n = (size_t)sh.row_bytes;
+        for (int32_t y = band0; y <= band1; ++y)
+            memcpy(baseline_row(*base, sh.r[1] + y) + (size_t)sh.r[0] * bb, row_now(y), n);
+    }
 
     // Anything still open under this lock has now been told about these
     // pixels, so its own "before" is re-based to what they are NOW. Two things
@@ -2400,7 +2537,7 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
     auto open_locks = lock_shadows().find(s->id);
     if (open_locks != lock_shadows().end()) {
         for (LockShadow &other : open_locks->second) {
-            if (!other.armed)
+            if (!other.armed || other.baseline)
                 continue;
             int32_t ox0 = other.r[0] > (sh.r[0] + x0) ? other.r[0] : (sh.r[0] + x0);
             int32_t oy0 = other.r[1] > (sh.r[1] + y0) ? other.r[1] : (sh.r[1] + y0);
@@ -2613,7 +2750,9 @@ void Surface_Blt(X86 *c) {
     }
     if (flags & DDBLT_ROP)
         log_once("ddraw.rop", "ddraw: Blt DDBLT_ROP is ignored");
+    const uint32_t before = ddraw_surface_revision(dst->id);
     surface_pixels_changed(dst);
+    baseline_absorb(dst, d, before);
     com_ret(c, DD_OK);
 }
 
@@ -2705,7 +2844,9 @@ void Surface_BltFast(X86 *c) {
     ddraw_before_write(dst);
     blit(dst, d, src, sr, keys, false, 0, cov);
     apply_last_blit(dst);
+    const uint32_t before = ddraw_surface_revision(dst->id);
     surface_pixels_changed(dst);
+    baseline_absorb(dst, d, before);
     com_ret(c, DD_OK);
 }
 
@@ -3092,12 +3233,14 @@ void Surface_ReleaseDC(X86 *c) {
         com_ret(c, DDERR_INVALIDPARAMS);
         return;
     }
+    const uint32_t before = ddraw_surface_revision(s->id);
     bool wrote = lock_shadow_record(s, nullptr, s->dc_handle);
     gdi_unbind_surface_dc(s->dc_handle);
     s->dc_handle = 0;
     if (wrote) {
         ddraw_note_cpu_write_impl(s);
         surface_pixels_changed(s);
+        baseline_note_revision(s, before);
     }
     com_ret(c, DD_OK);
 }
@@ -3287,17 +3430,17 @@ void Surface_Unlock(X86 *c) {
     // gets its own record. The record comes first: it reads the pixels the
     // guest wrote, and surface_pixels_changed advances the revision they
     // belong to.
+    const uint32_t before = ddraw_surface_revision(s->id);
     bool wrote = lock_shadow_record(s, unlock_rect, unlock_ptr);
     if (wrote)
         ddraw_note_cpu_write_impl(s);
     // The screen and the renderer are told once, when the last lock is gone:
     // a nested Unlock leaves the guest still holding a pointer.
     if (!s->lock_count) {
-        if (s->retained_pointer) {
-            int32_t full[4] = {0, 0, (int32_t)s->width, (int32_t)s->height};
-            s->retained_hash = hash_rect(s, full);
-        }
         surface_pixels_changed(s);
+        // The diff published what this lock wrote, so the baseline it brought
+        // up to date is current at the revision that made.
+        baseline_note_revision(s, before);
     }
     com_ret(c, DD_OK);
 }
@@ -4591,6 +4734,8 @@ const ImportShim g_ddraw_exports[] = {
 void ddraw_reset() {
     host_d3d_reset_coherence();
     g_clean_base = 0;
+    // Every surface went with the arena, and their ids start over.
+    baselines().clear();
     // The scratch block and every surface lived in the arena mem_init just
     // discarded, so the cached addresses must not be reused.
     g_scratch = 0;
@@ -4675,6 +4820,7 @@ extern "C" void ddraw_gdi_end_primary(uint32_t dc) {
     if (!dc || dc != gdi_primary_dc)
         return;
     auto *s = com_get(gdi_primary_surface);
+    const uint32_t before = s ? ddraw_surface_revision(s->id) : 0;
     bool wrote = s && lock_shadow_record(s, nullptr, dc);
     gdi_unbind_surface_dc(dc);
     gdi_primary_dc = 0;
@@ -4682,5 +4828,6 @@ extern "C" void ddraw_gdi_end_primary(uint32_t dc) {
     if (wrote) {
         ddraw_note_cpu_write_impl(s);
         surface_pixels_changed(s);
+        baseline_note_revision(s, before);
     }
 }
