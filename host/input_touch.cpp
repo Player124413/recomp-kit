@@ -198,6 +198,8 @@ void TouchMapper::finger_down(TouchPoint p, uint64_t now, std::vector<TouchActio
         pan_cx_ = centroid_x();
         pan_cy_ = centroid_y();
         pan_acc_x_ = pan_acc_y_ = 0;
+        tap2_x_ = pan_cx_;
+        tap2_y_ = pan_cy_;
     }
 }
 
@@ -284,7 +286,8 @@ void TouchMapper::finger_up(TouchPoint p, uint64_t now, std::vector<TouchAction>
         end_edge_hold(out);
     } else if (max_fingers_ == 2 && fabs(pan_acc_x_) < kTouchPanStep &&
                fabs(pan_acc_y_) < kTouchPanStep && !moved) {
-        key_tap(out, SDL_SCANCODE_ESCAPE);
+        // Right click between the two fingers, where the second one landed.
+        click(out, 1, tap2_x_, tap2_y_, now);
     } else if (max_fingers_ == 3 && !moved) {
         key_tap(out, SDL_SCANCODE_F10);
     } else if (max_fingers_ == 4 && !moved) {

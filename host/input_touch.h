@@ -125,6 +125,7 @@ class TouchMapper {
     bool middle_held_ = false;    // a drag after the long press: wheel button down
     bool text_input_ = false;
     double pan_cx_ = 0, pan_cy_ = 0, pan_acc_x_ = 0, pan_acc_y_ = 0;
+    double tap2_x_ = 0, tap2_y_ = 0; // a two-finger tap right-clicks here
     double bounds_w_ = 0, bounds_h_ = 0;
     double inset_l_ = 0, inset_t_ = 0, inset_r_ = 0, inset_b_ = 0;
     bool snapped_ = false;               // the gesture's placed point sits on a window edge

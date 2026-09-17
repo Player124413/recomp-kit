@@ -309,28 +309,38 @@ static void test_two_finger_drag_pans_with_arrows() {
     CHECK(out.empty()); // no click from a pan
 }
 
-static void test_two_finger_tap_is_escape_three_is_f10_four_toggles_keyboard() {
+static void test_two_finger_tap_is_right_click_three_is_f10_four_toggles_keyboard() {
     TouchMapper m;
     std::vector<TouchAction> out;
     m.finger_down({1, 0, 0}, 0, &out);
     m.finger_down({2, 10, 0}, 0, &out);
     m.finger_up({1, 0, 0}, 50 * MS, &out);
     m.finger_up({2, 10, 0}, 50 * MS, &out);
-    CHECK(out.size() == 2 && out[0].scancode == SDL_SCANCODE_ESCAPE && out[0].down && !out[1].down);
+    // Placed between the fingers, then pressed and released as a right click.
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Motion && out[0].place &&
+          out[0].x == 5 && out[0].y == 0);
     out.clear();
-    m.finger_down({1, 0, 0}, 100 * MS, &out);
-    m.finger_down({2, 10, 0}, 100 * MS, &out);
-    m.finger_down({3, 20, 0}, 100 * MS, &out);
-    m.finger_up({1, 0, 0}, 150 * MS, &out);
-    m.finger_up({2, 10, 0}, 150 * MS, &out);
-    m.finger_up({3, 20, 0}, 150 * MS, &out);
+    m.tick(110 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].button == 1 &&
+          out[0].down && out[0].x == 5);
+    out.clear();
+    m.tick(210 * MS, &out);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].button == 1 &&
+          !out[0].down);
+    out.clear();
+    m.finger_down({1, 0, 0}, 300 * MS, &out);
+    m.finger_down({2, 10, 0}, 300 * MS, &out);
+    m.finger_down({3, 20, 0}, 300 * MS, &out);
+    m.finger_up({1, 0, 0}, 350 * MS, &out);
+    m.finger_up({2, 10, 0}, 350 * MS, &out);
+    m.finger_up({3, 20, 0}, 350 * MS, &out);
     CHECK(out.size() == 2 && out[0].scancode == SDL_SCANCODE_F10);
     out.clear();
     CHECK(!m.text_input_wanted());
     for (int i = 1; i <= 4; ++i)
-        m.finger_down({i, 10.0 * i, 0}, 200 * MS, &out);
+        m.finger_down({i, 10.0 * i, 0}, 400 * MS, &out);
     for (int i = 1; i <= 4; ++i)
-        m.finger_up({i, 10.0 * i, 0}, 250 * MS, &out);
+        m.finger_up({i, 10.0 * i, 0}, 450 * MS, &out);
     CHECK(out.empty() && m.text_input_wanted());
 }
 
@@ -499,7 +509,7 @@ int main() {
     test_no_bounds_means_no_snapping();
     test_drag_is_left_drag();
     test_two_finger_drag_pans_with_arrows();
-    test_two_finger_tap_is_escape_three_is_f10_four_toggles_keyboard();
+    test_two_finger_tap_is_right_click_three_is_f10_four_toggles_keyboard();
     test_second_finger_cancels_pending_tap();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
