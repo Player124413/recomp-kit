@@ -2,12 +2,21 @@
 #include "../controls/builtin_layouts.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
+#include "../controls/layout_store.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
 
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 static int g_failures = 0;
 #define CHECK(c)                                                                                   \
@@ -165,12 +174,100 @@ static void test_builtin_keys_matches_the_old_keypad() {
         }
 }
 
+static void write_file(const std::filesystem::path &path, const std::string &text) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    FILE *f = fopen(path.string().c_str(), "wb");
+    CHECK(f != nullptr);
+    if (f) {
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    }
+}
+
+static void test_form_for() {
+    CHECK(form_for(2360, 1640, 2.0) == Form::Tablet);
+    CHECK(form_for(2532, 1170, 3.0) == Form::PhoneLandscape);
+    CHECK(form_for(1170, 2532, 3.0) == Form::PhonePortrait);
+}
+
+// Exercises the profile-then-game-then-built-in search, names() and the
+// save/delete round trip against a scratch directory tree.
+static void test_layout_store() {
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / ("controls_tests_" + std::to_string(getpid()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    const std::filesystem::path profile_dir = root / "profile";
+    const std::filesystem::path game_dir = root / "game";
+
+    // The tiny layout, renamed "keys" so it round-trips through keys.json.
+    std::string keys_json = kTinyLayout;
+    size_t pos = keys_json.find("\"tiny\"");
+    CHECK(pos != std::string::npos);
+    if (pos != std::string::npos)
+        keys_json.replace(pos, 6, "\"keys\"");
+
+    write_file(game_dir / "keys.json", keys_json);
+    write_file(game_dir / "pad.json", "{");
+    write_file(game_dir / "extra.phone-portrait.json", keys_json);
+
+    LayoutStore store;
+    store.set_dirs(profile_dir.string(), game_dir.string());
+
+    const std::vector<std::string> expected_names = {"pad", "keys", "pad+keys", "extra"};
+    CHECK(store.names() == expected_names);
+
+    Layout game_keys;
+    std::string problem;
+    CHECK(store.load("keys", Form::Tablet, &game_keys, &problem));
+    CHECK(game_keys.name == "keys" && game_keys.opacity == 0.5);
+    CHECK(problem.empty());
+
+    problem.clear();
+    Layout unused;
+    CHECK(!store.load("pad", Form::Tablet, &unused, &problem));
+    CHECK(problem.find("pad.json") != std::string::npos);
+    CHECK(problem.find("line 1") != std::string::npos);
+
+    // No file and no built-in for this name/form: a clean miss.
+    problem.clear();
+    CHECK(!store.load("nope", Form::Tablet, &unused, &problem));
+    CHECK(problem.empty());
+
+    // save_user_copy -> load returns the player's copy; has_user_copy sees it.
+    Layout mine;
+    std::string parse_err;
+    CHECK(parse_layout(keys_json, &mine, &parse_err));
+    mine.opacity = 0.9;
+    std::string save_err;
+    CHECK(!store.has_user_copy("keys", Form::Tablet));
+    CHECK(store.save_user_copy(mine, Form::Tablet, &save_err));
+    CHECK(store.has_user_copy("keys", Form::Tablet));
+    Layout loaded;
+    problem.clear();
+    CHECK(store.load("keys", Form::Tablet, &loaded, &problem));
+    CHECK(loaded.opacity == 0.9);
+
+    // delete_user_copy removes it; load falls back to the game copy.
+    CHECK(store.delete_user_copy("keys", Form::Tablet));
+    CHECK(!store.has_user_copy("keys", Form::Tablet));
+    Layout fallback;
+    problem.clear();
+    CHECK(store.load("keys", Form::Tablet, &fallback, &problem));
+    CHECK(fallback.opacity == 0.5);
+
+    std::filesystem::remove_all(root, ec);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
     test_layout_parse_and_write();
     test_layout_geometry_and_hits();
     test_builtin_keys_matches_the_old_keypad();
+    test_form_for();
+    test_layout_store();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

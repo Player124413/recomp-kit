@@ -75,10 +75,11 @@ add_test(NAME keypad_tests COMMAND keypad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
 add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
-                              ${HOST}/controls/builtin_layouts.cpp
+                              ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
                               ${HOST}/tests/controls_tests.cpp ${HOST}/tests/keypad_legacy_oracle.cpp)
 target_include_directories(controls_tests PRIVATE ${POP_ROOT})
 target_compile_options(controls_tests PRIVATE ${POP_WARN_WERROR})
+target_link_libraries(controls_tests PRIVATE recomp_platform)
 pop_link_sdl(controls_tests)
 pop_optimize(controls_tests 1)
 pop_test_binary(controls_tests)
