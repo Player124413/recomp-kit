@@ -131,6 +131,11 @@ void Launcher::start(const std::string &known) {
     status_ = best;
     screen_ = Screen::Main;
     rebuild();
+    Picked opened;
+    if (platform_.initial_pick(&opened)) {
+        begin_import(opened);
+        return;
+    }
     if (status_.state == State::NotFound && !info_.auto_import.empty() &&
         !find_root(spec_, info_.auto_import).empty()) {
         Picked p;
