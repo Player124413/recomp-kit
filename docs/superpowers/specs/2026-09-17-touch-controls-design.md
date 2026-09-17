@@ -36,7 +36,7 @@ and desktops are all covered.
 | Look | DualSense-styled: shaded buttons, a rimmed stick base, PS-coloured ✕○□△. |
 | Portrait | Phones only. Tablets stay landscape. In portrait the game is pinned to the top at full width and the controls fill the space below. |
 | Editor | Snaps to a 10 pt grid and to other controls' edges; snapping can be switched off. |
-| Branch | `touch-controls` off the current kit `main`, in its own worktree. |
+| Branch | `touch-controls` off the current kit `main` (32bb542), in its own worktree; one PR. |
 
 ## 3. Non-goals
 
@@ -457,8 +457,9 @@ Reached from the F10 page ("Edit controls") or an `edit_layout` action.
 
 ## 11. Build order
 
-Each step is its own PR to `main`, with CI green on every platform before
-the next step starts.
+All six steps land in one PR to `main` (user decision), one or more
+commits per step, with every test passing at each commit. CI must be green
+on every platform before the PR merges.
 
 1. **Layout model and keypad port.**
    - Includes the JSON model, the router, and the overlay drawing `key`
@@ -544,7 +545,3 @@ the next step starts.
   state changes, and the stick knob is a separate quad.
 - **Editor scope.** The editor is last in the order, so steps 1–5 are
   useful without it, and players can edit the JSON meanwhile.
-- **The branch may start from an old `main`.** The spec was written from
-  b3e02d5, and notes say the Siege merge moved kit `main` to 623e504,
-  which isn't visible in this clone yet. Fetch and rebase onto the current
-  `main` before step 1.
