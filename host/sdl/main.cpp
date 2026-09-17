@@ -1309,6 +1309,7 @@ int main(int argc, char **argv) {
     }
     std::string game_error;
 #ifdef __ANDROID__
+    platform_ui_init_hints(); // stdout and stderr reach logcat from here on
     (void)exe_flag; // The mobile app always uses its own external data root.
     // SDL's Java glue has initialized the app-specific external files path
     // before SDL_main. Resolve it before host_layout caches a profile path.

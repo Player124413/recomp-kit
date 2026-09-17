@@ -7,11 +7,47 @@
 #ifdef __ANDROID__
 #include "../audio.h"
 #include "../present.h"
+#include <android/log.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string>
+#include <thread>
+#include <unistd.h>
+
+namespace {
+// An app has no console: the host's stdout and stderr go to logcat (tag
+// "recomp"), a line at a time.
+void redirect_stdio_to_logcat() {
+    static bool done = false;
+    int fds[2];
+    if (done || pipe(fds) != 0)
+        return;
+    done = true;
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    dup2(fds[1], STDOUT_FILENO);
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[1]);
+    std::thread([fd = fds[0]]() {
+        std::string line;
+        char buf[1024];
+        ssize_t n;
+        while ((n = read(fd, buf, sizeof buf)) > 0)
+            for (ssize_t i = 0; i < n; ++i) {
+                if (buf[i] == '\n') {
+                    __android_log_write(ANDROID_LOG_INFO, "recomp", line.c_str());
+                    line.clear();
+                } else
+                    line.push_back(buf[i]);
+            }
+    }).detach();
+}
+} // namespace
 #endif
 
 void platform_ui_init_hints() {
 #ifdef __ANDROID__
+    redirect_stdio_to_logcat();
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     // The shared touch mapper generates mouse events itself.
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
