@@ -358,11 +358,18 @@ CHHapticEngine *haptic_engine() {
                     error.localizedDescription.UTF8String);
             return nil;
         }
+        // Core Haptics calls both handlers on its own background queue; every
+        // other read/write of g_rumble_player runs on the main queue (the
+        // functions below), so hop there before touching it.
         g_haptic_engine.stoppedHandler = ^(CHHapticEngineStoppedReason) {
-          g_rumble_player = nil;
+          dispatch_async(dispatch_get_main_queue(), ^{
+            g_rumble_player = nil;
+          });
         };
         g_haptic_engine.resetHandler = ^{
-          g_rumble_player = nil;
+          dispatch_async(dispatch_get_main_queue(), ^{
+            g_rumble_player = nil;
+          });
         };
     }
     return g_haptic_engine;

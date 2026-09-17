@@ -28,11 +28,29 @@ JNIEnv *haptics_env() {
     return static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
 }
 
-// The cached RecompActivity class, or null when the JNI env is unavailable
-// (should not happen once SDL has started the app).
+// A pending exception (a missing class/method, or one the Java side threw)
+// would abort the next unrelated JNI call on this thread if left in place.
+// Logs it once per call site (`*logged`), so a call made every frame does not
+// spam logcat, clears it, and reports whether one was pending.
+bool jni_failed(JNIEnv *env, const char *what, bool *logged) {
+    if (!env->ExceptionCheck())
+        return false;
+    if (!*logged) {
+        *logged = true;
+        __android_log_write(ANDROID_LOG_ERROR, "recomp", what);
+        env->ExceptionDescribe();
+    }
+    env->ExceptionClear();
+    return true;
+}
+
+// The cached RecompActivity class, or null when it cannot be resolved.
 jclass haptics_activity_class(JNIEnv *env) {
     if (!g_haptics_activity) {
+        static bool logged = false;
         jclass local = env->FindClass("dev/recompkit/RecompActivity");
+        if (jni_failed(env, "[haptics] FindClass(RecompActivity) failed", &logged) || !local)
+            return nullptr;
         g_haptics_activity = static_cast<jclass>(env->NewGlobalRef(local));
         env->DeleteLocalRef(local);
     }
@@ -182,22 +200,32 @@ void platform_ui_process_exit(int code) {
 
 void platform_ui_haptic_tap() {
 #ifdef __ANDROID__
+    static bool logged_method = false, logged_call = false;
     JNIEnv *env = haptics_env();
     jclass cls = env ? haptics_activity_class(env) : nullptr;
-    jmethodID m = cls ? env->GetStaticMethodID(cls, "hapticTap", "()V") : nullptr;
-    if (m)
-        env->CallStaticVoidMethod(cls, m);
+    if (!cls)
+        return;
+    jmethodID m = env->GetStaticMethodID(cls, "hapticTap", "()V");
+    if (jni_failed(env, "[haptics] GetStaticMethodID(hapticTap) failed", &logged_method) || !m)
+        return;
+    env->CallStaticVoidMethod(cls, m);
+    jni_failed(env, "[haptics] CallStaticVoidMethod(hapticTap) failed", &logged_call);
 #endif
     // Desktop: no-op.
 }
 
 void platform_ui_device_rumble(uint16_t low, uint16_t high) {
 #ifdef __ANDROID__
+    static bool logged_method = false, logged_call = false;
     JNIEnv *env = haptics_env();
     jclass cls = env ? haptics_activity_class(env) : nullptr;
-    jmethodID m = cls ? env->GetStaticMethodID(cls, "deviceRumble", "(II)V") : nullptr;
-    if (m)
-        env->CallStaticVoidMethod(cls, m, jint(low), jint(high));
+    if (!cls)
+        return;
+    jmethodID m = env->GetStaticMethodID(cls, "deviceRumble", "(II)V");
+    if (jni_failed(env, "[haptics] GetStaticMethodID(deviceRumble) failed", &logged_method) || !m)
+        return;
+    env->CallStaticVoidMethod(cls, m, jint(low), jint(high));
+    jni_failed(env, "[haptics] CallStaticVoidMethod(deviceRumble) failed", &logged_call);
 #else
     (void)low;
     (void)high;
