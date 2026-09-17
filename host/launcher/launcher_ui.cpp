@@ -667,7 +667,8 @@ void Launcher::layout(int w, int h, int s, int top) {
     columns_ = columns;
     const int rows = (n + columns - 1) / columns;
     const int total = rows * (bh + gap) - gap;
-    const int y0 = std::max(top, bottom - total);
+    // Under the text when there is room, else as low as they fit.
+    const int y0 = std::max(0, std::min(std::max(top, bottom - total), bottom - total));
     const int x0 = (w - (columns * bw + (columns - 1) * 16 * s)) / 2;
     for (int i = 0; i < n; ++i)
         buttons_[size_t(i)].rect = {x0 + (i % columns) * (bw + 16 * s),
@@ -758,7 +759,9 @@ void Launcher::draw(Canvas &c, int s) {
         c.fill({margin, y, 6 * s, 30 * s}, accent);
         c.text(px, py, headline, 2 * s, accent);
         py += Canvas::text_height(2 * s) + 8 * s;
-        py += c.paragraph(px, py, pw, detail, 2 * s, kDim);
+        // Manage keeps the folder, not the how-to-import text the main screen has.
+        if (screen_ != Screen::Manage || status_.state != State::NotFound)
+            py += c.paragraph(px, py, pw, detail, 2 * s, kDim);
         if (screen_ == Screen::Manage)
             py +=
                 4 * s +
@@ -768,6 +771,11 @@ void Launcher::draw(Canvas &c, int s) {
                             2 * s, kDim);
     }
     layout(w, c.height(), s, py + 14 * s);
+    // Text too tall for the screen goes under the buttons, which stay reachable.
+    if (!buttons_.empty() && buttons_.front().rect.y < py + 14 * s) {
+        const int band = buttons_.front().rect.y - 8 * s;
+        c.fill({0, band, w, c.height() - band}, kBackground);
+    }
 
     for (size_t i = 0; i < buttons_.size(); ++i) {
         const Button &b = buttons_[i];

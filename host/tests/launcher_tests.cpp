@@ -628,6 +628,27 @@ void test_ui_mobile() {
     CHECK(has_button(l, kPlay) && has_button(l, kImportFolder));
     CHECK(fp.protected_count == 1 && fp.released == 1);
 
+    // A phone in landscape: every screen's buttons stay on it, whatever the text.
+    {
+        FakePlatform tall = fp;
+        tall.pi.drop_hint = std::string(400, 'x');
+        tall.pi.import_root = dir + "/elsewhere/game";
+        tall.pi.profile_dir = dir + "/" + std::string(300, 'p');
+        Launcher small(s, tall);
+        small.start("");
+        CHECK(small.status().state == State::NotFound);
+        Canvas c;
+        c.resize(2856, 1280, true);
+        for (int id : {0, int(kManage)}) {
+            if (id)
+                small.activate(id);
+            small.draw(c, 4);
+            CHECK(!small.buttons().empty());
+            for (const Button &b : small.buttons())
+                CHECK(b.rect.y >= 0 && b.rect.y + b.rect.h <= c.height());
+        }
+    }
+
     // A device that cannot run the game still imports; Play explains why not.
     Launcher cannot(s, fp);
     cannot.start("");
