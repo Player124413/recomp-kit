@@ -392,6 +392,8 @@ void test_detection() {
     make_install(base + "/Games/Other Name");                 // direct
     make_install(base + "/Games/Unrelated/deep/deeper");      // too deep, unnamed
     make_install(base + "/Steam/steamapps/common/Test Game"); // a base that is the game
+    write_file(base + "/Games/A Patch/game.exe", kExeBytes);  // no data: not offered
+    write_file(base + "/Games/A Patch/levels/one.lvl", "patched");
     std::vector<std::string> found = detect_under(
         s, {base + "/Games", base + "/Steam/steamapps/common/Test Game", base + "/missing"});
     CHECK(found.size() == 3);
@@ -404,6 +406,7 @@ void test_detection() {
     CHECK(has(base + "/Games/Test Game/sub"));
     CHECK(has(base + "/Games/Other Name"));
     CHECK(has(base + "/Steam/steamapps/common/Test Game"));
+    CHECK(!has(base + "/Games/A Patch"));
     // The real scan runs and returns folders that hold the executable.
     for (const std::string &f : detect_installs(s))
         CHECK(!find_name(f, s.executable).empty());

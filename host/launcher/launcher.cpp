@@ -943,9 +943,17 @@ bool import_profile(const std::string &zip_path, const std::string &profile_dir,
 // ---------------------------------------------------------------------------
 std::vector<std::string> detect_under(const Spec &spec, const std::vector<std::string> &bases) {
     std::vector<std::string> found;
+    // Only whole installs: a folder with the executable but not the game's
+    // data (an unpacked patch, say) is not offered.
     auto add = [&](const std::string &root) {
-        if (!root.empty() && std::find(found.begin(), found.end(), root) == found.end())
-            found.push_back(root);
+        if (root.empty() || std::find(found.begin(), found.end(), root) != found.end())
+            return;
+        for (const std::string &dir : spec.required_dirs) {
+            const std::string name = find_name(root, dir);
+            if (name.empty() || !is_dir(join(root, name)))
+                return;
+        }
+        found.push_back(root);
     };
     for (const std::string &base_in : bases) {
         const std::string base = normalize(base_in);
