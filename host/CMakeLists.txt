@@ -187,6 +187,7 @@ if(TARGET recomp_gen)
   if(ANDROID)
     # SDLActivity loads libmain.so from the APK's native library directory.
     set_target_properties(recomp_app PROPERTIES OUTPUT_NAME main)
+    target_link_libraries(recomp_app PRIVATE log)
   elseif(IOS)
     pop_ios_bundle(recomp_app)
   elseif(APPLE)
