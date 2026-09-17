@@ -118,6 +118,10 @@ def load_controls(controls, touch, source):
     controls["mapped"] = mapped
 
     native = dict(controls.get("native", {}))
+    unknown_native = sorted(k for k in native if k not in ("xinput", "dinput", "axes", "buttons"))
+    if unknown_native:
+        raise ValueError("%s: [controls.native] may name only xinput, dinput, axes, buttons, not %s"
+                         % (source, ", ".join(unknown_native)))
     native.setdefault("xinput", True)
     native.setdefault("dinput", True)
     if not isinstance(native["xinput"], bool) or not isinstance(native["dinput"], bool):

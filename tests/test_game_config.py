@@ -218,6 +218,10 @@ class LoadTests(unittest.TestCase):
                 base + '\n[controls]\n[controls.native]\naxes = ["x", "y", "z"]\n')  # wrong length
             with self.assertRaises(ValueError):
                 game_config.load(game)
+            (game / "game.toml").write_text(
+                base + '\n[controls]\n[controls.native]\nsensitivity = 5\n')  # unknown key
+            with self.assertRaises(ValueError):
+                game_config.load(game)
 
             # The header.
             (game / "game.toml").write_text(base)

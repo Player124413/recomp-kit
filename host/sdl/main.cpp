@@ -828,9 +828,12 @@ KeypadView keypad_view() {
     KeypadView v;
     v.wanted = g_keypad_wanted;
     // Temporary adapter (Task 6): the router that reads the layout's own
-    // hidden groups directly lands in Task 7, which removes this.
-    v.left = !(mods_controls_hidden_groups() & 1);
-    v.right = !(mods_controls_hidden_groups() & 2);
+    // hidden groups directly lands in Task 7, which removes this. An empty
+    // layout name is the Hidden choice, which hides both halves regardless
+    // of the per-group bits, matching the old RECOMP_TOUCH_KEYPAD_HIDDEN.
+    const bool layout_hidden = mods_controls_layout_name().empty();
+    v.left = !layout_hidden && !(mods_controls_hidden_groups() & 1);
+    v.right = !layout_hidden && !(mods_controls_hidden_groups() & 2);
     v.size = mods_controls_value(CONTROLS_SIZE_ROW);
     v.lit = g_keypad_modifiers.lit();
     v.scale = bw > 0 ? double(dw) / bw : 1.0;

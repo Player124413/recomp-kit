@@ -6,11 +6,16 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 
 namespace {
 // The layout names come from the host (mods_controls_set_names), which must
 // run before mods_controls_init because mods/ cannot depend on host/controls.
-// Until the host calls it, this is what a fresh profile sees.
+// Until the host calls it, this is what a fresh profile sees. g_names is set
+// once at startup but read every frame by the host loop laying the controls
+// out, on a different thread than the settings page's nudges; g_names_mutex
+// guards every access.
+std::mutex g_names_mutex;
 std::vector<std::string> g_names = {"pad", "keys", "pad+keys"};
 
 // EDIT_ROW is not one of these: it is never declared or persisted.
@@ -33,18 +38,28 @@ std::atomic<bool> edit_request{false};
 std::atomic<bool> initialized{false};
 
 int layout_max() {
+    std::lock_guard<std::mutex> lock(g_names_mutex);
     return int(g_names.size()); // the extra index past the names is Hidden
 }
 
 int index_of(const std::string &name) {
+    std::lock_guard<std::mutex> lock(g_names_mutex);
     for (size_t i = 0; i < g_names.size(); ++i)
         if (g_names[i] == name)
             return int(i);
     return -1;
 }
+
+// A copy, not a reference: the caller must not hold g_names_mutex while
+// reading the result, and the vector may be reassigned out from under it.
+std::string name_at(int index) {
+    std::lock_guard<std::mutex> lock(g_names_mutex);
+    return index >= 0 && index < int(g_names.size()) ? g_names[index] : std::string();
+}
 } // namespace
 
 void mods_controls_set_names(std::vector<std::string> names) {
+    std::lock_guard<std::mutex> lock(g_names_mutex);
     g_names = std::move(names);
 }
 
@@ -108,7 +123,10 @@ void mods_controls_init(const char *default_layout) {
 
 void mods_controls_reset() {
     initialized = false;
-    g_names = {"pad", "keys", "pad+keys"};
+    {
+        std::lock_guard<std::mutex> lock(g_names_mutex);
+        g_names = {"pad", "keys", "pad+keys"};
+    }
     values[CONTROLS_LAYOUT_ROW] = 0;
     values[CONTROLS_SIZE_ROW] = 1;
     values[CONTROLS_OPACITY_ROW] = 70;
@@ -125,8 +143,7 @@ int mods_controls_value(ControlsRow row) {
 }
 
 std::string mods_controls_layout_name() {
-    const int index = mods_controls_value(CONTROLS_LAYOUT_ROW);
-    return index >= 0 && index < int(g_names.size()) ? g_names[index] : "";
+    return name_at(mods_controls_value(CONTROLS_LAYOUT_ROW));
 }
 
 PopModStatus mods_controls_set(ControlsRow row, int value) {

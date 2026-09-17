@@ -69,22 +69,38 @@ MOD_TEST_SUITE(native_options_preserve_navigation_and_apply_controls) {
     activate(1);
     update();
     MOD_CHECK_EQ(rd32(controller + 12), 5);
-    // Window, frame limit and overlay, then the controls' seven rows; no
-    // duplicate resolution row. Ten rows on an eight-row tab: the last two
-    // (snap, edit) land on the slots the pagination buttons use on the Mods
-    // tab. Known capacity limitation, not fixed by this task; see the
-    // task-6 report.
-    for (unsigned i : {37u, 38u, 39u, 40u, 41u, 42u, 43u, 44u, 45u, 46u})
+    // Window, frame limit and overlay, then five of the controls' seven rows
+    // (layout, size, opacity, haptics, edit): eight rows exactly fill the
+    // tab. pad_with_controller and snap show only on the F10 fallback page.
+    for (unsigned i : {37u, 38u, 39u, 40u, 41u, 42u, 43u, 44u})
         MOD_CHECK_EQ(flags(i), 0);
+    // The Mods tab's pagination buttons stay hidden: nothing on this tab may
+    // alias their slots.
+    MOD_CHECK_EQ(flags(45), 3);
+    MOD_CHECK_EQ(flags(46), 3);
     activate(4);
     MOD_CHECK_EQ(mods_display_fps(), 40);
     activate(5);
     MOD_CHECK_EQ(mods_display_overlay(), 1);
+    // The five rows at control(6..10) are, in order, layout, size, opacity,
+    // haptics and edit - not pad_with_controller or snap.
+    const int layout_before = mods_controls_value(CONTROLS_LAYOUT_ROW);
+    activate(6); // control(6): row 3, CONTROLS_LAYOUT_ROW
+    MOD_CHECK(mods_controls_value(CONTROLS_LAYOUT_ROW) != layout_before); // always turns over
+    const int size_before = mods_controls_value(CONTROLS_SIZE_ROW);
+    activate(7); // control(7): row 4, CONTROLS_SIZE_ROW
+    MOD_CHECK(mods_controls_value(CONTROLS_SIZE_ROW) != size_before || size_before == 2);
+    const int opacity_before = mods_controls_value(CONTROLS_OPACITY_ROW);
+    activate(8); // control(8): row 5, CONTROLS_OPACITY_ROW
+    MOD_CHECK(mods_controls_value(CONTROLS_OPACITY_ROW) != opacity_before || opacity_before == 100);
     const int haptics = mods_controls_value(CONTROLS_HAPTICS_ROW);
-    activate(9); // control(9): row 6 of tab 5, CONTROLS_HAPTICS_ROW
+    activate(9); // control(9): row 6, CONTROLS_HAPTICS_ROW
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_HAPTICS_ROW), 1 - haptics);
     activate(9);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_HAPTICS_ROW), haptics);
+    MOD_CHECK(!mods_controls_take_edit_request());
+    activate(10); // control(10): row 7, CONTROLS_EDIT_ROW
+    MOD_CHECK(mods_controls_take_edit_request());
     // The display API still follows the original Graphics resolution selector.
     wr8(0x89d15c, 2);
     wr8(0x749cf0, 1);

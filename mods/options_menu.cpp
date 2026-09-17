@@ -153,6 +153,12 @@ const DisplayRow enhanced[] = {DISPLAY_RENDERING, DISPLAY_TEXTURES, DISPLAY_FILT
 const DisplayRow display[] = {DISPLAY_WINDOW, DISPLAY_FPS, DISPLAY_OVERLAY};
 // An entry of an added tab: a display row, or kControls + a controls row.
 constexpr int kControls = 100;
+// Tab 5 has room for 8 rows (rows_per_page) and already spends 3 on window,
+// frame limit and overlay; these 5 are the ones that fit alongside them.
+// pad_with_controller and snap show only on the F10 fallback page
+// (settings_page.cpp), which has no such limit.
+const ControlsRow native_controls[] = {CONTROLS_LAYOUT_ROW, CONTROLS_SIZE_ROW, CONTROLS_OPACITY_ROW,
+                                       CONTROLS_HAPTICS_ROW, CONTROLS_EDIT_ROW};
 // The rows a tab shows: the ones game.toml [settings] rows lists, the
 // controls rows after the Display tab's own. Eight fit a tab (rows_per_page).
 std::vector<int> tab_rows(unsigned tab) {
@@ -166,8 +172,8 @@ std::vector<int> tab_rows(unsigned tab) {
             if (mods_display_row_applies(r))
                 rows.push_back(r);
         if (mods_settings_row_listed(DISPLAY_CONTROLS_BIT))
-            for (int k = 0; k < CONTROLS_ROW_COUNT; ++k)
-                rows.push_back(kControls + k);
+            for (auto r : native_controls)
+                rows.push_back(kControls + r);
     }
     return rows;
 }
@@ -237,9 +243,11 @@ void update(X86 *c) {
             show(original_control(i));
         if (tab == 6)
             rebuild_mods();
+        // Clamped to rows_per_page on every tab: control(11)/(12) are the
+        // paging slots, and nothing built from tab_rows() may reach them.
         const size_t count =
             tab == 4 || tab == 5
-                ? tab_rows(tab).size()
+                ? std::min(size_t(rows_per_page), tab_rows(tab).size())
                 : std::min(size_t(rows_per_page), mod_rows.size() - mod_page * rows_per_page);
         for (unsigned i = 0; i < count; ++i) {
             show(control(3 + i));
