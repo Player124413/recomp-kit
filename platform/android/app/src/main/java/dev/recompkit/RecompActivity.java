@@ -21,6 +21,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 
 import org.libsdl.app.SDLActivity;
 
@@ -69,20 +71,29 @@ public class RecompActivity extends SDLActivity {
      * The game's on-screen control layouts, from the APK's assets to the app's
      * external files folder, where the native side reads them as
      * host_resource("controls"). A handful of small JSON files: copied when
-     * missing or when the packaged size differs, so an updated app replaces
-     * them and an unchanged one costs a directory listing.
+     * missing or when the packaged size differs (an asset stream reports its
+     * uncompressed length, so a size match means an unchanged layout), so an
+     * updated app replaces them and an unchanged one costs a directory
+     * listing. A layout this app no longer ships is deleted, so one the game
+     * dropped stops working after an upgrade; the player's own edited copies
+     * live in profile/controls and are never touched.
      */
     private void unpackControlLayouts() {
+        // No external storage mounted: there is no data folder to unpack into,
+        // and the native side stops on the same condition (host/sdl/main.cpp).
+        File base = getExternalFilesDir(null);
+        if (base == null)
+            return;
         String[] names;
         try {
             names = getAssets().list("controls");
         } catch (Exception e) {
             return; // no assets/controls: the app ships no layouts
         }
-        if (names == null || names.length == 0)
-            return;
-        File dir = new File(getExternalFilesDir(null), "controls");
-        if (!dir.isDirectory() && !dir.mkdirs())
+        if (names == null)
+            names = new String[0];
+        File dir = new File(base, "controls");
+        if (names.length > 0 && !dir.isDirectory() && !dir.mkdirs())
             return;
         int copied = 0;
         for (String name : names) {
@@ -101,8 +112,19 @@ public class RecompActivity extends SDLActivity {
                 // one in its place; the game still starts.
             }
         }
-        if (copied > 0)
-            android.util.Log.i("recomp", "unpacked " + copied + " control layout(s) into " + dir);
+        HashSet<String> shipped = new HashSet<>(Arrays.asList(names));
+        File[] unpacked = dir.listFiles();
+        int removed = 0;
+        if (unpacked != null) {
+            for (File file : unpacked) {
+                if (file.isFile() && file.getName().endsWith(".json") && !shipped.contains(file.getName())
+                        && file.delete())
+                    ++removed;
+            }
+        }
+        if (copied > 0 || removed > 0)
+            android.util.Log.i("recomp", "unpacked " + copied + " and removed " + removed
+                    + " control layout(s) in " + dir);
     }
 
     @Override
