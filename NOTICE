@@ -60,10 +60,8 @@ third_party/vulkan-headers/LICENSE.md. Both are included unmodified. The Vulkan
 loader, MoltenVK and Mesa's lavapipe are runtime components on the player's or
 developer's machine and are not distributed here.
 
-The HLSL contract quotations in dx/d3d11.cpp and their test fixtures are
-from SNEG-DEV/siege-of-avalon, commit 417cbd0, src/win32/graphics/D3DRenderer.pas
-(2021), distributed under LGPL-2.1. They retain that license rather than
-the kit's MIT license. Source and license:
-https://github.com/SNEG-DEV/siege-of-avalon/tree/417cbd0
-The full LGPL-2.1 text is also in third_party/ffmpeg/NOTICE.md.
-The software adapter implements the documented arithmetic independently.
+dx/d3d11.cpp describes, without quoting, the shader contract of
+SNEG-DEV/siege-of-avalon's src/win32/graphics/D3DRenderer.pas (LGPL-2.1), and
+dx/d3dcompiler.cpp recognises those programs by digests of their source. No
+part of that source is included; the software adapter implements the
+described arithmetic independently.

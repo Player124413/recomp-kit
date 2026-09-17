@@ -73,8 +73,10 @@ void d3dcompiler_register() {
     imports_register(shims, std::size(shims));
 }
 
-// These exact FNV-1a digests name the HLSL quoted in d3d11.cpp. Unknown
-// programs fail closed; neither an entry-point name nor the tag alone is proof.
+// These exact FNV-1a digests name the programs described at the top of
+// d3d11.cpp: the vertex program (1), the plain pixel program (2) and the packed
+// one (3). Unknown programs fail closed; neither an entry-point name nor the tag
+// alone is proof.
 uint32_t dx11::shader_kind(uint32_t data, uint32_t size, bool vertex) {
     ShaderTag t{};
     if (size == sizeof(t) && span(data, size))

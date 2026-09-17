@@ -1,87 +1,32 @@
-// Shader contract, quoted verbatim from D3DRenderer.pas at 417cbd0 (2021).
-// The quoted HLSL is LGPL-2.1; attribution and full license are in NOTICE.
-// Each displayed newline represents CRLF; tabs and trailing spaces are
-// significant to the exact source digest in D3DCompile.
-// D3DShader.pas input layout / D3DMesh.pas TDXVertex:
-// POSITION: float3, R32G32B32_FLOAT, slot 0, byte offset 0.
-// TEXCOORD: float2, R32G32_FLOAT, slot 0, APPEND_ALIGNED_ELEMENT (=12).
-// Both PER_VERTEX_DATA, semantic index 0, step rate 0; stride 20 bytes.
-// Indices (R16_UINT): 0,2,1,0,1,3; TRIANGLELIST.
-// Constant buffer: OutputPosition then InputPosition (128 bytes).
-// D3DXMatrixMultiplyTranspose uploads transposed row-vector products.
-// HLSL's default column-major layout interprets those bytes as the original
-// row-vector matrix; transform[k] = sum(input[j] * uploaded[k*4+j]).
-// Exact ANSI source bytes below use C string escapes (CRLF is \r\n).
-// vertex_shader:
-// "cbuffer MatrixBuffer\r\n"
-// "{\r\n"
-// "    matrix OutputPosition;\r\n"
-// "    matrix InputPosition;\r\n"
-// "}\r\n"
-// "struct VSInput\r\n"
-// "{\r\n"
-// "    float4 position : POSITION;\r\n"
-// "    float2 texcoords : TEXCOORD0;\r\n"
-// "};\r\n"
-// "\r\n"
-// "struct PSInput\r\n"
-// "{\r\n"
-// "    float4 position : SV_POSITION;\r\n"
-// "    float2 texcoords : TEXCOORD0;\r\n"
-// "};\r\n"
-// "\r\n"
-// "PSInput VSEntry(VSInput input)\r\n"
-// "{\r\n"
-// "    PSInput output;\r\n"
-// "    input.position.w = 1.0f;\r\n"
-// "    output.position = mul(input.position, OutputPosition);\r\n"
-// "    float4 tex = float4(input.texcoords.x, input.texcoords.y, 0.0f, 1.0f);\r\n"
-// "    tex = mul(tex, InputPosition);\r\n"
-// "    output.texcoords = float2(tex.x, 1.0f - tex.y);\r\n"
-// "    return output;\r\n"
-// "}\r\n"
-// fragment_shader:
-// "Texture2D DiffuseMap;\r\n"
-// "SamplerState SampleType;\r\n"
-// "\r\n"
-// "struct PSInput\r\n"
-// "{\r\n"
-// "    float4 position : SV_POSITION;\r\n"
-// "    float2 texcoords : TEXCOORD0;\r\n"
-// "};\r\n"
-// "\r\n"
-// "float4 PSEntry(PSInput vs_out) : SV_TARGET\r\n"
-// "{\r\n"
-// "\tfloat4 color = DiffuseMap.Sample(SampleType, vs_out.texcoords); \r\n"
-// "\treturn color.rgba; \r\n"
-// "}\r\n"
-// fragment_shader_R16_int:
-// "Texture2D DiffuseMap;\r\n"
-// "SamplerState SampleType;\r\n"
-// "\r\n"
-// "struct PSInput\r\n"
-// "{\r\n"
-// "    float4 position : SV_POSITION;\r\n"
-// "    float2 texcoords : TEXCOORD0;\r\n"
-// "};\r\n"
-// "\r\n"
-// "float4 PSEntry(PSInput vs_out) : SV_TARGET\r\n"
-// "{\r\n"
-// "    float4 c = DiffuseMap.Sample(SampleType, vs_out.texcoords);\r\n"
-// "    int c565 = c.r * 65535;\r\n"
-// "    int t = c565 / 32;\r\n"
-// "    t = t * 32;\r\n"
-// "    int b = c565 - t;\r\n"
-// "    c565 = (c565 - b) / 32;\r\n"
-// "    t = c565 / 64;\r\n"
-// "    t = t * 64;\r\n"
-// "    int g = c565 - t;\r\n"
-// "    c565 = (c565 - g) / 64;\r\n"
-// "    t = c565 / 32;\r\n"
-// "    t = t * 32;\r\n"
-// "    int r = c565 - t;\r\n"
-// "\treturn float4(r / 32.0f, g / 64.0f, b / 32.0f, 1.0f);\r\n"
-// "}\r\n"
+// The pipeline contract this adapter implements, described rather than quoted.
+// It is the one a 2D Direct3D 11 renderer uses to put layered images on screen
+// (Siege of Avalon's graphics/D3DRenderer.pas is the known client):
+//
+// Input layout: POSITION, R32G32B32_FLOAT at byte 0, and TEXCOORD,
+// R32G32_FLOAT appended after it (byte 12), both slot 0, per vertex, semantic
+// index 0; a 20-byte vertex. Indices are R16_UINT, 0 2 1 0 1 3, as a triangle
+// list.
+//
+// Constant buffer: two 4x4 matrices, 128 bytes - the output transform, then
+// the input (texture) transform. The client fills them with
+// D3DXMatrixMultiplyTranspose, and HLSL's column-major default reads those
+// bytes back as the row-vector matrix, so each transformed component k is
+// sum over j of input[j] * uploaded[k * 4 + j].
+//
+// Vertex program: the position, with w forced to 1, times the output
+// transform; the texture coordinate (u, v, 0, 1) times the input transform,
+// then flipped vertically: (u', 1 - v').
+//
+// Pixel programs, both sampling texture 0 with sampler 0:
+// - plain: the sample, all four channels.
+// - packed: the sample's red channel holds a 5-6-5 word stored as R16_UNORM.
+//   It is scaled by 65535 and truncated to an integer, split by integer
+//   division into blue (low 5 bits), green (next 6) and red (top 5), and
+//   returned as (red / 32, green / 64, blue / 32, 1) - divided by 32 and 64,
+//   not 31 and 63.
+//
+// The programs are recognised by the FNV-1a digest of their exact source
+// (dx/d3dcompiler.cpp, dx11::shader_kind); the kit carries no shader source.
 // d3d11.cpp - a software, single-sample 2D Direct3D 11 adapter.
 // Shader arithmetic and the input layout are documented below. No executable
 // address, window title or renderer-selection policy belongs in this module.

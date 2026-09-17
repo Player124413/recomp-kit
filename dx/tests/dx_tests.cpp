@@ -23,7 +23,8 @@
 #include "../../runtime/win32.h"
 #include "../../platform/os.h"
 #include "fixtures/tone_mp3.h"
-#include "fixtures/quad_hlsl.h"
+#include "fixtures/quad_shaders.h"
+#include "../d3d11.h"
 #include <cmath>
 
 #include <algorithm>
@@ -10812,6 +10813,17 @@ static void test_d3dx_math_and_blob() {
         CHECK(data != 0);
         CHECK(size >= 32);
         CHECK_EQ(rd32(data), 0x31425352u);
+        // The tag: FNV-1a over the exact source bytes, then the names given.
+        uint64_t hash = 14695981039346656037ull;
+        for (const char *p = "unknown source"; *p; ++p) {
+            hash ^= uint8_t(*p);
+            hash *= 1099511628211ull;
+        }
+        dx11::ShaderTag tag{};
+        memcpy(&tag, gm_ptr(data), sizeof tag);
+        CHECK_EQ(tag.hash, hash);
+        CHECK(strcmp(tag.entry, "VSEntry") == 0);
+        CHECK(strcmp(tag.target, "vs_4_0") == 0);
         call_method(blob, 2);
     }
 }
@@ -10905,31 +10917,27 @@ static void test_d3d11_quad(bool alpha) {
         cleanup();
         return;
     }
-    auto shader = [&](const char *source, bool vertex) {
-        gm_put_str(sc(0x1000), source, 2048);
-        gm_put_str(sc(0x1800), vertex ? "VSEntry" : "PSEntry", 32);
-        gm_put_str(sc(0x1840), vertex ? "vs_4_0" : "ps_4_0", 32);
-        CHECK_EQ(call_shim(tramp("d3dcompiler_47.dll", "D3DCompile"),
-                           {sc(0x1000), uint32_t(strlen(source)), 0, 0, 0, sc(0x1800), sc(0x1840),
-                            0, 0, sc(0x1880), sc(0x1884)}),
-                 S_OK);
-        uint32_t blob = rd32(sc(0x1880));
-        if (!blob)
-            return uint32_t(0);
-        owned.push_back(blob);
-        uint32_t p = call_method(blob, 3), n = call_method(blob, 4);
+    // A shader from its tagged blob, written at `at`.
+    auto shader = [&](const QuadShader &q, uint32_t at) {
+        dx11::ShaderTag tag{};
+        tag.magic = 0x31425352;
+        tag.version = 1;
+        tag.hash = q.hash;
+        snprintf(tag.entry, sizeof tag.entry, "%s", q.entry);
+        snprintf(tag.target, sizeof tag.target, "%s", q.target);
+        memcpy(gm_ptr(at), &tag, sizeof tag);
         wr32(sc(0x1888), 0);
-        CHECK_EQ(call_method(dev, vertex ? 12 : 15, {p, n, 0, sc(0x1888)}), S_OK);
+        CHECK_EQ(call_method(dev, q.vertex ? 12 : 15, {at, uint32_t(sizeof tag), 0, sc(0x1888)}),
+                 S_OK);
         uint32_t sh = rd32(sc(0x1888));
         if (sh)
             owned.push_back(sh);
         return sh;
     };
-    uint32_t vs = shader(quad_vertex_shader, true);
-    // Keep the VS tag for CreateInputLayout before compiling the PS.
-    uint32_t vsblob = rd32(sc(0x1880)), vsdata = call_method(vsblob, 3),
-             vssize = call_method(vsblob, 4);
-    uint32_t ps = shader(alpha ? quad_fragment_shader : quad_fragment_shader_R16_int, false);
+    uint32_t vs = shader(quad_vertex_shader, sc(0x1000));
+    // The VS tag stays where it is for CreateInputLayout.
+    const uint32_t vsdata = sc(0x1000), vssize = sizeof(dx11::ShaderTag);
+    uint32_t ps = shader(alpha ? quad_fragment_shader : quad_fragment_shader_R16_int, sc(0x1080));
     if (!vs || !ps) {
         cleanup();
         return;
@@ -11186,30 +11194,26 @@ static void test_d3d11_texel_copy(bool hardware) {
         cleanup();
         return;
     }
-    auto shader = [&](const char *source, bool vertex) {
-        gm_put_str(sc(0x1000), source, 2048);
-        gm_put_str(sc(0x1800), vertex ? "VSEntry" : "PSEntry", 32);
-        gm_put_str(sc(0x1840), vertex ? "vs_4_0" : "ps_4_0", 32);
-        CHECK_EQ(call_shim(tramp("d3dcompiler_47.dll", "D3DCompile"),
-                           {sc(0x1000), uint32_t(strlen(source)), 0, 0, 0, sc(0x1800), sc(0x1840),
-                            0, 0, sc(0x1880), sc(0x1884)}),
-                 S_OK);
-        uint32_t blob = rd32(sc(0x1880));
-        if (!blob)
-            return uint32_t(0);
-        owned.push_back(blob);
-        uint32_t p = call_method(blob, 3), n = call_method(blob, 4);
+    // A shader from its tagged blob, written at `at`.
+    auto shader = [&](const QuadShader &q, uint32_t at) {
+        dx11::ShaderTag tag{};
+        tag.magic = 0x31425352;
+        tag.version = 1;
+        tag.hash = q.hash;
+        snprintf(tag.entry, sizeof tag.entry, "%s", q.entry);
+        snprintf(tag.target, sizeof tag.target, "%s", q.target);
+        memcpy(gm_ptr(at), &tag, sizeof tag);
         wr32(sc(0x1888), 0);
-        CHECK_EQ(call_method(dev, vertex ? 12 : 15, {p, n, 0, sc(0x1888)}), S_OK);
+        CHECK_EQ(call_method(dev, q.vertex ? 12 : 15, {at, uint32_t(sizeof tag), 0, sc(0x1888)}),
+                 S_OK);
         uint32_t sh = rd32(sc(0x1888));
         if (sh)
             owned.push_back(sh);
         return sh;
     };
-    uint32_t vs = shader(quad_vertex_shader, true);
-    uint32_t vsblob = rd32(sc(0x1880)), vsdata = call_method(vsblob, 3),
-             vssize = call_method(vsblob, 4);
-    uint32_t ps = shader(quad_fragment_shader, false);
+    uint32_t vs = shader(quad_vertex_shader, sc(0x1000));
+    const uint32_t vsdata = sc(0x1000), vssize = sizeof(dx11::ShaderTag);
+    uint32_t ps = shader(quad_fragment_shader, sc(0x1080));
     if (!vs || !ps) {
         cleanup();
         return;

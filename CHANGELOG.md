@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The kit no longer carries Siege of Avalon's HLSL. `dx/d3d11.cpp` describes
+  the shader contract in words instead of quoting the LGPL source, and
+  `dx_tests` hands the shim the tagged blobs `D3DCompile` would make - entry
+  point, target, source digest - from `fixtures/quad_shaders.h`, which replaces
+  the source fixture. The scaffold test now checks the digest `D3DCompile`
+  computes. NOTICE says what is described and that nothing is included.
+
 - Direct3D 11 draws the GPU can reproduce exactly go to the GPU
   (`host/gpu2d.cpp`). A draw that is two triangles tiling an axis-aligned
   rectangle, a texel to a pixel, inside its texture, is a copy with a blend,
