@@ -3,6 +3,7 @@
 #include "mods_tests.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <map>
 #include <string>
 #include "../../platform/os.h"
@@ -69,7 +70,27 @@ int main() {
     // down with it - the run then looks as though nothing ran at all, which
     // is the opposite of what a crashing test run should tell you.
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    // RECOMP_MOD_TEST_ONLY=a,b runs only the suites whose name contains one
+    // of the comma-separated parts, in the usual order.
+    const char *only = recomp_env("MOD_TEST_ONLY");
+    auto selected = [only](const char *name) {
+        if (!only || !*only)
+            return true;
+        std::string list = only;
+        for (size_t start = 0; start <= list.size();) {
+            size_t end = list.find(',', start);
+            if (end == std::string::npos)
+                end = list.size();
+            const std::string part = list.substr(start, end - start);
+            if (!part.empty() && strstr(name, part.c_str()))
+                return true;
+            start = end + 1;
+        }
+        return false;
+    };
     for (ModTestSuite *s = mod_test_suites(); s; s = s->next) {
+        if (!selected(s->name))
+            continue;
         int before = g_failures;
         s->fn();
         printf("%-34s %s\n", s->name, g_failures == before ? "ok" : "FAILED");

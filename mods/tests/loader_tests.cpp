@@ -1199,6 +1199,8 @@ MOD_TEST_SUITE(loader_a_retained_guard_survives_the_teardown_that_races_it) {
     stop = false;
     odd = 0;
     calls = 0;
+    // The caller has to be running before the teardown starts, or a fast
+    // shutdown leaves it nothing to race and the call count at zero.
     std::thread caller([] {
         while (!stop.load(std::memory_order_acquire)) {
             uint32_t a = 0;
@@ -1208,6 +1210,8 @@ MOD_TEST_SUITE(loader_a_retained_guard_survives_the_teardown_that_races_it) {
             ++calls;
         }
     });
+    while (!calls.load(std::memory_order_acquire))
+        std::this_thread::yield();
     mods_shutdown_request();
     while (!mods_shutdown_complete()) {
     }

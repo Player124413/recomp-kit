@@ -213,6 +213,10 @@ MOD_TEST_SUITE(settings_page_without_symbols_shows_host_controls) {
 // Like the stub, this port can have no usable symbol table. The existing
 // layout test seam makes that failure deterministic without touching a map.
 MOD_TEST_SUITE(settings_load_before_missing_symbols) {
+    // The load and the teardown below mutate the hook registry. Without the
+    // baton those mutations are queued for a checkpoint this binary never
+    // runs, and every later suite's installs wait behind them.
+    sched_set_guest_thread(true);
     mods_host_set_main_thread();
     MOD_CHECK(mods_test_reset_loader());
     fresh();
