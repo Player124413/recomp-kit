@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The SDL host closes the audio device before `SDL_Quit`
+  (`host_audio_shutdown`). The mixer's sink is a static, so the process's exit
+  handlers destroyed it after SDL had torn its audio down, and
+  `SDL_DestroyAudioStream` locked a freed mutex: every game that exited on its
+  own ended in a segfault, which the fault handler reported against the last
+  guest address. Found under lldb from Siege of Avalon's Exit; the Mac app now
+  ends with status 0, and the iOS host, which ends with `exit`, the same way.
+
 - `MsgWaitForMultipleObjects` and its Ex form answer for their handles: a
   signalled one is WAIT_OBJECT_0 + its index, ahead of a queued message, and
   MWMO_WAITALL waits for all of them. The call only ever reported a message or

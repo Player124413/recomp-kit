@@ -1611,6 +1611,9 @@ int main(int argc, char **argv) {
     SDL_HideWindow(g_window);
     gpu::release_window_surface(g_surface);
     SDL_DestroyWindow(g_window);
+    // The audio device goes before the SDL it runs on, not in the exit
+    // handlers after it: there its stream is destroyed through a freed mutex.
+    host_audio_shutdown();
     SDL_Quit();
     platform_ui_process_exit(0);
     return 0;

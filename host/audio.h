@@ -164,6 +164,10 @@ uint32_t host_audio_offline_render(uint32_t frames, float *peak);
 // anyway. Without it a host that falls behind stops every cursor with it.
 void host_audio_offline_skip(uint32_t frames);
 void host_audio_offline_end(void);
+// Closes the output device now. A host calls it before it tears down the
+// platform audio it runs on (SDL_Quit): left to the process's exit handlers,
+// the device's stream is destroyed after SDL is gone, through a freed mutex.
+void host_audio_shutdown(void);
 
 #ifdef __cplusplus
 }

@@ -1327,6 +1327,14 @@ extern "C" void host_audio_capture_end(void) {
 
 // --- offline rendering, which is how a test hears anything -------------------
 //
+extern "C" void host_audio_shutdown(void) {
+    std::lock_guard<std::mutex> api(g_api_mutex);
+    if (g_sink) {
+        g_sink->stop();
+        g_sink.reset();
+    }
+}
+
 // The same render loop into a buffer instead of a device, so what a test
 // measures is what would have been played.
 extern "C" int host_audio_offline_begin(double sample_rate, uint32_t max_frames) {
