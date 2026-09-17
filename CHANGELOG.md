@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- A windowed DXGI swap chain on a program's own top-level window owns the
+  display, as a fullscreen one does: the display mode becomes its back-buffer
+  size and the window covers it. The host shows one window, and it is the
+  program's, so the program's window is the picture. Before, Siege of Avalon
+  with Fullscreen unchecked put a 1920x1080 window on the host's 1024x768
+  fallback desktop and showed its top-left corner. Its presents now take the
+  Direct3D 11 hardware path too. A chain on a child window is still a picture
+  inside its window. `dx_tests` and `headless_tests` check both.
+
+- The presenter finishes the Direct3D 11 hardware path's GPU work before it
+  stops (`host_gpu2d_release_device`). A run that ended mid-frame left a
+  render pass open, and Metal aborted the process at exit when the encoder was
+  released without `endEncoding`.
+
 - DXGI swap chains no longer choose the host window. A fullscreen chain
   posted fullscreen into the same slot as the Display setting, so Siege of
   Avalon's `ForceD3DFullscreen=1` overrode the player's choice after the

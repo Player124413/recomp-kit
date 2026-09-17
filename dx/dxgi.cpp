@@ -8,12 +8,21 @@
 #include <cstring>
 
 namespace {
-// The mode a fullscreen swap chain put the display in, for USER32's metrics.
-// Zero while every swap chain is windowed, which leaves the desktop as it was.
+// The mode a swap chain that owns the display put it in, for USER32's metrics.
+// Zero while none does, which leaves the desktop as it was.
 uint32_t g_fs_w = 0, g_fs_h = 0;
 
 } // namespace
 namespace dx11 {
+// Whether a swap chain's picture is the whole display. A fullscreen chain's
+// is, as on Windows. So is a windowed chain on a program's own top-level
+// window: the host shows one window, and that window is the program's, so the
+// program's window is sized to its back buffer and fills it. Treating it as a
+// window on a desktop instead put a 1920x1080 window on the host's 1024x768
+// fallback desktop and showed a corner of it.
+bool owns_display(const Object &s) {
+    return s.fullscreen || win32_top_level(s.swap.OutputWindow);
+}
 uint32_t swapchain(X86 *c, ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
     D3D11_TEXTURE2D_DESC td{};
     td.Width = d.BufferDesc.Width;
@@ -30,7 +39,7 @@ uint32_t swapchain(X86 *c, ComObj *device, const DXGI_SWAP_CHAIN_DESC &d) {
     o->resource = back;
     o->swap = d;
     o->fullscreen = !d.Windowed;
-    if (o->fullscreen) {
+    if (owns_display(*o)) {
         g_fs_w = d.BufferDesc.Width;
         g_fs_h = d.BufferDesc.Height;
         host_set_display_mode(d.BufferDesc.Width, d.BufferDesc.Height, 32);
@@ -76,7 +85,7 @@ void present(X86 *c) {
     const uint32_t sync = arg(c, 1), flags = arg(c, 2);
     if (!(flags & 1))
         dx11::present(*back, com_this_arg(c)->id, s->swap.OutputWindow,
-                      s->fullscreen); // DXGI_PRESENT_TEST does not display
+                      dx11::owns_display(*s)); // DXGI_PRESENT_TEST does not display
     // A sync interval returns at the vertical blank, and a renderer that asks
     // for one paces its whole loop by that return. Returning at once let a
     // game present eight hundred times a second: its main thread never left
@@ -96,13 +105,13 @@ void present(X86 *c) {
     LOGV("D3DPresent %ux%u", back->texture.Width, back->texture.Height);
     com_ret(c, S_OK);
 }
-// A fullscreen swap chain sets the guest's display mode and window bounds
-// only. The host window is the player's Display setting: a game's own
+// A swap chain that owns the display sets the guest's display mode and window
+// bounds only. The host window is the player's Display setting: a game's own
 // fullscreen switch (siege.ini ForceD3DFullscreen) would otherwise override
 // it on every chain and drop borderless. No native window or platform API is
 // accessed from the guest thread.
 void apply_mode(X86 *c, dx11::Object &s) {
-    if (s.fullscreen) {
+    if (dx11::owns_display(s)) {
         g_fs_w = s.swap.BufferDesc.Width;
         g_fs_h = s.swap.BufferDesc.Height;
         host_set_display_mode(s.swap.BufferDesc.Width, s.swap.BufferDesc.Height, 32);

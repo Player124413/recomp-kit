@@ -63,6 +63,8 @@ void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
 // display in, and gets its bounds back when the chain leaves fullscreen.
 void win32_cover_display(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h);
 void win32_uncover_display(X86 *c, uint32_t hwnd);
+// A window with no parent: a program's own top-level window.
+bool win32_top_level(uint32_t hwnd);
 extern "C" bool ddraw_enum_display_mode(uint32_t index, uint32_t *w, uint32_t *h, uint32_t *bpp);
 
 // ---------------------------------------------------------------------------

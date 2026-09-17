@@ -1029,6 +1029,7 @@ extern "C" void host_present_stop() {
     auto s = active.load();
     if (!s)
         return;
+    host_gpu2d_release_device();
     {
         std::lock_guard lock(s->mutex);
         s->stop = true;

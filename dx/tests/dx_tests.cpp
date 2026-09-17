@@ -1388,13 +1388,13 @@ static void test_blt_and_colorkey() {
 // A store in the last bytes of a row that is not a whole number of eight-byte
 // words is still noticed through a retained pointer: the hash takes eight
 // bytes a step and has to cover the tail as well.
-// A fullscreen swap chain changes the mode the desktop is in, and USER32's
+// A swap chain that owns the display - fullscreen, or windowed on the
+// program's top-level window - changes the mode the desktop is in, and USER32's
 // metrics have to say so: a guest that lays out windows or clamps its cursor
 // by the screen size would otherwise use the mode from before the switch.
 static void test_fullscreen_swapchain_sets_the_desktop_mode() {
     g_presents.clear();
     cpu_reset();
-    const uint32_t before_w = call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0});
     uint32_t desc = sc(0x100);
     gm_zero(desc, 0x80);
     wr32(desc + 0, 1920);  // BufferDesc.Width
@@ -1434,14 +1434,43 @@ static void test_fullscreen_swapchain_sets_the_desktop_mode() {
     CHECK_EQ(rd32(rect + 4), 0u);
     CHECK_EQ(rd32(rect + 8), 1920u);
     CHECK_EQ(rd32(rect + 12), 1080u);
-    // Leaving fullscreen puts the desktop back the way it was, and the window.
+    // Leaving fullscreen keeps it all: the program's own top-level window is
+    // the one window the host shows, so a windowed chain on it owns the
+    // display too, and the window stays the size of its back buffer.
     CHECK_EQ(call_method(swap, 10 /* IDXGISwapChain::SetFullscreenState */, {0, 0}), 0u);
-    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), before_w);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 1920u);
     CHECK_EQ(call_shim(tramp("USER32.dll", "GetWindowRect"), {hwnd, rect}), 1u);
-    CHECK_EQ(rd32(rect), 20u);
-    CHECK_EQ(rd32(rect + 4), 30u);
-    CHECK_EQ(rd32(rect + 8), 660u);
-    CHECK_EQ(rd32(rect + 12), 510u);
+    CHECK_EQ(rd32(rect), 0u);
+    CHECK_EQ(rd32(rect + 4), 0u);
+    CHECK_EQ(rd32(rect + 8), 1920u);
+    CHECK_EQ(rd32(rect + 12), 1080u);
+    // A windowed chain on a child window is a picture inside the program's
+    // window: it leaves its window alone, and entering and leaving fullscreen
+    // on it puts the window back the way it was.
+    uint32_t child = call_shim(tramp("USER32.dll", "CreateWindowExA"),
+                               {0, sc(0x280), sc(0x280), 0x40000000u, 20, 30, 320, 200, hwnd, 0, 0,
+                                0});
+    CHECK(child != 0);
+    wr32(desc + 44, child);
+    wr32(desc + 48, 1); // Windowed
+    wr32(desc + 0, 320);
+    wr32(desc + 4, 200);
+    CHECK_EQ(call_shim(tramp("d3d11.dll", "D3D11CreateDeviceAndSwapChain"),
+                       {0, 1, 0, 0, 0, 0, 7, desc, sc(16), sc(20), 0, sc(24)}),
+             0u);
+    const uint32_t inner = rd32(sc(16));
+    CHECK(inner != 0);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetWindowRect"), {child, rect}), 1u);
+    CHECK_EQ(rd32(rect + 8) - rd32(rect), 320u);
+    CHECK_EQ(call_method(inner, 10, {1, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetSystemMetrics"), {0}), 320u);
+    CHECK_EQ(call_method(inner, 10, {0, 0}), 0u);
+    CHECK_EQ(call_shim(tramp("USER32.dll", "GetWindowRect"), {child, rect}), 1u);
+    CHECK_EQ(rd32(rect + 8) - rd32(rect), 320u);
+    CHECK_EQ(rd32(rect + 12) - rd32(rect + 4), 200u);
+    for (uint32_t id : {inner, rd32(sc(20)), swap, device})
+        call_method(id, 2);
+    call_shim(tramp("USER32.dll", "DestroyWindow"), {child});
     call_shim(tramp("USER32.dll", "DestroyWindow"), {hwnd});
 }
 

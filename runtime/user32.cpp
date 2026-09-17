@@ -1478,6 +1478,10 @@ void win32_cover_display(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h) {
         saved[hwnd] = {win->x, win->y, win->w, win->h};
     user32::set_window_pos(c, win, 0, 0, 0, int32_t(w), int32_t(h), 0x14 /* NOZORDER|NOACTIVATE */);
 }
+bool win32_top_level(uint32_t hwnd) {
+    auto *win = user32::find_window(hwnd);
+    return win && hwnd != user32::desktop_handle && !win->parent;
+}
 void win32_uncover_display(X86 *c, uint32_t hwnd) {
     auto &saved = user32::covered_bounds();
     auto it = saved.find(hwnd);

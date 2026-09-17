@@ -214,8 +214,12 @@ int main(int argc, char **argv) {
     method(c, swap, 8, {0, 0});
     check(g_present_count == old_count + 1 && g_frames_written == old_written + 1,
           "DXGI Present writes exactly one frame file");
-    check(frame_pixel(6, 8) == 0xff0000 && frame_pixel(18, 20) == 0xff0000,
-          "windowed back buffer stretches over the output client canvas");
+    // The output window is the program's top-level window, the one window the
+    // host shows: the chain owns the display, so the frame is the back buffer.
+    uint32_t ww = 0, wh = 0, wbpp = 0;
+    win32_display_mode(&ww, &wh, &wbpp);
+    check(ww == 4 && wh == 4 && frame_pixel(0, 0) == 0xff0000 && frame_pixel(3, 3) == 0xff0000,
+          "a windowed back buffer on the program's window is the frame");
     float green_colour[] = {0, 1, 0, 1};
     memcpy(gm_ptr(s + 0xa40), green_colour, 16);
     method(c, context, 50, {view, s + 0xa40});
@@ -224,7 +228,8 @@ int main(int argc, char **argv) {
     dc = call(c, "USER32.dll", "GetDC", {output_window});
     call(c, "USER32.dll", "FillRect", {dc, rect, blue});
     call(c, "USER32.dll", "ReleaseDC", {output_window, dc});
-    check(frame_pixel(6, 8) == 0xff0000, "GDI refresh retains immutable DXGI pixels");
+    check(frame_pixel(0, 0) == 0xff0000 && frame_pixel(3, 3) == 0xff0000,
+          "GDI refresh retains immutable DXGI pixels");
     check(method(c, swap, 15, {s + 0x918}) == S_OK && rd32(s + 0x918),
           "GetContainingOutput supplies a COM output");
     check(method(c, swap, 10, {1, rd32(s + 0x918)}) == S_OK, "SetFullscreenState works");

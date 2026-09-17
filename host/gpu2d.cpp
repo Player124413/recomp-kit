@@ -13,8 +13,8 @@
 // still to write. A present commits the buffer before the frame is sealed, so
 // the presenter composes after the draws that made it.
 //
-// Every entry point runs under the guest baton, so nothing here is shared with
-// another thread.
+// Entry points run under the guest baton; the presenter's shutdown is the one
+// call from another thread, so every entry point takes the state's lock.
 #include "../runtime/display_seam.h"
 #include "present.h"
 #include "gpu/gpu.h"
@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <vector>
 
 namespace {
@@ -31,6 +32,7 @@ struct Surface {
     int w = 0, h = 0;
 };
 struct State {
+    std::recursive_mutex lock;
     gpu::Device *device = nullptr;
     uint32_t generation = 1; // advances whenever every surface is dropped
     std::map<uint32_t, Surface> surfaces;
@@ -152,16 +154,19 @@ struct Quad {
 } // namespace
 
 extern "C" int host_gpu2d_available(void) {
+    std::lock_guard held(state().lock);
     return device() != nullptr;
 }
 
 extern "C" uint32_t host_gpu2d_generation(void) {
+    std::lock_guard held(state().lock);
     device();
     return state().generation;
 }
 
 extern "C" void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgba, int x, int y,
                                    int rw, int rh) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     if (!d || !rgba || rw <= 0 || rh <= 0 || x < 0 || y < 0 || x + rw > w || y + rh > h)
         return;
@@ -173,6 +178,7 @@ extern "C" void host_gpu2d_texture(uint32_t id, int w, int h, const uint8_t *rgb
 }
 
 extern "C" void host_gpu2d_forget(uint32_t id) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     auto &surfaces = state().surfaces;
     auto it = surfaces.find(id);
@@ -184,6 +190,7 @@ extern "C" void host_gpu2d_forget(uint32_t id) {
 }
 
 extern "C" void host_gpu2d_reset(void) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     if (!d)
         return;
@@ -195,6 +202,7 @@ extern "C" void host_gpu2d_reset(void) {
 }
 
 extern "C" void host_gpu2d_clear(uint32_t id, int w, int h, const float rgba[4]) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     Surface *t = d ? surface(d, id, w, h) : nullptr;
     if (t)
@@ -203,6 +211,7 @@ extern "C" void host_gpu2d_clear(uint32_t id, int w, int h, const float rgba[4])
 
 extern "C" int host_gpu2d_draw(uint32_t target, int w, int h, uint32_t texture,
                                const struct HostGpu2DQuad *q) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     if (!d || !q || q->w <= 0 || q->h <= 0)
         return 0;
@@ -243,6 +252,7 @@ extern "C" int host_gpu2d_draw(uint32_t target, int w, int h, uint32_t texture,
 }
 
 extern "C" int host_gpu2d_readback(uint32_t id, int w, int h, uint8_t *rgba) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     auto it = state().surfaces.find(id);
     if (!d || !rgba || it == state().surfaces.end() || it->second.w != w || it->second.h != h)
@@ -254,6 +264,7 @@ extern "C" int host_gpu2d_readback(uint32_t id, int w, int h, uint8_t *rgba) {
 // For the host that presents on the GPU (host/present.cpp): encode the copy
 // into the frame and commit it, ahead of the seal.
 bool host_gpu2d_stage(uint32_t id, int w, int h) {
+    std::lock_guard held(state().lock);
     gpu::Device *d = device();
     auto it = state().surfaces.find(id);
     if (!d || it == state().surfaces.end() || it->second.w != w || it->second.h != h)
@@ -267,6 +278,7 @@ bool host_gpu2d_stage(uint32_t id, int w, int h) {
 // For hosts that build their frames from CPU pixels (the smoke host): the
 // render target read back and presented as a snapshot.
 extern "C" void host_gpu2d_present_readback(uint32_t id, int w, int h) {
+    std::lock_guard held(state().lock);
     std::vector<uint8_t> rgba(size_t(w) * h * 4);
     if (!host_gpu2d_readback(id, w, h, rgba.data()))
         return;
@@ -277,4 +289,20 @@ extern "C" void host_gpu2d_present_readback(uint32_t id, int w, int h) {
         argb[i] = 0xff000000u | (c & 0xffu) << 16 | (c & 0xff00u) | (c >> 16 & 0xffu);
     }
     host_display_present_window(argb.data(), w, h);
+}
+
+// The presenter is stopping and its device may go with it. Anything still
+// open is ended and committed, everything committed finishes, and every copy
+// is dropped: Metal refuses to release a command encoder that was never ended.
+void host_gpu2d_release_device() {
+    State &s = state();
+    std::lock_guard held(s.lock);
+    if (!s.device)
+        return;
+    settle(s.device);
+    for (auto &kv : s.surfaces)
+        s.device->destroy(kv.second.texture);
+    s.surfaces.clear();
+    s.device = nullptr;
+    ++s.generation;
 }
