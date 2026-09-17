@@ -3,16 +3,21 @@
 from pathlib import Path
 import platform
 import shutil
+import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import copy_layouts  # noqa: E402
 
 
-def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None, build_dir=None) -> Path:
+def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None, build_dir=None, game_dir=None) -> Path:
     """Copy the app and host resources into a folder, plus a Linux tarball.
 
     Only named build resources are copied. Shaders are embedded in the host;
     SoundFonts and optional replacement textures belong to the player's game.
+    game_dir, when given, is the game repository whose layouts/ (its shipped
+    on-screen control layouts) is bundled at resources/controls.
     """
     system = system or platform.system()
     if system not in {"Linux", "Windows"}:
@@ -44,6 +49,9 @@ def stage(app_binary: Path, cfg: dict, out_dir: Path, system=None, build_dir=Non
         copy(symbols, resources / "symbols.json")
     else:
         (resources / "symbols.json").unlink(missing_ok=True)
+
+    if game_dir is not None:
+        files.extend(copy_layouts.copy_layouts(game_dir, resources / "controls"))
 
     # Read the actual preset's cache, including an explicit video-OFF override.
     # Exact SONAMEs avoid bundling build tools or unrelated files from ffmpeg/.

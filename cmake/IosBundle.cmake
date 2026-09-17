@@ -65,6 +65,15 @@ function(pop_ios_bundle target)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${POP_ROOT}/tools/recomp/baseline/classic-modes.json
             $<TARGET_BUNDLE_CONTENT_DIR:${target}>/classic-modes.json
     VERBATIM)
+  # The game's shipped on-screen control layouts, when it has any (spec
+  # section 5): host_resource("controls") is the flat bundle's own root here.
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/tools/copy_layouts.py
+            --game-dir ${RECOMP_GAME_DIR}
+            --dest $<TARGET_BUNDLE_CONTENT_DIR:${target}>/controls
+    WORKING_DIRECTORY ${POP_ROOT}
+    COMMENT "Bundling ${RECOMP_APP_NAME}.app's control layouts"
+    VERBATIM)
   # The General MIDI bank for a game that ships none, with its licence.
   add_custom_command(TARGET ${target} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

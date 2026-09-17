@@ -1490,6 +1490,13 @@ int main(int argc, char **argv) {
         const char *profile = recomp_env("PROFILE_DIR");
         if (!profile || !*profile)
             os_setenv("RECOMP_PROFILE_DIR", (data_root + "/profile").c_str());
+        // No executable path can lead to this app's resources (the process is
+        // the system's app_process), so name the data root the activity
+        // unpacked the APK's assets into: host_resource("controls") is
+        // <data root>/controls. A switches.txt override still wins.
+        const char *resources = recomp_env("RESOURCES_DIR");
+        if (!resources || !*resources)
+            os_setenv("RECOMP_RESOURCES_DIR", data_root.c_str());
         game = game_path_resolve(nullptr, data_root.c_str());
         // Missing data is the launcher's to explain and import.
         if (!game.exe.empty())

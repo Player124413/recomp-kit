@@ -52,6 +52,7 @@ static void mkdir_p(const std::string &path) {
 
 int main() {
     os_unsetenv("RECOMP_PROFILE_DIR");
+    os_unsetenv("RECOMP_RESOURCES_DIR");
     std::string root = temp_root();
     CHECK(!root.empty());
     // 1. resources/ beside the executable (Windows and Linux archives).
@@ -131,6 +132,30 @@ int main() {
     CHECK(host_layout().resources_dir == root + "/Flat.app");
     CHECK(!host_layout().developer);
     CHECK(host_resource("classic-modes.json") == root + "/Flat.app/classic-modes.json");
+
+    // 9. RECOMP_RESOURCES_DIR wins everywhere: the Android host points the
+    // layout at its app data folder, where no executable path could lead.
+    os_setenv("RECOMP_RESOURCES_DIR", "/data/app-files");
+    host_layout_set_exe_path_for_test((root + "/bare/exe").c_str());
+    CHECK(host_layout().resources_dir == "/data/app-files");
+    CHECK(!host_layout().developer);
+    CHECK(host_resource("controls") == "/data/app-files/controls");
+    CHECK(host_resource("classic-modes.json") == "/data/app-files/classic-modes.json");
+    // Set after the layout was first asked for, as for the profile.
+    os_setenv("RECOMP_RESOURCES_DIR", "/data/other-files");
+    CHECK(host_layout().resources_dir == "/data/other-files");
+    // A developer run keeps its name mapping: the checkout still wins for the
+    // names that only exist there, so an override aimed at one resource does
+    // not send symbols.json or the game's layouts somewhere they never are.
+    host_layout_set_exe_path_for_test((root + "/game/build/recomp/pop_headless").c_str());
+    CHECK(host_layout().developer);
+    CHECK(host_layout().resources_dir == "/data/other-files");
+    CHECK(host_resource("symbols.json") == root + "/game/build/recomp/symbols.json");
+    CHECK(host_resource("controls") == root + "/game/layouts");
+    CHECK(host_resource("mods/core") == "/data/other-files/mods/core");
+    CHECK(host_layout().profile_dir == root + "/game/build/recomp/profile");
+    os_unsetenv("RECOMP_RESOURCES_DIR");
+    CHECK(host_layout().resources_dir == root + "/game");
 
     host_layout_set_exe_path_for_test(nullptr);
     printf("%d checks, %d failures\n", g_checks, g_failures);

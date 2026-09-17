@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "tools/recomp"))
 sys.path.insert(0, str(ROOT / "tools"))
 import game_config  # noqa: E402
 import buildlock  # noqa: E402
+import copy_layouts  # noqa: E402
 import package_desktop  # noqa: E402
 import stage_game_files  # noqa: E402
 
@@ -174,7 +175,21 @@ def android_project(build_root, cfg, *, gen_dir):
     return out
 
 
-def android_apk(build_root, cfg, *, gen_dir):
+def android_stage_layout_assets(out, game_dir):
+    """Put the game's control layouts in the APK's assets, as controls/.
+
+    RecompActivity copies them out to the app's external files folder on
+    start, which is where host_resource("controls") looks on Android. The
+    directory is rebuilt from scratch so a layout the game dropped also
+    leaves the APK, as the ffmpeg notice does when video goes off.
+    """
+    controls = Path(out) / "app/src/main/assets/controls"
+    if controls.exists():
+        shutil.rmtree(controls)
+    return copy_layouts.copy_layouts(game_dir, controls)
+
+
+def android_apk(build_root, cfg, *, gen_dir, game_dir):
     """Stage the native libraries beside the SDL activity and assemble a debug APK."""
     library = Path(gen_dir) / "host/libmain.so"
     sdl_activity = Path(gen_dir) / "_deps/sdl3-src/android-project/app/src/main/java/org/libsdl/app/SDLActivity.java"
@@ -203,6 +218,7 @@ def android_apk(build_root, cfg, *, gen_dir):
         shutil.copy2(ROOT / "third_party/ffmpeg/NOTICE.md", notice)
     else:
         notice.unlink(missing_ok=True)
+    android_stage_layout_assets(out, game_dir)
     wrapper = "gradlew.bat" if platform.system() == "Windows" else "./gradlew"
     subprocess.run([wrapper, "assembleDebug"], cwd=out, check=True)
     apk = out / "app/build/outputs/apk/debug/app-debug.apk"
@@ -433,7 +449,7 @@ def main():
                 configure(preset, defines, build_dir=build_dir)
                 build(preset, TARGETS[args.target], args.jobs, build_dir=build_dir, config=args.config)
                 if args.target == "android":
-                    apk = android_apk(args.build_root, cfg, gen_dir=build_dir)
+                    apk = android_apk(args.build_root, cfg, gen_dir=build_dir, game_dir=args.game_dir)
                     if not args.no_install:
                         android_install_and_launch(apk, cfg["game"]["bundle_id"], args.device, args.console,
                                                    game_cfg=cfg if args.push_game else None,
@@ -446,7 +462,7 @@ def main():
                     if not binary.is_file():
                         parser.exit(1, "No desktop app binary at %s after the build\n" % binary)
                     packaged = package_desktop.stage(binary, cfg, args.build_root / "package",
-                                                     system=system, build_dir=build_dir)
+                                                     system=system, build_dir=build_dir, game_dir=args.game_dir)
                     print("Packaged %s" % packaged)
     except subprocess.CalledProcessError as error:
         parser.exit(error.returncode or 1, "Build failed; see the compiler output above.\n")
