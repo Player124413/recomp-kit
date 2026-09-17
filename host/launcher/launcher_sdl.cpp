@@ -265,8 +265,11 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
                 }
             } while (SDL_PollEvent(&e));
         }
+        // The countdown runs only while it can be seen, in small steps, so a
+        // slow first frame (an app still launching) does not eat it.
         const uint64_t now = SDL_GetTicksNS();
-        launcher.advance(double(now - last) / 1e9);
+        if (canvas.width() > 0)
+            launcher.advance(std::min(0.1, double(now - last) / 1e9));
         last = now;
         launcher.tick();
         {
