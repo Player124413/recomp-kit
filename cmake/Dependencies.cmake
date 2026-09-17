@@ -35,17 +35,25 @@ set(RECOMP_VIDEO_DEFAULT OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR IOS OR ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(RECOMP_VIDEO_DEFAULT ON)
 elseif(WIN32)
-  # FFmpeg's configure needs the MSYS2 shell and GNU make on PATH. The
-  # native MinGW compiler path is supported; clang-cl/MSVC is out of scope.
-  find_program(RECOMP_FFMPEG_SHELL NAMES bash PATHS ENV PATH NO_DEFAULT_PATH)
-  find_program(RECOMP_FFMPEG_MAKE NAMES make PATHS ENV PATH NO_DEFAULT_PATH)
+  # FFmpeg's configure needs an MSYS2 shell and GNU make. The shell is looked
+  # for beside make first, so Git's or WSL's bash is not picked by accident.
+  find_program(RECOMP_FFMPEG_MAKE NAMES make)
+  if(RECOMP_FFMPEG_MAKE)
+    get_filename_component(RECOMP_FFMPEG_MSYS_BIN "${RECOMP_FFMPEG_MAKE}" DIRECTORY)
+    find_program(RECOMP_FFMPEG_SHELL NAMES bash HINTS "${RECOMP_FFMPEG_MSYS_BIN}" NO_DEFAULT_PATH)
+  endif()
   if(NOT RECOMP_FFMPEG_SHELL OR NOT RECOMP_FFMPEG_MAKE)
-    message(STATUS "RECOMP_VIDEO stays OFF: Windows requires bash and make (MSYS2) on PATH")
-  elseif(MSVC OR CMAKE_C_SIMULATE_ID STREQUAL "MSVC")
-    message(STATUS "RECOMP_VIDEO stays OFF: use a MinGW compiler; clang-cl/MSVC FFmpeg builds are out of scope")
+    message(STATUS "RECOMP_VIDEO stays OFF: Windows requires MSYS2's bash and make")
   else()
     set(RECOMP_VIDEO_DEFAULT ON)
   endif()
+endif()
+# An MSVC-ABI compiler (clang targeting MSVC, clang-cl, cl) gets an FFmpeg
+# built by FFmpeg's own MSVC toolchain, whose DLLs and import libraries it
+# links; a MinGW compiler gets a MinGW FFmpeg.
+set(RECOMP_FFMPEG_MSVC OFF)
+if(WIN32 AND NOT MINGW AND (MSVC OR CMAKE_C_SIMULATE_ID STREQUAL "MSVC"))
+  set(RECOMP_FFMPEG_MSVC ON)
 endif()
 option(RECOMP_VIDEO "Build the shared FFmpeg Bink and Smacker dependency" ${RECOMP_VIDEO_DEFAULT})
 if(WIN32 AND NOT RECOMP_VIDEO_DEFAULT)
@@ -114,9 +122,16 @@ if(RECOMP_VIDEO)
     list(APPEND RECOMP_FFMPEG_CONFIGURE
       --install-name-dir=@rpath --cc=${CMAKE_C_COMPILER})
   else()
-    list(APPEND RECOMP_FFMPEG_CONFIGURE --cc=${CMAKE_C_COMPILER})
-    if(WIN32)
-      list(APPEND RECOMP_FFMPEG_CONFIGURE --target-os=mingw32)
+    if(RECOMP_FFMPEG_MSVC)
+      # cl.exe and link.exe from the Visual Studio developer environment;
+      # FFmpeg's compat/windows/mslink finds the right link.exe when MSYS2's
+      # coreutils link comes first on PATH.
+      list(APPEND RECOMP_FFMPEG_CONFIGURE --toolchain=msvc --target-os=win64 --arch=x86_64)
+    else()
+      list(APPEND RECOMP_FFMPEG_CONFIGURE --cc=${CMAKE_C_COMPILER})
+      if(WIN32)
+        list(APPEND RECOMP_FFMPEG_CONFIGURE --target-os=mingw32)
+      endif()
     endif()
   endif()
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$" OR "x86_64" IN_LIST CMAKE_OSX_ARCHITECTURES)
@@ -153,21 +168,41 @@ if(RECOMP_VIDEO)
       IMPORTED_SONAME "${soname}"
       INTERFACE_INCLUDE_DIRECTORIES "${RECOMP_FFMPEG_PREFIX}/include")
     if(WIN32)
-      set(implib "${RECOMP_FFMPEG_PREFIX}/lib/lib${component}.dll.a")
+      if(RECOMP_FFMPEG_MSVC)
+        # FFmpeg's win64 target installs the import library beside the DLL.
+        set(implib "${RECOMP_FFMPEG_PREFIX}/bin/${component}.lib")
+      else()
+        set(implib "${RECOMP_FFMPEG_PREFIX}/lib/lib${component}.dll.a")
+      endif()
       set_target_properties(ffmpeg::${component} PROPERTIES IMPORTED_IMPLIB "${implib}")
       list(APPEND RECOMP_FFMPEG_IMPLIBRARIES "${implib}")
     endif()
   endforeach()
   # FFmpeg uses a shell configure script and GNU make, not CMake or Ninja.
   # CMAKE_COMMAND is the same (venv) CMake that configured the kit.
+  # On Windows the MSYS2 tools run with their own directory first on PATH, so
+  # configure and make find sed, awk and sh there and nowhere else.
+  set(RECOMP_FFMPEG_ENV ${CMAKE_COMMAND} -E env)
+  if(WIN32)
+    get_filename_component(RECOMP_FFMPEG_MSYS_BIN "${RECOMP_FFMPEG_MAKE}" DIRECTORY)
+    list(APPEND RECOMP_FFMPEG_ENV --modify "PATH=path_list_prepend:${RECOMP_FFMPEG_MSYS_BIN}")
+  endif()
   ExternalProject_Add(ffmpeg
     URL https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
     URL_HASH SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    CONFIGURE_COMMAND ${RECOMP_FFMPEG_SHELL} <SOURCE_DIR>/configure ${RECOMP_FFMPEG_CONFIGURE}
-    BUILD_COMMAND ${CMAKE_COMMAND} -E env ${RECOMP_FFMPEG_MAKE} -j8
-    INSTALL_COMMAND ${CMAKE_COMMAND} -E env ${RECOMP_FFMPEG_MAKE} install
+    CONFIGURE_COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_SHELL} <SOURCE_DIR>/configure ${RECOMP_FFMPEG_CONFIGURE}
+    BUILD_COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_MAKE} -j8
+    INSTALL_COMMAND ${RECOMP_FFMPEG_ENV} ${RECOMP_FFMPEG_MAKE} install
     BUILD_BYPRODUCTS ${RECOMP_FFMPEG_LIBRARIES} ${RECOMP_FFMPEG_IMPLIBRARIES})
+  if(WIN32)
+    # Windows finds a DLL beside the executable: every host and test binary
+    # is built into POP_OUT.
+    ExternalProject_Add_Step(ffmpeg copy_dlls
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${POP_OUT}
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RECOMP_FFMPEG_LIBRARIES} ${POP_OUT}
+      DEPENDEES install)
+  endif()
   # Imported include paths must exist at generation time, before installation.
   file(MAKE_DIRECTORY "${RECOMP_FFMPEG_PREFIX}/include")
   foreach(component avformat avcodec avutil)

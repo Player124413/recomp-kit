@@ -101,15 +101,15 @@ the executable, whose rpath includes `$ORIGIN`. The package also carries
 `resources/ffmpeg-NOTICE.md`. FFmpeg builds from source using the existing
 compiler and make; no distribution FFmpeg package is needed.
 
-On Windows, CMake looks for `bash` and `make` on `PATH` (MSYS2). Video
-defaults to ON only with both tools and a MinGW-compatible compiler;
-missing tools or an MSVC-ABI compiler keep it OFF with a status message.
-`--toolchain=msvc`/clang-cl builds are out of scope. The enabled path imports
-the three versioned DLLs and their MinGW import libraries, and packages the
-DLLs beside the executable with the notice under `resources/`. Windows CI
-explicitly keeps video OFF. Linux/Windows configuration branches have been
-reviewed and packaging tested with fake files on macOS; native builds,
-dynamic loading and cinematic playback on either platform remain unverified.
+On Windows, CMake looks for MSYS2's `make` on `PATH` (or takes
+`-DRECOMP_FFMPEG_MAKE=C:/msys64/usr/bin/make.exe`) and the `bash` beside it;
+video defaults to ON when both are there. With the presets' clang, which
+targets the MSVC ABI, FFmpeg is built by its own MSVC toolchain
+(`--toolchain=msvc`), so run CMake from a Visual Studio developer shell where
+`cl` and `link` are on `PATH`; a MinGW compiler gets a MinGW FFmpeg. The
+three versioned DLLs are copied beside the built executables and packaged
+beside the app with the notice under `resources/`. Windows CI builds FFmpeg
+this way and runs the video tests.
 
 FFmpeg is LGPL-2.1-or-later and dynamically linked. Its full license,
 source URL, checksum, configure command and library replacement instructions

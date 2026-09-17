@@ -113,9 +113,12 @@ jobs:
       - name: Configure
         if: runner.os != 'Windows'
         run: cmake --preset ${{ matrix.preset }}
-      - name: Configure without video (Windows)
+      - name: MSYS2's make for the FFmpeg build (Windows)
         if: runner.os == 'Windows'
-        run: cmake --preset ${{ matrix.preset }} -DRECOMP_VIDEO=OFF
+        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make diffutils
+      - name: Configure with video (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --preset ${{ matrix.preset }} -DRECOMP_FFMPEG_MAKE=C:/msys64/usr/bin/make.exe
       - name: Build every test binary this platform has
         if: matrix.preset != 'ios-stub'
         run: cmake --build --preset ${{ matrix.preset }} --target check_binaries

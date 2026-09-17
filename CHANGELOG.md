@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Video decoding works in the Windows build. With the presets' MSVC-ABI
+  clang, FFmpeg is built by its own MSVC toolchain from an MSYS2 shell and
+  make (found beside each other, so Git's or WSL's bash is not used), its
+  import libraries are linked from `bin/`, and its DLLs are copied beside
+  every built executable. Windows CI installs MSYS2's make and builds with
+  video on, so the Media Foundation and Bink tests run there too.
+
 - CI passes on main again after the Siege of Avalon merge: the repository
   check allows the bundled GeneralUser GS SoundFont, and the Media Foundation
   topology test is skipped in builds without video decoding, where no file
