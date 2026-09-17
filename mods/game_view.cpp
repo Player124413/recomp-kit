@@ -370,7 +370,8 @@ int mods_sprite_hooks_init() {
     const uint32_t addrs[7] = RECOMP_HOOK_SPRITES;
 #endif
 #else
-    const uint32_t addrs[7] = {0x46f080, 0x46dbe0, 0x45f4a0, 0x45f9d0, 0x45efd0, 0x4f95a0, 0x4f98a0};
+    const uint32_t addrs[7] = {0x46f080, 0x46dbe0, 0x45f4a0, 0x45f9d0,
+                               0x45efd0, 0x4f95a0, 0x4f98a0};
 #endif
 #if !defined(RECOMP_HOOK_SPRITES_COUNT) || RECOMP_HOOK_SPRITES_COUNT != 0
     for (auto h : {Hook{addrs[0], sprite_scope, POP_HOOK_BEFORE},

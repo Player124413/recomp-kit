@@ -106,9 +106,9 @@ Surface *surface(gpu::Device *d, uint32_t id, int w, int h) {
         t = {};
     }
     if (!t.texture) {
-        t.texture = d->create_texture({w, h, gpu::Format::RGBA8,
-                                       gpu::UsageSampled | gpu::UsageRenderTarget | gpu::UsageCpu,
-                                       1});
+        t.texture =
+            d->create_texture({w, h, gpu::Format::RGBA8,
+                               gpu::UsageSampled | gpu::UsageRenderTarget | gpu::UsageCpu, 1});
         if (!t.texture) {
             fprintf(stderr, "gpu2d: texture allocation failed (%dx%d)\n", w, h);
             state().surfaces.erase(id);

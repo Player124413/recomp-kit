@@ -76,7 +76,8 @@ CompositeRect settings_page_rect(const CompositorInput &in) {
     const int fits = std::min(in.drawable_w / 640, in.drawable_h / 480);
     if (fits < 1)
         return pixel_rect(whole_rect(page, false));
-    page.scale_override = std::min(compositor_ui_scale(in.drawable_h, 480, in.scale_override), fits);
+    page.scale_override =
+        std::min(compositor_ui_scale(in.drawable_h, 480, in.scale_override), fits);
     return pixel_rect(whole_rect(page, true));
 }
 CompositeRect mapped_element_rect(const CompositorInput &in, const UiElement &e,
@@ -351,8 +352,9 @@ void compositor_compose(gpu::Device *device, const CompositorInput *in, gpu::Tex
     const auto registry = registry_snapshot();
     if (in->cls == HOST_SCREEN_GAMEPLAY)
         draw(pass, *in, in->world,
-             in->classic || boxed_scene(*in) ? pixel_rect(whole_rect(*in, false))
-                         : CompositeRect{0, 0, double(in->drawable_w), double(in->drawable_h)},
+             in->classic || boxed_scene(*in)
+                 ? pixel_rect(whole_rect(*in, false))
+                 : CompositeRect{0, 0, double(in->drawable_w), double(in->drawable_h)},
              full_uv, Opaque);
     for (const auto *e : elements) {
         const auto dst = element_rect(*in, *e, registry);

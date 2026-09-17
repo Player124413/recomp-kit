@@ -105,8 +105,8 @@ extern "C" void recomp_watch_hit(uint32_t addr, uint32_t n, uint64_t value) {
     // was the last one before the damage was read back, and a legitimate
     // writer and a stray one look identical one at a time.
     static uint32_t hits = 0;
-    LOGW("watch: %08x %u = %llx by %s (hit %u)", addr, n, (unsigned long long)value,
-         watch_writer(), ++hits);
+    LOGW("watch: %08x %u = %llx by %s (hit %u)", addr, n, (unsigned long long)value, watch_writer(),
+         ++hits);
 }
 
 // ---------------------------------------------------------------------------

@@ -68,13 +68,13 @@ class BuildPyTests(unittest.TestCase):
             build_py.configure("macos", build_py.game_defines(Path("/g"), Path("/g/build")),
                                build_dir=Path("/g/build/cmake/macos"))
         command = run.call_args[0][0]
-        self.assertEqual(command[command.index("-B") + 1], "/g/build/cmake/macos")
+        self.assertEqual(command[command.index("-B") + 1], str(Path("/g/build/cmake/macos")))
         self.assertIn("-DRECOMP_GAME_DIR=/g", command)
         self.assertIn("-DPOP_BUILD_ROOT=/g/build", command)
         with patch.object(build_py.subprocess, "run") as run:
             build_py.build("macos", ["pop_smoke"], 2, build_dir=Path("/g/build/cmake/macos"))
         command = run.call_args[0][0]
-        self.assertEqual(command[command.index("--build") + 1], "/g/build/cmake/macos")
+        self.assertEqual(command[command.index("--build") + 1], str(Path("/g/build/cmake/macos")))
         self.assertEqual(command[command.index("--config") + 1], "Release")  # Xcode is multi-config
 
     def test_stub_selects_the_stub_preset_and_rejects_debug(self):

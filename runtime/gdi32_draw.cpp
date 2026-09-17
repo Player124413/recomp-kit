@@ -172,9 +172,15 @@ void blit_shim(X86 *c, int mode) {
         dc_size(dest, &dw, &dh);
         dc_size(arg(c, 5), &sw2, &sh2);
         LOGW("gdi: %s %s dst=%08x(%dx%d) src=%08x(%dx%d) at %d,%d %dx%d rop=%08x ret=%08x",
-             ok ? "" : "REFUSED", mode == 1 ? "stretch" : mode == 2 ? "mask" : "blit", dest, dw, dh,
-             arg(c, 5), sw2, sh2, si(c, 1), si(c, 2), si(c, 3), si(c, 4),
-             arg(c, mode == 1 ? 10 : mode == 2 ? 11 : 8), blit_ret);
+             ok ? "" : "REFUSED",
+             mode == 1   ? "stretch"
+             : mode == 2 ? "mask"
+                         : "blit",
+             dest, dw, dh, arg(c, 5), sw2, sh2, si(c, 1), si(c, 2), si(c, 3), si(c, 4),
+             arg(c, mode == 1   ? 10
+                    : mode == 2 ? 11
+                                : 8),
+             blit_ret);
         if (!ok) {
             // Who asked for it. A frame whose locals were never initialised
             // says the routine was entered past its own setup, which the

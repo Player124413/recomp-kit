@@ -32,12 +32,13 @@ def findings():
     for directory in DIRECTORIES:
         for path in sorted((ROOT / directory).rglob("*")):
             relative = path.relative_to(ROOT)
-            if path.suffix not in SUFFIXES or "tests" in relative.parts or str(relative) in EXEMPT:
+            # EXEMPT is written with forward slashes, whatever the platform.
+            if path.suffix not in SUFFIXES or "tests" in relative.parts or relative.as_posix() in EXEMPT:
                 continue
             for number, code in code_lines(path.read_text(errors="replace")):
                 for token in TOKENS:
                     if token in code:
-                        yield "%s:%d: %s" % (relative, number, token)
+                        yield "%s:%d: %s" % (relative.as_posix(), number, token)
 
 
 def main():

@@ -87,8 +87,8 @@ void draw_theme_text_ex(X86 *c) {
 void begin_buffered_paint(X86 *c) {
     if (recomp_env("TRACE_GDI")) {
         const uint32_t rc = arg(c, 1);
-        LOGW("gdi: BeginBufferedPaint target=%08x rect=%d,%d,%d,%d format=%u",
-             arg(c, 0), rc && gm_valid(rc, 16) ? (int)rd32(rc) : -1,
+        LOGW("gdi: BeginBufferedPaint target=%08x rect=%d,%d,%d,%d format=%u", arg(c, 0),
+             rc && gm_valid(rc, 16) ? (int)rd32(rc) : -1,
              rc && gm_valid(rc, 16) ? (int)rd32(rc + 4) : -1,
              rc && gm_valid(rc, 16) ? (int)rd32(rc + 8) : -1,
              rc && gm_valid(rc, 16) ? (int)rd32(rc + 12) : -1, arg(c, 2));

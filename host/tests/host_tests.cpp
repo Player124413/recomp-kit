@@ -1106,7 +1106,8 @@ static void test_bundled_general_midi() {
     const std::string bank = host_resource("general-midi.sf2");
     OsStat st;
     CHECK(!bank.empty() && os_stat(bank.c_str(), &st) == 0 && st.is_regular);
-    CHECK(bank.find("third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2") != std::string::npos);
+    CHECK(bank.find("third_party/soundfonts/generaluser-gs/GeneralUser-GS.sf2") !=
+          std::string::npos);
     CHECK_EQ(st.size, 32319396u);
 }
 

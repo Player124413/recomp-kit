@@ -261,8 +261,9 @@ void swap_row(const uint8_t *src, uint8_t *dst, size_t n) {
 bool to_rgba(const Object &o, bool packed, int32_t x, int32_t y, int32_t w, int32_t h,
              std::vector<uint8_t> &out) {
     const uint32_t f = o.texture.Format;
-    const uint32_t *lut = f == 85 && !packed ? lut565(false) : f == 56 && packed ? lut_packed(false)
-                                                                                 : nullptr;
+    const uint32_t *lut = f == 85 && !packed  ? lut565(false)
+                          : f == 56 && packed ? lut_packed(false)
+                                              : nullptr;
     if (!lut && (packed || !(f == 28 || f == 87)))
         return false;
     const uint32_t bpp = lut ? 2 : 4;
@@ -308,7 +309,8 @@ void cpu_view(Object &o) {
     const uint32_t w = o.texture.Width, h = o.texture.Height, f = o.texture.Format;
     std::vector<uint8_t> rgba(size_t(w) * h * 4);
     if ((f != 28 && f != 87) || !host_gpu2d_readback(o.id, int(w), int(h), rgba.data())) {
-        log_once("d3d11.readback", "D3D11: a render target drawn on the GPU could not be read back");
+        log_once("d3d11.readback",
+                 "D3D11: a render target drawn on the GPU could not be read back");
         o.host_valid = false;
         return;
     }
@@ -316,7 +318,8 @@ void cpu_view(Object &o) {
     // target is used from the CPU, and drawing it on the GPU only adds reads.
     if (++o.readbacks >= 3 && !o.host_refused) {
         o.host_refused = true;
-        log_once("d3d11.refused", "D3D11: a render target read back every frame is drawn in software");
+        log_once("d3d11.refused",
+                 "D3D11: a render target read back every frame is drawn in software");
     }
     for (uint32_t y = 0; y < h; ++y) {
         const uint8_t *src = rgba.data() + size_t(y) * w * 4;
@@ -1232,7 +1235,8 @@ bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, i
         int x = corner & 1 ? maxx : minx, y = corner & 2 ? maxy : miny;
         double tx, ty;
         texel(x, y, tx, ty);
-        if (!(std::abs(tx - double(x + kx)) <= slack) || !(std::abs(ty - double(y + ky)) <= slack)) {
+        if (!(std::abs(tx - double(x + kx)) <= slack) ||
+            !(std::abs(ty - double(y + ky)) <= slack)) {
             return false;
         }
     }
@@ -1289,7 +1293,8 @@ bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, i
         if (xl > xr)
             continue;
         copy_row(tex.data + uint32_t(y + ky) * tex.pitch + uint32_t(xl + kx) * texel_bytes,
-                 target.data + uint32_t(y) * target.pitch + uint32_t(xl) * 4, uint32_t(xr - xl + 1));
+                 target.data + uint32_t(y) * target.pitch + uint32_t(xl) * 4,
+                 uint32_t(xr - xl + 1));
         copied = true;
     }
     if (copied)
@@ -1391,8 +1396,7 @@ bool gpu_draw(dx11::Object &target, dx11::Object &tex, const std::vector<QuadVer
     const bool packed = shader == 3;
     if (!dx11::gpu_available() || !(of == 28 || of == 87) ||
         (packed ? tf != 56 : !(tf == 28 || tf == 87 || tf == 85)) || tex.host_owned ||
-        target.host_refused ||
-        verts.size() != 6 || blend.RenderTargetWriteMask != 15)
+        target.host_refused || verts.size() != 6 || blend.RenderTargetWriteMask != 15)
         return false;
     struct Corner {
         double x, y, u, v;
@@ -1457,8 +1461,8 @@ bool gpu_draw(dx11::Object &target, dx11::Object &tex, const std::vector<QuadVer
         return false;
     const double kx = cu[0] * tw - x0, ky = cv[0] * th - y0;
     if (std::abs((cu[1] - cu[0]) * tw - (x1 - x0)) > 1e-3 ||
-        std::abs((cv[2] - cv[0]) * th - (y1 - y0)) > 1e-3 ||
-        std::abs(kx - std::round(kx)) > 1e-3 || std::abs(ky - std::round(ky)) > 1e-3)
+        std::abs((cv[2] - cv[0]) * th - (y1 - y0)) > 1e-3 || std::abs(kx - std::round(kx)) > 1e-3 ||
+        std::abs(ky - std::round(ky)) > 1e-3)
         return false;
     // What survives the viewport and the target, and the texels under it.
     const double tw_px = target.texture.Width, th_px = target.texture.Height;
@@ -1480,7 +1484,8 @@ bool gpu_draw(dx11::Object &target, dx11::Object &tex, const std::vector<QuadVer
     if (!dx11::host_sync(tex, packed))
         return false;
     // The target's own pixels matter unless this draw replaces all of them.
-    const bool replaces = !blend.BlendEnable && vx0 <= 0 && vy0 <= 0 && vx1 >= tw_px && vy1 >= th_px;
+    const bool replaces =
+        !blend.BlendEnable && vx0 <= 0 && vy0 <= 0 && vx1 >= tw_px && vy1 >= th_px;
     dx11::host_check(target);
     if (!target.host_owned && !replaces && !dx11::host_sync(target, false))
         return false;

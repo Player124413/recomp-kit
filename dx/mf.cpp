@@ -123,7 +123,9 @@ constexpr Guid guid_of(uint32_t a, uint16_t b, uint16_t c, uint64_t tail) {
                  (uint8_t)(tail >> 24), (uint8_t)(tail >> 16), (uint8_t)(tail >> 8),
                  (uint8_t)tail}};
 }
-bool guid_eq(const Guid &x, const Guid &y) { return memcmp(x.b, y.b, 16) == 0; }
+bool guid_eq(const Guid &x, const Guid &y) {
+    return memcmp(x.b, y.b, 16) == 0;
+}
 // Data1 alone identifies every GUID this layer knows, and is what a trace
 // line can be read against the constants above without a formatter.
 uint32_t guid_tag(const Guid &g) {
@@ -379,10 +381,16 @@ Attrs *attrs_arg(X86 *c) {
     return o ? &attrs()[o->id] : nullptr;
 }
 // The key is always the first argument after `this`, by pointer.
-bool attr_key(X86 *c, Guid *key) { return guid_read(arg(c, 1), key); }
+bool attr_key(X86 *c, Guid *key) {
+    return guid_read(arg(c, 1), key);
+}
 
-void attr_unimpl(X86 *c) { com_ret(c, E_NOTIMPL); }
-void attr_ok(X86 *c) { com_ret(c, S_OK); }
+void attr_unimpl(X86 *c) {
+    com_ret(c, E_NOTIMPL);
+}
+void attr_ok(X86 *c) {
+    com_ret(c, S_OK);
+}
 
 void attr_GetUINT32(X86 *c) {
     Attrs *a = attrs_arg(c);
@@ -1028,7 +1036,9 @@ void Source_GetCharacteristics(X86 *c) {
     // MFMEDIASOURCE_CAN_PAUSE | CAN_SEEK
     com_ret(c, put32(arg(c, 1), 0x2u | 0x1u) ? S_OK : E_POINTER);
 }
-void Source_ok(X86 *c) { com_ret(c, S_OK); }
+void Source_ok(X86 *c) {
+    com_ret(c, S_OK);
+}
 
 const ComMethod g_media_source[] = {
     MF_IUNKNOWN_SLOTS,
@@ -1380,7 +1390,8 @@ void Event_GetValue(X86 *c) {
 }
 
 const ComMethod g_media_event[] = {
-    MF_IUNKNOWN_SLOTS,       MF_ATTRIBUTE_SLOTS,
+    MF_IUNKNOWN_SLOTS,
+    MF_ATTRIBUTE_SLOTS,
     {"GetType", 2, Event_GetType},
     {"GetExtendedType", 2, Event_GetExtendedType},
     {"GetStatus", 2, Event_GetStatus},
@@ -1397,7 +1408,9 @@ void Result_GetState(X86 *c) {
     }
     com_ret(c, put32(arg(c, 1), st) ? S_OK : E_POINTER);
 }
-void Result_GetStatus(X86 *c) { com_ret(c, S_OK); }
+void Result_GetStatus(X86 *c) {
+    com_ret(c, S_OK);
+}
 void Result_GetObject(X86 *c) {
     ComObj *self = com_this_arg(c, IF_MF_ASYNC_RESULT);
     ComObj *e = self ? com_get(results()[self->id].event_obj) : nullptr;
@@ -1464,7 +1477,7 @@ void Session_GetEvent(X86 *c) {
     s->queue.pop_front();
     out_view(c, arg(c, 2), e, IF_MF_MEDIA_EVENT); // takes its own reference
     if (e)
-        com_release(e);                           // and the queue drops hers
+        com_release(e); // and the queue drops hers
 }
 void Session_QueueEvent(X86 *c) {
     SessionState *s = session_arg(c);
@@ -1745,8 +1758,8 @@ void Volume_GetChannelCount(X86 *c) {
     ComObj *self = com_this_arg(c, IF_MF_AUDIO_VOLUME);
     SessionState *s = self ? owning_session(self) : nullptr;
     SourceState *src = s ? source_of(s->source_obj) : nullptr;
-    com_ret(c, put32(arg(c, 1), src ? (uint32_t)src->media.audio_channels() : 2u) ? S_OK
-                                                                                  : E_POINTER);
+    com_ret(c,
+            put32(arg(c, 1), src ? (uint32_t)src->media.audio_channels() : 2u) ? S_OK : E_POINTER);
 }
 // The level arrives as a float in 0..1; the host takes hundredths of a dB.
 void Volume_SetAllVolumes(X86 *c) {
@@ -1857,9 +1870,8 @@ void get_service(X86 *c, ComObj *on, uint32_t service_guid, uint32_t riid, uint3
     // A player stores whatever this returns and calls through it later, so a
     // refusal here surfaces as a null call somewhere else entirely. Name the
     // object the request was actually made on.
-    MF_TRACE("mf: GetService kind=%d session=%s service=%08x iid=%08x",
-             on ? (int)on->kind : -1, s ? "yes" : "NO",
-             read_ok ? guid_tag(service) : 0u, read_ok ? guid_tag(want) : 0u);
+    MF_TRACE("mf: GetService kind=%d session=%s service=%08x iid=%08x", on ? (int)on->kind : -1,
+             s ? "yes" : "NO", read_ok ? guid_tag(service) : 0u, read_ok ? guid_tag(want) : 0u);
     if (!s || !read_ok) {
         factory_fail(c, out, E_INVALIDARG);
         return;

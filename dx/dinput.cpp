@@ -815,8 +815,10 @@ void DirectInputCreateEx(X86 *c) {
     static const uint32_t ansi[] = {0x89521360u, 0x5944E662u, 0x9A4CB684u}; // IDirectInput{,2,7}A
     bool known = false, wide = false;
     for (uint32_t a : ansi) {
-        if (data1 == a) known = true;
-        if (data1 == a + 1) known = wide = true;
+        if (data1 == a)
+            known = true;
+        if (data1 == a + 1)
+            known = wide = true;
     }
     if (!known) {
         if (out && gm_valid(out, 4))

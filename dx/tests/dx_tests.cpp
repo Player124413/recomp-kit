@@ -191,16 +191,26 @@ int host_gpu2d_draw(uint32_t target, int w, int h, uint32_t texture, const HostG
     FakeGpuSurface &dst = fake_gpu_surface(target, w, h);
     auto factor = [](int f, int c, const float *s, const float *d) -> float {
         switch (f) {
-        case 0: return 0;
-        case 1: return 1;
-        case 2: return s[3];
-        case 3: return 1 - s[3];
-        case 4: return d[3];
-        case 5: return 1 - d[3];
-        case 6: return s[c];
-        case 7: return 1 - s[c];
-        case 8: return d[c];
-        default: return 1 - d[c];
+        case 0:
+            return 0;
+        case 1:
+            return 1;
+        case 2:
+            return s[3];
+        case 3:
+            return 1 - s[3];
+        case 4:
+            return d[3];
+        case 5:
+            return 1 - d[3];
+        case 6:
+            return s[c];
+        case 7:
+            return 1 - s[c];
+        case 8:
+            return d[c];
+        default:
+            return 1 - d[c];
         }
     };
     for (int py = int(std::ceil(q->y - 0.5)); py < int(std::ceil(q->y + q->h - 0.5)); ++py)
@@ -1125,8 +1135,8 @@ static void test_overlapping_self_blit() {
     };
     uint32_t rect = sc(0x300);
     // BltFast(x, y) from `sr`, checked against the copy DirectDraw makes.
-    auto scroll = [&](int32_t x, int32_t y, int32_t l, int32_t t, int32_t r, int32_t b,
-                      bool keyed, uint8_t key) {
+    auto scroll = [&](int32_t x, int32_t y, int32_t l, int32_t t, int32_t r, int32_t b, bool keyed,
+                      uint8_t key) {
         paint();
         const std::vector<uint8_t> before = pixels();
         std::vector<uint8_t> want = before;
@@ -1447,9 +1457,9 @@ static void test_fullscreen_swapchain_sets_the_desktop_mode() {
     // A windowed chain on a child window is a picture inside the program's
     // window: it leaves its window alone, and entering and leaving fullscreen
     // on it puts the window back the way it was.
-    uint32_t child = call_shim(tramp("USER32.dll", "CreateWindowExA"),
-                               {0, sc(0x280), sc(0x280), 0x40000000u, 20, 30, 320, 200, hwnd, 0, 0,
-                                0});
+    uint32_t child =
+        call_shim(tramp("USER32.dll", "CreateWindowExA"),
+                  {0, sc(0x280), sc(0x280), 0x40000000u, 20, 30, 320, 200, hwnd, 0, 0, 0});
     CHECK(child != 0);
     wr32(desc + 44, child);
     wr32(desc + 48, 1); // Windowed
@@ -11543,7 +11553,6 @@ static void next_event(uint32_t session, uint32_t *type, uint32_t *status) {
     *status = rd32(sc(0x48));
 }
 
-
 // A player does its renderer setup from the topology-status event, not from
 // SetTopology returning: that handler is where it asks for
 // IMFVideoDisplayControl and stores the pointer it calls through afterwards.
@@ -11573,9 +11582,9 @@ static void test_media_foundation_topology_ready() {
     gm_put_wstr(sc(0x100), "Movie.mp3", 0x80);
     wr32(sc(4), 0);
     wr32(sc(8), 0);
-    CHECK_EQ(call_method(resolver, MF_RESOLVER_CreateObjectFromURL,
-                         {sc(0x100), 1, 0, sc(4), sc(8)}),
-             S_OK);
+    CHECK_EQ(
+        call_method(resolver, MF_RESOLVER_CreateObjectFromURL, {sc(0x100), 1, 0, sc(4), sc(8)}),
+        S_OK);
     const uint32_t source = rd32(sc(8));
     CHECK(source != 0);
 
@@ -11772,8 +11781,9 @@ int main() {
         {"gradient, flip, present", test_gradient_flip},
         {"blt and colour key", test_blt_and_colorkey},
         {"retained pointer writes", test_retained_pointer_writes},
-{"retained pointer tail bytes", test_retained_pointer_tail_bytes},
-        {"fullscreen swap chain sets the desktop mode", test_fullscreen_swapchain_sets_the_desktop_mode},
+        {"retained pointer tail bytes", test_retained_pointer_tail_bytes},
+        {"fullscreen swap chain sets the desktop mode",
+         test_fullscreen_swapchain_sets_the_desktop_mode},
         {"display ABI", test_display_abi},
         {"record and coverage", test_record_basic_and_coverage},
         {"keyed blit coverage", test_keyed_blit_coverage_and_key_values},

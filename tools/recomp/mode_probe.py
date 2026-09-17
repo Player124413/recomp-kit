@@ -227,8 +227,8 @@ def main():
     baseline = ROOT / "tools/recomp/baseline/classic-modes.json"
     old = baseline.read_text() if baseline.exists() else ""
     sys.stdout.writelines(difflib.unified_diff(old.splitlines(True), generated.splitlines(True),
-                                             fromfile=str(baseline.relative_to(ROOT)),
-                                             tofile=str(candidate.relative_to(ROOT))))
+                                             fromfile=baseline.relative_to(ROOT).as_posix(),
+                                             tofile=candidate.relative_to(ROOT).as_posix()))
     verified = report["probe_complete"] and report["target_verified"]
     if args.update and verified:
         temporary = baseline.with_suffix(".json.tmp")

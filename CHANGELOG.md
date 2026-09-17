@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- CI passes on Linux and Windows too. Handwritten sources are formatted to
+  the repository's clang-format again. The SEH fatal paths flush stdio before
+  `abort()`, so the line that says why survives a stderr redirected to a
+  file, which glibc buffers (`seh_tests` lost it on Linux). `os_wait` reports
+  a Windows release runtime's fast-fail abort (0xC0000409) as SIGABRT, as it
+  already did the debug runtime's exit status 3. The literal checker, the
+  mode probe's diff headers and two tool tests compare paths the same way on
+  Windows as elsewhere.
+
 - CI builds again on every platform. The GeneralUser GS SoundFont the hosts
   bundle was ignored by `.gitignore` (`*.sf2`) and never committed, so every
   packaging step failed to copy it and a public checkout had no music; it is

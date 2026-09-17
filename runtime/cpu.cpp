@@ -189,8 +189,9 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
         const uint32_t info = c->r[R_ESP] - 16;
         wr32(info, 8);
         wr32(info + 4, target);
-        log_once("null-call", "call to %08x (return=%08x): raising an access violation, as Windows "
-                              "would, for the guest's handlers",
+        log_once("null-call",
+                 "call to %08x (return=%08x): raising an access violation, as Windows "
+                 "would, for the guest's handlers",
                  target, ret);
         recomp_seh_raise(c, 0xc0000005u, 0, 2, info);
     }

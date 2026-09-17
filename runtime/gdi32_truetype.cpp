@@ -53,9 +53,9 @@ std::string lower_ascii(std::string s) {
 // matches it, else the Macintosh Roman one.
 std::string family_of(const stbtt_fontinfo &info) {
     int length = 0;
-    if (const char *utf16 = stbtt_GetFontNameString(&info, &length, STBTT_PLATFORM_ID_MICROSOFT,
-                                                    STBTT_MS_EID_UNICODE_BMP,
-                                                    STBTT_MS_LANG_ENGLISH, 1)) {
+    if (const char *utf16 =
+            stbtt_GetFontNameString(&info, &length, STBTT_PLATFORM_ID_MICROSOFT,
+                                    STBTT_MS_EID_UNICODE_BMP, STBTT_MS_LANG_ENGLISH, 1)) {
         std::string name;
         for (int i = 0; i + 1 < length; i += 2) {
             uint16_t unit = uint16_t((uint8_t(utf16[i]) << 8) | uint8_t(utf16[i + 1]));
@@ -121,9 +121,10 @@ const TrueTypeFace *truetype_windows_substitute(const std::string &family, int32
     // the system raster fonts (System, Fixedsys, Terminal) are not here -
     // the 8x16 cells are the closer stand-in for those.
     static const char *const windows_sans[] = {
-        "segoe ui",     "tahoma",   "microsoft sans serif", "ms sans serif", "ms shell dlg",
-        "ms shell dlg 2", "arial", "verdana",              "calibri",       "trebuchet ms",
-        "helvetica",
+        "segoe ui",      "tahoma",       "microsoft sans serif",
+        "ms sans serif", "ms shell dlg", "ms shell dlg 2",
+        "arial",         "verdana",      "calibri",
+        "trebuchet ms",  "helvetica",
     };
     const std::string key = lower_ascii(family);
     if (std::find(std::begin(windows_sans), std::end(windows_sans), key) == std::end(windows_sans))
@@ -149,8 +150,8 @@ TrueTypeMetrics truetype_metrics(const TrueTypeFace *face, double scale) {
     m.ascent = int32_t(std::lround(ascent * scale));
     m.descent = int32_t(std::lround(-descent * scale));
     m.height = m.ascent + m.descent;
-    const uint16_t units_per_em =
-        uint16_t((face->info.data[face->info.head + 18] << 8) | face->info.data[face->info.head + 19]);
+    const uint16_t units_per_em = uint16_t((face->info.data[face->info.head + 18] << 8) |
+                                           face->info.data[face->info.head + 19]);
     m.internal = std::max(0, m.height - int32_t(std::lround(units_per_em * scale)));
     m.average = truetype_advance(face, scale, 'x');
     for (uint32_t ch = 32; ch < 127; ++ch)
@@ -170,7 +171,8 @@ const TrueTypeGlyph &truetype_glyph(const TrueTypeFace *face, double scale, uint
     auto it = cache.find(key);
     if (it != cache.end())
         return it->second;
-    if (cache.size() > 4096) // repaints redraw the same few captions; a bound, not an eviction policy
+    if (cache.size() >
+        4096) // repaints redraw the same few captions; a bound, not an eviction policy
         cache.clear();
     TrueTypeGlyph glyph;
     int x0 = 0, y0 = 0, x1 = 0, y1 = 0;

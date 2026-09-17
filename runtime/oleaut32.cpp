@@ -84,7 +84,7 @@ uint32_t element_size(uint16_t vt) {
 // [0..4, 0..12] resource table as bounds {5, 13} and then reads [i, 0] for
 // each of its five resources - so the index arithmetic and the one-based
 // dimension number of SafeArrayGetLBound both follow it.
-const uint32_t kArrayMaxDims = 16;  // more than any caller here, and bounds the header
+const uint32_t kArrayMaxDims = 16; // more than any caller here, and bounds the header
 
 uint32_t array_dims(uint32_t a) {
     return rd16(a);
@@ -555,15 +555,12 @@ void o_GetErrorInfo(X86 *c) {
 }
 const ImportShim shims[] = {
 #define O(name, n) {"OLEAUT32.dll", #name, n, o_##name}
-    O(VariantInit, 1),         O(VariantClear, 1),
-    O(VariantCopy, 2),         O(VariantCopyInd, 2),
-    O(VariantChangeType, 4),   O(SysAllocStringLen, 2),
-    O(SysReAllocStringLen, 3), O(SysFreeString, 1),
-    O(SafeArrayCreate, 3),     O(SafeArrayGetLBound, 3),
-    O(SafeArrayGetUBound, 3),  O(SafeArrayGetElement, 3),
-    O(SafeArrayPutElement, 3), O(SafeArrayPtrOfIndex, 3),
-    O(SafeArrayAccessData, 2), O(SafeArrayUnaccessData, 1),
-    O(GetErrorInfo, 2)
+    O(VariantInit, 1),           O(VariantClear, 1),        O(VariantCopy, 2),
+    O(VariantCopyInd, 2),        O(VariantChangeType, 4),   O(SysAllocStringLen, 2),
+    O(SysReAllocStringLen, 3),   O(SysFreeString, 1),       O(SafeArrayCreate, 3),
+    O(SafeArrayGetLBound, 3),    O(SafeArrayGetUBound, 3),  O(SafeArrayGetElement, 3),
+    O(SafeArrayPutElement, 3),   O(SafeArrayPtrOfIndex, 3), O(SafeArrayAccessData, 2),
+    O(SafeArrayUnaccessData, 1), O(GetErrorInfo, 2)
 #undef O
 };
 } // namespace

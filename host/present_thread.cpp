@@ -837,9 +837,10 @@ struct Service : std::enable_shared_from_this<Service> {
                             std::chrono::duration<double>(Clock::now() - synthetic_start).count();
                         synthetic_index =
                             std::max(synthetic_index + 1, uint64_t(elapsed * kOffscreenHz) + 1);
-                        auto deadline = synthetic_start +
-                                        std::chrono::duration_cast<Clock::duration>(
-                                            std::chrono::duration<double>(synthetic_index / kOffscreenHz));
+                        auto deadline =
+                            synthetic_start +
+                            std::chrono::duration_cast<Clock::duration>(
+                                std::chrono::duration<double>(synthetic_index / kOffscreenHz));
                         wake.wait_until(lock, deadline, [&] { return stop; });
                         ts = synthetic_origin + synthetic_index / kOffscreenHz;
                     } else {

@@ -811,9 +811,9 @@ static void test_static_control() {
           "GetClassInfoW finds the system STATIC class and its procedure");
     gm_put_wstr(s + 0x940, "Hi", 8);
     // WS_CHILD | SS_CENTER, 48x16 at (8,8), created hidden as the VCL creates it.
-    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
-                                 {0, s + 0x900, s + 0x940, 0x40000001u, 8, 8, 48, 16, parent, 0,
-                                  IMAGE_BASE, 0});
+    uint32_t child =
+        call_import(&c, "USER32.dll", "CreateWindowExW",
+                    {0, s + 0x900, s + 0x940, 0x40000001u, 8, 8, 48, 16, parent, 0, IMAGE_BASE, 0});
     check(child != 0, "CreateWindowExW(STATIC)");
     memset(g_mem + s + 0xb00, 0, 92);
     wr32(s + 0xb00, uint32_t(-16));
@@ -830,7 +830,8 @@ static void test_static_control() {
     wr32(s + 0xc08, uint32_t(-16));
     wr16(s + 0xc0c, 1);
     wr16(s + 0xc0e, 32);
-    uint32_t dib = call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, s + 0xc00, 0, s + 0xc40, 0, 0});
+    uint32_t dib =
+        call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, s + 0xc00, 0, s + 0xc40, 0, 0});
     call_import(&c, "GDI32.dll", "SelectObject", {mem, dib});
     call_import(&c, "USER32.dll", "SendMessageW", {child, 0x0f, mem, 0});
     int in_memory = 0, on_window = 0;
@@ -843,7 +844,8 @@ static void test_static_control() {
             on_window += call_import(&c, "GDI32.dll", "GetPixel", {window_dc, x, y}) != 0;
     call_import(&c, "USER32.dll", "ReleaseDC", {parent, window_dc});
     check(in_memory > 0 && on_window == 0,
-          "WM_PAINT with a DC in wParam paints into it, not the window (%d, %d)", in_memory, on_window);
+          "WM_PAINT with a DC in wParam paints into it, not the window (%d, %d)", in_memory,
+          on_window);
     call_import(&c, "GDI32.dll", "DeleteDC", {mem});
     call_import(&c, "GDI32.dll", "DeleteObject", {dib});
     // The VCL shows a control with SetWindowPos and SWP_SHOWWINDOW, never with
@@ -882,10 +884,12 @@ static void test_clip_children() {
     loader_init_context(&c);
     uint32_t s = 0x00318000;
     make_test_window(&c, s, 16, 16); // registers the class
-    uint32_t parent = call_import(&c, "USER32.dll", "CreateWindowExW",
-                                  {0, s + 0x800, 0, 0x02000000u, 0, 0, 16, 16, 0, 0, IMAGE_BASE, 0});
-    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
-                                 {0, s + 0x800, 0, 0x50000000u, 4, 4, 4, 4, parent, 0, IMAGE_BASE, 0});
+    uint32_t parent =
+        call_import(&c, "USER32.dll", "CreateWindowExW",
+                    {0, s + 0x800, 0, 0x02000000u, 0, 0, 16, 16, 0, 0, IMAGE_BASE, 0});
+    uint32_t child =
+        call_import(&c, "USER32.dll", "CreateWindowExW",
+                    {0, s + 0x800, 0, 0x50000000u, 4, 4, 4, 4, parent, 0, IMAGE_BASE, 0});
     uint32_t brush = call_import(&c, "GDI32.dll", "CreateSolidBrush", {0xff});
     wr32(s + 0x100, 0);
     wr32(s + 0x104, 0);
@@ -935,8 +939,9 @@ static void test_draw_theme_parent_background() {
     check(call_import(&c, "USER32.dll", "RegisterClassW", {s}) != 0, "RegisterClassW(PrintParent)");
     uint32_t parent = call_import(&c, "USER32.dll", "CreateWindowExW",
                                   {0, s + 0x800, 0, 0, 0, 0, 16, 16, 0, 0, IMAGE_BASE, 0});
-    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
-                                 {0, s + 0x800, 0, 0x50000000u, 4, 4, 4, 4, parent, 0, IMAGE_BASE, 0});
+    uint32_t child =
+        call_import(&c, "USER32.dll", "CreateWindowExW",
+                    {0, s + 0x800, 0, 0x50000000u, 4, 4, 4, 4, parent, 0, IMAGE_BASE, 0});
     uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {child});
     g_parent_messages.clear();
     check(call_import(&c, "UXTHEME.dll", "DrawThemeParentBackground", {child, dc, 0}) == 0,
@@ -997,8 +1002,9 @@ static void test_blit_into_moved_child_origin() {
     loader_init_context(&c);
     uint32_t s = 0x00330000;
     uint32_t parent = make_test_window(&c, s, 16, 16);
-    uint32_t child = call_import(&c, "USER32.dll", "CreateWindowExW",
-                                 {0, s + 0x800, 0, 0x50000000u, 4, 4, 8, 8, parent, 0, IMAGE_BASE, 0});
+    uint32_t child =
+        call_import(&c, "USER32.dll", "CreateWindowExW",
+                    {0, s + 0x800, 0, 0x50000000u, 4, 4, 8, 8, parent, 0, IMAGE_BASE, 0});
     uint32_t bmi = s + 0x200;
     memset(g_mem + bmi, 0, 40);
     wr32(bmi, 40);
@@ -1009,8 +1015,8 @@ static void test_blit_into_moved_child_origin() {
     uint32_t mem = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
     uint32_t dib = call_import(&c, "GDI32.dll", "CreateDIBSection", {mem, bmi, 0, s + 0x280, 0, 0});
     call_import(&c, "GDI32.dll", "SelectObject", {mem, dib});
-    call_import(&c, "GDI32.dll", "SetPixel", {mem, 6, 6, 0x0000ffu});  // red
-    call_import(&c, "GDI32.dll", "SetPixel", {mem, 7, 6, 0x00ff00u});  // green
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 6, 6, 0x0000ffu});                // red
+    call_import(&c, "GDI32.dll", "SetPixel", {mem, 7, 6, 0x00ff00u});                // green
     uint32_t mask = call_import(&c, "GDI32.dll", "CreateBitmap", {16, 16, 1, 1, 0}); // all clear
     uint32_t dc = call_import(&c, "USER32.dll", "GetDC", {child});
     // Logical (4,4) is the child's (0,0), which is the parent's (4,4).
@@ -1019,14 +1025,16 @@ static void test_blit_into_moved_child_origin() {
           "BitBlt into the moved child DC");
     uint32_t parent_dc = call_import(&c, "USER32.dll", "GetDC", {parent});
     uint32_t red = call_import(&c, "GDI32.dll", "GetPixel", {parent_dc, 6, 6});
-    check(red == 0x0000ffu, "BitBlt: the source's (6,6) lands on the parent's (6,6) (got %08x)", red);
+    check(red == 0x0000ffu, "BitBlt: the source's (6,6) lands on the parent's (6,6) (got %08x)",
+          red);
     // Clear bits select the background operation, SRCCOPY: the VCL's transparent draw.
     call_import(&c, "GDI32.dll", "SetPixel", {mem, 7, 6, 0xff0000u}); // now blue
     check(call_import(&c, "GDI32.dll", "MaskBlt",
                       {dc, 0, 0, 16, 16, mem, 0, 0, mask, 0, 0, 0xccaa0029u}) != 0,
           "MaskBlt into the moved child DC");
     uint32_t blue = call_import(&c, "GDI32.dll", "GetPixel", {parent_dc, 7, 6});
-    check(blue == 0xff0000u, "MaskBlt: the source's (7,6) lands on the parent's (7,6) (got %08x)", blue);
+    check(blue == 0xff0000u, "MaskBlt: the source's (7,6) lands on the parent's (7,6) (got %08x)",
+          blue);
     call_import(&c, "USER32.dll", "ReleaseDC", {parent, parent_dc});
     call_import(&c, "USER32.dll", "ReleaseDC", {child, dc});
     call_import(&c, "GDI32.dll", "DeleteDC", {mem});
@@ -1059,7 +1067,8 @@ static void test_memory_truetype_font() {
     gm_put_wstr(s + 0x200, "AB", 8);
     call_import(&c, "GDI32.dll", "GetTextExtentPoint32W", {dc, s + 0x200, 2, s + 0x220});
     check(rd32(s + 0x220) == 160 && rd32(s + 0x224) == 100,
-          "the extent is the font's advances and height (%u x %u)", rd32(s + 0x220), rd32(s + 0x224));
+          "the extent is the font's advances and height (%u x %u)", rd32(s + 0x220),
+          rd32(s + 0x224));
     memset(g_mem + s + 0x240, 0, 60);
     call_import(&c, "GDI32.dll", "GetTextMetricsW", {dc, s + 0x240});
     check(rd32(s + 0x240) == 100 && rd32(s + 0x244) == 80 && rd32(s + 0x248) == 20,
@@ -1080,7 +1089,8 @@ static void test_memory_truetype_font() {
     wr32(s + 0x264, 40);
     wr32(s + 0x268, 256);
     wr32(s + 0x26c, 140);
-    call_import(&c, "USER32.dll", "DrawTextW", {dc, s + 0x200, 1, s + 0x260, 0x21}); // DT_CENTER | DT_SINGLELINE
+    call_import(&c, "USER32.dll", "DrawTextW",
+                {dc, s + 0x200, 1, s + 0x260, 0x21}); // DT_CENTER | DT_SINGLELINE
     check(at(128, 85) == 0x0000ffu && at(104, 85) == 0,
           "DrawTextW centres by the font's advance (%08x %08x)", at(128, 85), at(104, 85));
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});

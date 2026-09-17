@@ -942,9 +942,9 @@ bool pixel(uint32_t hdc, int64_t x, int64_t y, uint32_t *p, bool write, bool ble
     if (x < 0 || y < 0 || x >= w || y >= h ||
         (!d && !contains(client_bounds(*dc, int(w), int(h)), x, y)))
         return false;
-    if (write && !d &&
-        std::any_of(dc->excluded.begin(), dc->excluded.end(),
-                    [&](Rect r) { return contains(r, x, y); }))
+    if (write && !d && std::any_of(dc->excluded.begin(), dc->excluded.end(), [&](Rect r) {
+            return contains(r, x, y);
+        }))
         return false;
     uint32_t at = 0, value = 0;
     if (d) {
@@ -1352,8 +1352,10 @@ void gdi_present_windows(bool refresh) {
     gdi_composite_windows(pixels.data(), w, h);
     if (presented.owner) {
         if (visible && width > 0 && height > 0) {
-            const int64_t x0 = std::max<int64_t>(0, x), x1 = std::min<int64_t>(w, int64_t(x) + width),
-                          y0 = std::max<int64_t>(0, y), y1 = std::min<int64_t>(h, int64_t(y) + height);
+            const int64_t x0 = std::max<int64_t>(0, x),
+                          x1 = std::min<int64_t>(w, int64_t(x) + width),
+                          y0 = std::max<int64_t>(0, y),
+                          y1 = std::min<int64_t>(h, int64_t(y) + height);
             // The source column of every destination column, once per frame
             // rather than once per pixel; a window the snapshot's own size
             // takes whole rows.
@@ -1368,8 +1370,9 @@ void gdi_present_windows(bool refresh) {
                 uint32_t *row = pixels.data() + size_t(dy) * w;
                 if (same_size) {
                     if (x1 > x0)
-                        memcpy(row + x0, presented.pixels.data() + size_t(dy - y) * presented.w +
-                                             size_t(x0 - x),
+                        memcpy(row + x0,
+                               presented.pixels.data() + size_t(dy - y) * presented.w +
+                                   size_t(x0 - x),
                                size_t(x1 - x0) * 4);
                     continue;
                 }

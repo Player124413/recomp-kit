@@ -437,8 +437,8 @@ void u_UpdateWindow(X86 *c) {
 
 // SetWindowPos's body, shared with the runtime's own callers: DXGI sizes a
 // fullscreen swap chain's output window the way Windows does, through here.
-void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int32_t cx,
-                    int32_t cy, uint32_t flags) {
+void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int32_t cx, int32_t cy,
+                    uint32_t flags) {
     if (!(flags & 4)) // SWP_NOZORDER
         reorder_window(w->hwnd, after);
     // A WM_SIZE handler may set the same size while arranging children.
@@ -455,8 +455,8 @@ void set_window_pos(X86 *c, Window *w, uint32_t after, int32_t x, int32_t y, int
         if (!(flags & 0x0008)) // SWP_NOREDRAW
             w->update_pending = true;
     } // SWP_NOSIZE
-    LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h,
-         w->x, w->y, flags, moved, sized);
+    LOGV("SetWindowPos(%08x): %dx%d at %d,%d, flags=%08x changed=%d/%d", w->hwnd, w->w, w->h, w->x,
+         w->y, flags, moved, sized);
     // SWP_SHOWWINDOW and SWP_HIDEWINDOW are ShowWindow's transitions, made
     // before WM_WINDOWPOSCHANGED as Windows makes them. The VCL shows every
     // child control this way, so ignoring them left each one hidden.
@@ -1041,8 +1041,7 @@ void u_BeginPaint(X86 *c) {
     if (w)
         w->update_pending = false; // BeginPaint validates the region
     if (recomp_env("TRACE_GDI"))
-        LOGW("gdi: BeginPaint hwnd=%08x -> hdc=%08x%s", hwnd, hdc,
-             w ? "" : " (no such window)");
+        LOGW("gdi: BeginPaint hwnd=%08x -> hdc=%08x%s", hwnd, hdc, w ? "" : " (no such window)");
     if (ps) {
         memset(g_mem + ps, 0, 64);
         wr32(ps + 0, hdc);                         // hdc

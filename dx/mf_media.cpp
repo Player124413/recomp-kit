@@ -202,15 +202,14 @@ bool Media::next_video(VideoFrame *out) {
             out->height = f.height;
             out->argb.assign(size_t(f.width) * size_t(f.height), 0);
             for (int y = 0; y < f.height; ++y)
-                video_frame_convert_row(reinterpret_cast<uint8_t *>(out->argb.data() +
-                                                                    size_t(y) * size_t(f.width)),
-                                        f.data[0] + size_t(y) * f.linesize[0],
-                                        f.data[1] + size_t(y / 2) * f.linesize[1],
-                                        f.data[2] + size_t(y / 2) * f.linesize[2],
-                                        uint32_t(f.width), VIDEO_XRGB8888);
+                video_frame_convert_row(
+                    reinterpret_cast<uint8_t *>(out->argb.data() + size_t(y) * size_t(f.width)),
+                    f.data[0] + size_t(y) * f.linesize[0],
+                    f.data[1] + size_t(y / 2) * f.linesize[1],
+                    f.data[2] + size_t(y / 2) * f.linesize[2], uint32_t(f.width), VIDEO_XRGB8888);
             const AVRational tb = s_->input->streams[s_->video_index]->time_base;
-            const int64_t pts = f.best_effort_timestamp != AV_NOPTS_VALUE ? f.best_effort_timestamp
-                                                                         : f.pts;
+            const int64_t pts =
+                f.best_effort_timestamp != AV_NOPTS_VALUE ? f.best_effort_timestamp : f.pts;
             out->pts = pts == AV_NOPTS_VALUE ? 0 : double(pts) * tb.num / tb.den;
             av_frame_unref(s_->frame);
             return true;

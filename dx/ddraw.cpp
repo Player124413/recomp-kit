@@ -321,7 +321,6 @@ uint32_t bytes_per_pixel(uint32_t bpp) {
     return bpp <= 8 ? 1u : (bpp <= 16 ? 2u : 4u);
 }
 
-
 // The recorder, defined below with the rest of the frame machinery. Declared
 // here because every write path above it has to call in.
 struct BlitKeys;
@@ -707,8 +706,8 @@ void blit(ComObj *dst, const int32_t d[4], const ComObj *src, const int32_t sr[4
     // leased revision - so only a program that reads its own memory back,
     // such as a renderer uploading its back buffer, shows it.
     const bool same_buffer = src->pixels == dst->pixels;
-    const bool overlap = same_buffer && d[0] < sr[0] + sw && sr[0] < d[2] && d[1] < sr[1] + sh &&
-                         sr[1] < d[3];
+    const bool overlap =
+        same_buffer && d[0] < sr[0] + sw && sr[0] < d[2] && d[1] < sr[1] + sh && sr[1] < d[3];
 
     // The common case: same size, same format, no colour key. One memmove a
     // row, which handles a sideways overlap; a downward one takes the rows
@@ -741,8 +740,8 @@ void blit(ComObj *dst, const int32_t d[4], const ComObj *src, const int32_t sr[4
     auto source_pixel = [&](int32_t x, int32_t y) -> uint32_t {
         if (!overlap)
             return read_pixel(src, x, y);
-        const uint8_t *p = snapshot.data() +
-                           ((size_t)(y - sr[1]) * (size_t)sw + (size_t)(x - sr[0])) * bpp_bytes;
+        const uint8_t *p =
+            snapshot.data() + ((size_t)(y - sr[1]) * (size_t)sw + (size_t)(x - sr[0])) * bpp_bytes;
         uint32_t v = 0;
         memcpy(&v, p, bpp_bytes); // little-endian, as read_pixel reads it
         return v;
@@ -1325,8 +1324,9 @@ void note_palette_write(void) {
 // outstanding write lock, which is the price of recording writes the shim is
 // structurally unable to observe.
 struct LockShadow {
-    std::vector<uint8_t> bytes; // the region as it was at Lock, tightly packed; empty for a baseline lock
-    bool baseline = false;      // "before" is the surface's baseline, not `bytes`
+    std::vector<uint8_t>
+        bytes; // the region as it was at Lock, tightly packed; empty for a baseline lock
+    bool baseline = false; // "before" is the surface's baseline, not `bytes`
     // The guest writes this lock through a raw pointer, so its stores are
     // counted in a dirty range (x86.h) - as long as no import that might write
     // the surface ran in between, which `calls` is there to tell.
@@ -2476,7 +2476,9 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
                    sh.dirty_len == s->pixels_bytes;
     struct Recycle {
         LockShadow &sh;
-        ~Recycle() { shadow_recycle(std::move(sh.bytes)); }
+        ~Recycle() {
+            shadow_recycle(std::move(sh.bytes));
+        }
     } recycle{sh};
     if (stack.empty())
         lock_shadows().erase(it);
@@ -2495,8 +2497,8 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
     // Only the band of rows that differ gets a mask: a text draw locks the
     // whole back buffer and changes a line of it.
     auto row_now = [&](int32_t y) {
-        return (const uint8_t *)gm_ptr(s->pixels + (uint32_t)((sh.r[1] + y) * (int32_t)s->pitch +
-                                                              sh.r[0] * (int32_t)bb));
+        return (const uint8_t *)gm_ptr(
+            s->pixels + (uint32_t)((sh.r[1] + y) * (int32_t)s->pitch + sh.r[0] * (int32_t)bb));
     };
     Baseline *base = nullptr;
     if (sh.baseline) {

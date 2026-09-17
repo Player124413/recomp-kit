@@ -347,8 +347,10 @@ int os_wait(int64_t pid, int *exit_code) {
     DWORD code = 0;
     GetExitCodeProcess(h, &code);
     CloseHandle(h);
-    // abort() exits with 3 on Windows; report it as POSIX SIGABRT so tests agree.
-    *exit_code = code == 3 ? 134 : (int)code;
+    // abort() exits with 3 under a debug C runtime and fails fast with
+    // STATUS_STACK_BUFFER_OVERRUN (0xC0000409, FAST_FAIL_FATAL_APP_EXIT) under a
+    // release one; report both as POSIX SIGABRT so tests agree.
+    *exit_code = code == 3 || code == 0xC0000409u ? 134 : (int)code;
     return 0;
 }
 

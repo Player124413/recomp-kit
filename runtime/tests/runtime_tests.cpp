@@ -393,23 +393,60 @@ static void test_buffered_paint_unavailable() {
     }
     // A VCL program binds every one of these at start and calls through the
     // pointer it got, so a missing export is a call to address zero later.
-    for (const char *api :
-         {"OpenThemeData", "CloseThemeData", "DrawThemeBackground", "DrawThemeText",
-          "GetThemeBackgroundContentRect", "GetThemeBackgroundExtent", "GetThemePartSize",
-          "GetThemeTextExtent", "GetThemeTextMetrics", "GetThemeBackgroundRegion",
-          "HitTestThemeBackground", "DrawThemeEdge", "DrawThemeIcon", "IsThemePartDefined",
-          "IsThemeBackgroundPartiallyTransparent", "GetThemeColor", "GetThemeMetric",
-          "GetThemeString", "GetThemeBool", "GetThemeInt", "GetThemeEnumValue", "GetThemePosition",
-          "GetThemeFont", "GetThemeRect", "GetThemeMargins", "GetThemeIntList",
-          "GetThemePropertyOrigin", "SetWindowTheme", "GetThemeFilename", "GetThemeSysColor",
-          "GetThemeSysColorBrush", "GetThemeSysBool", "GetThemeSysSize", "GetThemeSysFont",
-          "GetThemeSysString", "GetThemeSysInt", "GetWindowTheme", "EnableThemeDialogTexture",
-          "IsThemeDialogTextureEnabled", "GetThemeAppProperties", "SetThemeAppProperties",
-          "GetCurrentThemeName", "GetThemeDocumentationProperty", "DrawThemeParentBackground",
-          "EnableTheming", "DrawThemeTextEx", "OpenThemeDataForDpi", "BeginBufferedPaint",
-          "EndBufferedPaint", "BufferedPaintSetAlpha", "BeginBufferedAnimation",
-          "EndBufferedAnimation", "BufferedPaintRenderAnimation",
-          "BufferedPaintStopAllAnimations"}) {
+    for (const char *api : {"OpenThemeData",
+                            "CloseThemeData",
+                            "DrawThemeBackground",
+                            "DrawThemeText",
+                            "GetThemeBackgroundContentRect",
+                            "GetThemeBackgroundExtent",
+                            "GetThemePartSize",
+                            "GetThemeTextExtent",
+                            "GetThemeTextMetrics",
+                            "GetThemeBackgroundRegion",
+                            "HitTestThemeBackground",
+                            "DrawThemeEdge",
+                            "DrawThemeIcon",
+                            "IsThemePartDefined",
+                            "IsThemeBackgroundPartiallyTransparent",
+                            "GetThemeColor",
+                            "GetThemeMetric",
+                            "GetThemeString",
+                            "GetThemeBool",
+                            "GetThemeInt",
+                            "GetThemeEnumValue",
+                            "GetThemePosition",
+                            "GetThemeFont",
+                            "GetThemeRect",
+                            "GetThemeMargins",
+                            "GetThemeIntList",
+                            "GetThemePropertyOrigin",
+                            "SetWindowTheme",
+                            "GetThemeFilename",
+                            "GetThemeSysColor",
+                            "GetThemeSysColorBrush",
+                            "GetThemeSysBool",
+                            "GetThemeSysSize",
+                            "GetThemeSysFont",
+                            "GetThemeSysString",
+                            "GetThemeSysInt",
+                            "GetWindowTheme",
+                            "EnableThemeDialogTexture",
+                            "IsThemeDialogTextureEnabled",
+                            "GetThemeAppProperties",
+                            "SetThemeAppProperties",
+                            "GetCurrentThemeName",
+                            "GetThemeDocumentationProperty",
+                            "DrawThemeParentBackground",
+                            "EnableTheming",
+                            "DrawThemeTextEx",
+                            "OpenThemeDataForDpi",
+                            "BeginBufferedPaint",
+                            "EndBufferedPaint",
+                            "BufferedPaintSetAlpha",
+                            "BeginBufferedAnimation",
+                            "EndBufferedAnimation",
+                            "BufferedPaintRenderAnimation",
+                            "BufferedPaintStopAllAnimations"}) {
         gm_put_str(text + 128, api, 64);
         check(call_import(&c, "KERNEL32.dll", "GetProcAddress", {module, text + 128}) != 0,
               "%s resolves through GetProcAddress", api);
@@ -425,10 +462,12 @@ static void test_buffered_paint_unavailable() {
     uint32_t fixed = 0;
     if (size && size <= 0x1000 &&
         call_import(&c, "VERSION.dll", "GetFileVersionInfoW", {text, 0, size, block}) &&
-        call_import(&c, "VERSION.dll", "VerQueryValueW", {block, text + 256, text + 512, text + 516}))
+        call_import(&c, "VERSION.dll", "VerQueryValueW",
+                    {block, text + 256, text + 512, text + 516}))
         fixed = rd32(text + 512);
     uint32_t major = fixed && gm_valid(fixed, 52) ? rd32(fixed + 8) >> 16 : 0;
-    check(fixed && rd32(fixed) == 0xfeef04bdu && (major == 5 || major == 6) && rd32(fixed + 36) == 2,
+    check(fixed && rd32(fixed) == 0xfeef04bdu && (major == 5 || major == 6) &&
+              rd32(fixed + 36) == 2,
           "comctl32.dll has a DLL version resource, 5.82 or 6.10 (major %u)", major);
     gm_put_wstr(text, "dwmapi.dll", 64);
     module = call_import(&c, "KERNEL32.dll", "LoadLibraryW", {text});
@@ -5622,17 +5661,22 @@ static void test_user32_window_model() {
         uint32_t fired = call_import(&c, "KERNEL32.dll", "CreateEventA", {0, 1, 1, 0});
         wr32(s + 0x780, idle);
         wr32(s + 0x784, fired);
-        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {2, s + 0x780, 0, 1000, 0x40}) == 1,
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects",
+                          {2, s + 0x780, 0, 1000, 0x40}) == 1,
               "a signalled handle is WAIT_OBJECT_0 + its index");
-        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx", {2, s + 0x780, 1000, 0x40, 0}) == 1,
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx",
+                          {2, s + 0x780, 1000, 0x40, 0}) == 1,
               "the Ex form takes the handles in the same place");
-        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx", {2, s + 0x780, 0, 0x40, 1}) == 0x102,
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx",
+                          {2, s + 0x780, 0, 0x40, 1}) == 0x102,
               "MWMO_WAITALL waits for both");
         host_post_message(hwnd, 0x8001, 0, 0);
-        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {1, s + 0x780, 0, 0, 0xff}) == 1,
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects",
+                          {1, s + 0x780, 0, 0, 0xff}) == 1,
               "an unsignalled handle leaves the queued message");
         call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1});
-        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {1, s + 0x780, 0, 0, 0xff}) == 0x102,
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects",
+                          {1, s + 0x780, 0, 0, 0xff}) == 0x102,
               "and then the timeout");
         call_import(&c, "KERNEL32.dll", "CloseHandle", {idle});
         call_import(&c, "KERNEL32.dll", "CloseHandle", {fired});

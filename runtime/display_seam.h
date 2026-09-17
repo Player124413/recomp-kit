@@ -87,15 +87,15 @@ void host_gpu2d_clear(uint32_t id, int w, int h, const float rgba[4]);
 // DstAlpha, OneMinusDstAlpha, SrcColor, OneMinusSrcColor, DstColor,
 // OneMinusDstColor.
 struct HostGpu2DQuad {
-    double x, y, w, h;     // destination, render-target pixels, y down
-    double u, v, uw, uh;   // source, normalised, v down
-    int blend;             // 0: replace colour and alpha
+    double x, y, w, h;   // destination, render-target pixels, y down
+    double u, v, uw, uh; // source, normalised, v down
+    int blend;           // 0: replace colour and alpha
     int src_rgb, dst_rgb, src_alpha, dst_alpha;
 };
 // Draw `texture` into render target `target` (w x h). False, having drawn
 // nothing, when the texture does not exist or the draw cannot be encoded.
 int host_gpu2d_draw(uint32_t target, int w, int h, uint32_t texture,
-                     const struct HostGpu2DQuad *quad);
+                    const struct HostGpu2DQuad *quad);
 // Waits for the target's pending work and copies it out, w x h RGBA8.
 int host_gpu2d_readback(uint32_t id, int w, int h, uint8_t *rgba);
 // Publish render target `id` as the window frame, as host_display_present_window

@@ -100,7 +100,7 @@ enum ComIface : uint16_t {
     // describes its streams, builds a topology and drives a session; the
     // interfaces no player calls are absent rather than stubbed.
     IF_MF_SOURCE_RESOLVER,
-    IF_MF_MEDIA_SOURCE,           // IMFMediaEventGenerator is its prefix
+    IF_MF_MEDIA_SOURCE, // IMFMediaEventGenerator is its prefix
     IF_MF_PRESENTATION_DESCRIPTOR,
     IF_MF_STREAM_DESCRIPTOR,
     IF_MF_MEDIA_TYPE_HANDLER,
@@ -108,8 +108,8 @@ enum ComIface : uint16_t {
     IF_MF_TOPOLOGY,
     IF_MF_TOPOLOGY_NODE,
     IF_MF_ACTIVATE,
-    IF_MF_MEDIA_SESSION,      // IMFMediaEventGenerator is its prefix too
-    IF_MF_GET_SERVICE,        // IMFGetService, a second view of the session
+    IF_MF_MEDIA_SESSION, // IMFMediaEventGenerator is its prefix too
+    IF_MF_GET_SERVICE,   // IMFGetService, a second view of the session
     IF_MF_MEDIA_EVENT,
     IF_MF_ASYNC_RESULT,
     IF_MF_CLOCK,
@@ -169,7 +169,7 @@ enum ComKind : uint16_t {
     K_MF_ACTIVATE,      // a renderer the player asked for by name
     K_MF_MEDIA_SESSION, // playback, and the event queue the player waits on
     K_MF_MEDIA_EVENT,
-    K_MF_ASYNC_RESULT,  // how one queued event reaches the player's Invoke
+    K_MF_ASYNC_RESULT, // how one queued event reaches the player's Invoke
     K_MF_CLOCK,
     K_MF_VIDEO_DISPLAY, // IMFVideoDisplayControl on the session's renderer
     K_MF_AUDIO_VOLUME,
@@ -278,7 +278,7 @@ struct ComObj {
 
     // --- K_DINPUT / K_DIDEVICE
     uint32_t di_version = 0;
-    bool di_wide = false; // created through DirectInputCreateW: DIDEVICEINSTANCEW layouts
+    bool di_wide = false;  // created through DirectInputCreateW: DIDEVICEINSTANCEW layouts
     uint32_t dev_type = 0; // DIDEVTYPE_MOUSE / _KEYBOARD
     bool acquired = false;
     uint32_t di_coop = 0;

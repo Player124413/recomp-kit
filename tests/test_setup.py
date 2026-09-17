@@ -50,7 +50,11 @@ class SetupTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already points elsewhere"):
                 setup.link_game(root / "replacement", link)
             self.assertTrue(link.is_symlink())
-            self.assertEqual(link.readlink(), root / "missing")
+            # Windows reports the target with its extended-length prefix.
+            target = str(link.readlink())
+            if target.startswith("\\\\?\\"):
+                target = target[4:]
+            self.assertEqual(Path(target), root / "missing")
 
     def test_game_data_names_must_be_directories(self):
         with tempfile.TemporaryDirectory() as directory:

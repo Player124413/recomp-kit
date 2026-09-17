@@ -88,10 +88,18 @@ void trace_frames(X86 *c, const char *phase) {
                  f->establishing_eip);
 }
 
+// abort() drops what stdio still holds, and a stderr redirected to a file is
+// buffered on glibc: the one line that says why would be lost with it.
+[[noreturn]] void fatal_abort() {
+    fflush(stdout);
+    fflush(stderr);
+    abort();
+}
+
 [[noreturn]] void invalid_chain(X86 *c, uint32_t reg, uint32_t target, const char *why) {
     LOGW("SEH: %s (registration=%08x target=%08x FS=%08x ESP=%08x)", why, reg, target, c->fs_base,
          c->r[R_ESP]);
-    abort();
+    fatal_abort();
 }
 
 // Bounds come from this guest thread's TEB, so heap-backed worker stacks are
@@ -172,12 +180,12 @@ uint32_t call_handler(X86 *c, uint32_t reg, SehDispatch *d) {
         LOGW("ExceptionContinueExecution requested; not supported (record=%08x code=%08x "
              "registration=%08x handler=%08x)",
              d->record, rd32(d->record), reg, handler);
-        abort();
+        fatal_abort();
     }
     if (disposition != 1) {
         LOGW("SEH: unsupported disposition %u (record=%08x registration=%08x handler=%08x)",
              disposition, d->record, reg, handler);
-        abort();
+        fatal_abort();
     }
     return disposition;
 }

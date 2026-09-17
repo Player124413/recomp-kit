@@ -107,8 +107,8 @@ struct Pen {
                     write_pixel(hdc, x + g.x + i, baseline + g.y + j, (uint32_t(cover) << 24) | fg,
                                 true);
         if (underline)
-            for (int64_t yy = baseline + 1; yy <= baseline + std::max<int64_t>(1, metrics.height / 16);
-                 ++yy)
+            for (int64_t yy = baseline + 1;
+                 yy <= baseline + std::max<int64_t>(1, metrics.height / 16); ++yy)
                 for (int64_t xx = x; xx < x + width; ++xx)
                     write_pixel(hdc, xx, yy, 0xff000000u | fg);
     }
@@ -122,7 +122,8 @@ Pen pen_of(uint32_t hdc) {
         return pen;
     std::string family;
     for (size_t i = 0; i < 32; ++i) {
-        uint16_t unit = uint16_t(it->second.logfont[28 + 2 * i] | (it->second.logfont[29 + 2 * i] << 8));
+        uint16_t unit =
+            uint16_t(it->second.logfont[28 + 2 * i] | (it->second.logfont[29 + 2 * i] << 8));
         if (!unit)
             break;
         family.push_back(unit < 128 ? char(unit) : '?');
@@ -240,7 +241,8 @@ void memory_font(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    uint32_t fonts = data && size && gm_valid(data, size) ? truetype_add_memory(g_mem + data, size) : 0;
+    uint32_t fonts =
+        data && size && gm_valid(data, size) ? truetype_add_memory(g_mem + data, size) : 0;
     Object font;
     font.kind = Object::Font;
     uint32_t handle = make_object(font);

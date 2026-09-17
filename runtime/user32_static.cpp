@@ -65,8 +65,7 @@ void paint(X86 *c, uint32_t hwnd, uint32_t into) {
     // background brush, or a null brush to leave what is underneath. The VCL
     // reflects the message back to the control, which is where it answers.
     uint32_t brush =
-        parent ? host_dispatch_to_wndproc(c, parent, 0x0138 /* WM_CTLCOLORSTATIC */, hdc, hwnd)
-               : 0;
+        parent ? host_dispatch_to_wndproc(c, parent, 0x0138 /* WM_CTLCOLORSTATIC */, hdc, hwnd) : 0;
     uint32_t pixel;
     if (brush && gdi::brush_color(brush, &pixel))
         gdi::fill(hdc, {0, 0, width, height}, pixel);

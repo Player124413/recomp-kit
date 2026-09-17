@@ -3408,8 +3408,8 @@ void k_RaiseException(X86 *c) {
             snprintf(b, sizeof b, " %08x", r);
             frames += b;
         }
-        LOGV("RaiseException(code=%08x nargs=%u arg0=%08x) from ret=%08x, frames:%s",
-             arg(c, 0), arg(c, 2), arg(c, 2) && gm_valid(arg(c, 3), 4) ? rd32(arg(c, 3)) : 0,
+        LOGV("RaiseException(code=%08x nargs=%u arg0=%08x) from ret=%08x, frames:%s", arg(c, 0),
+             arg(c, 2), arg(c, 2) && gm_valid(arg(c, 3), 4) ? rd32(arg(c, 3)) : 0,
              rd32(c->r[R_ESP]), frames.c_str());
     }
     if (recomp_seh_raise(c, arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3)))
@@ -3510,8 +3510,8 @@ void k_MultiByteToWideChar(X86 *c) {
     for (uint32_t i = 0; i < n; ++i)
         wr16(dst + 2 * i, (uint16_t)(uint8_t)(i < s.size() ? s[i] : 0));
     if (recomp_env("TRACE_FILES") && srclen > 256)
-        LOGW("file: MultiByteToWideChar cp=%u srclen=%d dstlen=%d -> %u", arg(c, 0), srclen,
-             dstlen, n);
+        LOGW("file: MultiByteToWideChar cp=%u srclen=%d dstlen=%d -> %u", arg(c, 0), srclen, dstlen,
+             n);
     set_eax(c, n);
 }
 
