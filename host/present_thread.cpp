@@ -1608,14 +1608,16 @@ bool host_present_suspended(void) {
 }
 
 // Present with a sync interval returns at a vertical blank on Windows, and a
-// renderer that asks for one paces its whole loop by it. The guest thread
-// sleeps to the presenter's next refresh boundary, on the device clock the
-// pacer keeps. A headless presenter has no display to wait for and returns at
-// once, so a smoke still runs as fast as it can.
-extern "C" void host_present_wait_refresh(int intervals) {
+// renderer that asks for one paces its whole loop by it. This is how long
+// until the presenter's next refresh boundary, `intervals` refreshes on, on the
+// device clock the pacer keeps. The caller waits it out in the scheduler: a
+// host sleep here would hold the guest baton for the whole wait and freeze
+// every other guest thread with it. A headless presenter has no display to
+// wait for, so a smoke still runs as fast as it can.
+extern "C" double host_present_refresh_delay(int intervals) {
     auto s = active.load();
     if (!s || s->fake || !s->device || intervals <= 0)
-        return;
+        return 0.0;
     double period, now;
     {
         std::lock_guard lock(s->mutex);
@@ -1623,8 +1625,7 @@ extern "C" void host_present_wait_refresh(int intervals) {
         now = s->device->now_seconds();
     }
     const double next = (std::floor(now / period) + intervals) * period;
-    if (next > now)
-        std::this_thread::sleep_for(std::chrono::duration<double>(next - now));
+    return next > now ? next - now : 0.0;
 }
 
 extern "C" void host_present_seal_window() {

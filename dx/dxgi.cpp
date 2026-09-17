@@ -84,8 +84,16 @@ void present(X86 *c) {
     // the render loop to pump input, and eight megabytes of staging a call
     // outran the GPU by hundreds of megabytes a second. DXGI_PRESENT_TEST and
     // DXGI_PRESENT_DO_NOT_WAIT ask not to.
-    if (sync && !(flags & 9))
-        host_present_wait_refresh(int(std::min<uint32_t>(sync, 4)));
+    //
+    // The wait is a scheduler sleep, as Sleep is. A game that presents from its
+    // own thread does so while the thread handling input runs, and a host sleep
+    // would hold the baton through every refresh and stall that thread with it:
+    // the pointer trailing whatever it hovers over.
+    if (sync && !(flags & 9)) {
+        const double delay = host_present_refresh_delay(int(std::min<uint32_t>(sync, 4)));
+        if (delay > 0)
+            guest_sleep_ms(uint32_t(delay * 1000.0));
+    }
     LOGV("D3DPresent %ux%u", back->texture.Width, back->texture.Height);
     com_ret(c, S_OK);
 }

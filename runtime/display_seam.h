@@ -33,10 +33,10 @@ extern "C" {
 #endif
 // Synchronous owned-pixel snapshot: the host copies ARGB before returning.
 void host_display_present_window(const uint32_t *argb, int w, int h);
-// Guest thread: sleep to the presenter's next refresh boundary, `intervals`
-// refreshes on - what a Present with a sync interval returns at. Nothing to
-// wait for on a headless presenter.
-void host_present_wait_refresh(int intervals);
+// Seconds to the presenter's next refresh boundary, `intervals` refreshes
+// on - when a Present with a sync interval returns. Zero on a headless
+// presenter. The caller waits in the scheduler, never in the host.
+double host_present_refresh_delay(int intervals);
 bool ddraw_gdi_primary_active(void);
 #ifdef __cplusplus
 }

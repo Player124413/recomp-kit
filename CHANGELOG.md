@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `IDXGISwapChain::Present`'s refresh wait is a scheduler sleep, as `Sleep`
+  is, instead of a host sleep. Guest threads run one at a time, and a game
+  that presents from its own thread slept through every refresh holding the
+  baton: in Siege of Avalon that was 38% of the time, sampled while the player
+  hovered over a conversation's replies, with the thread that reads the mouse
+  and redraws the highlight frozen for all of it. The presenter now returns
+  the delay (`host_present_refresh_delay`) and the shim waits it out in the
+  scheduler, so the other threads run.
+
 - A game that plays MIDI and ships no instrument bank now has music. The
   SoundFont search knew only one game's bank (`Sound\POPFIGHT.SF2`), so a
   game that relied on Windows' own General MIDI synthesizer - whose bank
