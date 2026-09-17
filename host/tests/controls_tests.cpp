@@ -1029,6 +1029,21 @@ static void test_tablet_fallback() {
     std::filesystem::remove_all(root, ec);
 }
 
+// A player-edited layout can hand a shape a huge, negative or NaN
+// coordinate; fill_shape must clamp before converting to int rather than
+// invoke undefined behaviour, and must simply draw nothing.
+static void test_raster_shape_bounds_are_clamped() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    c.disc(1e12, -1e12, 1e12, flat_paint(Rgba{255, 255, 255, 255}));
+    for (uint8_t b : px)
+        CHECK(b == 0);
+
+    c.disc(32, 32, std::nan(""), flat_paint(Rgba{255, 255, 255, 255}));
+    for (uint8_t b : px)
+        CHECK(b == 0);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -1065,6 +1080,7 @@ int main() {
     test_make_view_matches_the_old_keypad();
     test_make_view_revision_ignores_undrawn_press();
     test_tablet_fallback();
+    test_raster_shape_bounds_are_clamped();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

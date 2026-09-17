@@ -1,6 +1,8 @@
 // overlay_paint.cpp - see overlay_paint.h.
 #include "overlay_paint.h"
 
+#include <algorithm>
+
 namespace controls {
 
 namespace {

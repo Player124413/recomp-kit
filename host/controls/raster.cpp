@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <functional>
 
 namespace controls {
 
@@ -73,6 +72,16 @@ Canvas::Canvas(std::vector<uint8_t> &px, int w, int h, double opacity)
 template <class Inside>
 void Canvas::fill_shape(double bx0, double by0, double bx1, double by1, const Paint &p,
                         const Inside &inside) {
+    // A player-edited layout can hand a shape a huge, negative or NaN
+    // coordinate; clamp to the canvas (and bail on NaN, which clamp() does
+    // not resolve) before any floor/ceil + int cast, so those casts always
+    // see a finite value in range rather than undefined behaviour.
+    if (std::isnan(bx0) || std::isnan(by0) || std::isnan(bx1) || std::isnan(by1))
+        return;
+    bx0 = std::clamp(bx0, 0.0, double(w_));
+    by0 = std::clamp(by0, 0.0, double(h_));
+    bx1 = std::clamp(bx1, 0.0, double(w_));
+    by1 = std::clamp(by1, 0.0, double(h_));
     // The sample grid starts at each pixel's own (x, y) rather than its
     // centre (see below), so a pixel exactly at the shape's far bound can
     // still have an inside sample there; pad the upper bound by one pixel
