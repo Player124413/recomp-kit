@@ -43,7 +43,10 @@ const char *scancode_name(int scancode);
 struct Control {
     Kind kind = Kind::Key;
     Anchor anchor = Anchor::BottomLeft;
-    double x = 0, y = 0, w = 0, h = 0;   // points; "size" sets w = h; "radius" sets w = h = 2r
+    // Points. Non-Stick: "size" sets w = h; "radius" sets w = h = 2r. Stick:
+    // w/h are the zone (hit test and floating base clamp), independent of
+    // `radius` below; "zone": [w, h] sets them, else they default to 2r.
+    double x = 0, y = 0, w = 0, h = 0;
     int col = -1, row = -1, span = 1;    // inside a grid group only
     int scancode = 0;                    // Key
     std::string label;                   // drawn text; Key defaults to scancode_name
@@ -51,6 +54,7 @@ struct Control {
     int stick = 0;                       // Stick: 0 left, 1 right
     bool floating = true;                // Stick
     double deadzone = 0.15;              // Stick
+    double radius = 0;                   // Stick: knob travel, points; "radius" sets it
     std::string target;                  // Toggle: group id, layout name, or "next"
     std::string label_off;               // Toggle: label while its target group is hidden
     std::string stack_on;                // Toggle: sits on top of this group while it is visible

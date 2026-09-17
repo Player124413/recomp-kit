@@ -91,6 +91,24 @@ void Router::key_cancel(const Control &c, ControlsSink &sink) {
     }
 }
 
+bool Router::has_owner(int group, int control) const {
+    for (const auto &kv : fingers_)
+        if (!kv.second.gap && kv.second.group == group && kv.second.control == control)
+            return true;
+    return false;
+}
+
+// A stick's base at rest or after release: the rect centre, in drawable
+// pixels (never (0, 0) — that only happened to be the rect's own origin in
+// earlier layouts, but is not generally meaningful).
+static void reset_stick(ControlState &cs, const Layout &l, int group, int control,
+                        const Screen &s) {
+    const Rect r = control_rect(l, group, control, s);
+    cs.knob_x = cs.knob_y = 0;
+    cs.base_x = r.x + r.w / 2.0;
+    cs.base_y = r.y + r.h / 2.0;
+}
+
 bool Router::finger_down(int64_t id, double px, double py, uint64_t now_ns, ControlsSink &sink) {
     if (!enabled_ || !layout_)
         return false;
@@ -103,8 +121,15 @@ bool Router::finger_down(int64_t id, double px, double py, uint64_t now_ns, Cont
         return true; // claimed; a gap does nothing
     }
 
-    fingers_[id] = Owned{h.group, h.control, false};
     const Control &c = layout_->groups[h.group].controls[h.control];
+    // A stick or dpad has a single owner: a second finger on top of one
+    // already held is claimed (so TouchMapper never sees it) but inert.
+    const bool second_owner =
+        (c.kind == Kind::Stick || c.kind == Kind::Dpad) && has_owner(h.group, h.control);
+    fingers_[id] = Owned{h.group, h.control, false, !second_owner};
+    if (second_owner)
+        return true;
+
     set_pressed(h.group, h.control, true);
     ++generation_;
 
@@ -135,13 +160,14 @@ bool Router::finger_down(int64_t id, double px, double py, uint64_t now_ns, Cont
     }
     case Kind::Stick: {
         const Rect r = control_rect(*layout_, h.group, h.control, screen_);
-        const double radius = r.w / 2.0;
+        // The knob's travel is its own radius (points), scaled like any
+        // other length; the rect (w/h) is only the zone: hit test and, for
+        // a floating stick, the base's clamp.
+        const double radius = std::lround(c.radius * layout_->scale * screen_.scale);
         double bx, by;
         if (c.floating) {
-            // Clamped so the base circle (radius `radius`) stays inside the
-            // rect; a touch near an edge snaps the base inward.
-            bx = std::clamp(px, r.x + radius, r.x + r.w - radius);
-            by = std::clamp(py, r.y + radius, r.y + r.h - radius);
+            bx = std::clamp(px, double(r.x), double(r.x + r.w));
+            by = std::clamp(py, double(r.y), double(r.y + r.h));
         } else {
             bx = r.x + r.w / 2.0;
             by = r.y + r.h / 2.0;
@@ -171,22 +197,30 @@ bool Router::finger_motion(int64_t id, double px, double py, uint64_t, ControlsS
     if (o.gap || o.group < 0 || o.control < 0)
         return true;
     const Control &c = layout_->groups[o.group].controls[o.control];
+    if ((c.kind == Kind::Dpad || c.kind == Kind::Stick) && !o.primary)
+        return true; // a stick/dpad's non-owning finger does nothing
+
     if (c.kind == Kind::Dpad) {
         const Rect r = control_rect(*layout_, o.group, o.control, screen_);
         const double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
-        states_[o.group][o.control].hat = dpad_hat(px - cx, py - cy, r.w / 2.0);
-        recompute_pad();
-        ++generation_;
+        const uint8_t new_hat = dpad_hat(px - cx, py - cy, r.w / 2.0);
+        ControlState &cs = states_[o.group][o.control];
+        if (new_hat != cs.hat) {
+            cs.hat = new_hat;
+            recompute_pad();
+            ++generation_;
+        }
     } else if (c.kind == Kind::Stick) {
-        const Rect r = control_rect(*layout_, o.group, o.control, screen_);
-        const double radius = r.w / 2.0;
+        const double radius = std::lround(c.radius * layout_->scale * screen_.scale);
         ControlState &cs = states_[o.group][o.control];
         float ox, oy;
         stick_output(px - cs.base_x, py - cs.base_y, radius, c.deadzone, &ox, &oy);
-        cs.knob_x = ox;
-        cs.knob_y = oy;
-        recompute_pad();
-        ++generation_;
+        if (double(ox) != cs.knob_x || double(oy) != cs.knob_y) {
+            cs.knob_x = ox;
+            cs.knob_y = oy;
+            recompute_pad();
+            ++generation_;
+        }
     }
     return true;
 }
@@ -200,17 +234,25 @@ bool Router::finger_up(int64_t id, uint64_t now_ns, ControlsSink &sink) {
     if (o.gap)
         return true;
 
-    set_pressed(o.group, o.control, false);
-    ++generation_;
     const Control &c = layout_->groups[o.group].controls[o.control];
+    if ((c.kind == Kind::Stick || c.kind == Kind::Dpad) && !o.primary)
+        return true; // a stick/dpad's non-owning finger's lift does nothing
+
+    // A Button/Key's drawn `pressed` stays true while another finger still
+    // holds it; a Stick/Dpad has only the one owner, so it always clears.
+    if (c.kind == Kind::Button || c.kind == Kind::Key) {
+        if (!has_owner(o.group, o.control))
+            set_pressed(o.group, o.control, false);
+    } else {
+        set_pressed(o.group, o.control, false);
+    }
+    ++generation_;
     if (c.kind == Kind::Key)
         key_up(c, now_ns, sink);
     else if (c.kind == Kind::Dpad)
         states_[o.group][o.control].hat = 0;
-    else if (c.kind == Kind::Stick) {
-        ControlState &cs = states_[o.group][o.control];
-        cs.knob_x = cs.knob_y = cs.base_x = cs.base_y = 0;
-    }
+    else if (c.kind == Kind::Stick)
+        reset_stick(states_[o.group][o.control], *layout_, o.group, o.control, screen_);
     recompute_pad();
     return true;
 }
@@ -224,17 +266,23 @@ bool Router::finger_cancel(int64_t id, ControlsSink &sink) {
     if (o.gap)
         return true;
 
-    set_pressed(o.group, o.control, false);
-    ++generation_;
     const Control &c = layout_->groups[o.group].controls[o.control];
+    if ((c.kind == Kind::Stick || c.kind == Kind::Dpad) && !o.primary)
+        return true; // a stick/dpad's non-owning finger's cancel does nothing
+
+    if (c.kind == Kind::Button || c.kind == Kind::Key) {
+        if (!has_owner(o.group, o.control))
+            set_pressed(o.group, o.control, false);
+    } else {
+        set_pressed(o.group, o.control, false);
+    }
+    ++generation_;
     if (c.kind == Kind::Key)
         key_cancel(c, sink);
     else if (c.kind == Kind::Dpad)
         states_[o.group][o.control].hat = 0;
-    else if (c.kind == Kind::Stick) {
-        ControlState &cs = states_[o.group][o.control];
-        cs.knob_x = cs.knob_y = cs.base_x = cs.base_y = 0;
-    }
+    else if (c.kind == Kind::Stick)
+        reset_stick(states_[o.group][o.control], *layout_, o.group, o.control, screen_);
     recompute_pad();
     return true;
 }
@@ -252,10 +300,8 @@ void Router::cancel_all(ControlsSink &sink) {
             sink.key(c.scancode, false);
         else if (c.kind == Kind::Dpad)
             states_[o.group][o.control].hat = 0;
-        else if (c.kind == Kind::Stick) {
-            ControlState &cs = states_[o.group][o.control];
-            cs.knob_x = cs.knob_y = cs.base_x = cs.base_y = 0;
-        }
+        else if (c.kind == Kind::Stick)
+            reset_stick(states_[o.group][o.control], *layout_, o.group, o.control, screen_);
     }
     fingers_.clear();
 

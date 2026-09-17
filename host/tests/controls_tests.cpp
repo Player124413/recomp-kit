@@ -86,6 +86,7 @@ static void test_layout_parse_and_write() {
     CHECK(l.groups[0].controls[1].label == "SP");
     const Control &stick = l.groups[1].controls[1];
     CHECK(stick.kind == Kind::Stick && stick.stick == 1 && !stick.floating && stick.w == 60);
+    CHECK(stick.radius == 30); // no "zone": the zone defaults to 2 * radius
     CHECK(l.groups[1].controls.size() == 3); // the unknown kind was skipped
     Layout again;
     CHECK(parse_layout(write_layout(l), &again, &err));
@@ -93,6 +94,39 @@ static void test_layout_parse_and_write() {
     CHECK(!parse_layout("{\"groups\": 5}", &l, &err));
     CHECK(scancode_from_name("F5") == kScanF5 && std::string(scancode_name(kScanUp)) == "Up");
     CHECK(scancode_from_name("NotAKey") == 0);
+}
+
+// A stick's "radius" (knob travel) and "zone" (w/h, the hit-test/base rect)
+// are independent: without "zone" the zone defaults to 2 * radius (as
+// "radius" alone used to size the whole control); with one, it is exactly
+// what is given. Both round-trip through write_layout.
+static const char *kStickZoneLayout = R"({
+  "version": 1, "name": "sticks",
+  "groups": [
+    {"id": "g", "controls": [
+       {"kind": "stick", "stick": "left", "mode": "floating", "anchor": "top-left",
+        "radius": 40},
+       {"kind": "stick", "stick": "right", "mode": "fixed", "anchor": "top-left",
+        "x": 300, "radius": 40, "zone": [300, 150]}
+    ]}
+  ]})";
+
+static void test_stick_radius_and_zone_round_trip() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kStickZoneLayout, &l, &err));
+    const Control &no_zone = l.groups[0].controls[0];
+    CHECK(no_zone.radius == 40 && no_zone.w == 80 && no_zone.h == 80);
+    const Control &explicit_zone = l.groups[0].controls[1];
+    CHECK(explicit_zone.radius == 40 && explicit_zone.w == 300 && explicit_zone.h == 150);
+
+    Layout again;
+    CHECK(parse_layout(write_layout(l), &again, &err));
+    CHECK(write_layout(again) == write_layout(l));
+    const Control &no_zone2 = again.groups[0].controls[0];
+    CHECK(no_zone2.radius == 40 && no_zone2.w == 80 && no_zone2.h == 80);
+    const Control &explicit_zone2 = again.groups[0].controls[1];
+    CHECK(explicit_zone2.radius == 40 && explicit_zone2.w == 300 && explicit_zone2.h == 150);
 }
 
 static Screen screen(int dw, int dh, double scale) {
@@ -953,10 +987,12 @@ static void test_to_host_scales_axes() {
     CHECK(h.l2 == 255);
 }
 
-// A layout with a cross button, an l2 button, a dpad and a floating left
-// stick, all in one non-grid group, at scale 1 so rects match points exactly:
-// cross {0,0,60,60}, l2 {100,0,60,60}, dpad {200,0,120,120} (centre 260,60,
-// half 60), stick {400,0,200,200} (centre 500,100, radius 100).
+// A layout with a cross button, an l2 button, a dpad, a floating left stick
+// and a fixed right stick, all in one non-grid group, at scale 1 so rects
+// match points exactly: cross {0,0,60,60}, l2 {100,0,60,60}, dpad
+// {200,0,120,120} (centre 260,60, half 60), floating stick {400,0,200,200}
+// (centre 500,100), fixed stick {650,0,200,200} (centre 750,100). Both
+// sticks have radius 100 (points; the zone is independent of it).
 static Layout pad_layout() {
     Layout l;
     l.groups.resize(1);
@@ -994,11 +1030,24 @@ static Layout pad_layout() {
     stick.stick = 0;
     stick.floating = true;
     stick.deadzone = 0.15;
+    stick.radius = 100;
     stick.anchor = Anchor::TopLeft;
     stick.x = 400;
     stick.y = 0;
     stick.w = stick.h = 200;
     g.controls.push_back(stick);
+
+    Control fixed_stick;
+    fixed_stick.kind = Kind::Stick;
+    fixed_stick.stick = 1;
+    fixed_stick.floating = false;
+    fixed_stick.deadzone = 0.15;
+    fixed_stick.radius = 100;
+    fixed_stick.anchor = Anchor::TopLeft;
+    fixed_stick.x = 650;
+    fixed_stick.y = 0;
+    fixed_stick.w = fixed_stick.h = 200;
+    g.controls.push_back(fixed_stick);
 
     return l;
 }
@@ -1017,7 +1066,17 @@ static void test_router_pad_buttons() {
     CHECK(r.finger_down(2, 130, 30, 0, rec)); // l2
     CHECK(r.pad().l2 == 1.0f);
 
+    // Two fingers on cross: pad() and the drawn `pressed` stay set while
+    // either one still holds it.
+    CHECK(r.finger_down(5, 40, 40, 0, rec));
+    CHECK((r.pad().buttons & kPadCross) != 0);
     CHECK(r.finger_up(1, 10, rec));
+    CHECK((r.pad().buttons & kPadCross) != 0); // finger 5 still holds it
+    CHECK(r.state(0, 0).pressed);
+    CHECK(r.finger_up(5, 10, rec));
+    CHECK((r.pad().buttons & kPadCross) == 0);
+    CHECK(!r.state(0, 0).pressed);
+
     CHECK(r.finger_up(2, 10, rec));
     CHECK((r.pad() == PadState()));
 }
@@ -1030,12 +1089,22 @@ static void test_router_pad_stick_dpad_and_cancel() {
     r.set_layout(&l, rec);
     r.set_screen(s);
 
-    // A finger at the stick's right edge region: base at the finger, then
-    // motion by +radius saturates lx to 1.
+    // A floating stick's base is the off-centre finger position exactly (no
+    // clamp to the centre), and the knob starts at 0; a further motion by
+    // +radius saturates lx.
     CHECK(r.finger_down(1, 590, 100, 0, rec));
+    CHECK(r.state(0, 3).base_x == 590 && r.state(0, 3).base_y == 100);
+    CHECK(r.state(0, 3).knob_x == 0 && r.state(0, 3).knob_y == 0);
     CHECK(r.finger_motion(1, 690, 100, 0, rec));
     CHECK(r.pad().lx == 1.0f);
     CHECK(r.state(0, 3).knob_x == 1.0);
+
+    // A fixed stick's base is always its rect centre (750, 100): an
+    // off-centre down deflects it immediately.
+    CHECK(r.finger_down(6, 830, 100, 0, rec)); // 80pt right of centre
+    CHECK(r.state(0, 4).base_x == 750 && r.state(0, 4).base_y == 100);
+    CHECK(r.pad().rx > 0.0f);
+    CHECK(r.finger_up(6, 10, rec));
 
     // Dpad motion from up to right changes the hat without a lift.
     CHECK(r.finger_down(2, 260, 0, 0, rec));
@@ -1043,11 +1112,13 @@ static void test_router_pad_stick_dpad_and_cancel() {
     CHECK(r.finger_motion(2, 320, 60, 0, rec));
     CHECK(r.pad().hat == kHatRight);
 
-    // Lifting clears everything.
+    // Lifting clears everything; a stick's base returns to its rect centre
+    // (not (0, 0)).
     CHECK(r.finger_up(1, 10, rec));
     CHECK(r.finger_up(2, 10, rec));
     CHECK((r.pad() == PadState()));
-    CHECK(r.state(0, 3).knob_x == 0.0 && r.state(0, 3).base_x == 0.0);
+    CHECK(r.state(0, 3).knob_x == 0.0 && r.state(0, 3).base_x == 500 &&
+          r.state(0, 3).base_y == 100);
 
     // cancel_all clears everything, including a mid-drag stick.
     CHECK(r.finger_down(3, 30, 30, 0, rec));   // cross
@@ -1056,7 +1127,63 @@ static void test_router_pad_stick_dpad_and_cancel() {
     CHECK(r.pad().buttons == kPadCross);
     r.cancel_all(rec);
     CHECK((r.pad() == PadState()));
-    CHECK(r.state(0, 3).knob_x == 0.0 && r.state(0, 3).base_x == 0.0);
+    CHECK(r.state(0, 3).knob_x == 0.0 && r.state(0, 3).base_x == 500 &&
+          r.state(0, 3).base_y == 100);
+}
+
+// A stick or dpad has a single owner: a second finger claimed on top of it
+// changes nothing and taps nothing, and its own lift does nothing either.
+static void test_router_second_finger_on_stick_or_dpad_is_inert() {
+    Layout l = pad_layout();
+    const Screen s = screen(2000, 1000, 1.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+
+    CHECK(r.finger_down(1, 590, 100, 0, rec)); // primary, floating stick
+    const size_t calls_after_primary = rec.calls.size();
+    CHECK(r.finger_down(2, 410, 20, 0, rec)); // second finger, same stick's zone
+    CHECK(rec.calls.size() == calls_after_primary); // no tap for the second finger
+    CHECK(r.state(0, 3).base_x == 590);              // untouched by the second finger
+    CHECK(r.finger_up(2, 10, rec));                  // its lift does nothing
+    CHECK(r.state(0, 3).base_x == 590);
+    CHECK(r.finger_motion(1, 690, 100, 0, rec)); // the owner still drives it
+    CHECK(r.pad().lx == 1.0f);
+
+    CHECK(r.finger_down(3, 260, 0, 0, rec)); // primary, dpad: up
+    CHECK(r.pad().hat == kHatUp);
+    CHECK(r.finger_down(4, 300, 30, 0, rec)); // second finger, same dpad's zone
+    CHECK(r.pad().hat == kHatUp);             // unchanged by the second finger
+    CHECK(r.finger_up(4, 10, rec));
+    CHECK(r.pad().hat == kHatUp);
+    CHECK(r.finger_motion(3, 320, 60, 0, rec)); // the owner still drives it
+    CHECK(r.pad().hat == kHatRight);
+}
+
+// generation() bumps on a stick/dpad motion only when the hat or knob
+// actually changed, not on every finger_motion call.
+static void test_router_generation_bumps_only_on_hat_or_knob_change() {
+    Layout l = pad_layout();
+    const Screen s = screen(2000, 1000, 1.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+
+    CHECK(r.finger_down(1, 590, 100, 0, rec)); // floating stick, knob at 0
+    const uint32_t gen0 = r.generation();
+    CHECK(r.finger_motion(1, 590, 100, 0, rec)); // no motion at all
+    CHECK(r.generation() == gen0);
+    CHECK(r.finger_motion(1, 690, 100, 0, rec)); // now the knob moves
+    CHECK(r.generation() != gen0);
+
+    CHECK(r.finger_down(2, 260, 0, 0, rec)); // dpad: up
+    const uint32_t gen1 = r.generation();
+    CHECK(r.finger_motion(2, 260, -10, 0, rec)); // still "up": same hat
+    CHECK(r.generation() == gen1);
+    CHECK(r.finger_motion(2, 320, 60, 0, rec)); // now "right": hat changes
+    CHECK(r.generation() != gen1);
 }
 
 // --- Overlay view: what the presenter draws -------------------------------
@@ -1248,6 +1375,7 @@ int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
     test_layout_parse_and_write();
+    test_stick_radius_and_zone_round_trip();
     test_layout_geometry_and_hits();
     test_builtin_keys_matches_the_old_keypad();
     test_form_for();
@@ -1283,6 +1411,8 @@ int main() {
     test_to_host_scales_axes();
     test_router_pad_buttons();
     test_router_pad_stick_dpad_and_cancel();
+    test_router_second_finger_on_stick_or_dpad_is_inert();
+    test_router_generation_bumps_only_on_hat_or_knob_change();
     test_make_view_keys();
     test_make_view_matches_the_old_keypad();
     test_make_view_revision_ignores_undrawn_press();

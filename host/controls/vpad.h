@@ -99,7 +99,11 @@ class Vpad {
     bool controller_connected() const;
     void set_controller_connected(bool on);
 
-    // Back to the constructed state: no sources, no edges, no rumble.
+    // Back to the constructed state: no sources, no edges, no rumble. This
+    // also resets the edge sequence counter to 0, so any reader tracking an
+    // `after_sequence` must reset its own tracking too, or it will treat
+    // pre-reset sequences as still-future ones. Only safe at startup and in
+    // tests, never while a reader (game thread) might be mid-poll.
     void reset();
 
   private:
@@ -138,7 +142,10 @@ struct HostPadState {
 
 // Scales a PadState to the wire format the host_pad_* adapters (added after
 // the merge above) send the guest: sticks to the full int16 range (* 32767,
-// rounded), triggers to a byte (* 255, rounded).
+// rounded), triggers to a byte (* 255, rounded). Y is NOT flipped here —
+// PadState and HostPadState both keep +y down (screen convention); it is
+// the XInput adapter (dx/xinput.cpp, Task 12) that flips ly/ry to XInput's
+// +y up convention on its way out.
 HostPadState to_host(const PadState &s);
 
 } // namespace controls

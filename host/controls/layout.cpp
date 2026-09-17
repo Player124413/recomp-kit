@@ -256,7 +256,19 @@ bool parse_control(const Json &cj, const Group &grp, size_t group_index, size_t 
     c.anchor = anchor_from_name(cj.str("anchor", "bottom-left"));
     c.x = cj.num("x", 0);
     c.y = cj.num("y", 0);
-    if (cj.get("size")) {
+    if (kind == Kind::Stick) {
+        // radius is the knob's travel, independent of the zone (w/h): the
+        // hit-test and floating-base-clamp rect. "zone" sets it explicitly;
+        // without one it defaults to 2r, matching the old round-control size.
+        c.radius = cj.num("radius", 0);
+        if (const Json *zonej = cj.get("zone");
+            zonej && zonej->type == Json::Array && zonej->a.size() == 2) {
+            c.w = zonej->a[0].n;
+            c.h = zonej->a[1].n;
+        } else {
+            c.w = c.h = 2 * c.radius;
+        }
+    } else if (cj.get("size")) {
         double sz = cj.num("size", 0);
         c.w = c.h = sz;
     } else if (cj.get("radius")) {
@@ -441,8 +453,18 @@ Json write_control(const Control &c) {
         j.set("x", Json::number(c.x));
     if (c.y != 0)
         j.set("y", Json::number(c.y));
-    j.set("w", Json::number(c.w));
-    j.set("h", Json::number(c.h));
+    if (c.kind == Kind::Stick) {
+        j.set("radius", Json::number(c.radius));
+        if (c.w != 2 * c.radius || c.h != 2 * c.radius) {
+            Json zone = Json::array();
+            zone.a.push_back(Json::number(c.w));
+            zone.a.push_back(Json::number(c.h));
+            j.set("zone", zone);
+        }
+    } else {
+        j.set("w", Json::number(c.w));
+        j.set("h", Json::number(c.h));
+    }
     if (c.col != -1)
         j.set("col", Json::number(c.col));
     if (c.row != -1)

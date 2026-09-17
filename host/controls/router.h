@@ -31,13 +31,18 @@ class ControlsSink {
     virtual void tap() = 0;                                    // haptic tick on a press
 };
 
-// A control's live, drawable state, indexed by (group, control).
+// A control's live, drawable state, indexed by (group, control). `pressed`
+// stays true while any finger still owns the control (Button and Key; a
+// Stick/Dpad has only ever one owner).
 struct ControlState {
     bool pressed = false;
     double knob_x = 0, knob_y = 0; // Stick: output in [-1, 1]
-    double base_x = 0,
-           base_y = 0; // Stick (floating): the centre, in drawable pixels; 0,0 = default
-    uint8_t hat = 0;   // Dpad: 1 up, 2 right, 4 down, 8 left
+    // Stick: the base's drawable-pixel position, i.e. where the knob's
+    // output is measured from. Always valid: the rect centre at rest and
+    // after release, the finger position (floating) or the rect centre
+    // (fixed) while held.
+    double base_x = 0, base_y = 0;
+    uint8_t hat = 0; // Dpad: 1 up, 2 right, 4 down, 8 left
 };
 
 // Owns no SDL state: fingers arrive as (id, point, time) and leave as
@@ -73,22 +78,30 @@ class Router {
 
   private:
     // What a live finger is sitting on: a control (group/control >= 0), or a
-    // visible grid group's own gap (control == -1, gap == true).
+    // visible grid group's own gap (control == -1, gap == true). `primary`
+    // is only meaningful for Stick/Dpad, which allow just one real owner: a
+    // second finger claimed on top of it is inert (primary == false).
     struct Owned {
         int group = -1, control = -1;
         bool gap = false;
+        bool primary = true;
     };
 
     void set_pressed(int group, int control, bool pressed);
+    // Whether some other currently-owned finger already sits on (group,
+    // control): gates a Button/Key's drawn `pressed` (stays true while any
+    // owner remains) and a Stick/Dpad's single-owner claim.
+    bool has_owner(int group, int control) const;
     // Down on a Key control: modifiers go through modifiers_; anything else
     // is a plain sink.key(scancode, true).
     void key_down(const Control &c, uint64_t now_ns, ControlsSink &sink);
     // Up on a Key control: modifiers release through modifiers_; anything
     // else is sink.key(scancode, false) followed by key_lifted(). Legacy
-    // quirk, ported as-is from host/sdl/main.cpp's g_keypad_fingers map: a
-    // key's release is not reference-counted across the fingers that land
-    // on it, so if two fingers land on the same key, either one lifting
-    // releases it, and the other's later lift releases it again.
+    // quirk, ported as-is from host/sdl/main.cpp's g_keypad_fingers map: the
+    // sink's key event is not reference-counted across the fingers that
+    // land on it, so if two fingers land on the same key, either one
+    // lifting sends key(false), and the other's later lift sends it again
+    // (only the drawn `pressed` state is reference-counted, via has_owner).
     void key_up(const Control &c, uint64_t now_ns, ControlsSink &sink);
     // Cancel on a Key control: modifiers cancel through modifiers_ (no
     // latch survives); anything else is sink.key(scancode, false) alone.
