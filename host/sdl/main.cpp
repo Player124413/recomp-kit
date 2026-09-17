@@ -1301,9 +1301,11 @@ int main(int argc, char **argv) {
             exe_flag = argv[++i];
         else if (strncmp(argv[i], "--exe=", 6) == 0)
             exe_flag = argv[i] + 6;
+        else if (strcmp(argv[i], "--launcher") == 0)
+            continue; // launcher::requested reads it
         else {
             fprintf(stderr, "usage: " RECOMP_APP_NAME " [--exe <" RECOMP_EXECUTABLE
-                            ">] [--version] [--probe-layout]\n");
+                            ">] [--launcher] [--version] [--probe-layout]\n");
             return 2;
         }
     }

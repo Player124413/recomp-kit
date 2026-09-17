@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The desktop app accepts `--launcher`; its argument check printed the usage
+  and exited before the launcher could read the flag.
 - Bink: close any movie left open at guest exit before host audio teardown.
   Release decoder state, audio channels and guest records in the shared
   smoke, headless and SDL host shutdown path, preventing a process-exit abort.
