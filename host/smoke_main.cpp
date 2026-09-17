@@ -2065,6 +2065,18 @@ extern "C" void host_display_present_window(const uint32_t *argb, int w, int h) 
     host_present(argb, w, h, 32, nullptr, w * 4);
     host_present_seal_window();
 }
+// The smoke's display is its drawable: RECOMP_SMOKE_DRAWABLE, when set.
+extern "C" int host_display_screen_size(int *w, int *h) {
+    const char *size = recomp_env("SMOKE_DRAWABLE");
+    int sw = 0, sh = 0;
+    char trailing = 0;
+    if (!w || !h || !size || sscanf(size, "%dx%d%c", &sw, &sh, &trailing) != 2 || sw <= 0 ||
+        sh <= 0)
+        return 0;
+    *w = sw;
+    *h = sh;
+    return 1;
+}
 // A GPU-drawn window frame reaches the captures the same way, read back.
 extern "C" void host_display_present_gpu2d(uint32_t id, int w, int h) {
     host_gpu2d_present_readback(id, w, h);

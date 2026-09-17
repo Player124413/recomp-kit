@@ -6,6 +6,14 @@
 extern "C" {
 
 __attribute__((weak)) void mods_present_level_end(void) {}
+// A host with no display reports none.
+__attribute__((weak)) int host_display_screen_size(int *, int *) {
+    return 0;
+}
+// And a build without DirectDraw offers no modes.
+__attribute__((weak)) int ddraw_add_mode(int, int, int) {
+    return 0;
+}
 
 __attribute__((weak)) bool mods_load_all(void) {
     return true;

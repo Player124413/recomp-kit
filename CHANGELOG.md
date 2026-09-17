@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `runtime/native_seam.h` lists what a game's native overrides may call: the
+  area a fullscreen window fills (`host_display_screen_size`, reported by the
+  SDL host from the fullscreen window, which keeps clear of a camera notch, or
+  else the display, and by the smoke host from `RECOMP_SMOKE_DRAWABLE`), the
+  profile path a guest file would be written to (`recomp_writable_path`,
+  nothing without an overlay), the path a guest file is read from
+  (`recomp_readable_path`), and `ddraw_add_mode`. Hosts without a display or
+  DirectDraw get defaults that report none.
+
 - CI passes on Linux and Windows too. Handwritten sources are formatted to
   the repository's clang-format again. The SEH fatal paths flush stdio before
   `abort()`, so the line that says why survives a stderr redirected to a

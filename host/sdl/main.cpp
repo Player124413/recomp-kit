@@ -155,6 +155,30 @@ HostWindowSize window_size_for(int gw, int gh) {
     return host_window_size_for(gw, gh, visible.w, visible.h, density > 0 ? density : 1.0);
 }
 
+// The area a fullscreen window fills, read on the main thread and kept for the
+// guest threads that ask (host_display_screen_size): the fullscreen window
+// itself, which keeps clear of a camera notch, or else the window's display.
+std::atomic<int> g_screen_w{0}, g_screen_h{0};
+void note_screen_size() {
+    int w = 0, h = 0;
+    if (g_window && (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN)) {
+        if (!SDL_GetWindowSize(g_window, &w, &h))
+            w = h = 0;
+    } else {
+        SDL_Rect bounds = {0, 0, 0, 0};
+        SDL_DisplayID display =
+            g_window ? SDL_GetDisplayForWindow(g_window) : SDL_GetPrimaryDisplay();
+        if (SDL_GetDisplayBounds(display, &bounds)) {
+            w = bounds.w;
+            h = bounds.h;
+        }
+    }
+    if (w <= 0 || h <= 0)
+        return;
+    g_screen_w.store(w);
+    g_screen_h.store(h);
+}
+
 // The window's size in points and in drawable pixels.
 void window_sizes(int *bw, int *bh, int *dw, int *dh) {
     *bw = *bh = *dw = *dh = 0;
@@ -962,10 +986,12 @@ void handle_event(const SDL_Event &event) {
         break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_RESIZED:
+        note_screen_size();
         post_drawable_size();
         break;
     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+        note_screen_size();
         g_borderless_frame_dirty = true;
         post_drawable_size();
         break;
@@ -978,6 +1004,7 @@ void handle_event(const SDL_Event &event) {
         }
         g_fullscreen_transition = false;
         g_window_mode = 2;
+        note_screen_size();
         post_drawable_size();
         update_platform_pointer_capture();
         break;
@@ -988,6 +1015,7 @@ void handle_event(const SDL_Event &event) {
         }
         g_fullscreen_transition = false;
         g_window_mode = 0;
+        note_screen_size();
         post_drawable_size();
         update_platform_pointer_capture();
         break;
@@ -1518,6 +1546,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_CreateWindow failed: %s\n", SDL_GetError());
         return 3;
     }
+    note_screen_size();
     g_surface = gpu::native_surface_for_window(g_window);
     if (!g_surface) {
         fprintf(stderr, RECOMP_APP_NAME ": no %s surface for the window: %s\n",
@@ -1627,4 +1656,13 @@ int main(int argc, char **argv) {
     SDL_Quit();
     platform_ui_process_exit(0);
     return 0;
+}
+
+extern "C" int host_display_screen_size(int *w, int *h) {
+    const int sw = g_screen_w.load(), sh = g_screen_h.load();
+    if (!w || !h || sw <= 0 || sh <= 0)
+        return 0;
+    *w = sw;
+    *h = sh;
+    return 1;
 }

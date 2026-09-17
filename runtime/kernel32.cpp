@@ -15,6 +15,7 @@
 #include "frame_deadline.h"
 #include "memory.h"
 #include "win32.h"
+#include "native_seam.h"
 #include "loader.h"
 
 #include <errno.h>
@@ -407,6 +408,24 @@ std::string win32_host_path_op(const std::string &guest_path, int op) {
     // is a behaviour change and not one this seam is allowed to make.
     bool may_create = (op == WIN32_FILE_WRITE || op == WIN32_FILE_RENAME_DST);
     return resolve_in_game_dir(norm, may_create);
+}
+
+extern "C" int recomp_writable_path(const char *guest_path, char *out, size_t out_len) {
+    // Only the resolver's answer: without an overlay a write would fall
+    // through to the game directory, which a native override must not touch.
+    if (!guest_path || !out || !out_len || !g_file_resolve)
+        return 0;
+    const std::string rel = serialise_relative(normalise_components(guest_path));
+    return g_file_resolve(rel.c_str(), WIN32_FILE_WRITE, out, out_len) ? 1 : 0;
+}
+extern "C" int recomp_readable_path(const char *guest_path, char *out, size_t out_len) {
+    if (!guest_path || !out || !out_len)
+        return 0;
+    const std::string path = win32_host_path_op(guest_path, WIN32_FILE_READ);
+    if (path.empty() || path.size() >= out_len)
+        return 0;
+    memcpy(out, path.c_str(), path.size() + 1);
+    return 1;
 }
 
 std::string win32_host_path(const std::string &guest_path, bool for_create) {
