@@ -185,6 +185,22 @@ void test_process_and_strings() {
     CHECK(os_user_data_dir("PopRecompTest", data, sizeof data) == 0);
     CHECK(strstr(data, "PopRecompTest") != nullptr);
     CHECK(data[strlen(data) - 1] != '/' && data[strlen(data) - 1] != '\\');
+    {
+        uint64_t free_bytes = 0;
+        const std::string dir = scratch_dir();
+        CHECK(os_free_space(dir.c_str(), &free_bytes) == 0);
+        CHECK(free_bytes > 0);
+        CHECK(os_free_space("/definitely/not/a/volume/path", &free_bytes) == -1);
+        const std::string file = dir + "/mtime.txt";
+        FILE *f = fopen(file.c_str(), "wb");
+        CHECK(f != nullptr);
+        if (f)
+            fclose(f);
+        CHECK(os_set_mtime(file.c_str(), 1000000000) == 0);
+        OsStat st{};
+        CHECK(os_stat(file.c_str(), &st) == 0 && st.mtime == 1000000000);
+        os_unlink(file.c_str());
+    }
     CHECK(os_dlopen_noload("/definitely/not/loaded") == nullptr);
     CHECK(os_dlopen("/definitely/not/a/plugin") == nullptr);
     CHECK(os_dlerror() != nullptr);
