@@ -229,20 +229,50 @@ std::string write_mapped(const MappedTable &t) {
 // Binding
 // ---------------------------------------------------------------------------
 
+void Binding::clamp_cursor() {
+    // The window's last valid point is one short of its size on each axis;
+    // bounds <= 0 means "unset", so nothing is clamped on that axis.
+    if (bounds_w_ > 0)
+        cursor_x_ = std::clamp(cursor_x_, 0.0, bounds_w_ - 1);
+    if (bounds_h_ > 0)
+        cursor_y_ = std::clamp(cursor_y_, 0.0, bounds_h_ - 1);
+}
+
+void Binding::set_bounds(double w, double h) {
+    bounds_w_ = w;
+    bounds_h_ = h;
+    if (!cursor_known_) {
+        // No real position has ever been reported: start in the middle of
+        // the window rather than at its top-left corner, so a button press
+        // with no prior pointer event still lands somewhere sane.
+        cursor_x_ = bounds_w_ > 0 ? (bounds_w_ - 1) / 2.0 : 0;
+        cursor_y_ = bounds_h_ > 0 ? (bounds_h_ - 1) / 2.0 : 0;
+        emit_x_ = cursor_x_;
+        emit_y_ = cursor_y_;
+        cursor_known_ = true;
+    } else {
+        clamp_cursor();
+    }
+}
+
 void Binding::set_cursor(double x, double y) {
     cursor_x_ = x;
     cursor_y_ = y;
-    emit_x_ = x;
-    emit_y_ = y;
+    cursor_known_ = true;
+    clamp_cursor();
+    emit_x_ = cursor_x_;
+    emit_y_ = cursor_y_;
 }
 
 void Binding::press_key(int scancode, std::vector<TouchAction> *out) {
     if (scancode == 0)
         return;
-    for (int sc : held_keys_)
-        if (sc == scancode)
+    for (KeyHold &h : held_keys_)
+        if (h.scancode == scancode) {
+            ++h.count;
             return;
-    held_keys_.push_back(scancode);
+        }
+    held_keys_.push_back({scancode, 1});
     TouchAction a;
     a.kind = TouchAction::Key;
     a.scancode = scancode;
@@ -253,18 +283,33 @@ void Binding::press_key(int scancode, std::vector<TouchAction> *out) {
 void Binding::release_key(int scancode, std::vector<TouchAction> *out) {
     if (scancode == 0)
         return;
-    auto it = std::find(held_keys_.begin(), held_keys_.end(), scancode);
-    if (it == held_keys_.end())
+    for (size_t i = 0; i < held_keys_.size(); ++i) {
+        if (held_keys_[i].scancode != scancode)
+            continue;
+        if (--held_keys_[i].count > 0)
+            return; // another source still wants it held
+        held_keys_.erase(held_keys_.begin() + i);
+        TouchAction a;
+        a.kind = TouchAction::Key;
+        a.scancode = scancode;
+        a.down = false;
+        out->push_back(a);
         return;
-    held_keys_.erase(it);
-    TouchAction a;
-    a.kind = TouchAction::Key;
-    a.scancode = scancode;
-    a.down = false;
-    out->push_back(a);
+    }
+}
+
+bool Binding::key_held(int scancode) const {
+    for (const KeyHold &h : held_keys_)
+        if (h.scancode == scancode)
+            return true;
+    return false;
 }
 
 void Binding::tap_key(int scancode, std::vector<TouchAction> *out) {
+    // A sustained hold (Arrows/Wasd/dpad) already has the key down; a tap
+    // here would send a spurious Up the hold does not know about.
+    if (key_held(scancode))
+        return;
     TouchAction a;
     a.kind = TouchAction::Key;
     a.scancode = scancode;
@@ -293,22 +338,26 @@ void Binding::apply_button_edge(const Target &t, bool down, std::vector<TouchAct
             release_key(t.value, out);
         break;
     case Target::Mouse:
+        // Ref-counted: a second button also mapped to this one is a no-op
+        // press and does not release it on its own later.
         if (down) {
-            TouchAction m;
-            m.kind = TouchAction::Motion;
-            m.place = true;
-            m.x = cursor_x_;
-            m.y = cursor_y_;
-            out->push_back(m);
-            TouchAction b;
-            b.kind = TouchAction::Button;
-            b.button = t.value;
-            b.down = true;
-            b.x = cursor_x_;
-            b.y = cursor_y_;
-            out->push_back(b);
-            mouse_down_[t.value] = true;
-        } else if (mouse_down_[t.value]) {
+            if (mouse_hold_[t.value] == 0) {
+                TouchAction m;
+                m.kind = TouchAction::Motion;
+                m.place = true;
+                m.x = cursor_x_;
+                m.y = cursor_y_;
+                out->push_back(m);
+                TouchAction b;
+                b.kind = TouchAction::Button;
+                b.button = t.value;
+                b.down = true;
+                b.x = cursor_x_;
+                b.y = cursor_y_;
+                out->push_back(b);
+            }
+            ++mouse_hold_[t.value];
+        } else if (mouse_hold_[t.value] > 0 && --mouse_hold_[t.value] == 0) {
             TouchAction b;
             b.kind = TouchAction::Button;
             b.button = t.value;
@@ -316,7 +365,6 @@ void Binding::apply_button_edge(const Target &t, bool down, std::vector<TouchAct
             b.x = cursor_x_;
             b.y = cursor_y_;
             out->push_back(b);
-            mouse_down_[t.value] = false;
         }
         break;
     case Target::Wheel:
@@ -400,10 +448,7 @@ void Binding::apply_stick(int index, float vx, float vy, double dt, std::vector<
             const double f = table_.cursor_speed * dt * mag;
             cursor_x_ += f * vx;
             cursor_y_ += f * vy;
-            if (bounds_w_ > 0)
-                cursor_x_ = std::clamp(cursor_x_, 0.0, bounds_w_);
-            if (bounds_h_ > 0)
-                cursor_y_ = std::clamp(cursor_y_, 0.0, bounds_h_);
+            clamp_cursor();
         }
         const double dx = cursor_x_ - emit_x_, dy = cursor_y_ - emit_y_;
         if (std::sqrt(dx * dx + dy * dy) >= 0.5) {
@@ -481,12 +526,24 @@ void Binding::tick(const PadState &pad, uint64_t now_ns, std::vector<TouchAction
 
     for (int i = 0; i < int(PadButton::Count); ++i) {
         const uint16_t bit = uint16_t(1u << i);
-        const bool was = (prev_buttons_ & bit) != 0;
         const bool now_down = (pad.buttons & bit) != 0;
-        if (was != now_down)
+        if (release_latch_ & bit) {
+            // Forced up by release_all while the pad still held it: no edge
+            // fires until the pad itself reports it released.
+            if (!now_down) {
+                release_latch_ &= ~bit;
+                prev_buttons_ &= ~bit;
+            } else {
+                prev_buttons_ |= bit;
+            }
+            continue;
+        }
+        const bool was = (prev_buttons_ & bit) != 0;
+        if (was != now_down) {
             apply_button_edge(table_.buttons[i], now_down, out, actions);
+            prev_buttons_ = now_down ? (prev_buttons_ | bit) : uint16_t(prev_buttons_ & ~bit);
+        }
     }
-    prev_buttons_ = pad.buttons;
 
     apply_dpad(pad.hat, out);
     apply_stick(0, pad.lx, pad.ly, dt, out);
@@ -494,16 +551,16 @@ void Binding::tick(const PadState &pad, uint64_t now_ns, std::vector<TouchAction
 }
 
 void Binding::release_all(std::vector<TouchAction> *out) {
-    for (int sc : held_keys_) {
+    for (const KeyHold &h : held_keys_) {
         TouchAction a;
         a.kind = TouchAction::Key;
-        a.scancode = sc;
+        a.scancode = h.scancode;
         a.down = false;
         out->push_back(a);
     }
     held_keys_.clear();
     for (int i = 0; i < 3; ++i) {
-        if (mouse_down_[i]) {
+        if (mouse_hold_[i] > 0) {
             TouchAction a;
             a.kind = TouchAction::Button;
             a.button = i;
@@ -511,9 +568,12 @@ void Binding::release_all(std::vector<TouchAction> *out) {
             a.x = cursor_x_;
             a.y = cursor_y_;
             out->push_back(a);
-            mouse_down_[i] = false;
+            mouse_hold_[i] = 0;
         }
     }
+    // Latch whatever the pad still holds: apply_button_edge stays quiet for
+    // those bits until tick() sees them go up (see the loop in tick()).
+    release_latch_ |= prev_buttons_;
     prev_buttons_ = 0;
     for (int i = 0; i < 4; ++i)
         dpad_active_sc_[i] = 0;

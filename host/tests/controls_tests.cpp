@@ -87,7 +87,7 @@ static void test_layout_parse_and_write() {
     CHECK(l.groups[0].controls[1].label == "SP");
     const Control &stick = l.groups[1].controls[1];
     CHECK(stick.kind == Kind::Stick && stick.stick == 1 && !stick.floating && stick.w == 60);
-    CHECK(stick.radius == 30); // no "zone": the zone defaults to 2 * radius
+    CHECK(stick.radius == 30);               // no "zone": the zone defaults to 2 * radius
     CHECK(l.groups[1].controls.size() == 3); // the unknown kind was skipped
     Layout again;
     CHECK(parse_layout(write_layout(l), &again, &err));
@@ -1144,10 +1144,10 @@ static void test_router_second_finger_on_stick_or_dpad_is_inert() {
 
     CHECK(r.finger_down(1, 590, 100, 0, rec)); // primary, floating stick
     const size_t calls_after_primary = rec.calls.size();
-    CHECK(r.finger_down(2, 410, 20, 0, rec)); // second finger, same stick's zone
+    CHECK(r.finger_down(2, 410, 20, 0, rec));       // second finger, same stick's zone
     CHECK(rec.calls.size() == calls_after_primary); // no tap for the second finger
-    CHECK(r.state(0, 3).base_x == 590);              // untouched by the second finger
-    CHECK(r.finger_up(2, 10, rec));                  // its lift does nothing
+    CHECK(r.state(0, 3).base_x == 590);             // untouched by the second finger
+    CHECK(r.finger_up(2, 10, rec));                 // its lift does nothing
     CHECK(r.state(0, 3).base_x == 590);
     CHECK(r.finger_motion(1, 690, 100, 0, rec)); // the owner still drives it
     CHECK(r.pad().lx == 1.0f);
@@ -1381,8 +1381,10 @@ static void test_binding_parse_mapped() {
     CHECK(t.buttons[int(PadButton::Cross)].type == Target::Key);
     CHECK(t.buttons[int(PadButton::Cross)].value == kScanSpace);
     CHECK(t.left == StickMode::Cursor);
-    CHECK(t.dpad == StickMode::Arrows);                            // untouched
-    CHECK(t.buttons[int(PadButton::Circle)].type == Target::None); // untouched
+    CHECK(t.dpad == StickMode::Arrows); // untouched
+    // untouched: MappedTable's own default (tools/game_config.py's MAPPED_DEFAULTS)
+    CHECK(t.buttons[int(PadButton::Circle)].type == Target::Mouse &&
+          t.buttons[int(PadButton::Circle)].value == 1);
 
     MappedTable before = t;
     CHECK(!parse_mapped("cross=key:Nope", &t, &err));
@@ -1469,7 +1471,7 @@ static void test_binding_cursor_stick() {
         b3.tick(p, now, &out, &actions);
         now += 10ull * 1000000ull;
     }
-    CHECK(b3.cursor_x() == 1000.0);
+    CHECK(b3.cursor_x() == 999.0); // clamped to w - 1: no point outside the window
 }
 
 // Left stick on Arrows (the default): per-axis hysteresis, 0.5 to press and
@@ -1589,6 +1591,129 @@ static void test_binding_release_all() {
     CHECK(key_right_up && mouse_left_up);
 }
 
+// The cursor starts unknown; the first set_bounds (no set_cursor yet, as
+// happens the first time the host reports the window's size) centres it, so
+// a button press with no prior pointer event still lands somewhere sane
+// rather than at (0, 0). Bounds 1000x800 centre at (499.5, 399.5), the
+// midpoint of [0, 999] x [0, 799].
+static void test_binding_cursor_starts_centred() {
+    MappedTable t; // cross=mouse_left by default
+    Binding b;
+    b.set_table(t);
+    b.set_bounds(1000, 800); // no set_cursor call at all
+    PadState p;
+    p.buttons = kPadCross;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    b.tick(p, 0, &out, &actions);
+    CHECK(out.size() == 2);
+    CHECK(out[0].kind == TouchAction::Motion && out[0].x == 499.5 && out[0].y == 399.5);
+    CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down);
+}
+
+// left_stick=arrows and dpad=arrows both alias onto the Right key (the
+// defaults do exactly this): held_keys_ is ref-counted, so the key stays
+// down until every source holding it lets go, not just the first to release.
+static void test_binding_aliased_key_is_ref_counted() {
+    MappedTable t; // left_stick=arrows, dpad=arrows by default
+    Binding b;
+    b.set_table(t);
+    PadState p;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+
+    p.lx = 1; // stick right: one Down
+    b.tick(p, 0, &out, &actions);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Key && out[0].scancode == kScanRight &&
+          out[0].down);
+
+    out.clear();
+    p.hat = kHatRight; // dpad-right too, same key: already held, no second Down
+    b.tick(p, 1, &out, &actions);
+    CHECK(out.empty());
+
+    out.clear();
+    p.hat = 0; // dpad-right released: the stick still holds it, no Up
+    b.tick(p, 2, &out, &actions);
+    CHECK(out.empty());
+
+    out.clear();
+    p.lx = 0; // the stick returns to neutral: now it releases
+    b.tick(p, 3, &out, &actions);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Key && out[0].scancode == kScanRight &&
+          !out[0].down);
+}
+
+// Two pad buttons mapped to mouse_left: the mouse button stays down until
+// both are released, not just the first.
+static void test_binding_aliased_mouse_button_is_ref_counted() {
+    MappedTable t;
+    t.buttons[int(PadButton::Cross)] = Target{Target::Mouse, 0, ""};
+    t.buttons[int(PadButton::Circle)] = Target{Target::Mouse, 0, ""};
+    Binding b;
+    b.set_table(t);
+    b.set_bounds(1000, 800);
+    b.set_cursor(50, 50);
+    PadState p;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+
+    p.buttons = kPadCross;
+    b.tick(p, 0, &out, &actions);
+    CHECK(out.size() == 2); // Motion + Button down
+
+    out.clear();
+    p.buttons |= kPadCircle; // already held: no second Motion/Button
+    b.tick(p, 1, &out, &actions);
+    CHECK(out.empty());
+
+    out.clear();
+    p.buttons &= ~kPadCross; // circle still holds it: no Up
+    b.tick(p, 2, &out, &actions);
+    CHECK(out.empty());
+
+    out.clear();
+    p.buttons &= ~kPadCircle; // both released: now it lifts
+    b.tick(p, 3, &out, &actions);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Button && out[0].button == 0 &&
+          !out[0].down);
+}
+
+// After release_all, a button release_all forced up but the pad still holds
+// does not re-fire until the pad itself reports it released: a one-shot
+// Action target must not repeat every tick just because release_all reset
+// the internal edge state.
+static void test_binding_release_all_latches_still_held_buttons() {
+    MappedTable t; // ps=action:settings by default
+    Binding b;
+    b.set_table(t);
+    PadState p;
+    p.buttons = kPadPs;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+
+    b.tick(p, 0, &out, &actions);
+    CHECK(actions.size() == 1 && actions[0] == "settings");
+
+    out.clear();
+    b.release_all(&out);
+
+    actions.clear();
+    b.tick(p, 1, &out, &actions); // ps is still held: must not re-fire
+    CHECK(actions.empty());
+    b.tick(p, 2, &out, &actions); // still held on a later tick: still nothing
+    CHECK(actions.empty());
+
+    p.buttons = 0;
+    b.tick(p, 3, &out, &actions); // now the pad reports it released
+    CHECK(actions.empty());
+
+    actions.clear();
+    p.buttons = kPadPs; // a fresh press fires normally again
+    b.tick(p, 4, &out, &actions);
+    CHECK(actions.size() == 1 && actions[0] == "settings");
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -1644,6 +1769,10 @@ int main() {
     test_binding_action_button();
     test_binding_scroll_stick();
     test_binding_release_all();
+    test_binding_cursor_starts_centred();
+    test_binding_aliased_key_is_ref_counted();
+    test_binding_aliased_mouse_button_is_ref_counted();
+    test_binding_release_all_latches_still_held_buttons();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;
