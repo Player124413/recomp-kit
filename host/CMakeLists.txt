@@ -77,6 +77,7 @@ set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                               ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
                               ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
+                              ${HOST}/controls/haptics.cpp
                               ${HOST}/keypad_layout.cpp
                               ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
                               ${HOST}/tests/keypad_legacy_oracle.cpp)
@@ -170,7 +171,7 @@ set(POP_LAUNCHER_SOURCES $<TARGET_OBJECTS:launcher_core> $<TARGET_OBJECTS:recomp
                          ${HOST}/launcher/launcher_config.cpp ${HOST}/launcher/launcher_sdl.cpp)
 if(IOS)
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_ios.mm)
-  list(APPEND FW_METAL "-framework UIKit" "-framework UniformTypeIdentifiers")
+  list(APPEND FW_METAL "-framework UIKit" "-framework UniformTypeIdentifiers" "-framework CoreHaptics")
 elseif(ANDROID)
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp ${HOST}/launcher/launcher_platform_android.cpp)
 else()

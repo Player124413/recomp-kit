@@ -11,10 +11,12 @@
 #include "../present.h"
 #include "game_config.h"
 
+#import <CoreHaptics/CoreHaptics.h>
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdio.h>
@@ -328,4 +330,106 @@ void platform_ui_process_exit(int code) {
     fprintf(stderr, "[ios] the game exited (%d); ending the app\n", code);
     fflush(stderr);
     exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// Haptics: a light impact tick for on-screen control presses, and a Core
+// Haptics continuous player standing in for game rumble on a device with no
+// controller. Both must run on the main thread.
+// ---------------------------------------------------------------------------
+namespace {
+UIImpactFeedbackGenerator *g_tap_generator;        // prepared once, reused for every tap
+CHHapticEngine *g_haptic_engine;                   // created once, started lazily
+id<CHHapticAdvancedPatternPlayer> g_rumble_player; // the current 30 s rumble, or nil
+
+bool device_supports_haptics() {
+    static const bool supported = CHHapticEngine.capabilitiesForHardware.supportsHaptics;
+    return supported;
+}
+
+// The engine, created on first use. A stop or reset (background, audio
+// session interruption) drops the player, since it dies with the engine.
+CHHapticEngine *haptic_engine() {
+    if (!g_haptic_engine) {
+        NSError *error = nil;
+        g_haptic_engine = [[CHHapticEngine alloc] initAndReturnError:&error];
+        if (error) {
+            fprintf(stderr, "[ios] CHHapticEngine init failed: %s\n",
+                    error.localizedDescription.UTF8String);
+            return nil;
+        }
+        g_haptic_engine.stoppedHandler = ^(CHHapticEngineStoppedReason) {
+          g_rumble_player = nil;
+        };
+        g_haptic_engine.resetHandler = ^{
+          g_rumble_player = nil;
+        };
+    }
+    return g_haptic_engine;
+}
+} // namespace
+
+void platform_ui_haptic_tap() {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!g_tap_generator) {
+          g_tap_generator =
+              [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+          [g_tap_generator prepare];
+      }
+      [g_tap_generator impactOccurred];
+    });
+}
+
+void platform_ui_device_rumble(uint16_t low, uint16_t high) {
+    const float intensity = std::max(low, high) / 65535.0f;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!device_supports_haptics())
+          return;
+      if (intensity <= 0.0f) {
+          [g_rumble_player cancelAndReturnError:nil];
+          g_rumble_player = nil;
+          return;
+      }
+      NSError *error = nil;
+      if (g_rumble_player) {
+          // Already rumbling: retune it in place rather than restart it.
+          CHHapticDynamicParameter *param = [[CHHapticDynamicParameter alloc]
+              initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl
+                            value:intensity
+                     relativeTime:0];
+          [g_rumble_player sendParameters:@[ param ] atTime:CHHapticTimeImmediate error:&error];
+          if (!error)
+              return;
+          g_rumble_player = nil; // the player died under us; fall through and rebuild it
+      }
+      CHHapticEngine *engine = haptic_engine();
+      if (!engine)
+          return;
+      [engine startAndReturnError:&error];
+      if (error)
+          return;
+      CHHapticEventParameter *intensity_param = [[CHHapticEventParameter alloc]
+          initWithParameterID:CHHapticEventParameterIDHapticIntensity
+                        value:intensity];
+      CHHapticEventParameter *sharpness_param = [[CHHapticEventParameter alloc]
+          initWithParameterID:CHHapticEventParameterIDHapticSharpness
+                        value:0.3f];
+      CHHapticEvent *event =
+          [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous
+                                        parameters:@[ intensity_param, sharpness_param ]
+                                      relativeTime:0
+                                          duration:30.0];
+      CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[ event ]
+                                                              parameters:@[]
+                                                                   error:&error];
+      if (error)
+          return;
+      id<CHHapticAdvancedPatternPlayer> player = [engine createAdvancedPlayerWithPattern:pattern
+                                                                                   error:&error];
+      if (error || !player)
+          return;
+      [player startAtTime:CHHapticTimeImmediate error:&error];
+      if (!error)
+          g_rumble_player = player;
+    });
 }

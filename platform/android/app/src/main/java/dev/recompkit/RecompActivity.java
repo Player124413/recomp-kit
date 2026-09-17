@@ -1,13 +1,18 @@
 package dev.recompkit;
 
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.view.HapticFeedbackConstants;
 import android.view.WindowManager;
 
 import java.util.ArrayList;
@@ -221,5 +226,69 @@ public class RecompActivity extends SDLActivity {
             a.startActivity(intent);
         } catch (Exception ignored) {
         }
+    }
+
+    // -- Haptics: a light tick for on-screen control presses, and the device's
+    // own motor standing in for game rumble when no controller is connected
+    // (host/sdl/platform_ui_desktop.cpp calls these over JNI). ---------------
+
+    static Vibrator sVibrator;
+    // The amplitude bucket (0..15) currently driving the motor, or -1 while
+    // idle: a repeat call in the same bucket leaves the running effect alone
+    // instead of restarting it every frame the guest asks for the same rumble.
+    static int sRumbleBucket = -1;
+
+    private static Vibrator vibrator() {
+        if (sVibrator == null) {
+            final RecompActivity a = sActivity;
+            if (a == null)
+                return null;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager =
+                        (VibratorManager) a.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                sVibrator = manager != null ? manager.getDefaultVibrator() : null;
+            } else {
+                sVibrator = (Vibrator) a.getSystemService(Context.VIBRATOR_SERVICE);
+            }
+        }
+        return sVibrator;
+    }
+
+    /** A light tap tick for an on-screen control press. */
+    public static void hapticTap() {
+        final RecompActivity a = sActivity;
+        if (a == null)
+            return;
+        a.runOnUiThread(() -> a.getWindow().getDecorView()
+                .performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP));
+    }
+
+    /**
+     * The device's own motor, standing in for game rumble when no controller
+     * is connected. `low`/`high` are the guest's low/high-frequency motor
+     * strengths (0..65535, as SDL_GetGamepadRumble takes them); 0,0 stops it.
+     */
+    public static void deviceRumble(int low, int high) {
+        final RecompActivity a = sActivity;
+        final Vibrator vibrator = vibrator();
+        if (a == null || vibrator == null)
+            return;
+        final int strength = Math.max(low, high);
+        if (strength <= 0) {
+            sRumbleBucket = -1;
+            a.runOnUiThread(vibrator::cancel);
+            return;
+        }
+        final int amplitude = Math.max(1, strength * 255 / 65535);
+        final int bucket = amplitude / 16;
+        if (bucket == sRumbleBucket)
+            return;
+        sRumbleBucket = bucket;
+        a.runOnUiThread(() -> {
+            if (vibrator.hasAmplitudeControl())
+                vibrator.vibrate(VibrationEffect.createOneShot(60000, amplitude));
+            else
+                vibrator.vibrate(VibrationEffect.createOneShot(60000, VibrationEffect.DEFAULT_AMPLITUDE));
+        });
     }
 }

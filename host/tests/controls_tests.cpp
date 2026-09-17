@@ -1,6 +1,7 @@
 // controls_tests.cpp - the on-screen controls: json, layouts, router, pad, binding, editor.
 #include "../../platform/os.h"
 #include "../controls/builtin_layouts.h"
+#include "../controls/haptics.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
 #include "../controls/layout_fallback.h"
@@ -811,6 +812,16 @@ static void test_tablet_fallback() {
     std::filesystem::remove_all(root, ec);
 }
 
+// The rumble decision's whole truth table: a connected controller always
+// wins (it has its own motors), the device motor only stands in when there
+// is no controller, and neither leaves nothing to rumble.
+static void test_rumble_sink_truth_table() {
+    CHECK(rumble_sink(true, true) == RumbleSink::Controller);
+    CHECK(rumble_sink(true, false) == RumbleSink::Controller);
+    CHECK(rumble_sink(false, true) == RumbleSink::Device);
+    CHECK(rumble_sink(false, false) == RumbleSink::None);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -838,6 +849,7 @@ int main() {
     test_make_view_matches_the_old_keypad();
     test_make_view_revision_ignores_undrawn_press();
     test_tablet_fallback();
+    test_rumble_sink_truth_table();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

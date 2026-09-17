@@ -8,6 +8,7 @@
 #include "../audio.h"
 #include "../present.h"
 #include <android/log.h>
+#include <jni.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
@@ -15,6 +16,29 @@
 #include <unistd.h>
 
 namespace {
+// RecompActivity, resolved once and held as a global ref: FindClass from the
+// SDL thread (where the haptic calls below run) sees only the system class
+// loader, not the app's, unless the class is already cached from onCreate's
+// thread. The launcher's own JNI (launcher_platform_android.cpp) caches its
+// own reference the same way; this file needs its own because the two never
+// share a translation unit.
+jclass g_haptics_activity = nullptr;
+
+JNIEnv *haptics_env() {
+    return static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+}
+
+// The cached RecompActivity class, or null when the JNI env is unavailable
+// (should not happen once SDL has started the app).
+jclass haptics_activity_class(JNIEnv *env) {
+    if (!g_haptics_activity) {
+        jclass local = env->FindClass("dev/recompkit/RecompActivity");
+        g_haptics_activity = static_cast<jclass>(env->NewGlobalRef(local));
+        env->DeleteLocalRef(local);
+    }
+    return g_haptics_activity;
+}
+
 // An app has no console: the host's stdout and stderr go to logcat (tag
 // "recomp"), a line at a time.
 void redirect_stdio_to_logcat() {
@@ -153,5 +177,30 @@ void platform_ui_process_exit(int code) {
 #else
     (void)code;
     // main() returns; the process ends the ordinary way.
+#endif
+}
+
+void platform_ui_haptic_tap() {
+#ifdef __ANDROID__
+    JNIEnv *env = haptics_env();
+    jclass cls = env ? haptics_activity_class(env) : nullptr;
+    jmethodID m = cls ? env->GetStaticMethodID(cls, "hapticTap", "()V") : nullptr;
+    if (m)
+        env->CallStaticVoidMethod(cls, m);
+#endif
+    // Desktop: no-op.
+}
+
+void platform_ui_device_rumble(uint16_t low, uint16_t high) {
+#ifdef __ANDROID__
+    JNIEnv *env = haptics_env();
+    jclass cls = env ? haptics_activity_class(env) : nullptr;
+    jmethodID m = cls ? env->GetStaticMethodID(cls, "deviceRumble", "(II)V") : nullptr;
+    if (m)
+        env->CallStaticVoidMethod(cls, m, jint(low), jint(high));
+#else
+    (void)low;
+    (void)high;
+    // Desktop: no-op.
 #endif
 }
