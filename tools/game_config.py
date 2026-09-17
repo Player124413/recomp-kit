@@ -54,6 +54,22 @@ def load(game_dir):
     if not isinstance(rows, list) or unknown:
         raise ValueError("%s: [settings] rows may name only %s, not %s"
                          % (source, ", ".join(SETTINGS_ROWS), ", ".join(map(repr, unknown or [rows]))))
+    launcher = cfg.setdefault("launcher", {})
+    launcher.setdefault("title", game["name"])
+    launcher.setdefault("store", "")
+    for key in ("install_names", "gog_ids", "steam_ids"):
+        value = launcher.setdefault(key, [])
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ValueError("%s: [launcher] %s must be a list of strings" % (source, key))
+    for key in ("title", "store"):
+        if not isinstance(launcher[key], str):
+            raise ValueError("%s: [launcher] %s must be a string" % (source, key))
+    min_free = launcher.setdefault("min_free_mb", 0)
+    if not isinstance(min_free, int) or min_free < 0:
+        raise ValueError("%s: [launcher] min_free_mb must be a non-negative integer" % source)
+    setup_dirs = cfg.setdefault("setup", {}).setdefault("required_dirs", [])
+    if not isinstance(setup_dirs, list):
+        raise ValueError("%s: [setup] required_dirs must be a list" % source)
     globals_path = game_dir / translate.get("globals", "globals.toml")
     with globals_path.open("rb") as fh:
         cfg["globals"] = tomllib.load(fh).get("globals", {})
