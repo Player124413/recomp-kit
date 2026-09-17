@@ -222,8 +222,7 @@ void reload(const std::string &name, Form form) {
 
 Editor g_editor;
 std::string g_editor_name;     // the name the editor was opened on
-bool g_editor_renamed = false; // a rename was started this session
-bool g_editor_text = false;    // SDL text input is wanted (a rename is typing)
+bool g_editor_renamed = false; // a rename was started: Done removes the old file
 bool g_force_reload = false;   // the editor wrote a file: re-read the layout
 
 // RECOMP_CONTROLS_MAPPED alone, without <profile>/controls/binding.txt: what
@@ -301,11 +300,33 @@ class HostEditorHost : public EditorHost {
 
 HostEditorHost g_editor_host;
 
+// Lets go of everything the guest is being told is held: the router's keys
+// and pad buttons, the mapped binding's keys and mouse buttons, and any
+// finger the editor is tracking. Nothing else would ever lift them.
+void release_everything() {
+    if (g_editor.is_open())
+        g_editor.cancel_fingers();
+    g_router.cancel_all(g_sink);
+    std::vector<TouchAction> actions;
+    g_binding.release_all(&actions);
+    if (!actions.empty() && g_hooks.touch_actions)
+        g_hooks.touch_actions(actions);
+}
+
+void close_editor();
+
 // Opens the editor on the layout the player is looking at, and closes the
-// F10 page behind it.
+// F10 page behind it. A layout that would not load (the Hidden choice, or a
+// user copy just deleted) leaves nothing to edit, so the editor closes
+// instead of drawing a layout nothing backs.
 void open_editor() {
-    if (!g_have_layout)
-        return; // the Hidden choice, or a layout that would not load
+    if (!g_have_layout) {
+        close_editor();
+        return;
+    }
+    // A finger still on a control when the editor opens never reaches the
+    // router's finger_up, so whatever it held would stay down all session.
+    release_everything();
     // A reload just before this (a reset, a switch) left the file's own
     // scale; the editor shows what the player sees, size setting included.
     g_size = mods_controls_value(CONTROLS_SIZE_ROW);
@@ -319,7 +340,6 @@ void open_editor() {
                   mods_controls_value(CONTROLS_SNAP_ROW) != 0);
     g_editor_name = g_layout.name;
     g_editor_renamed = false;
-    g_editor_text = false;
     mods_controls_set_editing(true);
     mods_page_close();
 }
@@ -327,7 +347,6 @@ void open_editor() {
 void close_editor() {
     g_editor.close();
     g_editor_renamed = false;
-    g_editor_text = false;
     mods_controls_set_editing(false);
 }
 
@@ -444,7 +463,10 @@ void host_editor_escape() {
 }
 
 bool host_editor_text_wanted() {
-    return g_editor.is_open() && g_editor_text;
+    // The editor's own state, not g_editor_renamed: that one stays set after
+    // text_done so Done knows a rename happened, and driving the system
+    // keyboard from it would leave it up for the rest of the session.
+    return g_editor.is_open() && g_editor.renaming();
 }
 
 void host_editor_text(const char *utf8) {
@@ -453,20 +475,12 @@ void host_editor_text(const char *utf8) {
 }
 
 void host_editor_text_done() {
-    if (!g_editor.is_open())
-        return;
-    g_editor.text_done();
-    g_editor_text = false;
+    if (g_editor.is_open())
+        g_editor.text_done();
 }
 
 void host_release_all() {
-    if (g_editor.is_open())
-        g_editor.finger_up(kMouseFinger);
-    g_router.cancel_all(g_sink);
-    std::vector<TouchAction> actions;
-    g_binding.release_all(&actions);
-    if (!actions.empty() && g_hooks.touch_actions)
-        g_hooks.touch_actions(actions);
+    release_everything();
     publish();
 }
 
@@ -487,9 +501,6 @@ void host_pump(uint64_t now) {
     if (g_editor.is_open())
         next = apply_editor_results(g_editor, g_editor_host, g_editor_name, base_mapped_table(),
                                     &g_editor_renamed);
-    if (g_editor_renamed && !g_editor_text && g_editor.is_open() && next == EditorNext::Keep)
-        g_editor_text = true; // a rename is waiting to be typed
-
     const std::string name = mods_controls_layout_name();
     const Form form = g_screen.dw > 0 && g_screen.dh > 0
                           ? form_for(g_screen.dw, g_screen.dh, g_screen.scale)

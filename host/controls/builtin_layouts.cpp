@@ -159,7 +159,9 @@ const char *kPadTablet = R"JSON({
       "id": "tabs",
       "controls": [
         {"kind": "toggle", "target": "next", "label": "KEYS", "anchor": "top-center",
-         "y": 8, "w": 72, "h": 28}
+         "y": 8, "w": 72, "h": 28},
+        {"kind": "action", "action": "settings", "label": "F10", "anchor": "top-center",
+         "x": 72, "y": 8, "w": 56, "h": 28}
       ]
     }
   ]
@@ -200,6 +202,13 @@ std::string pad_and_keys_tablet() {
         {"kind": "button", "button": "circle", "anchor": "bottom-right", "x": 24, "y": 262, "size": 52},
         {"kind": "button", "button": "cross", "anchor": "bottom-right", "x": 80, "y": 206, "size": 52},
         {"kind": "button", "button": "square", "anchor": "bottom-right", "x": 136, "y": 262, "size": 52}
+      ]
+    },
+    {
+      "id": "actions",
+      "controls": [
+        {"kind": "action", "action": "settings", "label": "F10", "anchor": "top-center",
+         "y": 8, "w": 72, "h": 28}
       ]
     }
   ]
@@ -253,7 +262,9 @@ const char *kPadPhoneLandscape = R"JSON({
       "id": "tabs",
       "controls": [
         {"kind": "toggle", "target": "next", "label": "KEYS", "anchor": "top-center",
-         "y": 8, "w": 72, "h": 28}
+         "y": 8, "w": 72, "h": 28},
+        {"kind": "action", "action": "settings", "label": "F10", "anchor": "top-center",
+         "x": 68, "y": 8, "w": 56, "h": 28}
       ]
     }
   ]
@@ -369,7 +380,9 @@ const char *kPadKeysPhoneLandscape = R"JSON({
         {"kind": "toggle", "target": "left", "label": "HIDE", "label_off": "KEYS",
          "anchor": "top-left", "x": 24, "y": 12, "w": 64, "h": 20},
         {"kind": "toggle", "target": "next", "label": "NEXT", "anchor": "bottom-center",
-         "w": 64, "h": 20}
+         "w": 64, "h": 20},
+        {"kind": "action", "action": "settings", "label": "F10", "anchor": "top-right",
+         "x": 24, "y": 12, "w": 56, "h": 20}
       ]
     },
     {
@@ -434,7 +447,9 @@ const char *kPadPhonePortrait = R"JSON({
       "id": "tabs",
       "controls": [
         {"kind": "toggle", "target": "next", "label": "KEYS", "anchor": "top-center",
-         "y": 44, "w": 72, "h": 28}
+         "y": 44, "w": 72, "h": 28},
+        {"kind": "action", "action": "settings", "label": "F10", "anchor": "top-center",
+         "x": 68, "y": 44, "w": 56, "h": 28}
       ]
     }
   ]
@@ -570,7 +585,9 @@ const char *kPadKeysPhonePortrait = R"JSON({
         {"kind": "toggle", "target": "left", "label": "HIDE", "label_off": "KEYS",
          "anchor": "bottom-left", "x": 10, "w": 64, "h": 20, "stack_on": "left"},
         {"kind": "toggle", "target": "next", "label": "NEXT", "anchor": "bottom-right",
-         "x": 10, "w": 64, "h": 20, "stack_on": "left"}
+         "x": 10, "w": 64, "h": 20, "stack_on": "left"},
+        {"kind": "action", "action": "settings", "label": "F10", "anchor": "top-center",
+         "y": 46, "w": 60, "h": 26}
       ]
     },
     {

@@ -197,6 +197,10 @@ DrawControl editor_key(const Rect &r, const std::string &label, bool lit) {
 
 ControlsView make_view(const Editor &e, const Screen &s) {
     const Layout &l = e.layout();
+    // The edited layout is placed in the editor's content screen, which
+    // keeps the toolbar's band clear; the toolbar and picker rects are
+    // already in the full screen's pixels.
+    const Screen &cs = e.content_screen();
     ControlsView v;
     v.wanted = true;
     v.editing = true;
@@ -211,20 +215,20 @@ ControlsView make_view(const Editor &e, const Screen &s) {
     for (int g = 0; g < int(l.groups.size()); ++g) {
         const Group &grp = l.groups[g];
         if (grp.has_grid) {
-            v.backdrops.push_back(group_rect(l, g, s));
+            v.backdrops.push_back(group_rect(l, g, cs));
             v.backdrop_layers.push_back(0);
         }
         for (int c = 0; c < int(grp.controls.size()); ++c) {
             const Control &ctl = grp.controls[c];
             DrawControl d;
             d.kind = ctl.kind;
-            d.rect = control_rect(l, g, c, s);
+            d.rect = control_rect(l, g, c, cs);
             d.label = ctl.label;
             d.button = ctl.button;
             d.floating = ctl.floating;
             d.layer = 0;
             if (ctl.kind == Kind::Stick)
-                d.radius_px = int(std::lround(ctl.radius * l.scale * s.scale));
+                d.radius_px = int(std::lround(ctl.radius * l.scale * cs.scale));
             if (ctl.kind == Kind::Toggle) {
                 const int target = group_named(l, ctl.target);
                 d.group_visible = target < 0 || l.groups[target].visible;
@@ -246,8 +250,8 @@ ControlsView make_view(const Editor &e, const Screen &s) {
     // The 10 pt grid the drag snaps to, from the same origin editor.cpp
     // measures it from (the anchor area's top-left corner).
     if (e.snap()) {
-        v.grid_area = anchor_area(l, s);
-        v.grid_step = int(std::lround(10.0 * s.scale));
+        v.grid_area = anchor_area(l, cs);
+        v.grid_step = int(std::lround(10.0 * cs.scale));
         if (v.grid_step < 2)
             v.grid_step = 0;
     }

@@ -22,6 +22,9 @@ Paint flat(int r, int g, int b, int a) {
 void paint_one(Canvas &c, const DrawControl &d, const Rect &r) {
     const int x = d.rect.x - r.x, y = d.rect.y - r.y, w = d.rect.w, h = d.rect.h;
     switch (d.kind) {
+    // An action (the built-ins' F10) reads as a labelled key, not as pad art:
+    // it stands for something outside the game.
+    case Kind::Action:
     case Kind::Key: {
         if (d.lit)
             c.rect(x, y, w, h, flat(120, 160, 255, 220));

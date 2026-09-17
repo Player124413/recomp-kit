@@ -2765,8 +2765,9 @@ static bool pick(Editor &e, const std::string &value) {
     return false;
 }
 
-static Rect cross_rect(const Editor &e, const Screen &s) {
-    return control_rect(e.layout(), 2, 0, s);
+// The face group's cross, where the editor places it (its content screen).
+static Rect cross_rect(const Editor &e, const Screen &) {
+    return control_rect(e.layout(), 2, 0, e.content_screen());
 }
 
 static void test_editor_open_and_toolbar() {
@@ -2835,11 +2836,15 @@ static void test_editor_select_drag_and_reanchor() {
     e.finger_motion(1, cx - 403, cy - 597);
     Rect moved = cross_rect(e, s);
     CHECK(std::abs(moved.x - (before.x - 400)) <= 12 && std::abs(moved.y - (before.y - 600)) <= 12);
-    CHECK(moved.x % 20 == 0 && moved.y % 20 == 0);
+    // The 10 pt grid runs from the content area's corner, which the
+    // toolbar's band pushed down.
+    const Rect grid_from = anchor_area(e.layout(), e.content_screen());
+    CHECK(moved.x % 20 == 0 && (moved.y - grid_from.y) % 20 == 0);
     CHECK(!e.guides().empty());
     e.finger_up(1);
-    // The centre (1680, 580) is in the right third and the middle third.
-    CHECK(e.layout().groups[2].controls[0].anchor == Anchor::Right);
+    // The centre is in the right third and, of the area below the toolbar,
+    // the top third.
+    CHECK(e.layout().groups[2].controls[0].anchor == Anchor::TopRight);
     Rect after = cross_rect(e, s);
     CHECK(after.x == moved.x && after.y == moved.y && after.w == moved.w && after.h == moved.h);
     CHECK(e.guides().empty());
@@ -2867,7 +2872,7 @@ static void test_editor_snap_off_and_snap_to_control() {
     // Snap back on: a drop within 6 pt of the circle's left edge lines up with it.
     tap_tool(e, Tool::Snap);
     CHECK(e.snap());
-    Rect circle = control_rect(e.layout(), 2, 1, s);
+    Rect circle = control_rect(e.layout(), 2, 1, e.content_screen());
     Rect cr = cross_rect(e, s);
     e.finger_down(1, cr.x + 60, cr.y + 60);
     // Put the cross's left edge 7 px right of the circle's left edge, well
@@ -2911,7 +2916,7 @@ static void test_editor_pinch() {
     CHECK(int(e.layout().groups[2].controls[0].w) % 2 == 0);
 
     // A stick's pinch scales its travel and zone together.
-    Rect st = control_rect(e.layout(), 0, 0, s);
+    Rect st = control_rect(e.layout(), 0, 0, e.content_screen());
     double sx = st.x + st.w / 2.0, sy = st.y + st.h / 2.0;
     e.finger_down(1, sx, sy);
     e.finger_down(2, sx + 50, sy);
@@ -2943,9 +2948,11 @@ static void test_editor_add_delete_bind() {
     CHECK(custom.controls[0].kind == Kind::Button &&
           custom.controls[0].button == PadButton::Circle);
     CHECK(e.selected_group() == int(groups) && e.selected_control() == 0);
-    // Placed at the centre of the area.
-    Rect nr = control_rect(e.layout(), int(groups), 0, s);
-    CHECK(std::abs(nr.x + nr.w / 2 - 1180) <= 1 && std::abs(nr.y + nr.h / 2 - 820) <= 1);
+    // Placed at the centre of the area the editor works in (below the toolbar).
+    Rect nr = control_rect(e.layout(), int(groups), 0, e.content_screen());
+    const Rect mid = anchor_area(e.layout(), e.content_screen());
+    CHECK(std::abs(nr.x + nr.w / 2 - (mid.x + mid.w / 2)) <= 1 &&
+          std::abs(nr.y + nr.h / 2 - (mid.y + mid.h / 2)) <= 1);
 
     // A second add joins the same group.
     tap_tool(e, Tool::Add);
@@ -2959,7 +2966,7 @@ static void test_editor_add_delete_bind() {
     tap_tool(e, Tool::Delete);
     CHECK(e.selected_group() == -1);
     CHECK(e.layout().groups.back().controls.size() == 1);
-    tap_rect(e, control_rect(e.layout(), int(groups), 0, s));
+    tap_rect(e, control_rect(e.layout(), int(groups), 0, e.content_screen()));
     tap_tool(e, Tool::Delete);
     CHECK(e.layout().groups.size() == groups);
     for (const auto &g : e.layout().groups)
@@ -2972,7 +2979,7 @@ static void test_editor_add_delete_bind() {
     const Target &t = e.mapped().buttons[int(PadButton::Cross)];
     CHECK(t.type == Target::Key && t.value == kScanSpace);
     // A stick binds to a stick mode.
-    tap_rect(e, control_rect(e.layout(), 0, 1, s));
+    tap_rect(e, control_rect(e.layout(), 0, 1, e.content_screen()));
     tap_tool(e, Tool::Bind);
     CHECK(pick(e, "wasd"));
     CHECK(e.mapped().right == StickMode::Wasd);
@@ -3017,17 +3024,17 @@ static void test_editor_grid_key_moves_its_group() {
     CHECK(parse_layout(kTinyLayout, &l, &err));
     l.safe_inset = true;
     e.open(l, Form::Tablet, MappedTable{}, false, false);
-    Rect box = group_rect(e.layout(), 0, s);
-    Rect key = control_rect(e.layout(), 0, 0, s);
+    Rect box = group_rect(e.layout(), 0, e.content_screen());
+    Rect key = control_rect(e.layout(), 0, 0, e.content_screen());
     e.finger_down(1, key.x + 5, key.y + 5);
     CHECK(e.selected_group() == 0 && e.selected_control() == 0);
     e.finger_motion(1, key.x + 5 - 1400, key.y + 5 - 700);
     e.finger_up(1);
-    Rect moved = group_rect(e.layout(), 0, s);
+    Rect moved = group_rect(e.layout(), 0, e.content_screen());
     CHECK(moved.x == box.x - 1400 && moved.y == box.y - 700);
     CHECK(e.layout().groups[0].anchor == Anchor::Center);
     // Pinch scales the grid's key size, clamped to 24..60.
-    Rect k = control_rect(e.layout(), 0, 0, s);
+    Rect k = control_rect(e.layout(), 0, 0, e.content_screen());
     e.finger_down(1, k.x + 5, k.y + 5);
     e.finger_down(2, k.x + 105, k.y + 5);
     e.finger_motion(2, k.x + 505, k.y + 5);
@@ -3035,9 +3042,9 @@ static void test_editor_grid_key_moves_its_group() {
     e.finger_up(2);
     e.finger_up(1);
     // A grid group survives losing its last control.
-    tap_rect(e, control_rect(e.layout(), 0, 1, s));
+    tap_rect(e, control_rect(e.layout(), 0, 1, e.content_screen()));
     tap_tool(e, Tool::Delete);
-    tap_rect(e, control_rect(e.layout(), 0, 0, s));
+    tap_rect(e, control_rect(e.layout(), 0, 0, e.content_screen()));
     tap_tool(e, Tool::Delete);
     CHECK(e.layout().groups.size() == 2 && e.layout().groups[0].controls.empty());
 }
@@ -3110,7 +3117,7 @@ static void test_editor_tools_mid_gesture() {
         Rect cross = cross_rect(e, s);
         std::vector<Rect> before;
         for (int c = 1; c < 4; ++c)
-            before.push_back(control_rect(e.layout(), 2, c, s));
+            before.push_back(control_rect(e.layout(), 2, c, e.content_screen()));
         e.finger_down(1, cross.x + 60, cross.y + 60);
         e.finger_motion(1, cross.x + 30, cross.y + 60);
         tap_tool(e, Tool::Delete);
@@ -3123,7 +3130,7 @@ static void test_editor_tools_mid_gesture() {
         e.finger_up(2);
         e.finger_up(1);
         for (int c = 1; c < 4; ++c) {
-            Rect r = control_rect(e.layout(), 2, c - 1, s);
+            Rect r = control_rect(e.layout(), 2, c - 1, e.content_screen());
             CHECK(r.x == before[c - 1].x && r.y == before[c - 1].y && r.w == before[c - 1].w);
         }
         CHECK(e.selected_group() == -1);
@@ -3142,13 +3149,13 @@ static void test_editor_tools_mid_gesture() {
         CHECK(pick(e, "dpad"));
         const int g = e.selected_group();
         CHECK(g == int(e.layout().groups.size()) - 1);
-        Rect added = control_rect(e.layout(), g, 0, s);
+        Rect added = control_rect(e.layout(), g, 0, e.content_screen());
         e.finger_motion(1, 100, 100);
         e.finger_down(2, 1500, 300); // would pinch if the drag were still live
         e.finger_motion(2, 1800, 300);
         e.finger_up(2);
         e.finger_up(1);
-        Rect after = control_rect(e.layout(), g, 0, s);
+        Rect after = control_rect(e.layout(), g, 0, e.content_screen());
         CHECK(after.x == added.x && after.y == added.y && after.w == added.w);
         Rect c2 = cross_rect(e, s);
         CHECK(c2.x == moved.x && c2.y == moved.y);
@@ -3235,14 +3242,14 @@ static void test_editor_pinch_keeps_aspect_and_area() {
     e.open(editor_pad(), Form::Tablet, MappedTable{}, false, true);
     // L1 is 100x50 at the top-left: growing is capped where w hits 240,
     // shrinking where h hits 24; the result stays in the area.
-    Rect r = control_rect(e.layout(), 3, 0, s);
+    Rect r = control_rect(e.layout(), 3, 0, e.content_screen());
     double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
     e.finger_down(1, cx, cy);
     e.finger_down(2, cx + 40, cy);
     e.finger_motion(2, cx + 400, cy);
     const Control &c = e.layout().groups[3].controls[0];
     CHECK(c.w == 240 && c.h == 120);
-    Rect big = control_rect(e.layout(), 3, 0, s);
+    Rect big = control_rect(e.layout(), 3, 0, e.content_screen());
     CHECK(big.x >= 0 && big.y >= 0);
     e.finger_motion(2, cx + 1, cy);
     CHECK(e.layout().groups[3].controls[0].h == 24);
@@ -3351,7 +3358,7 @@ static void test_editor_view() {
     CHECK(v.picker_rows.empty());
     // Snapping on: the 10 pt grid, from the anchor area's corner.
     CHECK(v.grid_step == 20);
-    CHECK(v.grid_area.x == anchor_area(e.layout(), s).x);
+    CHECK(v.grid_area.x == anchor_area(e.layout(), e.content_screen()).x);
 
     // A tap selects, and the selection names a control of the view.
     const Rect cross = cross_rect(e, s);
@@ -3412,7 +3419,7 @@ static void test_editor_paints_its_layer() {
     }
     CHECK(accent);
     // A grid dot on the anchor area's corner, where no control sits.
-    const Rect area = anchor_area(e.layout(), s);
+    const Rect area = anchor_area(e.layout(), e.content_screen());
     const Rgba dot = c.at(area.x + 4 * v.grid_step, area.y);
     CHECK(dot.a == 40);
     // The play view is unchanged: nothing dims it.
@@ -3632,7 +3639,7 @@ static void dump_editor(const char *dir, const Screen &s) {
         if (state > 0) {
             // Select the first control and drag it a little, so the
             // selection outline and the snap guides both show.
-            const Rect first = control_rect(e.layout(), 0, 0, s);
+            const Rect first = control_rect(e.layout(), 0, 0, e.content_screen());
             const double cx = first.x + first.w / 2.0, cy = first.y + first.h / 2.0;
             e.finger_down(1, cx, cy);
             e.finger_motion(1, cx + 57, cy - 39);
@@ -3651,6 +3658,142 @@ static void dump_editor(const char *dir, const Screen &s) {
         const std::string file = std::string(dir) + tail;
         write_file(file, std::string(px.begin(), px.end()));
         printf("wrote %s\n", file.c_str());
+    }
+}
+
+// Bottom-anchored: its offset is measured from the area's bottom edge, which
+// the reserved band does not move.
+static bool anchor_row_is_bottom(Anchor a) {
+    return a == Anchor::BottomLeft || a == Anchor::Bottom || a == Anchor::BottomRight;
+}
+
+// The toolbar's band is reserved: the pad built-in's top-centre KEYS tab is
+// drawn below the toolbar while editing, and a tap on it selects it.
+static void test_editor_reserves_the_toolbar_band() {
+    const char *text = builtin_layout("pad", Form::Tablet);
+    CHECK(text != nullptr);
+    if (!text)
+        return;
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(text, &l, &err));
+    // Find the top-centre toggle.
+    int tg = -1, tc = -1;
+    for (int g = 0; g < int(l.groups.size()); ++g)
+        for (int c = 0; c < int(l.groups[g].controls.size()); ++c)
+            if (l.groups[g].controls[c].kind == Kind::Toggle &&
+                l.groups[g].controls[c].anchor == Anchor::Top) {
+                tg = g;
+                tc = c;
+            }
+    CHECK(tg >= 0);
+    if (tg < 0)
+        return;
+
+    Editor e;
+    const Screen s = editor_screen();
+    e.set_screen(s);
+    e.open(l, Form::Tablet, MappedTable{}, false, true);
+    // The content area starts below the toolbar, and so does the tab.
+    const Rect bar = e.toolbar().back().rect;
+    const Rect area = anchor_area(e.layout(), e.content_screen());
+    CHECK(area.y >= bar.y + bar.h);
+    const Rect tab = control_rect(e.layout(), tg, tc, e.content_screen());
+    CHECK(tab.y >= bar.y + bar.h);
+    // In play it sits under the toolbar's band, which is what made it
+    // unreachable before.
+    CHECK(control_rect(e.layout(), tg, tc, s).y < bar.y + bar.h);
+    // A tap on it selects it, and nothing of the toolbar covers it.
+    tap_rect(e, tab);
+    CHECK(e.selected_group() == tg && e.selected_control() == tc);
+    for (const ToolbarItem &t : e.toolbar())
+        CHECK(!overlaps(t.rect, tab));
+    // The view draws it where the hit test found it.
+    const ControlsView v = make_view(e, s);
+    CHECK(v.selected >= 0 && v.selected < int(v.controls.size()));
+    if (v.selected >= 0)
+        CHECK(v.controls[v.selected].rect.y == tab.y);
+    // Bottom-anchored controls do not move: only the top of the area does.
+    for (int g = 0; g < int(e.layout().groups.size()); ++g)
+        for (int c = 0; c < int(e.layout().groups[g].controls.size()); ++c)
+            if (anchor_row_is_bottom(e.layout().groups[g].controls[c].anchor))
+                CHECK(control_rect(e.layout(), g, c, e.content_screen()).y ==
+                      control_rect(e.layout(), g, c, s).y);
+}
+
+// Every finger goes when the window loses focus, and a moved drag is kept.
+static void test_editor_cancel_fingers() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    const Rect cross = cross_rect(e, s);
+    e.finger_down(1, cross.x + cross.w / 2.0, cross.y + cross.h / 2.0);
+    e.finger_motion(1, cross.x + cross.w / 2.0 - 120, cross.y + cross.h / 2.0);
+    const Rect moved = cross_rect(e, s);
+    CHECK(moved.x != cross.x);
+    e.cancel_fingers();
+    CHECK(e.guides().empty());
+    CHECK(cross_rect(e, s).x == moved.x); // the drag was committed, not undone
+    // A motion after the cancel moves nothing: that finger is gone.
+    e.finger_motion(1, cross.x, cross.y);
+    CHECK(cross_rect(e, s).x == moved.x);
+}
+
+// renaming() is what the host drives the system keyboard from: it clears on
+// text_done, while the rename flag the host keeps for Done does not.
+static void test_editor_renaming_clears_on_done() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    CHECK(!e.renaming());
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "duplicate"));
+    tap_tool(e, Tool::Layout);
+    CHECK(pick(e, "rename"));
+    CHECK(e.renaming());
+    e.text("mine");
+    CHECK(e.renaming());
+    e.text_done();
+    CHECK(!e.renaming());
+    CHECK(e.layout().name == "mine");
+}
+
+// Every built-in a touch-only player can be on offers a way to the settings
+// page: pad and pad+keys carry an F10 action, keys has an F10 key.
+static void test_builtins_reach_the_settings_page() {
+    static const Form kForms[] = {Form::Tablet, Form::PhoneLandscape, Form::PhonePortrait};
+    for (const char *name : {"pad", "keys", "pad+keys"}) {
+        for (Form form : kForms) {
+            const char *text = builtin_layout(name, form);
+            CHECK(text != nullptr);
+            if (!text)
+                continue;
+            Layout l;
+            std::string err;
+            CHECK(parse_layout(text, &l, &err));
+            int actions = 0, f10_keys = 0;
+            for (const Group &g : l.groups)
+                for (const Control &c : g.controls) {
+                    if (c.kind == Kind::Action && c.action == "settings") {
+                        ++actions;
+                        CHECK(!c.label.empty());
+                    }
+                    if (c.kind == Kind::Key && c.scancode == kScanF10)
+                        ++f10_keys;
+                }
+            int cycles = 0;
+            for (const Group &g : l.groups)
+                for (const Control &c : g.controls)
+                    if (c.kind == Kind::Toggle && c.target == "next")
+                        ++cycles;
+            if (actions + f10_keys + cycles < 1)
+                fprintf(stderr, "  %s %s reaches no settings page\n", name, form_name(form));
+            CHECK(actions + f10_keys + cycles >= 1);
+            // pad and pad+keys carry the action; keys has its own F10 key on
+            // a tablet and, on a phone, a tab to the layout that does.
+            if (std::string(name) != "keys")
+                CHECK(actions == 1);
+        }
     }
 }
 
@@ -3762,6 +3905,10 @@ int main(int argc, char **argv) {
     test_apply_results_duplicate_and_rename();
     test_apply_results_switch_and_delete();
     test_editor_done_without_a_tap();
+    test_editor_reserves_the_toolbar_band();
+    test_editor_cancel_fingers();
+    test_editor_renaming_clears_on_done();
+    test_builtins_reach_the_settings_page();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

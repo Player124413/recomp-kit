@@ -43,7 +43,13 @@ class Editor {
     Form form() const {
         return form_;
     }
+    // The screen the toolbar is laid out in. The edited layout uses
+    // content_screen() instead: the toolbar's band along the top of the
+    // anchor area is reserved, so no control is ever drawn or hit under it.
     void set_screen(const Screen &s);
+    const Screen &content_screen() const {
+        return screen_;
+    }
     // Every layout name the host knows (LayoutStore::names()): Duplicate
     // avoids them and a toggle's Bind lists them.
     void set_names(std::vector<std::string> names);
@@ -57,11 +63,19 @@ class Editor {
     void finger_motion(int64_t id, double px, double py);
     void finger_up(int64_t id);
     void wheel(double notches); // desktop: resize the selected control
+    // Focus loss: every finger is gone. A moved drag is committed first, the
+    // same as any tool would.
+    void cancel_fingers();
 
     // Rename text, once take_rename() handed the host a rename: `text`
     // appends UTF-8, `text_done` commits it (a built-in name is refused).
     void text(const std::string &utf8);
     void text_done();
+    // A rename is being typed: the host keeps the system keyboard up only
+    // while this holds.
+    bool renaming() const {
+        return renaming_;
+    }
 
     const Layout &layout() const {
         return layout_;
@@ -133,6 +147,8 @@ class Editor {
     double pt(double points) const {
         return points * screen_.scale;
     }
+    // `s` with the toolbar's band taken off the top of the anchor area.
+    Screen content_screen(const Screen &s) const;
     void layout_toolbar();
     void layout_picker();
     void open_picker(Picker kind, Tool from, std::vector<PickerItem> items);
@@ -165,7 +181,8 @@ class Editor {
     bool mapped_changed_ = false;
     bool native_ = false;
     bool snap_ = true;
-    Screen screen_;
+    Screen screen_;      // the edited layout's: the toolbar band reserved
+    Screen full_screen_; // as given: the toolbar and picker are laid out in it
     std::vector<std::string> names_;
 
     int sel_group_ = -1, sel_control_ = -1;

@@ -147,6 +147,9 @@ void Editor::open(const Layout &layout, Form form, const MappedTable &mapped, bo
     mapped_changed_ = false;
     native_ = native;
     snap_ = snap;
+    // The band depends on where this layout's anchors resolve, so it is
+    // taken again now the layout is known.
+    screen_ = content_screen(full_screen_);
     reset_transient();
     layout_toolbar();
 }
@@ -199,8 +202,32 @@ bool Editor::selection_valid() const {
            sel_control_ < int(layout_.groups[sel_group_].controls.size());
 }
 
+// The toolbar's band: its top margin, its height and the gap under it, in
+// drawable pixels on `s`.
+static double toolbar_band(const Screen &s) {
+    const double scale = s.scale > 0 ? s.scale : 1.0;
+    return (kToolMargin + kToolH + kToolGap) * scale;
+}
+
+// Everything the edited layout does -- drawing, hit testing, snapping and
+// re-anchoring -- happens in an anchor area whose top starts below the
+// toolbar, so a control anchored to the top centre (the pad built-in's KEYS
+// tab) is never hidden by it. Writing the reserved rect into controls_area
+// is what makes anchor_area() return it, whatever the layout's safe_inset
+// says; the area is left alone when there is no room for the band.
+Screen Editor::content_screen(const Screen &s) const {
+    Screen c = s;
+    const Rect base = anchor_area(layout_, s);
+    const int band = int(std::lround(toolbar_band(s)));
+    if (base.empty() || band <= 0 || base.h - band < 1)
+        return c;
+    c.controls_area = Rect{base.x, base.y + band, base.w, base.h - band};
+    return c;
+}
+
 void Editor::set_screen(const Screen &s) {
-    screen_ = s;
+    full_screen_ = s;
+    screen_ = content_screen(s);
     layout_toolbar();
     if (picker_ != Picker::None)
         layout_picker();
@@ -216,9 +243,12 @@ void Editor::set_names(std::vector<std::string> names) {
 // than the area.
 void Editor::layout_toolbar() {
     toolbar_.clear();
-    Rect area = screen_.controls_area;
+    // The full screen, not content_screen(): the toolbar owns the band it
+    // takes out of the edited layout's area.
+    Rect area = full_screen_.controls_area;
     if (area.empty())
-        area = screen_.safe.empty() ? Rect{0, 0, screen_.dw, screen_.dh} : screen_.safe;
+        area = full_screen_.safe.empty() ? Rect{0, 0, full_screen_.dw, full_screen_.dh}
+                                         : full_screen_.safe;
     const int n = int(std::size(kTools));
     int gap = int(std::lround(pt(kToolGap)));
     int margin = int(std::lround(pt(kToolMargin)));
@@ -943,6 +973,13 @@ bool Editor::take_cancel() {
 
 void Editor::cancel() {
     cancel_ = true;
+}
+
+void Editor::cancel_fingers() {
+    end_gesture();
+    fingers_.clear();
+    picker_held_ = false;
+    outside_finger_ = -1;
 }
 
 void Editor::done() {
