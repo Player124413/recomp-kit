@@ -1,5 +1,7 @@
 // controls_tests.cpp - the on-screen controls: json, layouts, router, pad, binding, editor.
 #include "../controls/json.h"
+#include "../controls/layout.h"
+#include "../keypad_layout.h"
 
 #include <cmath>
 #include <stdio.h>
@@ -42,9 +44,90 @@ static void test_json_errors_name_the_line() {
     CHECK(v.num("missing", 7) == 7); // a failed parse leaves a usable value
 }
 
+static const char *kTinyLayout = R"({
+  "version": 1, "name": "tiny", "opacity": 0.5, "safe_inset": false, "future_field": 3,
+  "groups": [
+    {"id": "g", "grid": {"cols": 2, "rows": 1, "key": 36, "gap": 4}, "anchor": "bottom-right",
+     "controls": [
+       {"kind": "key", "scancode": "LShift", "col": 0, "row": 0},
+       {"kind": "key", "scancode": "Space", "col": 1, "row": 0, "label": "SP"}]},
+    {"id": "loose", "controls": [
+       {"kind": "button", "button": "cross", "anchor": "top-left", "x": 10, "y": 20, "size": 50},
+       {"kind": "stick", "stick": "right", "mode": "fixed", "anchor": "center", "radius": 30},
+       {"kind": "hologram"},
+       {"kind": "toggle", "target": "g", "label": "HIDE", "label_off": "KEYS",
+        "anchor": "bottom-right", "w": 64, "h": 20, "stack_on": "g"}]}
+  ]})";
+
+static void test_layout_parse_and_write() {
+    Layout l;
+    std::string err;
+    std::vector<std::string> warnings;
+    CHECK(parse_layout(kTinyLayout, &l, &err, &warnings));
+    CHECK(warnings.size() == 1 && warnings[0].find("hologram") != std::string::npos);
+    CHECK(l.name == "tiny" && l.opacity == 0.5 && !l.safe_inset);
+    CHECK(l.groups.size() == 2 && l.groups[0].has_grid && l.groups[0].grid.cols == 2);
+    CHECK(l.groups[0].controls[0].scancode == kScanLShift);
+    CHECK(l.groups[0].controls[0].label == "LShift");
+    CHECK(l.groups[0].controls[1].label == "SP");
+    const Control &stick = l.groups[1].controls[1];
+    CHECK(stick.kind == Kind::Stick && stick.stick == 1 && !stick.floating && stick.w == 60);
+    CHECK(l.groups[1].controls.size() == 3); // the unknown kind was skipped
+    Layout again;
+    CHECK(parse_layout(write_layout(l), &again, &err));
+    CHECK(write_layout(again) == write_layout(l));
+    CHECK(!parse_layout("{\"groups\": 5}", &l, &err));
+    CHECK(scancode_from_name("F5") == kScanF5 && std::string(scancode_name(kScanUp)) == "Up");
+    CHECK(scancode_from_name("NotAKey") == 0);
+}
+
+static Screen screen(int dw, int dh, double scale) {
+    Screen s;
+    s.dw = dw;
+    s.dh = dh;
+    s.scale = scale;
+    s.safe = {0, 0, dw, dh};
+    return s;
+}
+
+static void test_layout_geometry_and_hits() {
+    Layout l;
+    std::string err;
+    CHECK(parse_layout(kTinyLayout, &l, &err));
+    const Screen s = screen(2000, 1000, 2.0);
+    // Grid: pitch = lround((36 + 4) * 2) = 80, box 160x80 in the bottom-right corner.
+    const Rect box = group_rect(l, 0, s);
+    CHECK(box.x == 1840 && box.y == 920 && box.w == 160 && box.h == 80);
+    const Rect k1 = control_rect(l, 0, 1, s);
+    CHECK(k1.x == 1840 + 80 + 4 && k1.y == 924 && k1.w == 72 && k1.h == 72);
+    const Rect cross = control_rect(l, 1, 0, s);
+    CHECK(cross.x == 20 && cross.y == 40 && cross.w == 100 && cross.h == 100);
+    const Rect stick = control_rect(l, 1, 1, s);
+    CHECK(stick.x == 940 && stick.y == 440 && stick.w == 120);
+    // The toggle sits on the visible group, and in the corner once it is hidden.
+    CHECK(control_rect(l, 1, 2, s).y == 920 - 40);
+    l.groups[0].visible = false;
+    CHECK(control_rect(l, 1, 2, s).y == 1000 - 40);
+    Hit h = hit_test(l, s, 1990, 990);
+    CHECK(h.group == 1 && h.control == 2);        // the tab, even with its group hidden
+    CHECK(hit_test(l, s, 1850, 950).group == -1); // hidden group: the game's
+    l.groups[0].visible = true;
+    h = hit_test(l, s, 1930, 960);
+    CHECK(h.group == 0 && h.control == 1);
+    h = hit_test(l, s, 1841, 921); // the half-gap at the box's corner
+    CHECK(h.group == 0 && h.gap);
+    CHECK(hit_test(l, s, 500, 900).group == -1); // non-grid groups never claim gaps
+    l.scale = 40.0 / 36.0;
+    CHECK(control_rect(l, 0, 0, s).w == lround((40 + 4) * 2.0) - 8);
+    Screen none;
+    CHECK(hit_test(l, none, 0, 0).group == -1);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
+    test_layout_parse_and_write();
+    test_layout_geometry_and_hits();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;

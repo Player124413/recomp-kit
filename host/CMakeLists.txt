@@ -74,7 +74,8 @@ pop_test_binary(keypad_tests)
 add_test(NAME keypad_tests COMMAND keypad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
-add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/tests/controls_tests.cpp)
+add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
+                              ${HOST}/tests/controls_tests.cpp)
 target_include_directories(controls_tests PRIVATE ${POP_ROOT})
 target_compile_options(controls_tests PRIVATE ${POP_WARN_WERROR})
 pop_link_sdl(controls_tests)
