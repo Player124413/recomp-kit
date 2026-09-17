@@ -5,6 +5,8 @@
 #include "../../mods/mods_internal.h"
 #include "../../platform/os.h"
 #include "../present.h"
+#include "binding.h"
+#include "game_config.h"
 #include "layout_fallback.h"
 #include "layout_store.h"
 #include "overlay.h"
@@ -27,6 +29,40 @@ Layout g_layout;
 Router g_router;
 Screen g_screen;
 bool g_keyboard_absent = false;
+
+// The mapped binding: RECOMP_CONTROLS_PAD == 1 drives it from the shared
+// virtual pad every pump; the other pad modes (off, native) leave it unused.
+Binding g_binding;
+
+// Reads a whole file as text; false (leaving *out alone) when it cannot be
+// opened, same contract as layout_store.cpp's own copy.
+bool read_text_file(const std::string &path, std::string *out) {
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+    out->clear();
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        out->append(buf, n);
+    fclose(f);
+    return true;
+}
+
+// RECOMP_CONTROLS_MAPPED, then <profile>/controls/binding.txt if present. A
+// missing override file is fine; a malformed one (either source) logs once
+// and is ignored as a whole (parse_mapped leaves *table unchanged on error).
+MappedTable load_mapped_table() {
+    MappedTable table;
+    std::string error;
+    if (!parse_mapped(RECOMP_CONTROLS_MAPPED, &table, &error))
+        fprintf(stderr, "[controls] bad RECOMP_CONTROLS_MAPPED: %s\n", error.c_str());
+    std::string text;
+    const std::string path = std::string(mods_overlay_profile_dir()) + "/controls/binding.txt";
+    if (read_text_file(path, &text) && !parse_mapped(text, &table, &error))
+        fprintf(stderr, "[controls] bad %s: %s\n", path.c_str(), error.c_str());
+    return table;
+}
 
 // What g_layout was loaded and sized for.
 bool g_loaded = false;      // a load has been attempted
@@ -157,11 +193,18 @@ void host_init(const HostHooks &hooks) {
     // player's copies and the kit's built-ins are searched.
     g_store.set_dirs(std::string(mods_overlay_profile_dir()) + "/controls", "");
     mods_controls_set_names(g_store.names());
+    g_binding.set_table(load_mapped_table());
 }
 
 void host_set_screen(const Screen &s) {
     g_screen = s;
     g_router.set_screen(s);
+    // The binding works in window points; s.scale is drawable pixels per point.
+    g_binding.set_bounds(s.scale > 0 ? s.dw / s.scale : 0, s.scale > 0 ? s.dh / s.scale : 0);
+}
+
+void host_pointer_moved(double x, double y) {
+    g_binding.set_cursor(x, y);
 }
 
 void host_set_wanted(bool keyboard_absent, bool controller_present) {
@@ -188,11 +231,14 @@ bool host_finger_cancel(int64_t id) {
 
 void host_release_all() {
     g_router.cancel_all(g_sink);
+    std::vector<TouchAction> actions;
+    g_binding.release_all(&actions);
+    if (!actions.empty() && g_hooks.touch_actions)
+        g_hooks.touch_actions(actions);
     publish();
 }
 
 void host_pump(uint64_t now) {
-    (void)now; // the binding tick arrives in Task 10
     // The layout row means nothing until the settings are loaded (the first
     // presented frame runs mods_page_init); draw nothing before then.
     if (!mods_controls_initialized()) {
@@ -226,6 +272,22 @@ void host_pump(uint64_t now) {
         g_router.set_enabled(enabled, g_sink);
     }
     vpad().set_source(kPadSourceTouch, g_router.pad());
+
+#if RECOMP_CONTROLS_PAD == 1
+    // The mapped binding turns the merged pad into keys/mouse; other pad
+    // modes (off, native) leave the virtual pad for host_pad_* to read
+    // directly.
+    {
+        std::vector<TouchAction> actions;
+        std::vector<std::string> names;
+        g_binding.tick(vpad().state(), now, &actions, &names);
+        if (!actions.empty() && g_hooks.touch_actions)
+            g_hooks.touch_actions(actions);
+        for (const std::string &name : names)
+            g_sink.action(name);
+    }
+#endif
+
     publish();
 }
 

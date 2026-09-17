@@ -75,15 +75,16 @@ struct TouchPoint {
 };
 
 struct TouchAction {
-    enum Kind { Motion, Button, Key } kind;
+    enum Kind { Motion, Button, Key, Wheel } kind;
     // Motion only: also place the game's own cursor here. True for a press
     // and for a left drag; false while the wheel button is held, when the
     // game scrolls or rotates from relative movement instead.
     bool place = true;
-    double x = 0, y = 0; // Motion, Button
+    double x = 0, y = 0; // Motion, Button, Wheel (the event's position)
     int button = 0;      // Button: 0 left, 1 right, 2 middle (wheel)
     bool down = false;   // Button, Key
     int scancode = 0;    // Key: an SDL_Scancode value
+    int wheel = 0;       // Wheel: notches, +1 up / -1 down
 };
 
 class TouchMapper {

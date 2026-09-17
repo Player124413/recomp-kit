@@ -1,5 +1,6 @@
 // controls_tests.cpp - the on-screen controls: json, layouts, router, pad, binding, editor.
 #include "../../platform/os.h"
+#include "../controls/binding.h"
 #include "../controls/builtin_layouts.h"
 #include "../controls/json.h"
 #include "../controls/layout.h"
@@ -1371,6 +1372,223 @@ static void test_raster_shape_bounds_are_clamped() {
         CHECK(b == 0);
 }
 
+// parse_mapped changes only the entries it names, and leaves *table alone on
+// any error; write_mapped round-trips through parse_mapped.
+static void test_binding_parse_mapped() {
+    MappedTable t;
+    std::string err;
+    CHECK(parse_mapped("cross=key:Space;left_stick=cursor", &t, &err));
+    CHECK(t.buttons[int(PadButton::Cross)].type == Target::Key);
+    CHECK(t.buttons[int(PadButton::Cross)].value == kScanSpace);
+    CHECK(t.left == StickMode::Cursor);
+    CHECK(t.dpad == StickMode::Arrows);                            // untouched
+    CHECK(t.buttons[int(PadButton::Circle)].type == Target::None); // untouched
+
+    MappedTable before = t;
+    CHECK(!parse_mapped("cross=key:Nope", &t, &err));
+    CHECK(write_mapped(t) == write_mapped(before)); // unchanged on error
+    CHECK(!parse_mapped("bogus=none", &t, &err));
+    CHECK(write_mapped(t) == write_mapped(before));
+
+    MappedTable w;
+    w.buttons[int(PadButton::Cross)] = Target{Target::Mouse, 0, ""};
+    w.buttons[int(PadButton::Ps)] = Target{Target::Action, 0, "settings"};
+    w.buttons[int(PadButton::L1)] = Target{Target::Wheel, 1, ""};
+    w.cursor_speed = 450;
+    const std::string text = write_mapped(w);
+    MappedTable w2;
+    CHECK(parse_mapped(text, &w2, &err));
+    CHECK(write_mapped(w2) == text);
+}
+
+// Cross mapped to mouse_left (the built-in default): a press places the
+// cursor and clicks; a release only lifts the button.
+static void test_binding_button_mouse() {
+    MappedTable t;
+    t.buttons[int(PadButton::Cross)] = Target{Target::Mouse, 0, ""};
+    Binding b;
+    b.set_table(t);
+    b.set_bounds(1000, 800);
+    b.set_cursor(100, 100);
+    PadState p;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    p.buttons = kPadCross;
+    b.tick(p, 0, &out, &actions);
+    CHECK(out.size() == 2);
+    CHECK(out[0].kind == TouchAction::Motion && out[0].place && out[0].x == 100 && out[0].y == 100);
+    CHECK(out[1].kind == TouchAction::Button && out[1].button == 0 && out[1].down);
+    out.clear();
+    p.buttons = 0;
+    b.tick(p, 10ull * 1000000ull, &out, &actions);
+    CHECK(out.size() == 1);
+    CHECK(out[0].kind == TouchAction::Button && out[0].button == 0 && !out[0].down);
+}
+
+// Right stick on Cursor (the default), speed 900, bounds 1000x800: the
+// cursor moves by cursor_speed * |v|^2 * dt each tick and clamps at the edge.
+static void test_binding_cursor_stick() {
+    MappedTable t; // right_stick=cursor, cursor_speed=900 by default
+    Binding b;
+    b.set_table(t);
+    b.set_bounds(1000, 800);
+    b.set_cursor(0, 0);
+    PadState p;
+    p.rx = 1;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    uint64_t now = 0;
+    for (int i = 0; i < 3; ++i) {
+        out.clear();
+        b.tick(p, now, &out, &actions);
+        now += 10ull * 1000000ull;
+    }
+    CHECK(std::fabs(b.cursor_x() - 18.0) <= 0.5);
+
+    Binding b2;
+    b2.set_table(t);
+    b2.set_bounds(1000, 800);
+    b2.set_cursor(0, 0);
+    p.rx = 0.5f;
+    now = 0;
+    for (int i = 0; i < 3; ++i) {
+        out.clear();
+        b2.tick(p, now, &out, &actions);
+        now += 10ull * 1000000ull;
+    }
+    CHECK(std::fabs(b2.cursor_x() - 4.5) <= 0.3);
+
+    Binding b3;
+    b3.set_table(t);
+    b3.set_bounds(1000, 800);
+    b3.set_cursor(0, 0);
+    p.rx = 1;
+    now = 0;
+    for (int i = 0; i < 200; ++i) {
+        out.clear();
+        b3.tick(p, now, &out, &actions);
+        now += 10ull * 1000000ull;
+    }
+    CHECK(b3.cursor_x() == 1000.0);
+}
+
+// Left stick on Arrows (the default): per-axis hysteresis, 0.5 to press and
+// 0.35 to release.
+static void test_binding_arrows_stick() {
+    MappedTable t; // left_stick=arrows by default
+    Binding b;
+    b.set_table(t);
+    PadState p;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    p.lx = 0.6f;
+    b.tick(p, 0, &out, &actions);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Key && out[0].scancode == kScanRight &&
+          out[0].down);
+    out.clear();
+    p.lx = 0.4f;
+    b.tick(p, 1, &out, &actions);
+    CHECK(out.empty());
+    out.clear();
+    p.lx = 0.3f;
+    b.tick(p, 2, &out, &actions);
+    CHECK(out.size() == 1 && out[0].scancode == kScanRight && !out[0].down);
+    out.clear();
+    p.lx = 0;
+    p.ly = -0.9f;
+    b.tick(p, 3, &out, &actions);
+    CHECK(out.size() == 1 && out[0].scancode == kScanUp && out[0].down);
+}
+
+// l1 = wheel_up: one Wheel(+1) per press, nothing on release.
+static void test_binding_wheel_button() {
+    MappedTable t;
+    std::string err;
+    CHECK(parse_mapped("l1=wheel_up", &t, &err));
+    Binding b;
+    b.set_table(t);
+    PadState p;
+    p.buttons = kPadL1;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    b.tick(p, 0, &out, &actions);
+    CHECK(out.size() == 1 && out[0].kind == TouchAction::Wheel && out[0].wheel == 1);
+    out.clear();
+    p.buttons = 0;
+    b.tick(p, 1, &out, &actions);
+    CHECK(out.empty());
+}
+
+// ps = action:settings: the action name once per press, nothing on release.
+static void test_binding_action_button() {
+    MappedTable t;
+    std::string err;
+    CHECK(parse_mapped("ps=action:settings", &t, &err));
+    Binding b;
+    b.set_table(t);
+    PadState p;
+    p.buttons = kPadPs;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    b.tick(p, 0, &out, &actions);
+    CHECK(actions.size() == 1 && actions[0] == "settings");
+    actions.clear();
+    b.tick(p, 1, &out, &actions); // held: no repeat
+    CHECK(actions.empty());
+    p.buttons = 0;
+    b.tick(p, 2, &out, &actions); // release: nothing
+    CHECK(actions.empty());
+}
+
+// Scroll mode taps the arrow key once per whole kTouchPanStep accumulated.
+static void test_binding_scroll_stick() {
+    MappedTable t;
+    std::string err;
+    CHECK(parse_mapped("left_stick=scroll", &t, &err));
+    Binding b;
+    b.set_table(t);
+    PadState p;
+    p.lx = 1;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    uint64_t now = 0;
+    int right_taps = 0;
+    for (int i = 0; i < 100; ++i) {
+        out.clear();
+        b.tick(p, now, &out, &actions);
+        for (const TouchAction &a : out)
+            if (a.kind == TouchAction::Key && a.scancode == kScanRight && a.down)
+                ++right_taps;
+        now += 10ull * 1000000ull;
+    }
+    CHECK(right_taps >= 18 && right_taps <= 22);
+}
+
+// release_all lets go of every key and mouse button the binding is holding.
+static void test_binding_release_all() {
+    MappedTable t; // left_stick=arrows by default
+    t.buttons[int(PadButton::Cross)] = Target{Target::Mouse, 0, ""};
+    Binding b;
+    b.set_table(t);
+    b.set_cursor(0, 0);
+    PadState p;
+    p.buttons = kPadCross;
+    p.lx = 1;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    b.tick(p, 0, &out, &actions);
+    out.clear();
+    b.release_all(&out);
+    bool key_right_up = false, mouse_left_up = false;
+    for (const TouchAction &a : out) {
+        if (a.kind == TouchAction::Key && a.scancode == kScanRight && !a.down)
+            key_right_up = true;
+        if (a.kind == TouchAction::Button && a.button == 0 && !a.down)
+            mouse_left_up = true;
+    }
+    CHECK(key_right_up && mouse_left_up);
+}
+
 int main() {
     test_json_round_trip();
     test_json_errors_name_the_line();
@@ -1418,6 +1636,14 @@ int main() {
     test_make_view_revision_ignores_undrawn_press();
     test_tablet_fallback();
     test_raster_shape_bounds_are_clamped();
+    test_binding_parse_mapped();
+    test_binding_button_mouse();
+    test_binding_cursor_stick();
+    test_binding_arrows_stick();
+    test_binding_wheel_button();
+    test_binding_action_button();
+    test_binding_scroll_stick();
+    test_binding_release_all();
     if (g_failures) {
         fprintf(stderr, "%d failures\n", g_failures);
         return 1;
