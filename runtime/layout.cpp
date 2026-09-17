@@ -11,6 +11,7 @@ namespace {
 std::string g_test_exe;
 HostLayout g_layout;
 bool g_computed = false;
+std::string g_profile_env; // the RECOMP_PROFILE_DIR g_layout was computed with
 
 bool exists(const std::string &p) {
     OsStat st;
@@ -77,9 +78,15 @@ HostLayout compute() {
 
 } // namespace
 
+// Computed once, and again if RECOMP_PROFILE_DIR changes afterwards: a
+// constructor (mods/run_record.cpp) asks before an Android host has set the
+// profile under its external files folder.
 const HostLayout &host_layout() {
-    if (!g_computed) {
+    const char *env = recomp_env("PROFILE_DIR");
+    const std::string profile_env = env ? env : "";
+    if (!g_computed || profile_env != g_profile_env) {
         g_layout = compute();
+        g_profile_env = profile_env;
         g_computed = true;
     }
     return g_layout;
