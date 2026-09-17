@@ -30,6 +30,7 @@ void d3d_register();
 void dsound_register();
 void dshow_register();
 void dinput_register();
+void xinput_register();
 void qmixer_register();
 void mss32_register();
 void fmod_register();
@@ -118,6 +119,8 @@ extern "C" bool mf_owns_the_screen();
 void ddraw_frame_pump(X86 *c);
 // Test only: forget the cached RECOMP_QMIX_GATE reading.
 void qmixer_gate_reset_for_test();
+// Test only: XInputEnable's stored state and the keystroke replay position.
+void xinput_reset_for_test();
 
 // Diagnostics: live COM objects, surfaces and audio channels.
 void dx_dump(FILE *out);

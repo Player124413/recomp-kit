@@ -1,6 +1,6 @@
 set(POP_DX_SOURCES
   com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp d3dx10.cpp
-  dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp qmixer.cpp mss32.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp mf.cpp weanetr.cpp)
+  dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp xinput.cpp qmixer.cpp mss32.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp mf.cpp weanetr.cpp)
 
 add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
 target_link_libraries(recomp_dx PUBLIC recomp_runtime)

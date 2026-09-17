@@ -738,6 +738,88 @@ static void test_joy_custom_format() {
     CHECK_EQ(call_method(dev, DID_SetDataFormat, {df}), DI_OK);
 }
 
+// ===========================================================================
+// XInput
+// ===========================================================================
+
+// dwPacketNumber (4), then XINPUT_GAMEPAD: wButtons (2), bLeftTrigger (1),
+// bRightTrigger (1), sThumbLX/LY/RX/RY (2 each) = 16 bytes total.
+enum {
+    XI_STATE_OFF_dwPacketNumber = 0,
+    XI_STATE_OFF_wButtons = 4,
+    XI_STATE_OFF_sThumbLY = 10,
+    XI_STATE_OFF_sThumbRY = 14,
+};
+static const uint32_t XI_ERROR_SUCCESS = 0, XI_ERROR_DEVICE_NOT_CONNECTED = 1167,
+                      XI_ERROR_EMPTY = 4306;
+
+static void test_xinput() {
+    cpu_reset();
+    pad_reset();
+    xinput_reset_for_test();
+    g_pad_apis = 3; // DirectInput joystick and XInput both native
+
+    uint32_t get_state = tramp("xinput1_3.dll", "XInputGetState");
+    uint32_t set_state = tramp("xinput1_3.dll", "XInputSetState");
+    uint32_t enable = tramp("xinput1_3.dll", "XInputEnable");
+    uint32_t keystroke = tramp("xinput1_3.dll", "XInputGetKeystroke");
+    uint32_t st = sc(0x400);
+
+    // Any user but 0 is not connected, even when served.
+    CHECK_EQ(call_shim(get_state, {1, st}), XI_ERROR_DEVICE_NOT_CONNECTED);
+
+    // Mapped mode (not native): not connected either.
+    g_pad_mode = 1;
+    CHECK_EQ(call_shim(get_state, {0, st}), XI_ERROR_DEVICE_NOT_CONNECTED);
+    g_pad_mode = 2;
+
+    // Served: cross + hat up -> buttons 0x1001 (A | DPAD_UP); the Y axes
+    // invert (XInput up is positive, the pad's is negative) and clamp.
+    g_pad.buttons = 1 << 0; // cross
+    g_pad.hat = 1;          // up
+    g_pad.ly = -32767;
+    g_pad.ry = -32768; // out of the pad's own -32767..32767 range: clamp it
+    g_pad_packet = 7;
+    CHECK_EQ(call_shim(get_state, {0, st}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd32(st + XI_STATE_OFF_dwPacketNumber), 7u);
+    CHECK_EQ(rd16(st + XI_STATE_OFF_wButtons), 0x1001u);
+    CHECK_EQ((int16_t)rd16(st + XI_STATE_OFF_sThumbLY), 32767);
+    CHECK_EQ((int16_t)rd16(st + XI_STATE_OFF_sThumbRY), 32767);
+
+    // The packet number is the host's own, unmodified.
+    g_pad_packet = 8;
+    CHECK_EQ(call_shim(get_state, {0, st}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd32(st + XI_STATE_OFF_dwPacketNumber), 8u);
+
+    // SetState reaches the host rumble callback directly.
+    uint32_t vib = sc(0x500);
+    wr16(vib + 0, 1000);
+    wr16(vib + 2, 2000);
+    CHECK_EQ(call_shim(set_state, {0, vib}), XI_ERROR_SUCCESS);
+    CHECK_EQ(g_rumble_low, 1000u);
+    CHECK_EQ(g_rumble_high, 2000u);
+
+    // Disabling sends one zero rumble and zeros the reported state, but the
+    // packet number keeps tracking the real one.
+    CHECK_EQ(call_shim(enable, {0}), XI_ERROR_SUCCESS);
+    CHECK_EQ(g_rumble_low, 0u);
+    CHECK_EQ(g_rumble_high, 0u);
+    g_pad_packet = 9;
+    CHECK_EQ(call_shim(get_state, {0, st}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd32(st + XI_STATE_OFF_dwPacketNumber), 9u);
+    CHECK_EQ(rd16(st + XI_STATE_OFF_wButtons), 0u);
+
+    // A cross press becomes one keystroke; the queue then reports empty.
+    pad_edge(0, 0, 1);
+    uint32_t ks = sc(0x600);
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5800u);
+    CHECK_EQ(rd8(ks + 4), 1u);
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_EMPTY);
+
+    CHECK(imports_serves_module("xinput9_1_0.dll"));
+}
+
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     mem_init();
@@ -761,6 +843,7 @@ int main() {
         {"joystick objects", test_joy_objects},
         {"joystick buffered data", test_joy_device_data},
         {"joystick custom format", test_joy_custom_format},
+        {"xinput", test_xinput},
     };
     for (const auto &t : tests) {
         int before = g_failures;
