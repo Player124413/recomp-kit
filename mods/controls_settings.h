@@ -44,10 +44,28 @@ PopModStatus mods_controls_set(ControlsRow row, int value);
 // EDIT_ROW ignores the delta and requests the editor instead of a value change.
 PopModStatus mods_controls_nudge(ControlsRow row, int delta);
 std::string mods_controls_line(ControlsRow row);
-// Hidden groups of the active layout, bit i = groups[i] hidden. Not shown on
-// the settings page; the touch router (Task 7+) reads it directly.
-uint32_t mods_controls_hidden_groups();
-void mods_controls_set_hidden_groups(uint32_t bits);
+// Which form factor a set of hidden-group bits belongs to; the same order as
+// host/controls/layout.h's Form. One layout name's forms need not have the
+// same groups -- portrait "keys" is one board where landscape is two halves
+// -- so the bits are kept per form and a rotation no longer hides the wrong
+// half. The three lanes share one stored value.
+enum ControlsForm {
+    CONTROLS_FORM_TABLET,
+    CONTROLS_FORM_PHONE_LANDSCAPE,
+    CONTROLS_FORM_PHONE_PORTRAIT,
+    CONTROLS_FORM_COUNT
+};
+// Hidden groups of the active layout on `form`, bit i = groups[i] hidden.
+// Not shown on the settings page; the touch router reads it directly. A
+// profile written by the build that stored one set of bits for every form
+// hands them to the first form that asks, and keeps them there.
+uint32_t mods_controls_hidden_groups(ControlsForm form);
+void mods_controls_set_hidden_groups(ControlsForm form, uint32_t bits);
+// Writes what the on-screen controls changed since the last call. The host
+// calls it once per pump: a toggle press runs on the SDL input thread, and
+// mods_settings_set saves the whole profile synchronously, so the press
+// itself only marks the value and this flushes it.
+void mods_controls_flush();
 // Set by the EDIT row; the host polls this and clears it.
 bool mods_controls_take_edit_request();
 // True while the layout editor is open (the host sets it). The F10 page's

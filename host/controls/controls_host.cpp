@@ -117,6 +117,22 @@ uint32_t hidden_bits(const Layout &l) {
     return bits;
 }
 
+// Which lane of the settings' hidden-group bits a form factor owns. The
+// forms of one layout name need not have the same groups, so each keeps its
+// own bits: hiding the portrait keyboard must not hide the landscape one's
+// left half after a rotation.
+ControlsForm settings_form(Form f) {
+    switch (f) {
+    case Form::PhoneLandscape:
+        return CONTROLS_FORM_PHONE_LANDSCAPE;
+    case Form::PhonePortrait:
+        return CONTROLS_FORM_PHONE_PORTRAIT;
+    case Form::Tablet:
+        break;
+    }
+    return CONTROLS_FORM_TABLET;
+}
+
 void apply_hidden_bits(Layout &l, uint32_t bits) {
     for (size_t i = 0; i < l.groups.size() && i < kHiddenBits; ++i)
         l.groups[i].visible = (bits & (1u << i)) == 0;
@@ -158,7 +174,7 @@ class HostSink : public ControlsSink {
             (void)mods_controls_set(CONTROLS_LAYOUT_ROW, index);
     }
     void group_visibility_changed() override {
-        mods_controls_set_hidden_groups(hidden_bits(g_layout));
+        mods_controls_set_hidden_groups(settings_form(g_loaded_form), hidden_bits(g_layout));
     }
     // A light tick on each press, when the haptics row is on.
     void tap() override {
@@ -546,10 +562,12 @@ void host_pump(uint64_t now) {
         }
         // The hidden groups follow the row whoever set it: a toggle writes it
         // (group_visibility_changed), and a settings load or reset may too.
-        // The row belongs to the layout name, not to one form of it, so the
-        // bits are taken as they apply here (hidden_bits_for) and the row is
-        // left alone -- rotating back restores the other form's groups.
-        const uint32_t bits = hidden_bits_for(g_layout, mods_controls_hidden_groups());
+        // The row is per form factor, since one name's forms need not have the
+        // same groups; the bits are still taken as they apply to the layout in
+        // hand (hidden_bits_for) and the row is left alone, so a form whose
+        // file has fewer groups never trims the other's.
+        const uint32_t bits =
+            hidden_bits_for(g_layout, mods_controls_hidden_groups(settings_form(g_loaded_form)));
         if (bits != hidden_bits(g_layout))
             apply_hidden_bits(g_layout, bits);
     }
@@ -614,6 +632,10 @@ void host_pump(uint64_t now) {
                 pad.buttons, pad.hat, pad.lx, pad.ly, pad.rx, pad.ry, pad.l2, pad.r2);
         }
     }
+
+    // One profile write per pump at most, off the input thread's path: a
+    // toggle press only marks the hidden-group bits.
+    mods_controls_flush();
 
     publish();
 }

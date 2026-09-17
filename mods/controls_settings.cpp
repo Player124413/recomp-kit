@@ -33,7 +33,20 @@ const int kMax[kStoredRowCount] = {0, 2, 100, 1, 1, 1};
 // Written by the settings page and the on-screen tab, read by the host loop
 // that lays the controls out: each value is atomic on its own.
 std::atomic<int> values[CONTROLS_ROW_COUNT] = {0, 1, 100, 1, 0, 1, 0};
-std::atomic<uint32_t> hidden_groups{0};
+// The hidden-group bits: one 16-bit lane per form factor, packed into the
+// single stored "hidden" value with kHiddenPacked as the marker that says so.
+// A value without the marker was written by the build that kept one set of
+// bits for every form; it waits in hidden_legacy_bits until a form asks for
+// it (adopt_legacy), because only the host knows which form the player was
+// looking at when they hid the group.
+constexpr int kHiddenLaneBits = 16;
+constexpr int64_t kHiddenPacked = int64_t(1) << (kHiddenLaneBits * CONTROLS_FORM_COUNT);
+constexpr int64_t kHiddenMax = (kHiddenPacked << 1) - 1;
+std::atomic<uint32_t> hidden_groups[CONTROLS_FORM_COUNT] = {0, 0, 0};
+std::atomic<uint32_t> hidden_legacy_bits{0};
+std::atomic<bool> hidden_legacy{false};
+// A hidden-group change the host has not flushed to the settings store yet.
+std::atomic<bool> hidden_dirty{false};
 std::atomic<bool> edit_request{false};
 std::atomic<bool> editing{false};
 std::atomic<bool> initialized{false};
@@ -56,6 +69,34 @@ int index_of(const std::string &name) {
 std::string name_at(int index) {
     std::lock_guard<std::mutex> lock(g_names_mutex);
     return index >= 0 && index < int(g_names.size()) ? g_names[index] : std::string();
+}
+
+// The three lanes as one stored value.
+int64_t packed_hidden() {
+    int64_t v = kHiddenPacked;
+    for (int f = 0; f < CONTROLS_FORM_COUNT; ++f)
+        v |= int64_t(hidden_groups[f].load()) << (kHiddenLaneBits * f);
+    return v;
+}
+
+// A stored value back into the lanes, marked or not (see kHiddenPacked).
+void unpack_hidden(int64_t v) {
+    if (v < 0)
+        v = 0;
+    const bool packed = (v & kHiddenPacked) != 0;
+    for (int f = 0; f < CONTROLS_FORM_COUNT; ++f)
+        hidden_groups[f] = packed ? uint32_t((v >> (kHiddenLaneBits * f)) & 0xffff) : 0u;
+    hidden_legacy_bits = packed ? 0u : uint32_t(v & 0xffff);
+    hidden_legacy = !packed && hidden_legacy_bits.load() != 0;
+}
+
+// The one set of bits an older profile holds belongs to the form the player
+// hid the group in, and the first form to ask for them is that one.
+void adopt_legacy(ControlsForm form) {
+    if (!hidden_legacy.exchange(false))
+        return;
+    hidden_groups[form] = hidden_legacy_bits.exchange(0);
+    hidden_dirty = true; // rewrite it in the packed form
 }
 } // namespace
 
@@ -87,7 +128,7 @@ void mods_controls_init(const char *default_layout) {
     values[CONTROLS_HAPTICS_ROW] = 1;
     values[CONTROLS_PAD_WITH_CONTROLLER_ROW] = 0;
     values[CONTROLS_SNAP_ROW] = 1;
-    hidden_groups = 0;
+    unpack_hidden(kHiddenPacked);
 
     // Migrate a saved keypad profile the first time host.controls/layout has
     // never been written. The keypad's own keys are left on disk untouched:
@@ -105,7 +146,8 @@ void mods_controls_init(const char *default_layout) {
                 bits |= 1;
             if (has_right && right == 0)
                 bits |= 2;
-            hidden_groups = bits;
+            hidden_legacy_bits = bits;
+            hidden_legacy = bits != 0;
             if (mods_settings_stored_value("host.keypad/size", &size))
                 values[CONTROLS_SIZE_ROW] = int(size);
         }
@@ -117,13 +159,24 @@ void mods_controls_init(const char *default_layout) {
                               POP_SETTING_INT, values[i], kMin[i], max);
         int64_t v = values[i].load();
         mods_settings_get(MODS_OWNER_RUNTIME, kKeys[i], &v);
+        // A layout index out of range means the profile names a layout this
+        // build no longer discovers (a deleted user copy, a game that ships
+        // fewer files). The spec has that fall back to the game's
+        // default_layout, which values[] already holds: clamping instead
+        // landed on the Hidden slot, so losing one file left a blank screen.
+        if (i == CONTROLS_LAYOUT_ROW && (v < kMin[i] || v > max))
+            continue;
         values[i] = int(std::clamp<int64_t>(v, kMin[i], max));
     }
+    // The hidden bits' own value carries all three form lanes (kHiddenPacked).
+    const int64_t hidden_initial =
+        hidden_legacy.load() ? int64_t(hidden_legacy_bits.load()) : packed_hidden();
     mods_settings_declare(MODS_OWNER_RUNTIME, "host.controls", "hidden", "hidden", POP_SETTING_INT,
-                          hidden_groups.load(), 0, 0xffff);
-    int64_t hv = hidden_groups.load();
+                          hidden_initial, 0, kHiddenMax);
+    int64_t hv = hidden_initial;
     mods_settings_get(MODS_OWNER_RUNTIME, "hidden", &hv);
-    hidden_groups = uint32_t(std::clamp<int64_t>(hv, 0, 0xffff));
+    unpack_hidden(std::clamp<int64_t>(hv, 0, kHiddenMax));
+    hidden_dirty = false;
 }
 
 bool mods_controls_initialized() {
@@ -143,7 +196,8 @@ void mods_controls_reset() {
     values[CONTROLS_PAD_WITH_CONTROLLER_ROW] = 0;
     values[CONTROLS_SNAP_ROW] = 1;
     values[CONTROLS_EDIT_ROW] = 0;
-    hidden_groups = 0;
+    unpack_hidden(kHiddenPacked);
+    hidden_dirty = false;
     edit_request = false;
     editing = false;
 }
@@ -234,16 +288,30 @@ std::string mods_controls_line(ControlsRow row) {
     return buf;
 }
 
-uint32_t mods_controls_hidden_groups() {
-    return hidden_groups.load();
+uint32_t mods_controls_hidden_groups(ControlsForm form) {
+    if (form < 0 || form >= CONTROLS_FORM_COUNT)
+        return 0;
+    adopt_legacy(form);
+    return hidden_groups[form].load();
 }
 
-void mods_controls_set_hidden_groups(uint32_t bits) {
-    const uint32_t v = bits & 0xffffu;
-    hidden_groups = v;
-    if (!initialized)
+void mods_controls_set_hidden_groups(ControlsForm form, uint32_t bits) {
+    if (form < 0 || form >= CONTROLS_FORM_COUNT)
         return;
-    mods_settings_set(MODS_OWNER_RUNTIME, "hidden", int64_t(v));
+    adopt_legacy(form);
+    const uint32_t v = bits & 0xffffu;
+    if (hidden_groups[form].exchange(v) == v)
+        return;
+    // The write itself waits for mods_controls_flush: this runs on the SDL
+    // input thread under the player's finger, and mods_settings_set saves the
+    // whole profile to disk.
+    hidden_dirty = true;
+}
+
+void mods_controls_flush() {
+    if (!hidden_dirty.exchange(false) || !initialized)
+        return;
+    (void)mods_settings_set(MODS_OWNER_RUNTIME, "hidden", packed_hidden());
 }
 
 bool mods_controls_take_edit_request() {

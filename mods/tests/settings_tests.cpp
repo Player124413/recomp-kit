@@ -145,7 +145,7 @@ MOD_TEST_SUITE(controls_settings_defaults) {
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_HAPTICS_ROW), 1);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_PAD_WITH_CONTROLLER_ROW), 0);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_SNAP_ROW), 1);
-    MOD_CHECK_EQ(mods_controls_hidden_groups(), 0u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u);
     // Size clamps at its ends, like the old keypad size row.
     MOD_CHECK_EQ(mods_controls_set(CONTROLS_SIZE_ROW, 7), POP_OK);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_SIZE_ROW), 2);
@@ -174,7 +174,9 @@ MOD_TEST_SUITE(controls_settings_migration) {
     mods_controls_init("pad");
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1); // the index of "keys"
     MOD_CHECK(mods_controls_layout_name() == "keys");
-    MOD_CHECK_EQ(mods_controls_hidden_groups(), 1u); // left was 0; right was 1
+    // The keypad's bits belong to whichever form first asks for them.
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 1u); // left 0, right 1
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 0u);
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_SIZE_ROW), 2);
     // Nothing under host.controls/ was written by the migration itself.
     int64_t discard = 0;
@@ -231,6 +233,84 @@ MOD_TEST_SUITE(controls_settings_refresh_names) {
     mods_controls_set_names({"pad"});
     mods_controls_refresh_names();
     MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// The hidden-group bits are per form factor: portrait "keys" is one board
+// where landscape is two halves, so hiding the portrait board must not come
+// back as a hidden left half after a rotation. The three lanes share one
+// stored value and survive a reload of the profile.
+MOD_TEST_SUITE(controls_settings_hidden_groups_per_form) {
+    fresh();
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    mods_controls_set_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT, 1u);
+    mods_controls_set_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE, 2u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 1u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE), 2u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u); // the rotation home
+    // The press itself writes nothing: the host flushes once per pump.
+    int64_t stored = 0;
+    MOD_CHECK(!mods_settings_stored_value("host.controls/hidden", &stored));
+    mods_controls_flush();
+    MOD_CHECK(mods_settings_stored_value("host.controls/hidden", &stored));
+    mods_controls_flush(); // nothing left to write
+
+    // A relaunch reads all three lanes back.
+    mods_controls_reset();
+    mods_settings_reset();
+    mods_overlay_set_profile_dir(PROFILE);
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 1u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE), 2u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// A profile from the build that kept one set of bits for every form: they
+// belong to the form the player hid the group in, which is the first one to
+// ask, and the other forms start clean.
+MOD_TEST_SUITE(controls_settings_hidden_groups_legacy_value) {
+    fresh();
+    mods_controls_reset();
+    FILE *f = fopen(mods_settings_path(), "wb");
+    MOD_CHECK(f != nullptr);
+    if (f) {
+        MOD_CHECK(fputs("{\"host.controls/layout\": 1, \"host.controls/hidden\": 1}\n", f) >= 0);
+        MOD_CHECK_EQ(fclose(f), 0);
+    }
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 1u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE), 0u);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// A layout index the name list no longer reaches (the player deleted their
+// copy) falls back to the game's default_layout, not to the Hidden slot,
+// which would have left a blank screen.
+MOD_TEST_SUITE(controls_settings_out_of_range_layout_falls_back) {
+    fresh();
+    mods_controls_reset();
+    FILE *f = fopen(mods_settings_path(), "wb");
+    MOD_CHECK(f != nullptr);
+    if (f) {
+        MOD_CHECK(fputs("{\"host.controls/layout\": 7}\n", f) >= 0);
+        MOD_CHECK_EQ(fclose(f), 0);
+    }
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("pad+keys");
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 2);
+    MOD_CHECK(mods_controls_layout_name() == "pad+keys");
     mods_controls_reset();
     mods_settings_reset();
 }
