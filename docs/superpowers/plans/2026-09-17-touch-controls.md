@@ -373,7 +373,7 @@ static void test_layout_geometry_and_hits() {
     CHECK(control_rect(l, 1, 2, s).y == 1000 - 40);
     Hit h = hit_test(l, s, 1990, 990);
     CHECK(h.group == 1 && h.control == 2); // the tab, even with its group hidden
-    CHECK(hit_test(l, s, 1900, 960).group == -1); // hidden group: the game's
+    CHECK(hit_test(l, s, 1850, 950).group == -1); // hidden group: the game's
     l.groups[0].visible = true;
     h = hit_test(l, s, 1930, 960);
     CHECK(h.group == 0 && h.control == 1);
