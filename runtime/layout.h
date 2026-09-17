@@ -1,7 +1,10 @@
 // layout.h - where this executable's resources and the player's profile live:
 // a macOS bundle's Contents/Resources, a resources/ directory beside the
 // executable (the Windows and Linux archives), or a developer checkout found
-// above the executable. Computed once from os_exe_path().
+// above the executable. Computed once from os_exe_path(), except that
+// RECOMP_RESOURCES_DIR (like RECOMP_PROFILE_DIR for the profile) wins over
+// the computed resources directory whenever it is set: the Android host
+// names its app data folder there, having no executable path to go by.
 #pragma once
 #include <string>
 

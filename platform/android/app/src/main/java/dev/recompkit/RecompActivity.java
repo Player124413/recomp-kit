@@ -16,6 +16,10 @@ import android.provider.OpenableColumns;
 import android.view.HapticFeedbackConstants;
 import android.view.WindowManager;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 
 import org.libsdl.app.SDLActivity;
@@ -55,9 +59,50 @@ public class RecompActivity extends SDLActivity {
         // frame in portrait.
         if (getResources().getConfiguration().smallestScreenWidthDp >= 600)
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
+        unpackControlLayouts();
         super.onCreate(savedInstanceState);
         sActivity = this;
         takeViewIntent(getIntent());
+    }
+
+    /**
+     * The game's on-screen control layouts, from the APK's assets to the app's
+     * external files folder, where the native side reads them as
+     * host_resource("controls"). A handful of small JSON files: copied when
+     * missing or when the packaged size differs, so an updated app replaces
+     * them and an unchanged one costs a directory listing.
+     */
+    private void unpackControlLayouts() {
+        String[] names;
+        try {
+            names = getAssets().list("controls");
+        } catch (Exception e) {
+            return; // no assets/controls: the app ships no layouts
+        }
+        if (names == null || names.length == 0)
+            return;
+        File dir = new File(getExternalFilesDir(null), "controls");
+        if (!dir.isDirectory() && !dir.mkdirs())
+            return;
+        int copied = 0;
+        for (String name : names) {
+            File target = new File(dir, name);
+            try (InputStream in = getAssets().open("controls/" + name)) {
+                if (target.isFile() && target.length() == in.available())
+                    continue;
+                try (OutputStream out = new FileOutputStream(target)) {
+                    byte[] buffer = new byte[16 * 1024];
+                    for (int n; (n = in.read(buffer)) > 0; )
+                        out.write(buffer, 0, n);
+                }
+                ++copied;
+            } catch (Exception e) {
+                // A layout that cannot be unpacked leaves the kit's built-in
+                // one in its place; the game still starts.
+            }
+        }
+        if (copied > 0)
+            android.util.Log.i("recomp", "unpacked " + copied + " control layout(s) into " + dir);
     }
 
     @Override
