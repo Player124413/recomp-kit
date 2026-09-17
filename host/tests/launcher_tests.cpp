@@ -730,6 +730,33 @@ void test_ui_mobile() {
 
 } // namespace
 
+void test_ui_text_fits() {
+    // Paths wrap after a slash, not inside a folder name.
+    const std::vector<std::string> lines =
+        Canvas::wrap("/Users/player/Documents/profile", 12 * 6, 1);
+    CHECK((lines == std::vector<std::string>{"/Users/", "player/", "Documents/", "profile"}));
+
+    // A long title keeps the right margin clear, at any width.
+    Spec s = spec();
+    s.title = "Siege of Avalon: Anthology of Long Titles";
+    FakePlatform fp;
+    fp.pi.profile_dir = fresh("ui-title") + "/profile";
+    Launcher l(s, fp);
+    l.start("");
+    Canvas c;
+    for (int w : {640, 1280, 2420}) {
+        const int scale = std::max(1, std::min(w / 480, 1668 / 300));
+        c.resize(w, 1668, false);
+        l.draw(c, scale);
+        const int margin = 16 * scale;
+        int lit = 0;
+        for (int y = margin; y < margin + 24 * scale; ++y)
+            for (int x = w - margin; x < w; ++x)
+                lit += c.pixels()[(y * w + x) * 4] > 0x80;
+        CHECK(lit == 0);
+    }
+}
+
 int main() {
     const char *base = getenv("RECOMP_LAUNCHER_TEST_DIR");
     g_scratch = std::string(base && *base ? base : "build/recomp") + "/launcher-test";
@@ -755,6 +782,7 @@ int main() {
         {"detection", test_detection},
         {"launcher screen, desktop", test_ui_desktop},
         {"launcher screen, mobile", test_ui_mobile},
+        {"launcher text fits", test_ui_text_fits},
     };
     for (const Test &t : tests) {
         const int before = g_failures;

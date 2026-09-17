@@ -682,8 +682,16 @@ void Launcher::draw(Canvas &c, int s) {
     const int margin = 16 * s;
     c.clear(kBackground);
     int y = margin;
-    c.text(margin, y, spec_.title, 3 * s, kText);
-    y += Canvas::text_height(3 * s) + 8 * s;
+    // The title as large as fits between the margins, down to the body size.
+    int ts = 3 * s;
+    while (ts > 2 * s && Canvas::text_width(spec_.title, ts) > w - 2 * margin)
+        --ts;
+    std::string title = spec_.title;
+    const size_t fits = size_t(std::max(4, (w - 2 * margin) / (6 * ts)));
+    if (title.size() > fits)
+        title = title.substr(0, fits - 3) + "...";
+    c.text(margin, y, title, ts, kText);
+    y += Canvas::text_height(ts) + 8 * s;
 
     int py = y + 10 * s;
     const int px = margin + 10 * s, pw = w - 2 * margin - 20 * s;
