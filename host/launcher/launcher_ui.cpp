@@ -574,24 +574,31 @@ void Launcher::key(Key k) {
         return;
     const int n = int(buttons_.size());
     dirty_ = true;
+    // The nearest enabled button `step` places away, wrapping.
+    const auto move = [&](int step) {
+        for (int i = 1; i <= n; ++i) {
+            const int j = ((focus_ + step * i) % n + n) % n;
+            if (buttons_[size_t(j)].enabled) {
+                focus_ = j;
+                break;
+            }
+        }
+    };
+    const int row = std::min(columns_, n);
     switch (k) {
     case Key::Up:
+        move(-row);
+        break;
     case Key::Left:
     case Key::Previous:
-        for (int i = 1; i <= n; ++i)
-            if (buttons_[size_t((focus_ - i + n) % n)].enabled) {
-                focus_ = (focus_ - i + n) % n;
-                break;
-            }
+        move(-1);
         break;
     case Key::Down:
+        move(row);
+        break;
     case Key::Right:
     case Key::Next:
-        for (int i = 1; i <= n; ++i)
-            if (buttons_[size_t((focus_ + i) % n)].enabled) {
-                focus_ = (focus_ + i) % n;
-                break;
-            }
+        move(1);
         break;
     case Key::Activate:
         activate(buttons_[size_t(focus_)].id);
@@ -647,6 +654,7 @@ void Launcher::layout(int w, int h, int s, int top) {
         columns = 2;
         bw = std::min((w - 48 * s) / 2, 360 * s);
     }
+    columns_ = columns;
     const int rows = (n + columns - 1) / columns;
     const int total = rows * (bh + gap) - gap;
     const int y0 = std::max(top, bottom - total);

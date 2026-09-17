@@ -136,6 +136,7 @@ class Launcher {
     const std::vector<std::string> &found() const { return found_; }
     const std::vector<Button> &buttons();
     bool dirty() const { return dirty_; }
+    int focus() const { return focus_; }
 
   private:
     void rebuild();
@@ -154,6 +155,7 @@ class Launcher {
     std::vector<std::string> found_;
     std::vector<Button> buttons_;
     int focus_ = 0;
+    int columns_ = 1; // Up and Down move a whole row
     int pressed_ = -1;
     bool finished_ = false, quit_ = false, dirty_ = true, confirm_delete_ = false;
     double countdown_ = 0;

@@ -553,6 +553,22 @@ void test_ui_desktop() {
             CHECK(b.rect.w > 0 && b.rect.x >= 0 && b.rect.y >= 0 && b.rect.x + b.rect.w <= c.width() &&
                   b.rect.y + b.rect.h <= c.height());
     }
+    // A short, wide screen puts the buttons in two columns; Down keeps the column.
+    c.resize(2856, 800, true);
+    l.draw(c, 4);
+    {
+        const std::vector<Button> bs = l.buttons();
+        CHECK(bs.size() >= 4 && bs[1].rect.y == bs[0].rect.y);
+        const int from = l.focus();
+        l.key(Key::Down);
+        CHECK(l.focus() != from && bs[size_t(l.focus())].rect.x == bs[size_t(from)].rect.x);
+        l.key(Key::Up);
+        CHECK(l.focus() == from);
+        l.key(Key::Right);
+        CHECK(bs[size_t(l.focus())].rect.y == bs[size_t(from)].rect.y || l.focus() == from + 1);
+        l.key(Key::Left);
+        CHECK(l.focus() == from);
+    }
     const Button quit = l.buttons().back();
     CHECK(quit.id == kQuit);
     l.pointer(quit.rect.x + 2, quit.rect.y + 2, true);
