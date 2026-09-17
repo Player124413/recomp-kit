@@ -750,8 +750,9 @@ enum {
     XI_STATE_OFF_sThumbLY = 10,
     XI_STATE_OFF_sThumbRY = 14,
 };
-static const uint32_t XI_ERROR_SUCCESS = 0, XI_ERROR_DEVICE_NOT_CONNECTED = 1167,
-                      XI_ERROR_EMPTY = 4306;
+static const uint32_t XI_ERROR_SUCCESS = 0, XI_ERROR_BAD_ARGUMENTS = 160,
+                      XI_ERROR_DEVICE_NOT_CONNECTED = 1167, XI_ERROR_EMPTY = 4306;
+static const uint32_t XUSER_INDEX_ANY = 0xFF;
 
 static void test_xinput() {
     cpu_reset();
@@ -761,7 +762,9 @@ static void test_xinput() {
 
     uint32_t get_state = tramp("xinput1_3.dll", "XInputGetState");
     uint32_t set_state = tramp("xinput1_3.dll", "XInputSetState");
+    uint32_t get_caps = tramp("xinput1_3.dll", "XInputGetCapabilities");
     uint32_t enable = tramp("xinput1_3.dll", "XInputEnable");
+    uint32_t get_battery = tramp("xinput1_3.dll", "XInputGetBatteryInformation");
     uint32_t keystroke = tramp("xinput1_3.dll", "XInputGetKeystroke");
     uint32_t st = sc(0x400);
 
@@ -772,6 +775,10 @@ static void test_xinput() {
     g_pad_mode = 1;
     CHECK_EQ(call_shim(get_state, {0, st}), XI_ERROR_DEVICE_NOT_CONNECTED);
     g_pad_mode = 2;
+
+    // A null state pointer is a caller bug, not "no controller": refused
+    // before anything is read from the pad.
+    CHECK_EQ(call_shim(get_state, {0, 0}), XI_ERROR_BAD_ARGUMENTS);
 
     // Served: cross + hat up -> buttons 0x1001 (A | DPAD_UP); the Y axes
     // invert (XInput up is positive, the pad's is negative) and clamp.
@@ -791,6 +798,27 @@ static void test_xinput() {
     CHECK_EQ(call_shim(get_state, {0, st}), XI_ERROR_SUCCESS);
     CHECK_EQ(rd32(st + XI_STATE_OFF_dwPacketNumber), 8u);
 
+    // Capabilities: the fixed answer from the brief, not the live pad state.
+    uint32_t caps = sc(0x480);
+    CHECK_EQ(call_shim(get_caps, {0, 1 /* XINPUT_FLAG_GAMEPAD */, caps}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd8(caps + 0), 1u);        // XINPUT_DEVTYPE_GAMEPAD
+    CHECK_EQ(rd8(caps + 1), 1u);        // XINPUT_DEVSUBTYPE_GAMEPAD
+    CHECK_EQ(rd16(caps + 4), 0xF3FFu);  // wButtons: all but 0x0400/0x0800
+    CHECK_EQ(rd8(caps + 6), 255u);      // bLeftTrigger
+    CHECK_EQ(rd8(caps + 7), 255u);      // bRightTrigger
+    CHECK_EQ(rd16(caps + 8), 0xFFC0u);  // sThumbLX
+    CHECK_EQ(rd16(caps + 10), 0xFFC0u); // sThumbLY
+    CHECK_EQ(rd16(caps + 12), 0xFFC0u); // sThumbRX
+    CHECK_EQ(rd16(caps + 14), 0xFFC0u); // sThumbRY
+    CHECK_EQ(rd16(caps + 16), 0xFFFFu); // wLeftMotorSpeed
+    CHECK_EQ(rd16(caps + 18), 0xFFFFu); // wRightMotorSpeed
+
+    // Battery: the pad is always wired and full.
+    uint32_t batt = sc(0x4A0);
+    CHECK_EQ(call_shim(get_battery, {0, 0, batt}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd8(batt + 0), 1u); // BATTERY_TYPE_WIRED
+    CHECK_EQ(rd8(batt + 1), 3u); // BATTERY_LEVEL_FULL
+
     // SetState reaches the host rumble callback directly.
     uint32_t vib = sc(0x500);
     wr16(vib + 0, 1000);
@@ -809,15 +837,71 @@ static void test_xinput() {
     CHECK_EQ(rd32(st + XI_STATE_OFF_dwPacketNumber), 9u);
     CHECK_EQ(rd16(st + XI_STATE_OFF_wButtons), 0u);
 
-    // A cross press becomes one keystroke; the queue then reports empty.
-    pad_edge(0, 0, 1);
+    // SetState while disabled stores the values without forwarding them to
+    // the host; re-enabling resends exactly what was last asked for.
+    wr16(vib + 0, 5);
+    wr16(vib + 2, 6);
+    CHECK_EQ(call_shim(set_state, {0, vib}), XI_ERROR_SUCCESS);
+    CHECK_EQ(g_rumble_low, 0u);
+    CHECK_EQ(g_rumble_high, 0u);
+    CHECK_EQ(call_shim(enable, {1}), XI_ERROR_SUCCESS);
+    CHECK_EQ(g_rumble_low, 5u);
+    CHECK_EQ(g_rumble_high, 6u);
+
+    // On first use, only edges from now on are replayed: a "stale" edge
+    // queued before the game's first XInputGetKeystroke call is skipped
+    // rather than dumped as a backlog.
     uint32_t ks = sc(0x600);
+    pad_edge(0, 0, 1); // cross, before the first call
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_EMPTY);
+
+    // A cross press after that becomes one keystroke, with the full record
+    // checked (Flags is a WORD at offset 4, not a byte); the queue then
+    // reports empty.
+    pad_edge(0, 0, 1);
+    memset(gm_ptr(ks), 0xAB, 8);
     CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
-    CHECK_EQ(rd16(ks + 0), 0x5800u);
-    CHECK_EQ(rd8(ks + 4), 1u);
+    CHECK_EQ(rd16(ks + 0), 0x5800u); // VirtualKey
+    CHECK_EQ(rd16(ks + 4), 1u);      // Flags: XINPUT_KEYSTROKE_KEYDOWN
+    CHECK_EQ(rd8(ks + 6), 0u);       // UserIndex
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_EMPTY);
+
+    // XUSER_INDEX_ANY is accepted for the keystroke queue.
+    pad_edge(0, 1, 1); // circle
+    CHECK_EQ(call_shim(keystroke, {XUSER_INDEX_ANY, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5801u);
+    CHECK_EQ(call_shim(keystroke, {XUSER_INDEX_ANY, 0, ks}), XI_ERROR_EMPTY);
+
+    // A null or invalid keystroke pointer is refused before the queue is
+    // touched: a bad pointer must not silently eat a pending keystroke.
+    pad_edge(0, 2, 1); // square
+    CHECK_EQ(call_shim(keystroke, {0, 0, 0}), XI_ERROR_BAD_ARGUMENTS);
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5802u); // still there: the bad call above ate nothing
+
+    // A diagonal hat move queues two KEYDOWNs (bit order: up before right);
+    // releasing both queues two KEYUPs in the same order.
+    pad_edge(1, 0, 1 | 2); // up-right
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5810u); // up
+    CHECK_EQ(rd16(ks + 4), 1u);
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5813u); // right
+    CHECK_EQ(rd16(ks + 4), 1u);
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_EMPTY);
+
+    pad_edge(1, 0, 0); // released
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5810u);
+    CHECK_EQ(rd16(ks + 4), 2u); // XINPUT_KEYSTROKE_KEYUP
+    CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_SUCCESS);
+    CHECK_EQ(rd16(ks + 0), 0x5813u);
+    CHECK_EQ(rd16(ks + 4), 2u);
     CHECK_EQ(call_shim(keystroke, {0, 0, ks}), XI_ERROR_EMPTY);
 
     CHECK(imports_serves_module("xinput9_1_0.dll"));
+    // GetKeystroke is 1_3/1_4 only; 9_1_0 never registers it.
+    CHECK_EQ(tramp("xinput9_1_0.dll", "XInputGetKeystroke"), 0u);
 }
 
 int main() {
