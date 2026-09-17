@@ -77,9 +77,10 @@ set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                               ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
                               ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
+                              ${HOST}/controls/raster.cpp ${HOST}/controls/overlay_paint.cpp
                               ${HOST}/keypad_layout.cpp
                               ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
-                              ${HOST}/tests/keypad_legacy_oracle.cpp)
+                              ${HOST}/tests/keypad_legacy_oracle.cpp ${POP_ROOT}/mods/font6x8.cpp)
 target_include_directories(controls_tests PRIVATE ${POP_ROOT})
 target_compile_options(controls_tests PRIVATE ${POP_WARN_WERROR})
 target_link_libraries(controls_tests PRIVATE recomp_platform)
@@ -156,6 +157,7 @@ set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
                          ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
                          ${HOST}/controls/router.cpp ${HOST}/controls/overlay_view.cpp
                          ${HOST}/controls/overlay.cpp ${HOST}/controls/raster.cpp
+                         ${HOST}/controls/overlay_paint.cpp
                          ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp)
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
                         ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${POP_CONTROLS_SOURCES}

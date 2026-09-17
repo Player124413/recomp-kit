@@ -6,11 +6,14 @@
 #include "../controls/layout_fallback.h"
 #include "../controls/layout_store.h"
 #include "../controls/overlay.h"
+#include "../controls/overlay_paint.h"
+#include "../controls/raster.h"
 #include "../controls/router.h"
 #include "../keypad_layout.h"
 #include "keypad_legacy_oracle.h"
 
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <stdio.h>
 #include <string.h>
@@ -260,6 +263,196 @@ static void test_layout_store() {
     std::filesystem::remove_all(root, ec);
 }
 
+// --- Raster: anti-aliased premultiplied primitives -------------------------
+
+static Paint flat_paint(Rgba c) {
+    Paint p;
+    p.kind = Paint::Flat;
+    p.c0 = c;
+    return p;
+}
+
+static void test_raster_disc() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    c.disc(32, 32, 16, flat_paint(Rgba{255, 255, 255, 255}));
+
+    const Rgba centre = c.at(32, 32);
+    CHECK(centre.r == 255 && centre.g == 255 && centre.b == 255 && centre.a == 255);
+    CHECK(c.at(32, 10).a == 0);
+    const int edge_a = c.at(48, 32).a;
+    CHECK(edge_a > 0 && edge_a < 255);
+
+    long sum = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            sum += c.at(x, y).a;
+    const double expected = 3.14159265358979323846 * 16.0 * 16.0 * 255.0;
+    CHECK(std::abs(sum - expected) < expected * 0.02);
+}
+
+static void test_raster_ring() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    c.ring(32, 32, 14, 10, flat_paint(Rgba{255, 255, 255, 255}));
+    CHECK(c.at(32, 32).a == 0);   // the hole
+    CHECK(c.at(32, 20).a == 255); // 12 from centre: between the radii
+}
+
+static void test_raster_radial_gradient() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    Paint p;
+    p.kind = Paint::Radial;
+    p.c0 = Rgba{255, 0, 0, 255};
+    p.c1 = Rgba{0, 0, 255, 255};
+    p.x0 = 32;
+    p.y0 = 32;
+    p.x1 = 16; // radius
+    c.disc(32, 32, 16, p);
+    const Rgba centre = c.at(32, 32);
+    CHECK(centre.r > 200 && centre.b < 20);
+    const Rgba near_edge = c.at(32, 21); // 11 px from centre, close to the 16 px radius
+    CHECK(near_edge.b > near_edge.r);
+}
+
+static void test_raster_opacity_premultiplies() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64, 0.5);
+    c.disc(32, 32, 16, flat_paint(Rgba{255, 255, 255, 255}));
+    const Rgba centre = c.at(32, 32);
+    CHECK(centre.a == 127 || centre.a == 128);
+    CHECK(centre.r == centre.a); // premultiplied: white * alpha == alpha
+}
+
+static void test_raster_polygon() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    const std::vector<std::pair<double, double>> tri = {{0, 0}, {63, 0}, {0, 63}};
+    c.polygon(tri, flat_paint(Rgba{255, 255, 255, 255}));
+    CHECK(c.at(5, 5).a > 0);
+    CHECK(c.at(60, 60).a == 0);
+}
+
+static void test_raster_stroke() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    const std::vector<std::pair<double, double>> line = {{0, 32}, {63, 32}};
+    c.stroke(line, 4, false, flat_paint(Rgba{255, 255, 255, 255}));
+    CHECK(c.at(32, 32).a > 0);
+    CHECK(c.at(32, 36).a == 0);
+}
+
+static void test_raster_source_over() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    c.disc(32, 32, 20, flat_paint(Rgba{255, 255, 255, 255}));
+    Paint black_half;
+    black_half.c0 = Rgba{0, 0, 0, 128};
+    c.rect(10, 10, 44, 44, black_half); // fully inside the disc
+    const Rgba centre = c.at(32, 32);
+    CHECK(std::abs(int(centre.r) - 128) <= 2);
+    CHECK(std::abs(int(centre.g) - 128) <= 2);
+    CHECK(std::abs(int(centre.b) - 128) <= 2);
+}
+
+static void test_raster_text() {
+    std::vector<uint8_t> px(64 * 64 * 4, 0);
+    Canvas c(px, 64, 64);
+    c.text(0, 0, "A", Rgba{255, 255, 255, 255});
+    bool any_set = false;
+    for (int y = 0; y < 16 && !any_set; ++y)
+        for (int x = 0; x < 12 && !any_set; ++x)
+            if (c.at(x, y).a > 0)
+                any_set = true;
+    CHECK(any_set);
+    CHECK(c.text_width("AB") == 24);
+}
+
+// --- Old raster.cpp (pre-Task-8), frozen here as a regression oracle: it
+// replaced (never blended) pixels, and Task 7's keypad look depends on that
+// replace semantics exactly. Never update this to track raster.h/.cpp.
+extern "C" const uint8_t *mods_font6x8_glyph(char c); // mods/font6x8.cpp
+
+namespace legacy_raster {
+
+struct Canvas {
+    std::vector<uint8_t> &px;
+    int w, h;
+
+    void fill(int x, int y, int fw, int fh, int r, int g, int b, int a) {
+        const int x0 = std::max(0, x), y0 = std::max(0, y);
+        const int x1 = std::min(w, x + fw), y1 = std::min(h, y + fh);
+        for (int yy = y0; yy < y1; ++yy)
+            for (int xx = x0; xx < x1; ++xx) {
+                uint8_t *p = &px[(size_t(yy) * w + xx) * 4];
+                p[0] = uint8_t(r * a / 255);
+                p[1] = uint8_t(g * a / 255);
+                p[2] = uint8_t(b * a / 255);
+                p[3] = uint8_t(a);
+            }
+    }
+
+    void disc(int cx, int cy, int radius, int r, int g, int b, int a) {
+        for (int dy = -radius; dy < radius; ++dy) {
+            const double yc = dy + 0.5;
+            int half = 0;
+            while ((half + 0.5) * (half + 0.5) + yc * yc <= double(radius) * radius)
+                ++half;
+            fill(cx - half, cy + dy, 2 * half, 1, r, g, b, a);
+        }
+    }
+
+    void text(int x, int y, const char *str, int r, int g, int b, int a) {
+        for (; *str; ++str, x += 12) {
+            const uint8_t *glyph = mods_font6x8_glyph(*str);
+            for (int row = 0; row < 8; ++row)
+                for (int col = 0; col < 6; ++col)
+                    if (glyph[row] & (0x20 >> col))
+                        fill(x + col * 2, y + row * 2, 2, 2, r, g, b, a);
+        }
+    }
+};
+
+int text_width(const char *str) {
+    return int(strlen(str)) * 12;
+}
+
+// A byte-for-byte copy of overlay.cpp's pre-Task-8 `paint()`.
+void paint(Canvas &c, const ControlsView &view, const Rect &r) {
+    const auto alpha = [&](int a) { return int(lround(a * std::clamp(view.opacity, 0.0, 1.0))); };
+    for (const Rect &b : view.backdrops)
+        c.fill(b.x - r.x, b.y - r.y, b.w, b.h, 6, 9, 15, alpha(150));
+    for (const DrawControl &d : view.controls) {
+        const int x = d.rect.x - r.x, y = d.rect.y - r.y, w = d.rect.w, h = d.rect.h;
+        switch (d.kind) {
+        case Kind::Key: {
+            if (d.lit)
+                c.fill(x, y, w, h, 120, 160, 255, alpha(220));
+            else
+                c.fill(x, y, w, h, 40, 48, 64, alpha(200));
+            const char *label = d.label.c_str();
+            c.text(x + (w - text_width(label)) / 2, y + (h - 16) / 2, label, d.lit ? 10 : 235,
+                   d.lit ? 12 : 242, d.lit ? 20 : 255, alpha(255));
+            break;
+        }
+        case Kind::Toggle: {
+            c.fill(x, y, w, h, 6, 9, 15, alpha(150));
+            c.fill(x + 2, y + 2, w - 4, h - 4, 40, 48, 64, alpha(200));
+            const char *label = d.group_visible ? d.label.c_str() : d.label_off.c_str();
+            c.text(x + (w - text_width(label)) / 2, y + (h - 16) / 2, label, 235, 242, 255,
+                   alpha(255));
+            break;
+        }
+        default:
+            c.disc(x + w / 2, y + h / 2, std::min(w, h) / 2, 40, 48, 64, alpha(200));
+            break;
+        }
+    }
+}
+
+} // namespace legacy_raster
+
 // --- Router: fingers, keys, modifiers, toggles ----------------------------
 
 // Records every call as a short string: "k44+", "k44-", "a:settings",
@@ -288,6 +481,31 @@ static Layout keys_layout() {
     std::string err;
     CHECK(parse_layout(builtin_layout("keys", Form::Tablet), &l, &err));
     return l;
+}
+
+// The tablet "keys" layout, rendered through the frozen legacy_raster::paint
+// and through overlay_paint.cpp's new Canvas path, must produce identical
+// buffers: the keypad's look must not move a single pixel under Task 8.
+static void test_raster_matches_legacy_keypad_pixels() {
+    Layout l = keys_layout();
+    const int dw = 2360, dh = 1640;
+    const Screen s = screen(dw, dh, 2.0);
+    Router r;
+    Rec rec;
+    r.set_layout(&l, rec);
+    r.set_screen(s);
+    const ControlsView v = make_view(l, r, s, 1.0);
+    const Rect full{0, 0, dw, dh};
+
+    std::vector<uint8_t> old_px(size_t(dw) * dh * 4, 0);
+    legacy_raster::Canvas old_c{old_px, dw, dh};
+    legacy_raster::paint(old_c, v, full);
+
+    std::vector<uint8_t> new_px(size_t(dw) * dh * 4, 0);
+    Canvas new_c(new_px, dw, dh, v.opacity);
+    paint_overlay(new_c, v, full);
+
+    CHECK(old_px == new_px);
 }
 
 static int find_key(const Layout &l, int group, int scancode) {
@@ -819,6 +1037,15 @@ int main() {
     test_builtin_keys_matches_the_old_keypad();
     test_form_for();
     test_layout_store();
+    test_raster_disc();
+    test_raster_ring();
+    test_raster_radial_gradient();
+    test_raster_opacity_premultiplies();
+    test_raster_polygon();
+    test_raster_stroke();
+    test_raster_source_over();
+    test_raster_text();
+    test_raster_matches_legacy_keypad_pixels();
     test_router_space_key();
     test_router_latched_shift();
     test_router_left_tab_toggle();

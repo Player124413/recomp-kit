@@ -1,10 +1,10 @@
 // overlay.cpp - the GPU half of overlay.h: one raster for the whole view.
 #include "overlay.h"
 
+#include "overlay_paint.h"
 #include "raster.h"
 
 #include <algorithm>
-#include <cmath>
 
 namespace controls {
 
@@ -18,43 +18,6 @@ Rect unite(const Rect &a, const Rect &b) {
     const int x0 = std::min(a.x, b.x), y0 = std::min(a.y, b.y);
     const int x1 = std::max(a.x + a.w, b.x + b.w), y1 = std::max(a.y + a.h, b.y + b.h);
     return Rect{x0, y0, x1 - x0, y1 - y0};
-}
-
-// The keypad's look, unchanged: a translucent backdrop behind each half, flat
-// keys with light text that invert when lit, and tabs framed in the backdrop
-// colour. Every alpha is scaled by the view's opacity; `r` is the raster's
-// place on the drawable, so rects are drawn at (x - r.x, y - r.y).
-void paint(Canvas &c, const ControlsView &view, const Rect &r) {
-    const auto alpha = [&](int a) { return int(lround(a * std::clamp(view.opacity, 0.0, 1.0))); };
-    for (const Rect &b : view.backdrops)
-        c.fill(b.x - r.x, b.y - r.y, b.w, b.h, 6, 9, 15, alpha(150));
-    for (const DrawControl &d : view.controls) {
-        const int x = d.rect.x - r.x, y = d.rect.y - r.y, w = d.rect.w, h = d.rect.h;
-        switch (d.kind) {
-        case Kind::Key: {
-            if (d.lit)
-                c.fill(x, y, w, h, 120, 160, 255, alpha(220));
-            else
-                c.fill(x, y, w, h, 40, 48, 64, alpha(200));
-            const char *label = d.label.c_str();
-            c.text(x + (w - text_width(label)) / 2, y + (h - 16) / 2, label, d.lit ? 10 : 235,
-                   d.lit ? 12 : 242, d.lit ? 20 : 255, alpha(255));
-            break;
-        }
-        case Kind::Toggle: {
-            c.fill(x, y, w, h, 6, 9, 15, alpha(150));
-            c.fill(x + 2, y + 2, w - 4, h - 4, 40, 48, 64, alpha(200));
-            const char *label = d.group_visible ? d.label.c_str() : d.label_off.c_str();
-            c.text(x + (w - text_width(label)) / 2, y + (h - 16) / 2, label, 235, 242, 255,
-                   alpha(255));
-            break;
-        }
-        default:
-            // A placeholder until the pad look lands (Task 11).
-            c.disc(x + w / 2, y + h / 2, std::min(w, h) / 2, 40, 48, 64, alpha(200));
-            break;
-        }
-    }
 }
 
 } // namespace
@@ -84,8 +47,8 @@ void Overlay::update(gpu::Device *device, const ControlsView &view, int w, int h
     if (r.empty())
         return;
     pixels_.assign(size_t(r.w) * r.h * 4, 0);
-    Canvas c{pixels_, r.w, r.h};
-    paint(c, view, r);
+    Canvas c(pixels_, r.w, r.h, view.opacity);
+    paint_overlay(c, view, r);
     if (device_ != device || !texture_ || tex_w_ != r.w || tex_h_ != r.h) {
         if (device_ && texture_)
             device_->destroy(texture_);
