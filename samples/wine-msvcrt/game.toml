@@ -33,9 +33,6 @@ function_alignment = 4
 entry_points = [0x1003ccde]
 
 [translate]
-# Native replacements for functions the translator cannot model; see the
-# header for why msvcrt's memset needs one.
-overrides = "native/msvcrt_native.h"
 listings = "analysis/decompiled/sample.exe"
 globals = "globals.toml"
 animation_counter = 0x00404100

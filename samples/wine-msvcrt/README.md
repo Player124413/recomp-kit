@@ -86,43 +86,43 @@ Its own tests came over too: `interp_tests` (23 checks) and the Unicorn
 differential test, extended to cover the new `TEST` forms; 300 random routines
 match Unicorn's registers, flags and memory after every change above.
 
-## Result 2: Wine's i386 DLLs need SSE2 from the translator
+## Result 2: a Wine DLL runs
 
-The pipeline itself works. Wine's `msvcrt.dll` (639 KB, 2,686 listed
-functions) exported Ghidra listings, translated whole (2,696 functions,
-15 chunks), mapped at its own base `0x10000000`, and `LoadLibraryA` ran its
-entry point — the DLL's own startup executed as translated code.
+Wine's `msvcrt.dll` (639 KB, 2,686 listed functions) exports Ghidra listings,
+translates whole (2,696 functions, 15 chunks), maps at its own base
+`0x10000000`, and `LoadLibraryA` runs its entry point. The program then calls
+four of its exports and gets the right answers:
 
-It does not get as far as returning from that startup, for one reason:
+```
+msvcrt.strlen 10
+msvcrt.atoi 7655                       # -12345, offset by 20000
+msvcrt.qsort.sorted 1                  # sorted, with this program's comparator
+msvcrt.sprintf.text wine|-42|0beef|Z
+```
 
-- **SSE2 is ordinary code generation in this build, not a math-library
-  detail.** `memset` stores through `XMM` registers from its second
-  instruction, and the locale initialisation uses `MOVD`/`PUNPCKLDQ` merely to
-  write two dwords. Nothing checks CPUID first, so the kit's "no SSE"
-  `recomp_cpuid` does not steer around it, and the translator's SSE trap ends
-  the process. 154 of 2,686 functions (5.7%) contain SSE.
-  A native override for `memset` (`native/msvcrt_native.h`) gets startup past
-  the first one and straight into the next, which is why per-function
-  overrides are not the answer here: **the translator needs SSE2**.
+That took SSE2 in the translator, which is the finding this sample was
+written to produce. **SSE2 is ordinary code generation in this build, not a
+math-library detail**: `memset` stores through XMM registers from its second
+instruction, and locale initialisation uses `MOVD`/`PUNPCKLDQ` merely to write
+two dwords. Nothing checks CPUID first, so the kit's "no SSE" `recomp_cpuid`
+steered around none of it, and 154 of 2,686 functions were affected. A native
+`memset` was written first and then thrown away: with the lane and scalar
+forms translated, the DLL's own `memset` runs.
 
-Two smaller findings, both of which would have to be fixed anyway:
+Eight instructions in the whole DLL remain unmodelled - four `UD2`, two
+`FISTTP` and the x87 environment pair - and none is reached.
 
-- **Missing imports.** Of msvcrt's imports, the kit implements 88 of 129
-  `kernel32` functions and none of its 13 `ntdll` ones. The run named the ones
-  it actually reached: `__wine_dbg_header`, `__wine_dbg_output` and
-  `InitializeCriticalSectionEx`. The Wine debug-channel functions also have no
-  known argument count, so the runtime cannot correct the stack after them.
+Two smaller findings, both since fixed or recorded:
+
+- **Missing imports.** The kit implements 88 of msvcrt's 129 `kernel32`
+  imports and none of its 13 `ntdll` ones. The run named the ones it reached:
+  `__wine_dbg_header`, `__wine_dbg_output` and `InitializeCriticalSectionEx`.
+  The Wine debug-channel functions also have no known argument count, so the
+  runtime cannot correct the stack after them.
 - **A listing gap.** Three `strftime` jump tables name `1003ccde`, a block
   Ghidra does not list. `[translate] entry_points` does not adopt it, because
   it is a block inside a function rather than a function; `--allow-table-gaps`
   accepts it instead.
-
-## What this says about basing the kit on Wine
-
-Mapping, translating and running a Wine DLL beside a game works today, with no
-new mechanism. What stands between that and using Wine's DLLs in practice is
-the translator's instruction coverage, not the loader or the module design.
-SSE2 is the first thing to add.
 
 ## Result 3: run, discover, regenerate
 
@@ -205,4 +205,8 @@ compiler output, so a game will produce it.
   with the same gaps.
 - `cmake/Translate.cmake`: an auxiliary module's translation sees the game's
   `[translate] overrides` header, so a native replacement can stand in for one
-  of its functions.
+  of its functions. The sample needed this for its `memset` and no longer
+  does; the seam is still the right one for a module whose code cannot be
+  translated.
+- `tools/recomp/translate.py` and `runtime/x86.h`: the SSE2 forms above, and
+  the string/SSE split for `MOVSD`.
