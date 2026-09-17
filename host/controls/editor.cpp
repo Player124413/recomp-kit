@@ -641,6 +641,34 @@ void Editor::finger_up(int64_t id) {
     }
 }
 
+void Editor::finger_cancel(int64_t id) {
+    if (!open_)
+        return;
+    if (picker_held_ && picker_finger_.id == id) {
+        // No choose(): a cancelled finger never picked anything.
+        picker_held_ = false;
+        return;
+    }
+    if (outside_finger_ == id) {
+        outside_finger_ = -1;
+        return;
+    }
+    size_t i = 0;
+    while (i < fingers_.size() && fingers_[i].id != id)
+        ++i;
+    if (i == fingers_.size())
+        return;
+    fingers_.erase(fingers_.begin() + long(i));
+    // A drag the system took away is undone, not committed: the control goes
+    // back to where the finger picked it up, under the anchor it had (the
+    // re-anchor only ever happens on a real lift). A pinch just ends, the
+    // way cancel_fingers ends it.
+    if (i == 0 && dragging_ && drag_moved_ && !pinching_)
+        set_moving_rect(drag_rect0_, false);
+    drag_moved_ = false;
+    end_gesture();
+}
+
 void Editor::wheel(double notches) {
     if (!open_ || !selection_valid() || notches == 0)
         return;

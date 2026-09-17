@@ -41,6 +41,12 @@ class RumbleRouter {
     // serial/low/high: Vpad::rumble_serial() and Vpad::rumble() (serial 0 is
     // "never requested"); sink: rumble_sink() now; now_ns: a monotonic clock.
     void update(uint64_t serial, uint16_t low, uint16_t high, RumbleSink sink, uint64_t now_ns);
+    // Stops both motors now and forgets the request that was running, so
+    // nothing is refreshed until the guest asks again (a new serial). The
+    // host calls this when the layout editor opens, because the pump stops
+    // calling update() there and a rumble in flight would otherwise buzz for
+    // the whole editing session.
+    void stop();
 
   private:
     void send(RumbleSink sink, uint16_t low, uint16_t high);

@@ -55,4 +55,11 @@ void RumbleRouter::update(uint64_t serial, uint16_t low, uint16_t high, RumbleSi
     }
 }
 
+void RumbleRouter::stop() {
+    low_ = high_ = 0;
+    send(RumbleSink::Controller, 0, 0);
+    send(RumbleSink::Device, 0, 0);
+    active_ = RumbleSink::None;
+}
+
 } // namespace controls

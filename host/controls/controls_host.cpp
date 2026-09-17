@@ -311,6 +311,12 @@ void release_everything() {
     g_binding.release_all(&actions);
     if (!actions.empty() && g_hooks.touch_actions)
         g_hooks.touch_actions(actions);
+    // The router's pad reaches the guest only through the shared vpad, and
+    // host_pump publishes it after the editing early return -- so without
+    // this line the cleared pad would never arrive while the editor is open
+    // (pad = "native": a held on-screen button stays down for the whole
+    // editing session) or while the app is in the background.
+    vpad().set_source(kPadSourceTouch, g_router.pad());
 }
 
 void close_editor();
@@ -327,6 +333,9 @@ void open_editor() {
     // A finger still on a control when the editor opens never reaches the
     // router's finger_up, so whatever it held would stay down all session.
     release_everything();
+    // The pump stops feeding g_rumble below, so a rumble still running would
+    // buzz for the whole editing session.
+    g_rumble.stop();
     // A reload just before this (a reset, a switch) left the file's own
     // scale; the editor shows what the player sees, size setting included.
     g_size = mods_controls_value(CONTROLS_SIZE_ROW);
@@ -431,7 +440,9 @@ bool host_finger_up(int64_t id, uint64_t now) {
 
 bool host_finger_cancel(int64_t id) {
     if (g_editor.is_open()) {
-        g_editor.finger_up(id);
+        // Cancelled, not lifted: the finger's gesture is dropped, so a
+        // system-taken finger never commits a drag or chooses a picker item.
+        g_editor.finger_cancel(id);
         return true;
     }
     return g_router.finger_cancel(id, g_sink);

@@ -62,6 +62,11 @@ class Editor {
     void finger_down(int64_t id, double px, double py);
     void finger_motion(int64_t id, double px, double py);
     void finger_up(int64_t id);
+    // The system took one finger away (a call, a gesture the OS claimed):
+    // that finger's gesture is dropped rather than finished, so a picker
+    // item under it is not chosen and a drag or pinch just ends. The
+    // single-id form of cancel_fingers.
+    void finger_cancel(int64_t id);
     void wheel(double notches); // desktop: resize the selected control
     // Focus loss: every finger is gone. A moved drag is committed first, the
     // same as any tool would.

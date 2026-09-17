@@ -2735,6 +2735,26 @@ static void test_rumble_router_device_refresh() {
     CHECK(log.calls.empty());
 }
 
+// The layout editor takes over: stop() silences both motors at once and
+// forgets the request, so nothing is refreshed until the guest asks again.
+static void test_rumble_router_stop() {
+    RumbleLog log;
+    RumbleRouter r(log.outputs());
+    const uint64_t s = 1000000000ull;
+    r.update(1, 40000, 0, RumbleSink::Controller, 0);
+    CHECK((log.calls == Calls{"c:40000,0,1000"}));
+    log.calls.clear();
+    r.stop();
+    CHECK((log.calls == Calls{"c:0,0,0", "d:0,0"}));
+    log.calls.clear();
+    // The same request never restarts, however long the editor stays open.
+    r.update(1, 40000, 0, RumbleSink::Controller, 10 * s);
+    CHECK(log.calls.empty());
+    // The guest's next request (a new serial) does.
+    r.update(2, 30000, 0, RumbleSink::Controller, 11 * s);
+    CHECK((log.calls == Calls{"c:30000,0,1000"}));
+}
+
 // A controller arriving mid-rumble takes it over: the device stops first,
 // then the controller starts; leaving hands it back the other way.
 static void test_rumble_router_sink_change() {
@@ -3800,6 +3820,25 @@ static void test_editor_cancel_fingers() {
     CHECK(cross_rect(e, s).x == moved.x);
 }
 
+// A finger the system takes away (a call, a gesture the OS claimed) drops
+// its gesture: the drag goes back where it started, and a picker item under
+// it is not chosen. cancel_fingers, in contrast, commits what was drawn.
+static void test_editor_finger_cancel_discards_the_gesture() {
+    Editor e;
+    const Screen s = editor_screen();
+    open_for_results(e, s);
+    const Rect cross = cross_rect(e, s);
+    e.finger_down(1, cross.x + cross.w / 2.0, cross.y + cross.h / 2.0);
+    e.finger_motion(1, cross.x + cross.w / 2.0 - 120, cross.y + cross.h / 2.0);
+    CHECK(cross_rect(e, s).x != cross.x);
+    e.finger_cancel(1);
+    CHECK(e.guides().empty());
+    CHECK(cross_rect(e, s).x == cross.x); // the drag was undone, not committed
+    // That finger is gone: a motion after the cancel moves nothing.
+    e.finger_motion(1, cross.x - 300, cross.y);
+    CHECK(cross_rect(e, s).x == cross.x);
+}
+
 // renaming() is what the host drives the system keyboard from: it clears on
 // text_done, while the rename flag the host keeps for Done does not.
 static void test_editor_renaming_clears_on_done() {
@@ -3945,6 +3984,7 @@ int main(int argc, char **argv) {
     test_rumble_router_controller_refresh();
     test_rumble_router_device_refresh();
     test_rumble_router_sink_change();
+    test_rumble_router_stop();
     test_editor_open_and_toolbar();
     test_editor_select_drag_and_reanchor();
     test_editor_snap_off_and_snap_to_control();
@@ -3970,6 +4010,7 @@ int main(int argc, char **argv) {
     test_editor_done_without_a_tap();
     test_editor_reserves_the_toolbar_band();
     test_editor_cancel_fingers();
+    test_editor_finger_cancel_discards_the_gesture();
     test_editor_renaming_clears_on_done();
     test_builtins_reach_the_settings_page();
     if (g_failures) {
