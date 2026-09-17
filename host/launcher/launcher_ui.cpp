@@ -111,7 +111,8 @@ void Launcher::start(const std::string &known) {
         if (root.empty() || best.state == State::Ready)
             return;
         Status s = check(spec_, root, info_.plays_in_place ? info_.cache_file : "");
-        if (s.state == State::Ready || (best.state == State::NotFound && s.state != State::NotFound))
+        if (s.state == State::Ready ||
+            (best.state == State::NotFound && s.state != State::NotFound))
             best = s;
     };
     consider(find_root(spec_, known));
@@ -211,7 +212,9 @@ void Launcher::rebuild() {
         if (status_.state == State::Ready)
             add(kPlay, "Play");
         if (info_.plays_in_place) {
-            add(kLocate, status_.state == State::Ready ? "Use a different folder..." : "Locate game folder...",
+            add(kLocate,
+                status_.state == State::Ready ? "Use a different folder..."
+                                              : "Locate game folder...",
                 info_.can_pick_folder);
             for (size_t i = 0; i < found_.size() && i < 4; ++i)
                 if (found_[i] != status_.root)
@@ -221,7 +224,8 @@ void Launcher::rebuild() {
         } else {
             const bool have = status_.state != State::NotFound;
             if (info_.can_pick_folder)
-                add(kImportFolder, have ? "Import again from a folder..." : "Import game folder...");
+                add(kImportFolder,
+                    have ? "Import again from a folder..." : "Import game folder...");
             if (info_.can_pick_zip)
                 add(kImportZip, have ? "Import again from a ZIP..." : "Import game ZIP...");
             for (size_t i = 0; i < found_.size() && i < 3; ++i)
@@ -237,7 +241,8 @@ void Launcher::rebuild() {
         add(kExportSaves, "Export saves...");
         add(kImportSaves, "Import saves...");
         if (!info_.import_root.empty() && status_.root == info_.import_root)
-            add(kDeleteData, confirm_delete_ ? "Delete game data - press again" : "Delete game data");
+            add(kDeleteData,
+                confirm_delete_ ? "Delete game data - press again" : "Delete game data");
         if (info_.can_open_folder && !status_.root.empty())
             add(kOpenFolder, "Open game folder");
         if (info_.can_open_folder)
@@ -305,7 +310,8 @@ void Launcher::begin_import(const Picked &picked) {
     if (!picked.path.empty() && !info_.import_root.empty()) {
         const std::string root = find_root(spec_, picked.path);
         if (root == info_.import_root) {
-            show("That is the game this app already imported. Choose the folder the game is installed in.");
+            show("That is the game this app already imported. Choose the folder the game is "
+                 "installed in.");
             return;
         }
     }
@@ -394,7 +400,8 @@ void Launcher::tick() {
         screen_ = Screen::Main;
         rebuild();
         if (status_.state != State::Ready)
-            show(std::string("The import finished, but the game is ") + state_name(status_.state) + ".");
+            show(std::string("The import finished, but the game is ") + state_name(status_.state) +
+                 ".");
         break;
     case ImportResult::Cancelled:
         show("Import cancelled. Importing again continues where it stopped.");
@@ -423,7 +430,8 @@ void Launcher::tick() {
 void Launcher::activate(int id) {
     if (id != kPlay)
         countdown_ = 0;
-    auto it = std::find_if(buttons_.begin(), buttons_.end(), [&](const Button &b) { return b.id == id; });
+    auto it =
+        std::find_if(buttons_.begin(), buttons_.end(), [&](const Button &b) { return b.id == id; });
     if (it == buttons_.end() || !it->enabled)
         return;
     if (id != kDeleteData)
@@ -478,26 +486,28 @@ void Launcher::activate(int id) {
     case kExportSaves: {
         auto weak = std::weak_ptr<Shared>(shared_);
         Launcher *self = this;
-        platform_.pick_export(spec_.title + " saves.zip", [weak, self](std::vector<Picked> p, std::string error) {
-            auto shared = weak.lock();
-            if (!shared)
-                return;
-            std::lock_guard<std::mutex> lock(shared->m);
-            shared->posted.push_back([self, p, error]() {
-                if (p.empty()) {
-                    if (!error.empty())
-                        self->show("The picker failed: " + error);
+        platform_.pick_export(
+            spec_.title + " saves.zip", [weak, self](std::vector<Picked> p, std::string error) {
+                auto shared = weak.lock();
+                if (!shared)
                     return;
-                }
-                std::string err;
-                if (export_profile(self->info_.profile_dir, p[0].path, {"game", "logs", "*.log", "launcher-*"}, &err)) {
-                    self->show("Saves exported to " + (p[0].name.empty() ? p[0].path : p[0].name) + ".");
-                    self->platform_.export_ready(p[0]);
-                }
-                else
-                    self->show("Could not export saves: " + err);
+                std::lock_guard<std::mutex> lock(shared->m);
+                shared->posted.push_back([self, p, error]() {
+                    if (p.empty()) {
+                        if (!error.empty())
+                            self->show("The picker failed: " + error);
+                        return;
+                    }
+                    std::string err;
+                    if (export_profile(self->info_.profile_dir, p[0].path,
+                                       {"game", "logs", "*.log", "launcher-*"}, &err)) {
+                        self->show("Saves exported to " +
+                                   (p[0].name.empty() ? p[0].path : p[0].name) + ".");
+                        self->platform_.export_ready(p[0]);
+                    } else
+                        self->show("Could not export saves: " + err);
+                });
             });
-        });
         break;
     }
     case kImportSaves: {
@@ -652,7 +662,8 @@ void Launcher::layout(int w, int h, int s, int top) {
     const int y0 = std::max(top, bottom - total);
     const int x0 = (w - (columns * bw + (columns - 1) * 16 * s)) / 2;
     for (int i = 0; i < n; ++i)
-        buttons_[size_t(i)].rect = {x0 + (i % columns) * (bw + 16 * s), y0 + (i / columns) * (bh + gap), bw, bh};
+        buttons_[size_t(i)].rect = {x0 + (i % columns) * (bw + 16 * s),
+                                    y0 + (i / columns) * (bh + gap), bw, bh};
 }
 
 void Launcher::draw(Canvas &c, int s) {
@@ -684,7 +695,8 @@ void Launcher::draw(Canvas &c, int s) {
     case State::WrongVersion:
         accent = kWarn;
         headline = "Wrong version of " + spec_.executable;
-        detail = display(status_.exe) + "\nFound SHA-256 " + status_.digest + "\nNeeded " + spec_.sha256;
+        detail =
+            display(status_.exe) + "\nFound SHA-256 " + status_.digest + "\nNeeded " + spec_.sha256;
         break;
     case State::Incomplete: {
         accent = kWarn;
@@ -697,10 +709,10 @@ void Launcher::draw(Canvas &c, int s) {
     }
     case State::NotFound:
         headline = "Game not found";
-        detail = info_.plays_in_place
-                     ? "Locate the folder " + spec_.title + " is installed in (it holds " +
-                           spec_.executable + ")."
-                     : "Import your copy of " + spec_.title + ": the installed game folder, or a ZIP of it.";
+        detail = info_.plays_in_place ? "Locate the folder " + spec_.title +
+                                            " is installed in (it holds " + spec_.executable + ")."
+                                      : "Import your copy of " + spec_.title +
+                                            ": the installed game folder, or a ZIP of it.";
         if (!info_.drop_hint.empty())
             detail += "\n" + info_.drop_hint;
         if (!spec_.store_url.empty())
@@ -721,14 +733,17 @@ void Launcher::draw(Canvas &c, int s) {
         const double frac = p.bytes_total ? double(p.bytes_done) / double(p.bytes_total) : 0.0;
         c.fill({bar.x, bar.y, int(bar.w * std::min(1.0, frac)), bar.h}, kReady);
         py += bar.h + 8 * s;
-        const std::string counts = std::to_string(p.files_done) + " / " + std::to_string(p.files_total) +
-                                   " files, " + human_bytes(p.bytes_done) + " of " + human_bytes(p.bytes_total);
+        const std::string counts = std::to_string(p.files_done) + " / " +
+                                   std::to_string(p.files_total) + " files, " +
+                                   human_bytes(p.bytes_done) + " of " + human_bytes(p.bytes_total);
         c.text(px, py, counts, 2 * s, kDim);
         py += Canvas::text_height(2 * s) + 6 * s;
         c.text(px, py, shorten(p.current, size_t(pw / (12 * s))), 2 * s, kDim);
         py += Canvas::text_height(2 * s) + 6 * s;
-        py += c.paragraph(px, py, pw, "Keep the app open. If it stops, importing again continues where it left off.",
-                          2 * s, kDim);
+        py += c.paragraph(
+            px, py, pw,
+            "Keep the app open. If it stops, importing again continues where it left off.", 2 * s,
+            kDim);
     } else if (screen_ == Screen::Message) {
         py += c.paragraph(px, py, pw, message_, 2 * s, kText);
     } else {
@@ -737,25 +752,32 @@ void Launcher::draw(Canvas &c, int s) {
         py += Canvas::text_height(2 * s) + 8 * s;
         py += c.paragraph(px, py, pw, detail, 2 * s, kDim);
         if (screen_ == Screen::Manage)
-            py += 4 * s + c.paragraph(px, py + 4 * s, pw,
-                                      "Saves and settings: " + display(info_.profile_dir) +
-                                          "\nThey are kept when the game data is deleted or imported again.",
-                                      2 * s, kDim);
+            py +=
+                4 * s +
+                c.paragraph(px, py + 4 * s, pw,
+                            "Saves and settings: " + display(info_.profile_dir) +
+                                "\nThey are kept when the game data is deleted or imported again.",
+                            2 * s, kDim);
     }
     layout(w, c.height(), s, py + 14 * s);
 
     for (size_t i = 0; i < buttons_.size(); ++i) {
         const Button &b = buttons_[i];
         const bool focused = int(i) == focus_;
-        c.fill(b.rect, !b.enabled ? kButtonOff : (pressed_ == int(i) || focused) ? kButtonHot : kButton);
+        c.fill(b.rect, !b.enabled                        ? kButtonOff
+                       : (pressed_ == int(i) || focused) ? kButtonHot
+                                                         : kButton);
         if (focused && !info_.touch)
             c.frame(b.rect, std::max(1, s), kFocus);
         const std::string label = shorten(b.label, size_t(b.rect.w / (12 * s)));
         const int tw = Canvas::text_width(label, 2 * s);
-        c.text(b.rect.x + (b.rect.w - tw) / 2, b.rect.y + (b.rect.h - Canvas::text_height(2 * s)) / 2, label, 2 * s,
+        c.text(b.rect.x + (b.rect.w - tw) / 2,
+               b.rect.y + (b.rect.h - Canvas::text_height(2 * s)) / 2, label, 2 * s,
                b.enabled ? kText : kDim);
     }
-    const std::string hint = info_.touch ? "Tap a button." : "Arrows or D-pad: choose   Enter or A: select   Esc or B: back";
+    const std::string hint = info_.touch
+                                 ? "Tap a button."
+                                 : "Arrows or D-pad: choose   Enter or A: select   Esc or B: back";
     c.text(margin, c.height() - 12 * s, shorten(hint, size_t((w - 2 * margin) / (6 * s))), s, kDim);
 }
 

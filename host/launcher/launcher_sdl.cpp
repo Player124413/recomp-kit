@@ -59,10 +59,10 @@ struct Presenter {
             SDL_Surface *dst = SDL_GetWindowSurface(window);
             if (!dst)
                 return;
-            SDL_Surface *src = SDL_CreateSurfaceFrom(c.width(), c.height(),
-                                                     format == gpu::Format::BGRA8 ? SDL_PIXELFORMAT_BGRA32
-                                                                                  : SDL_PIXELFORMAT_RGBA32,
-                                                     static_cast<void *>(const_cast<uint8_t *>(c.pixels())), c.width() * 4);
+            SDL_Surface *src = SDL_CreateSurfaceFrom(
+                c.width(), c.height(),
+                format == gpu::Format::BGRA8 ? SDL_PIXELFORMAT_BGRA32 : SDL_PIXELFORMAT_RGBA32,
+                static_cast<void *>(const_cast<uint8_t *>(c.pixels())), c.width() * 4);
             if (src) {
                 SDL_BlitSurface(src, nullptr, dst, nullptr);
                 SDL_DestroySurface(src);
@@ -75,7 +75,8 @@ struct Presenter {
         if (!texture || tex_w != c.width() || tex_h != c.height()) {
             if (texture)
                 device->destroy(texture);
-            texture = device->create_texture({c.width(), c.height(), format, gpu::UsageSampled | gpu::UsageCpu, 1});
+            texture = device->create_texture(
+                {c.width(), c.height(), format, gpu::UsageSampled | gpu::UsageCpu, 1});
             tex_w = c.width();
             tex_h = c.height();
         }
@@ -133,7 +134,8 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
     const Spec &spec = spec_from_config();
     {
         const PlatformInfo info = platform.info();
-        fprintf(stderr, "[launcher] game data %s, saves %s\n", info.import_root.c_str(), info.profile_dir.c_str());
+        fprintf(stderr, "[launcher] game data %s, saves %s\n", info.import_root.c_str(),
+                info.profile_dir.c_str());
     }
     Launcher launcher(spec, platform);
     launcher.start(options.known);
@@ -309,7 +311,8 @@ std::string run(SDL_Window *window, gpu::Device *device, void *native_surface, P
             static int last_state = -1, last_screen = -1;
             const int st = int(launcher.status().state), sc = int(launcher.screen());
             if (st != last_state || sc != last_screen) {
-                fprintf(stderr, "[launcher] %s, screen %d%s%s\n", state_name(launcher.status().state), sc,
+                fprintf(stderr, "[launcher] %s, screen %d%s%s\n",
+                        state_name(launcher.status().state), sc,
                         launcher.screen() == Screen::Message ? ": " : "",
                         launcher.screen() == Screen::Message ? launcher.message().c_str() : "");
                 last_state = st;

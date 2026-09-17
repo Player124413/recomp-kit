@@ -338,11 +338,11 @@ int os_registry_read(const char *key, const char *value, char *buf, size_t cap) 
     for (REGSAM view : {KEY_WOW64_64KEY, KEY_WOW64_32KEY}) {
         wchar_t data[4096];
         DWORD size = sizeof data;
-        LSTATUS st = RegGetValueW(root, widen(path).c_str(), widen(value).c_str(),
-                                  RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | (view == KEY_WOW64_64KEY
-                                                                              ? RRF_SUBKEY_WOW6464KEY
-                                                                              : RRF_SUBKEY_WOW6432KEY),
-                                  nullptr, data, &size);
+        LSTATUS st = RegGetValueW(
+            root, widen(path).c_str(), widen(value).c_str(),
+            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ |
+                (view == KEY_WOW64_64KEY ? RRF_SUBKEY_WOW6464KEY : RRF_SUBKEY_WOW6432KEY),
+            nullptr, data, &size);
         if (st != ERROR_SUCCESS)
             continue;
         const std::string out = narrow(data);

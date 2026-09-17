@@ -10,7 +10,9 @@ namespace launcher {
 
 struct Rect {
     int x = 0, y = 0, w = 0, h = 0;
-    bool contains(int px, int py) const { return px >= x && py >= y && px < x + w && py < y + h; }
+    bool contains(int px, int py) const {
+        return px >= x && py >= y && px < x + w && py < y + h;
+    }
 };
 
 struct Color {
@@ -20,17 +22,27 @@ struct Color {
 class Canvas {
   public:
     void resize(int w, int h, bool bgra);
-    int width() const { return w_; }
-    int height() const { return h_; }
-    const uint8_t *pixels() const { return px_.data(); }
+    int width() const {
+        return w_;
+    }
+    int height() const {
+        return h_;
+    }
+    const uint8_t *pixels() const {
+        return px_.data();
+    }
     void clear(Color c);
     void fill(Rect r, Color c);
     void frame(Rect r, int thickness, Color c);
     // Text at `size` pixels per font pixel; returns the width drawn. Characters
     // outside ASCII 32-126 draw as '?'.
     int text(int x, int y, const std::string &s, int size, Color c);
-    static int text_width(const std::string &s, int size) { return int(s.size()) * 6 * size; }
-    static int text_height(int size) { return 8 * size; }
+    static int text_width(const std::string &s, int size) {
+        return int(s.size()) * 6 * size;
+    }
+    static int text_height(int size) {
+        return 8 * size;
+    }
     // Word-wrapped to `width`; returns the height used.
     int paragraph(int x, int y, int width, const std::string &s, int size, Color c);
     static std::vector<std::string> wrap(const std::string &s, int width, int size);

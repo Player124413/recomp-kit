@@ -79,7 +79,7 @@ namespace {
 std::vector<NSURL *> g_scoped; // security-scoped URLs held for an import
 NSMutableArray *g_delegates;   // picker delegates alive until they answer
 UIBackgroundTaskIdentifier g_background = UIBackgroundTaskInvalid;
-}
+} // namespace
 
 @implementation RecompPickerDelegate
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
@@ -128,8 +128,9 @@ class IosPlatform final : public launcher::Platform {
         i.touch = true;
         i.import_root = documents_dir() + "/game";
         i.profile_dir = host_layout().profile_dir;
-        i.drop_hint = "Or copy the game folder into this app's files with Finder (iPad connected to a Mac) "
-                      "or the Files app, then open the app again.";
+        i.drop_hint =
+            "Or copy the game folder into this app's files with Finder (iPad connected to a Mac) "
+            "or the Files app, then open the app again.";
         const fs::path bundled = fs::path(bundle_dir()) / "game";
         std::error_code ec;
         if (fs::is_regular_file(bundled / RECOMP_EXECUTABLE, ec))
@@ -159,7 +160,8 @@ class IosPlatform final : public launcher::Platform {
     }
     void pick_saves(launcher::PickDone done) override {
         UIDocumentPickerViewController *picker =
-            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeZIP ] asCopy:YES];
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeZIP ]
+                                                                        asCopy:YES];
         present(picker, std::move(done), false);
     }
     // Written to a temporary file first; export_ready offers it to the player.
@@ -224,7 +226,8 @@ class IosPlatform final : public launcher::Platform {
             dispatch_async(dispatch_get_main_queue(), update);
     }
     void protect_import(const std::string &root) override {
-        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:root.c_str()] isDirectory:YES];
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:root.c_str()]
+                                isDirectory:YES];
         NSError *err = nil;
         if (![url setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&err])
             fprintf(stderr, "[ios] could not exclude %s from backup: %s\n", root.c_str(),

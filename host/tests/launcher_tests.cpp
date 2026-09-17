@@ -128,7 +128,7 @@ void test_wildcards() {
     const std::vector<std::string> ex = {"__redist", "*.dll"};
     CHECK(excluded("__redist/vc/x.exe", ex));
     CHECK(excluded("data/sub/x.dll", ex));
-    CHECK(excluded("data/__redist", ex));         // a file name matches too
+    CHECK(excluded("data/__redist", ex));        // a file name matches too
     CHECK(!excluded("data/__redist/x.exe", ex)); // a folder below the top does not
     CHECK(!excluded("data/x.dat", ex));
 }
@@ -169,7 +169,7 @@ void test_find_and_check() {
     forged.replace(forged.find(s.sha256), s.sha256.size(), std::string(64, '0'));
     write_file(cache, forged);
     CHECK(check(s, top + "/cached", cache).state == State::WrongVersion); // trusts the cache
-    write_file(top + "/cached/game.exe", kExeBytes + "x");               // size changes
+    write_file(top + "/cached/game.exe", kExeBytes + "x");                // size changes
     CHECK(check(s, top + "/cached", cache).state == State::WrongVersion);
     write_file(top + "/cached/game.exe", kExeBytes);
     os_set_mtime((top + "/cached/game.exe").c_str(), 12345);
@@ -204,7 +204,8 @@ void test_folder_import() {
     CHECK(!exists(dest + "/binkw32.dll"));
     CHECK(!exists(dest + "/Setup1.txt"));
     CHECK(read_file(dest + "/.stamp") == s.sha256 + "\n");
-    CHECK(!seen.empty() && seen.back().files_done == 5 && seen.back().bytes_done == seen.back().bytes_total);
+    CHECK(!seen.empty() && seen.back().files_done == 5 &&
+          seen.back().bytes_done == seen.back().bytes_total);
     CHECK(check(s, dest).state == State::Ready);
 
     // Again: everything is kept, nothing is copied.
@@ -224,7 +225,8 @@ void test_cancel_and_resume() {
     const std::string src = fresh("resume-src");
     make_install(src);
     for (int i = 0; i < 20; ++i)
-        write_file(src + "/data/file" + std::to_string(i) + ".bin", std::string(1000, char('a' + i)));
+        write_file(src + "/data/file" + std::to_string(i) + ".bin",
+                   std::string(1000, char('a' + i)));
     const std::string dest = fresh("resume-dest") + "/game";
     auto source = folder_source(src);
     int calls = 0;
@@ -302,8 +304,8 @@ void test_zip_import() {
     const Spec s = spec();
     const std::string dir = fresh("zip");
     const std::vector<std::pair<std::string, std::string>> files = {
-        {"GAME.exe", kExeBytes},        {"data/a.bin", "aaaa"},     {"Levels/one.lvl", "1"},
-        {"__redist/setup.exe", "skip"}, {"x.dll", "skip"},          {"notes.txt", "keep"}};
+        {"GAME.exe", kExeBytes},        {"data/a.bin", "aaaa"}, {"Levels/one.lvl", "1"},
+        {"__redist/setup.exe", "skip"}, {"x.dll", "skip"},      {"notes.txt", "keep"}};
     // Inside a top folder, as most archives are, with macOS clutter.
     std::vector<std::pair<std::string, std::string>> with_junk = files;
     make_zip(dir + "/game.zip", "Test Game/", with_junk);
@@ -386,15 +388,14 @@ void test_folders_and_profile() {
 void test_detection() {
     const Spec s = spec();
     const std::string base = fresh("detect");
-    make_install(base + "/Games/Test Game/sub");                 // named: two levels
-    make_install(base + "/Games/Other Name");                    // direct
-    make_install(base + "/Games/Unrelated/deep/deeper");         // too deep, unnamed
-    make_install(base + "/Steam/steamapps/common/Test Game");    // a base that is the game
-    write_file(base + "/Games/A Patch/game.exe", kExeBytes);     // no data: not offered
+    make_install(base + "/Games/Test Game/sub");              // named: two levels
+    make_install(base + "/Games/Other Name");                 // direct
+    make_install(base + "/Games/Unrelated/deep/deeper");      // too deep, unnamed
+    make_install(base + "/Steam/steamapps/common/Test Game"); // a base that is the game
+    write_file(base + "/Games/A Patch/game.exe", kExeBytes);  // no data: not offered
     write_file(base + "/Games/A Patch/levels/one.lvl", "patched");
-    std::vector<std::string> found =
-        detect_under(s, {base + "/Games", base + "/Steam/steamapps/common/Test Game",
-                         base + "/missing"});
+    std::vector<std::string> found = detect_under(
+        s, {base + "/Games", base + "/Steam/steamapps/common/Test Game", base + "/missing"});
     CHECK(found.size() == 3);
     auto has = [&](const std::string &p) {
         for (const std::string &f : found)
@@ -419,28 +420,54 @@ struct FakePlatform : Platform {
     bool move_all = false;
     std::string opened_url, opened_folder;
     int activity_on = 0, activity_off = 0, protected_count = 0, released = 0, exported = 0;
-    PlatformInfo info() override { return pi; }
+    PlatformInfo info() override {
+        return pi;
+    }
     void answer(PickDone done) {
         auto n = next;
         next.clear();
         done(n, "");
     }
-    void pick_folder(PickDone done) override { answer(done); }
-    void pick_zip(PickDone done) override { answer(done); }
-    void pick_export(const std::string &, PickDone done) override { answer(done); }
-    void pick_saves(PickDone done) override { answer(done); }
-    std::vector<std::string> candidates(const Spec &) override { return cands; }
-    void open_folder(const std::string &f) override { opened_folder = f; }
-    void open_url(const std::string &u) override { opened_url = u; }
+    void pick_folder(PickDone done) override {
+        answer(done);
+    }
+    void pick_zip(PickDone done) override {
+        answer(done);
+    }
+    void pick_export(const std::string &, PickDone done) override {
+        answer(done);
+    }
+    void pick_saves(PickDone done) override {
+        answer(done);
+    }
+    std::vector<std::string> candidates(const Spec &) override {
+        return cands;
+    }
+    void open_folder(const std::string &f) override {
+        opened_folder = f;
+    }
+    void open_url(const std::string &u) override {
+        opened_url = u;
+    }
     void import_activity(bool active, const Progress *p) override {
         if (!p)
             (active ? activity_on : activity_off)++;
     }
-    void protect_import(const std::string &) override { ++protected_count; }
-    void release(const Picked &) override { ++released; }
-    bool movable(const Picked &) override { return move_all; }
-    void export_ready(const Picked &) override { ++exported; }
-    void run_in_background(std::function<void()> work) override { work(); }
+    void protect_import(const std::string &) override {
+        ++protected_count;
+    }
+    void release(const Picked &) override {
+        ++released;
+    }
+    bool movable(const Picked &) override {
+        return move_all;
+    }
+    void export_ready(const Picked &) override {
+        ++exported;
+    }
+    void run_in_background(std::function<void()> work) override {
+        work();
+    }
 };
 
 bool has_button(Launcher &l, int id) {
@@ -553,8 +580,8 @@ void test_ui_desktop() {
         l.activate(kOk);
         l.draw(c, scale);
         for (const Button &b : l.buttons())
-            CHECK(b.rect.w > 0 && b.rect.x >= 0 && b.rect.y >= 0 && b.rect.x + b.rect.w <= c.width() &&
-                  b.rect.y + b.rect.h <= c.height());
+            CHECK(b.rect.w > 0 && b.rect.x >= 0 && b.rect.y >= 0 &&
+                  b.rect.x + b.rect.w <= c.width() && b.rect.y + b.rect.h <= c.height());
     }
     const Button quit = l.buttons().back();
     CHECK(quit.id == kQuit);

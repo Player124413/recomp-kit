@@ -18,9 +18,10 @@ class Device;
 namespace launcher {
 
 struct RunOptions {
-    std::string known;         // a folder or executable already resolved ("" if none)
-    double auto_play = 0;      // seconds a ready game waits before starting (mobile)
-    std::string dump_path;     // RECOMP_LAUNCHER_DUMP: write each drawn frame here (PPM; relative to $HOME)
+    std::string known;    // a folder or executable already resolved ("" if none)
+    double auto_play = 0; // seconds a ready game waits before starting (mobile)
+    std::string
+        dump_path; // RECOMP_LAUNCHER_DUMP: write each drawn frame here (PPM; relative to $HOME)
     // RECOMP_LAUNCHER_KEYS: scripted input for smoke runs, one step every
     // 300 ms: up, down, left, right, next, previous, enter, back, drop:<path>,
     // wait (a step that does nothing).
