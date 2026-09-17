@@ -107,7 +107,9 @@ if(RECOMP_VIDEO)
       --nm=${RECOMP_FFMPEG_TOOLCHAIN_BIN}/llvm-nm
       --ranlib=${RECOMP_FFMPEG_TOOLCHAIN_BIN}/llvm-ranlib
       --strip=${RECOMP_FFMPEG_TOOLCHAIN_BIN}/llvm-strip
-      --sysroot=${RECOMP_FFMPEG_SYSROOT} --disable-symver)
+      --sysroot=${RECOMP_FFMPEG_SYSROOT} --disable-symver
+      # 16 KB page devices (Android 15 and later) load only aligned libraries.
+      "--extra-ldflags=-Wl,-z,max-page-size=16384")
   elseif(APPLE)
     list(APPEND RECOMP_FFMPEG_CONFIGURE
       --install-name-dir=@rpath --cc=${CMAKE_C_COMPILER})
