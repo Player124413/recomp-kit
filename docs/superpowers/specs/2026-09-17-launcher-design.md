@@ -1,7 +1,7 @@
 # Launcher design: finding and importing the player's game on every target
 
 Date: 2026-09-17
-Status: in progress (L0 core, L1 desktop, L2 Android, L3 iOS, L4 web)
+Status: implemented 2026-09-17 (L0 to L4); see the plan for what was checked where
 Parent spec: `2026-09-13-recomp-kit-design.md`
 
 ## 1. Goal
@@ -18,14 +18,20 @@ game repository only supplies data in `game.toml`.
   one hub page listing every game on the web.
 - Desktop plays an install in place and remembers it; iPadOS, Android and the
   web always import into app storage.
-- The launcher appears only when the game is not ready or the player asks for
-  it (Shift or Alt held at start on desktop, the Launcher tile on mobile, the
-  hub on the web). A ready game starts straight away, as today.
+- The launcher appears when the game is not ready or the player asks for it
+  (`--launcher`, `RECOMP_LAUNCHER`, Shift or Alt held at start on desktop).
+  On a phone or tablet it shows for 1.5 s before a ready game starts, and a
+  touch keeps it open. The web hub is always the launcher.
 - Saves live in the profile, never next to the game data, so deleting or
   re-importing the game never touches them. The mod overlay already writes
   there.
 - Native targets draw the launcher with SDL and the kit's own font; the web
   launcher is an HTML page so importing starts while the `.wasm` downloads.
+- A device the host cannot render on (no Vulkan 1.1) still gets the launcher,
+  drawn through SDL's window surface: the game imports, and Play explains.
+- A folder the player already put in app storage (Finder or Files on iPadOS,
+  USB on Android) is moved into place rather than copied, and the rest of it
+  removed.
 
 ## 3. States
 
@@ -88,10 +94,12 @@ min_free_mb = 200                         # headroom kept free after an import
 Target notes:
 
 - iPadOS: `Documents/game` wins over the copy bundled into developer builds;
-  the bundle seeds it only when it is missing or older. The game folder is
+  the bundle is imported only when `Documents/game` is not found. The game folder is
   excluded from iCloud backup; the screen stays awake while importing.
-- Android: the copy runs in a foreground service with a notification and
-  resumes after the app is killed. No all-files permission.
+- Android: the copy runs while a foreground service with a progress
+  notification keeps the process alive; an import that was stopped continues
+  from the files already copied when it is started again. No all-files
+  permission.
 - Web: the copy runs in a worker with synchronous OPFS handles, asks for
   persistent storage and shows the quota first. Nothing is uploaded.
 
