@@ -64,6 +64,13 @@ class Router {
     // held is released exactly as cancel_all() would release it.
     void set_enabled(bool on, ControlsSink &sink);
     bool enabled() const;
+    // true: the active layout is auto-hidden (controls_host.cpp) but its
+    // toggles stay live so the player can switch. finger_down then hits only
+    // Toggle controls (no gaps, no other kinds), make_view draws only the
+    // toggles, and turning it on releases every finger held, exactly as
+    // cancel_all() would. The claim area (portrait) is still claimed.
+    void set_toggles_only(bool on, ControlsSink &sink);
+    bool toggles_only() const;
     // True when the finger belongs to the controls (the caller must not give it to TouchMapper).
     bool finger_down(int64_t id, double px, double py, uint64_t now_ns, ControlsSink &sink);
     bool finger_motion(int64_t id, double px, double py, uint64_t now_ns, ControlsSink &sink);
@@ -117,6 +124,7 @@ class Router {
     Screen screen_;
     Rect claim_area_;
     bool enabled_ = true;
+    bool toggles_only_ = false;
     std::map<int64_t, Owned> fingers_;
     std::vector<std::vector<ControlState>> states_; // sized from layout_
     KeypadModifiers modifiers_;

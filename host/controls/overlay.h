@@ -49,10 +49,11 @@ struct ControlsView {
 };
 
 // Every control a player can see, in layout order: visible groups' controls,
-// and every toggle whether or not its own group is shown. `revision` is a
-// hash of what Overlay draws from the view, so two calls that would draw the
-// same pixels return the same revision, and a change nothing draws (a plain
-// key's press) does not force a new raster.
+// and every toggle whether or not its own group is shown. While the router
+// is toggles-only (an auto-hidden layout), only the toggles and no
+// backdrops. `revision` is a hash of what Overlay draws from the view, so
+// two calls that would draw the same pixels return the same revision, and a
+// change nothing draws (a plain key's press) does not force a new raster.
 ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double opacity);
 
 class Overlay {

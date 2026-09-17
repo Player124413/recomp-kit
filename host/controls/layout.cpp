@@ -671,4 +671,33 @@ Hit hit_test(const Layout &l, const Screen &s, double px_, double py_) {
     return result;
 }
 
+LayoutContent layout_content(const Layout &l) {
+    bool keys = false, pad = false;
+    for (const Group &g : l.groups)
+        for (const Control &c : g.controls) {
+            if (c.kind == Kind::Key)
+                keys = true;
+            else if (c.kind == Kind::Button || c.kind == Kind::Dpad || c.kind == Kind::Stick)
+                pad = true;
+        }
+    if (!pad)
+        return LayoutContent::Keys;
+    return keys ? LayoutContent::Mixed : LayoutContent::Pad;
+}
+
+bool layout_wanted(LayoutContent c, bool keyboard_present, bool controller_present,
+                   bool pad_with_controller, bool forced) {
+    if (forced)
+        return true;
+    switch (c) {
+    case LayoutContent::Keys:
+        return !keyboard_present;
+    case LayoutContent::Pad:
+        return !controller_present || pad_with_controller;
+    case LayoutContent::Mixed:
+        return !keyboard_present || !controller_present || pad_with_controller;
+    }
+    return true;
+}
+
 } // namespace controls

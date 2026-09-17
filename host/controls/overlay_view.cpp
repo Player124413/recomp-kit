@@ -54,14 +54,15 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
     v.dh = s.dh;
     v.opacity = opacity;
     v.controls_area = s.controls_area;
+    const bool toggles_only = r.toggles_only();
     for (int g = 0; g < int(l.groups.size()); ++g) {
         const Group &grp = l.groups[g];
-        if (grp.visible && grp.has_grid)
+        if (grp.visible && grp.has_grid && !toggles_only)
             v.backdrops.push_back(group_rect(l, g, s));
         for (int c = 0; c < int(grp.controls.size()); ++c) {
             const Control &ctl = grp.controls[c];
             // A toggle's tab is drawn even while its own group is hidden.
-            if (!grp.visible && ctl.kind != Kind::Toggle)
+            if ((!grp.visible || toggles_only) && ctl.kind != Kind::Toggle)
                 continue;
             const ControlState &st = r.state(g, c);
             DrawControl d;

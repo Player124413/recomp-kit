@@ -50,6 +50,20 @@ bool Router::enabled() const {
     return enabled_;
 }
 
+void Router::set_toggles_only(bool on, ControlsSink &sink) {
+    if (on == toggles_only_)
+        return;
+    toggles_only_ = on;
+    if (on)
+        cancel_all(sink); // releases everything held, and bumps generation
+    else
+        ++generation_;
+}
+
+bool Router::toggles_only() const {
+    return toggles_only_;
+}
+
 void Router::set_pressed(int group, int control, bool pressed) {
     if (group < 0 || group >= int(states_.size()))
         return;
@@ -116,7 +130,11 @@ static void reset_stick(ControlState &cs, const Layout &l, int group, int contro
 bool Router::finger_down(int64_t id, double px, double py, uint64_t now_ns, ControlsSink &sink) {
     if (!enabled_ || !layout_)
         return false;
-    const Hit h = hit_test(*layout_, screen_, px, py);
+    Hit h = hit_test(*layout_, screen_, px, py);
+    // A hidden layout's toggles are the only thing left to hit.
+    if (toggles_only_ && h.group >= 0 &&
+        (h.gap || layout_->groups[h.group].controls[h.control].kind != Kind::Toggle))
+        h = Hit();
     if (h.group < 0) {
         if (!claim_area_.contains(px, py))
             return false; // the game's own area

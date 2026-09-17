@@ -137,4 +137,17 @@ struct Hit {
 // visible grid group's own box as a gap.
 Hit hit_test(const Layout &l, const Screen &s, double px, double py);
 
+// What a layout is made of, for auto-hide: only key controls, only pad
+// controls (button, dpad, stick), or both. Toggles and actions count as
+// neither, and a layout with no pad control is Keys.
+enum class LayoutContent { Keys, Pad, Mixed };
+LayoutContent layout_content(const Layout &l);
+
+// Whether a layout of `c` shows, given the devices present and the
+// pad_with_controller setting: a hardware keyboard hides Keys, a controller
+// hides Pad unless pad_with_controller, and Mixed hides only when both are
+// present (again unless pad_with_controller). `forced` always shows.
+bool layout_wanted(LayoutContent c, bool keyboard_present, bool controller_present,
+                   bool pad_with_controller, bool forced);
+
 } // namespace controls
