@@ -544,6 +544,7 @@ the next step starts.
   state changes, and the stick knob is a separate quad.
 - **Editor scope.** The editor is last in the order, so steps 1–5 are
   useful without it, and players can edit the JSON meanwhile.
-- **The branch starts from an old `main`.** The spec was written from
-  b3e02d5, but kit `main` has moved (the Siege merge). The branch is
-  rebased onto the current `main` before step 1.
+- **The branch may start from an old `main`.** The spec was written from
+  b3e02d5, and notes say the Siege merge moved kit `main` to 623e504,
+  which isn't visible in this clone yet. Fetch and rebase onto the current
+  `main` before step 1.
