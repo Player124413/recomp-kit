@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The rasterizer's texel copy converts every 16-bit format, the packed R16
+  decode included, through whole-word tables, and swaps 8-bit channel order
+  word by word. Siege of Avalon's main layer is R16 drawn with the packed
+  decode, which still went a channel at a time and was a quarter of its
+  render thread on the Mac. An Unlock's per-pixel diff skips unchanged
+  stretches eight bytes at a time and compares the rest inline instead of
+  calling `memcmp` for every pixel of a changed row.
+
 - `WaitMessage` waits until there is a message or a paint to retrieve, pumping
   timers and host input meanwhile, instead of returning at once. Delphi's idle
   handler calls it whenever the queue is empty, and a WaitMessage that came

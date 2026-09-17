@@ -2540,8 +2540,37 @@ bool lock_shadow_record(ComObj *s, const int32_t *unlock_rect, uint32_t unlock_p
         const uint8_t *now = row_now(y);
         if (!memcmp(was, now, (size_t)sh.row_bytes))
             continue;
+        // Unchanged stretches are skipped eight bytes at a time, whole pixels
+        // of them when the pixel size divides eight; what is left is compared
+        // a pixel at a time without a call.
+        const int32_t step = bb == 3 ? 0 : int32_t(8 / bb);
         for (int32_t x = 0; x < lw; ++x) {
-            if (!memcmp(was + (size_t)x * bb, now + (size_t)x * bb, bb))
+            if (step && x + step <= lw) {
+                uint64_t a, b;
+                memcpy(&a, was + (size_t)x * bb, 8);
+                memcpy(&b, now + (size_t)x * bb, 8);
+                if (a == b) {
+                    x += step - 1;
+                    continue;
+                }
+            }
+            bool differs;
+            if (bb == 2) {
+                uint16_t a, b;
+                memcpy(&a, was + (size_t)x * 2, 2);
+                memcpy(&b, now + (size_t)x * 2, 2);
+                differs = a != b;
+            } else if (bb == 4) {
+                uint32_t a, b;
+                memcpy(&a, was + (size_t)x * 4, 4);
+                memcpy(&b, now + (size_t)x * 4, 4);
+                differs = a != b;
+            } else if (bb == 1) {
+                differs = was[x] != now[x];
+            } else {
+                differs = memcmp(was + (size_t)x * bb, now + (size_t)x * bb, bb) != 0;
+            }
+            if (!differs)
                 continue;
             changed[(size_t)(y - band0) * lw + x] = 1;
             if (x < x0)

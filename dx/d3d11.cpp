@@ -1088,13 +1088,30 @@ bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, i
                    uint32_t(lut5[(v >> 11) & 31]) << 16 | 0xff000000u;
         return t;
     }();
+    // The packed decode as the target's four bytes, from lut16.
+    static const std::vector<uint32_t> lut16_rgba = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v)
+            t[v] = lut16[v] | 0xff000000u;
+        return t;
+    }();
+    static const std::vector<uint32_t> lut16_bgra = [] {
+        std::vector<uint32_t> t(65536);
+        for (int v = 0; v < 65536; ++v) {
+            const uint32_t c = lut16[v];
+            t[v] = (c >> 16 & 0xffu) | (c & 0xff00u) | (c & 0xffu) << 16 | 0xff000000u;
+        }
+        return t;
+    }();
     auto copy_row = [&](uint32_t src, uint32_t dst, uint32_t n) {
         if (tf == of) {
             memmove(gm_ptr(dst), gm_ptr(src), n * 4);
             return;
         }
-        if (tf == 85 && !packed) {
-            const uint32_t *lut = (target_bgra ? lut565_bgra : lut565_rgba).data();
+        if (packed || tf == 85) {
+            const uint32_t *lut = (packed ? (target_bgra ? lut16_bgra : lut16_rgba)
+                                          : (target_bgra ? lut565_bgra : lut565_rgba))
+                                      .data();
             const uint8_t *s = gm_ptr(src);
             uint8_t *d = gm_ptr(dst);
             for (uint32_t i = 0; i < n; ++i) {
@@ -1104,29 +1121,14 @@ bool copy_texel_rows(const ScreenVertex p[3], double area, int minx, int miny, i
             }
             return;
         }
-        for (uint32_t i = 0; i < n; ++i, dst += 4) {
-            uint32_t r, g, b, a;
-            if (packed) {
-                uint32_t c = lut16[rd16(src + i * 2)];
-                r = c & 0xff;
-                g = (c >> 8) & 0xff;
-                b = (c >> 16) & 0xff;
-                a = 255;
-            } else if (tf == 85) {
-                uint32_t v = rd16(src + i * 2);
-                r = lut5[(v >> 11) & 31];
-                g = lut6[(v >> 5) & 63];
-                b = lut5[v & 31];
-                a = 255;
-            } else {
-                uint32_t c = rd32(src + i * 4);
-                bool bgra = tf == 87;
-                r = (c >> (bgra ? 16 : 0)) & 0xff;
-                g = (c >> 8) & 0xff;
-                b = (c >> (bgra ? 0 : 16)) & 0xff;
-                a = c >> 24;
-            }
-            wr32(dst, target_bgra ? b | g << 8 | r << 16 | a << 24 : r | g << 8 | b << 16 | a << 24);
+        // The other eight-bit order: red and blue trade places.
+        const uint8_t *s = gm_ptr(src);
+        uint8_t *d = gm_ptr(dst);
+        for (uint32_t i = 0; i < n; ++i) {
+            uint32_t c;
+            memcpy(&c, s + size_t(i) * 4, 4);
+            c = (c & 0xff00ff00u) | (c >> 16 & 0xffu) | (c & 0xffu) << 16;
+            memcpy(d + size_t(i) * 4, &c, 4);
         }
     };
     const uint32_t texel_bytes = tf == 85 || tf == 56 ? 2 : 4;
