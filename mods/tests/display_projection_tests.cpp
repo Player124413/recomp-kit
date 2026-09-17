@@ -18,6 +18,9 @@ std::map<uint32_t, uint16_t> words;
 float aspect;
 float origin = 100;
 uint16_t canvas_width = 640;
+// What 00523200 saw while its wrap was in place.
+uint16_t status_width;
+uint32_t status_clip;
 const std::map<std::string, uint32_t> symbols = {
     {"display_project_point", 0x46dbe0}, {"display_cull_triangle", 0x46daa0},
     {"screen_width_2", 0x87ca90},        {"screen_width_2_half", 0x87caa4},
@@ -35,7 +38,9 @@ PopModApi fake_api() {
     };
     a.hook_install = [](const PopModApi *, uint32_t addr, PopHookFn fn, int32_t mode, void *user,
                         uint32_t *out) {
-        MOD_CHECK_EQ(mode, addr == 0x47d980 || addr == 0x47d8a0 ? POP_HOOK_WRAP : POP_HOOK_AFTER);
+        MOD_CHECK_EQ(mode, addr == 0x47d980 || addr == 0x47d8a0 || addr == 0x523200
+                               ? POP_HOOK_WRAP
+                               : POP_HOOK_AFTER);
         hooks.push_back({addr, fn, user});
         *out = (uint32_t)hooks.size();
         return POP_OK;
@@ -58,7 +63,11 @@ PopModApi fake_api() {
         return POP_OK;
     };
     a.guest_write_u16 = [](const PopModApi *, uint32_t addr, uint16_t v) {
-        MOD_CHECK(addr == 0x87ca90 || addr == 0x87caa4 || addr == 0x1001c);
+        MOD_CHECK(addr == 0x87ca90 || addr == 0x87caa4 || addr == 0x1001c || addr == 0x89c6cf);
+        if (addr == 0x89c6cf) {
+            canvas_width = v;
+            return POP_OK;
+        }
         words[addr] = v;
         return POP_OK;
     };
@@ -75,6 +84,11 @@ PopModApi fake_api() {
         return POP_OK;
     };
     a.call_next = [](const PopModApi *, PopHookInvocation *, pop_cpu_v1 *cpu) {
+        if (cpu->target == 0x523200) {
+            status_width = canvas_width;
+            status_clip = dwords[dwords[0x5ce0bc] + 0x248052];
+            return POP_OK;
+        }
         // The guest append copies one record and advances its queue cursor.
         dwords[cpu->ecx + 0x20002a] += cpu->target == 0x47d980 ? 0xa0 : 0x80;
         return POP_OK;
@@ -111,8 +125,8 @@ MOD_TEST_SUITE(display_projection_fixture) {
     canvas_width = 640;
     PopModApi api = fake_api();
     MOD_CHECK_EQ(init(&api), POP_OK);
-    MOD_CHECK_EQ(hooks.size(), 4u);
-    if (hooks.size() == 4) {
+    MOD_CHECK_EQ(hooks.size(), 5u);
+    if (hooks.size() == 5) {
         MOD_CHECK_EQ(hooks[0].addr, 0x41ebf0u);
         MOD_CHECK_EQ(hooks[1].addr, 0x46e700u);
         struct Case {
@@ -181,6 +195,30 @@ MOD_TEST_SUITE(display_projection_fixture) {
                     MOD_CHECK_EQ(dwords[0x30024 + i * 32], 0xabcdefu);
                 }
             }
+    // The bottom-right status line (00523200) is right-aligned to, and clipped
+    // at, the widened canvas for its own call only; 4:3 keeps the original.
+    for (float ratio : {4.f / 3, 16.f / 9})
+        if (hooks.size() == 5) {
+            aspect = ratio;
+            origin = 100;
+            words = {{0x87ca90, 540}, {0x87caa4, 270}, {0x87ca92, 480}};
+            canvas_width = 640;
+            dwords.clear();
+            dwords[0x5ce0bc] = 0x50000;
+            dwords[0x50000 + 0x248052] = 640;
+            pop_cpu_v1 cpu;
+            pop_cpu_v1_init(&cpu);
+            hooks[0].fn(&api, &cpu, nullptr, nullptr); // a projection reset
+            cpu.target = 0x523200;
+            status_width = 0;
+            status_clip = 0;
+            hooks[4].fn(&api, &cpu, nullptr, hooks[4].user);
+            const unsigned want = ratio > 4.f / 3 ? 852u : 640u;
+            MOD_CHECK_EQ(status_width, want);
+            MOD_CHECK_EQ(status_clip, want);
+            MOD_CHECK_EQ(canvas_width, 640);
+            MOD_CHECK_EQ(dwords[0x50000 + 0x248052], 640u);
+        }
     // Background coverage below the original horizon extends edge pixels;
     // it must not rescale the existing sky or exceed the guest queue limit.
     for (bool full : {false, true}) {
