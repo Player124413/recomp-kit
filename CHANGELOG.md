@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `MsgWaitForMultipleObjects` and its Ex form answer for their handles: a
+  signalled one is WAIT_OBJECT_0 + its index, ahead of a queued message, and
+  MWMO_WAITALL waits for all of them. The call only ever reported a message or
+  a timeout, and Delphi's `TThread.WaitFor` on the main thread loops on it
+  until the thread's handle is signalled - so stopping a thread hung the
+  program. Siege of Avalon stops its D3D mouse thread on the way out, and
+  choosing Exit left it running until the host unwound it.
+
 - A call into the first 64 KB raises an access violation through the guest's
   own exception handlers, as it faults on Windows, instead of returning 0. A
   call through a nil interface reads a zero vtable and lands there; a Delphi

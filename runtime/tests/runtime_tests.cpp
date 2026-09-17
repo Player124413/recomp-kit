@@ -5543,6 +5543,32 @@ static void test_user32_window_model() {
           "queued message returns count without pumping");
     call_import(&c, "USER32.dll", "WaitMessage", {});
     check(vcl_wait_calls == 2, "WaitMessage pumps once");
+    // A signalled handle answers before any message, in both argument orders;
+    // an unsignalled one leaves the message, then the timeout. This is the
+    // wait Delphi's TThread.WaitFor makes for a thread's handle.
+    {
+        call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1}); // drain
+        while (call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1}))
+            ;
+        uint32_t idle = call_import(&c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, 0});
+        uint32_t fired = call_import(&c, "KERNEL32.dll", "CreateEventA", {0, 1, 1, 0});
+        wr32(s + 0x780, idle);
+        wr32(s + 0x784, fired);
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {2, s + 0x780, 0, 1000, 0x40}) == 1,
+              "a signalled handle is WAIT_OBJECT_0 + its index");
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx", {2, s + 0x780, 1000, 0x40, 0}) == 1,
+              "the Ex form takes the handles in the same place");
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjectsEx", {2, s + 0x780, 0, 0x40, 1}) == 0x102,
+              "MWMO_WAITALL waits for both");
+        host_post_message(hwnd, 0x8001, 0, 0);
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {1, s + 0x780, 0, 0, 0xff}) == 1,
+              "an unsignalled handle leaves the queued message");
+        call_import(&c, "USER32.dll", "PeekMessageW", {msg, 0, 0, 0, 1});
+        check(call_import(&c, "USER32.dll", "MsgWaitForMultipleObjects", {1, s + 0x780, 0, 0, 0xff}) == 0x102,
+              "and then the timeout");
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {idle});
+        call_import(&c, "KERNEL32.dll", "CloseHandle", {fired});
+    }
     host_set_message_waiter(nullptr);
     host_set_key_state(65, true);
     check(call_import(&c, "USER32.dll", "GetKeyboardState", {s + 0x600}) == 1 &&

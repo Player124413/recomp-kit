@@ -2567,6 +2567,10 @@ const double SCHED_SLICE_SECONDS = 0.001;
 void guest_sleep_ms(uint32_t ms) {
     sched_sleep_ms(ms);
 }
+uint32_t guest_wait_objects(const uint32_t *handles, uint32_t count, bool wait_all,
+                            uint32_t timeout_ms) {
+    return sched_wait_objects(handles, count, wait_all, timeout_ms);
+}
 
 // Installs what the run thread does instead of parking in the scheduler. See
 // the note by g_idle_waiter: on a windowed host the run thread also services

@@ -2,9 +2,11 @@
 // name runtime-owned state; callbacks always re-enter through guest_call.
 #include "user32_internal.h"
 #include "memory.h"
+#include "win32.h"
 #include "gdi_image.h"
 #include <algorithm>
 #include <set>
+#include <vector>
 #include <cstring>
 
 void sched_checkpoint();
@@ -644,14 +646,54 @@ void wait_message(X86 *c) {
     pump_once(c);
     set_eax(c, 1);
 }
-void message_wait(X86 *c) {
+// MsgWaitForMultipleObjects(n, handles, wait_all, ms, mask) and the Ex form,
+// (n, handles, ms, mask, flags) with MWMO_WAITALL (1) in the flags. A signalled
+// handle answers first, as WAIT_OBJECT_0 + its index; then a queued message,
+// as WAIT_OBJECT_0 + n. Delphi's TThread.WaitFor on the main thread loops on
+// this call until the thread's handle is signalled, so a wait that never looked
+// at the handles never returned: stopping a thread at exit hung the program.
+void message_wait(X86 *c, bool ex) {
+    const uint32_t n = arg(c, 0), handles = arg(c, 1);
+    const bool wait_all = ex ? (arg(c, 4) & 1) != 0 : arg(c, 2) != 0;
+    std::vector<uint32_t> list;
+    if (n && handles && n <= 64 && gm_valid(handles, n * 4)) {
+        list.resize(n);
+        for (uint32_t i = 0; i < n; ++i)
+            list[i] = rd32(handles + i * 4);
+    }
+    auto signalled = [&](uint32_t *result) {
+        if (list.empty())
+            return false;
+        const uint32_t r = guest_wait_objects(list.data(), n, wait_all, 0);
+        if (r == 0x102)
+            return false;
+        *result = r; // an object, an abandoned mutex, or WAIT_FAILED
+        return true;
+    };
+    uint32_t result = 0;
     pump_window_timers();
-    if (!queue().empty()) {
-        set_eax(c, arg(c, 0));
+    if (signalled(&result)) {
+        set_eax(c, result);
         return;
     }
+    if (!queue().empty()) {
+        set_eax(c, n);
+        return;
+    }
+    // Let everything else run - the thread being waited for among it - and
+    // look again.
     pump_once(c);
+    if (signalled(&result)) {
+        set_eax(c, result);
+        return;
+    }
     set_eax(c, 0x102);
+}
+void message_wait_plain(X86 *c) {
+    message_wait(c, false);
+}
+void message_wait_ex(X86 *c) {
+    message_wait(c, true);
 }
 void last_popup(X86 *c) {
     uint32_t hwnd = arg(c, 0), found = hwnd;
@@ -1354,8 +1396,8 @@ const ImportShim shims[] = {
     U("GetKeyboardState", 1, keyboard_state),
     U("GetKeyboardLayoutList", 2, layout_list),
     U("ActivateKeyboardLayout", 2, activate_layout),
-    U("MsgWaitForMultipleObjects", 5, message_wait),
-    U("MsgWaitForMultipleObjectsEx", 5, message_wait),
+    U("MsgWaitForMultipleObjects", 5, message_wait_plain),
+    U("MsgWaitForMultipleObjectsEx", 5, message_wait_ex),
     U("WaitMessage", 0, wait_message),
     U("GetSysColor", 1, sys_color),
     U("ShowOwnedPopups", 2, show_owned),

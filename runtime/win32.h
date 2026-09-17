@@ -367,6 +367,11 @@ bool host_messages_pending();
 // Blocks the calling guest thread for `ms` and lets the other guest threads
 // run. GetMessageA uses it so waiting for a message is a real wait.
 void guest_sleep_ms(uint32_t ms);
+// WaitForMultipleObjects for the calling guest thread: WAIT_OBJECT_0 + i,
+// WAIT_ABANDONED_0 + i, WAIT_TIMEOUT (0x102) or WAIT_FAILED. A zero timeout
+// answers from the current state, taking what it reports as Windows does.
+uint32_t guest_wait_objects(const uint32_t *handles, uint32_t count, bool wait_all,
+                            uint32_t timeout_ms);
 // Hands the baton to whatever else can run and takes it back; false means
 // nothing else could have run. A host that blocks inside a callback the guest
 // made - a message waiter, most obviously - must yield rather than spin or
