@@ -14,8 +14,6 @@ function(pop_ios_bundle target)
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "2"
     XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET 17.0
     XCODE_ATTRIBUTE_ENABLE_BITCODE NO
-    "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations~iphone"
-      "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     "XCODE_ATTRIBUTE_INFOPLIST_KEY_UISupportedInterfaceOrientations~ipad"
       "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight")
   if(RECOMP_VIDEO)

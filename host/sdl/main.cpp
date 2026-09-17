@@ -1012,7 +1012,11 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
         // The green button or the View menu: the player chose fullscreen, so
         // it becomes the setting instead of being undone on the next frame.
-        if (!g_fullscreen_transition) {
+        // A touch platform's window is always fullscreen and has no
+        // "windowed" mode to save - platform_ui_pointer_capture_supported()
+        // is false there - so a rotation raising this same event (no player
+        // choice behind it) never rewrites the saved window-mode setting.
+        if (!g_fullscreen_transition && platform_ui_pointer_capture_supported()) {
             g_wanted_window_mode = 2;
             (void)mods_display_set(DISPLAY_WINDOW, 2);
         }
@@ -1023,7 +1027,8 @@ void handle_event(const SDL_Event &event) {
         update_platform_pointer_capture();
         break;
     case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-        if (!g_fullscreen_transition && g_wanted_window_mode == 2) {
+        if (!g_fullscreen_transition && g_wanted_window_mode == 2 &&
+            platform_ui_pointer_capture_supported()) {
             g_wanted_window_mode = 0;
             (void)mods_display_set(DISPLAY_WINDOW, 0);
         }
