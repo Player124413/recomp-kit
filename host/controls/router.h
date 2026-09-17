@@ -45,16 +45,13 @@ struct ControlState {
 // given to any other input path (the touch gesture mapper, in particular).
 class Router {
   public:
-    // Not owned; forgets every finger the router currently holds (there is
-    // no sink here to notify, so this is a silent reset — the caller is
-    // expected to have already backgrounded input, e.g. via cancel_all,
-    // before swapping layouts under a live game).
-    void set_layout(Layout *layout);
+    // Not owned. Releases everything the router currently holds against the
+    // old layout — exactly as cancel_all(sink) would — before swapping in
+    // the new one and rebuilding its per-control state.
+    void set_layout(Layout *layout, ControlsSink &sink);
     void set_screen(const Screen &s);
     // false: hit_test never claims a new finger, and every finger currently
-    // held is released exactly as cancel_all() would release it (this is
-    // the one place the class-comment interface omits a sink parameter but
-    // still needs one, to emit the releases it promises — see router.cpp).
+    // held is released exactly as cancel_all() would release it.
     void set_enabled(bool on, ControlsSink &sink);
     bool enabled() const;
     // True when the finger belongs to the controls (the caller must not give it to TouchMapper).
@@ -83,7 +80,11 @@ class Router {
     // is a plain sink.key(scancode, true).
     void key_down(const Control &c, uint64_t now_ns, ControlsSink &sink);
     // Up on a Key control: modifiers release through modifiers_; anything
-    // else is sink.key(scancode, false) followed by key_lifted().
+    // else is sink.key(scancode, false) followed by key_lifted(). Legacy
+    // quirk, ported as-is from host/sdl/main.cpp's g_keypad_fingers map: a
+    // key's release is not reference-counted across the fingers that land
+    // on it, so if two fingers land on the same key, either one lifting
+    // releases it, and the other's later lift releases it again.
     void key_up(const Control &c, uint64_t now_ns, ControlsSink &sink);
     // Cancel on a Key control: modifiers cancel through modifiers_ (no
     // latch survives); anything else is sink.key(scancode, false) alone.

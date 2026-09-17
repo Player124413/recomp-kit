@@ -16,8 +16,8 @@ int group_named(const Layout &l, const std::string &id) {
 }
 } // namespace
 
-void Router::set_layout(Layout *layout) {
-    fingers_.clear();
+void Router::set_layout(Layout *layout, ControlsSink &sink) {
+    cancel_all(sink); // releases everything held against the old layout
     layout_ = layout;
     states_.clear();
     if (layout_) {
