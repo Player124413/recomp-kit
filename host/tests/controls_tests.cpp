@@ -2104,6 +2104,60 @@ static void test_hidden_bits_are_clamped_to_the_group_count() {
     CHECK(hidden_bits_for(port, 0x4) == 0x0); // nothing past the last group
 }
 
+// Every group a toggle can hide in one form of a built-in name.
+static uint32_t toggle_reachable_bits(const Layout &l) {
+    uint32_t bits = 0;
+    for (size_t i = 0; i < l.groups.size() && i < kHiddenBits; ++i)
+        for (const Group &g : l.groups)
+            for (const Control &c : g.controls)
+                if (c.kind == Kind::Toggle && c.target == l.groups[i].id)
+                    bits |= 1u << i;
+    return bits;
+}
+
+// Rotating carries the hidden-group bits, which belong to the layout name,
+// into a layout whose groups may be different ones. Whatever a player can
+// hide in one form must, in every other form of that name, either survive as
+// a group with its own tab or be dropped by hidden_bits_for: a bit that hides
+// a group no toggle targets would strand the player there.
+static void test_a_hidden_group_survives_a_rotation() {
+    for (const char *name : {"pad", "keys", "pad+keys"}) {
+        for (const Form from : {Form::Tablet, Form::PhoneLandscape, Form::PhonePortrait}) {
+            Layout a;
+            std::string err;
+            CHECK(parse_layout(builtin_layout(name, from), &a, &err));
+            const uint32_t reachable = toggle_reachable_bits(a);
+            for (const Form to : {Form::Tablet, Form::PhoneLandscape, Form::PhonePortrait}) {
+                if (to == from)
+                    continue;
+                Layout b;
+                CHECK(parse_layout(builtin_layout(name, to), &b, &err));
+                const uint32_t recoverable = toggle_reachable_bits(b);
+                for (size_t i = 0; i < kHiddenBits; ++i) {
+                    const uint32_t bit = 1u << i;
+                    if (!(reachable & bit))
+                        continue;
+                    const bool kept = (hidden_bits_for(b, bit) & bit) != 0;
+                    if (kept && !(recoverable & bit))
+                        fprintf(stderr,
+                                "  %s: group %zu hidden in %s stays hidden in %s with no tab\n",
+                                name, i, form_name(from), form_name(to));
+                    CHECK(!kept || (recoverable & bit) != 0);
+                }
+            }
+        }
+    }
+    // The case the rule exists for, both ways round: pad+keys' key group is
+    // group 0 in every form, and every form can put it back.
+    Layout land, port;
+    std::string err;
+    CHECK(parse_layout(builtin_layout("pad+keys", Form::PhoneLandscape), &land, &err));
+    CHECK(parse_layout(builtin_layout("pad+keys", Form::PhonePortrait), &port, &err));
+    CHECK((toggle_reachable_bits(land) & 1u) != 0);
+    CHECK((toggle_reachable_bits(port) & 1u) != 0);
+    CHECK(hidden_bits_for(land, 0x1) == 0x1 && hidden_bits_for(port, 0x1) == 0x1);
+}
+
 // A held stick's knob is its own quad, so moving it keeps the revision; a
 // button press, the dpad's hat and a floating base's move are drawn, so
 // they change it. radius_px follows the layout and screen scale.
@@ -2402,6 +2456,7 @@ int main(int argc, char **argv) {
     test_builtin_layouts_fit_and_do_not_overlap();
     test_phone_builtin_layouts_fit_and_do_not_overlap();
     test_hidden_bits_are_clamped_to_the_group_count();
+    test_a_hidden_group_survives_a_rotation();
     test_make_view_pad_revision();
     test_layer_revisions_are_per_group();
     test_small_key_label_fits();

@@ -48,15 +48,19 @@ inline uint32_t clamp_hidden_bits(uint32_t bits, size_t groups) {
 }
 
 // Which of the stored bits apply to `l`: those past its last group are
-// dropped, and so is any bit on a group holding a toggle. A name's forms can
-// disagree about what group i is -- portrait "keys" is one board where
-// landscape is two halves -- and a bit that landed on the tab row would hide
-// the only way back to another layout.
+// dropped, and so is any bit on a group holding a cycle toggle (target
+// "next"). A name's forms can disagree about what group i is -- portrait
+// "keys" is one board where landscape is two halves -- and a bit that landed
+// on the group holding the cycle tab would leave no on-screen way to any
+// other layout, which is the one state a player cannot get out of. A group
+// with no cycle toggle can still be hidden whole by an inherited bit; the F10
+// page is then the way back, so nothing (the editor included) may treat this
+// as a promise that every group stays reachable on screen.
 inline uint32_t hidden_bits_for(const Layout &l, uint32_t stored) {
     uint32_t bits = clamp_hidden_bits(stored, l.groups.size());
     for (size_t i = 0; i < l.groups.size() && i < kHiddenBits; ++i)
         for (const Control &c : l.groups[i].controls)
-            if (c.kind == Kind::Toggle) {
+            if (c.kind == Kind::Toggle && c.target == "next") {
                 bits &= ~(1u << i);
                 break;
             }

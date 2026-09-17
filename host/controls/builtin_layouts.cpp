@@ -335,7 +335,11 @@ const char *kKeysPhoneLandscape = R"JSON({
 })JSON";
 
 // Landscape pad+keys is the pad without its dpad and system buttons, plus a
-// single strip of the keys a game most often binds to a menu or a save.
+// single strip of the keys a game most often binds to a menu or a save. The
+// strip's HIDE tab sits beside it in the top-left corner rather than stacked
+// on it, which for a top-anchored group would land above the screen; the
+// strip must have a tab of its own because the hidden-group bits are shared
+// with the portrait layout, where that same group can be hidden.
 const char *kPadKeysPhoneLandscape = R"JSON({
   "version": 1,
   "name": "pad+keys",
@@ -362,6 +366,8 @@ const char *kPadKeysPhoneLandscape = R"JSON({
     {
       "id": "tabs",
       "controls": [
+        {"kind": "toggle", "target": "left", "label": "HIDE", "label_off": "KEYS",
+         "anchor": "top-left", "x": 24, "y": 12, "w": 64, "h": 20},
         {"kind": "toggle", "target": "next", "label": "NEXT", "anchor": "bottom-center",
          "w": 64, "h": 20}
       ]
@@ -437,7 +443,9 @@ const char *kPadPhonePortrait = R"JSON({
 // Portrait is wide enough for one unsplit board: the full 10-column QWERTY
 // with a digit row above it and a modifier row, Enter and Backspace at the
 // right edge and the arrow cluster in the bottom-right corner. 34pt keys,
-// the same as the tablet's small size.
+// the same as the tablet's small size. The board sits at the bottom of the
+// controls area, where the thumbs are and where its two tabs frame it,
+// rather than centred with the PAD tab adrift below it.
 const char *kKeysPhonePortrait = R"JSON({
   "version": 1,
   "name": "keys",
@@ -446,7 +454,8 @@ const char *kKeysPhonePortrait = R"JSON({
     {
       "id": "left",
       "grid": {"cols": 10, "rows": 5, "key": 34, "gap": 3},
-      "anchor": "center",
+      "anchor": "bottom-center",
+      "y": 28,
       "controls": [
         {"kind": "key", "scancode": "1", "col": 0, "row": 0},
         {"kind": "key", "scancode": "2", "col": 1, "row": 0},
