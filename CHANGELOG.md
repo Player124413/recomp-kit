@@ -8,7 +8,8 @@
   tracked now. The smoke host includes `<algorithm>` and `<cstdint>` for the
   compilers that do not bring them in transitively (Linux, Windows), and the
   watchpoint's backtrace is compiled out on Android, whose NDK has
-  `backtrace` only from API 33.
+  `backtrace` only from API 33. The instruction tests skip on Windows, where
+  their POSIX shared-library harness cannot be built.
 
 - The portable suites pass again. The instruction harness defines the
   runtime globals the memory writers read (the watchpoint and the DirectDraw

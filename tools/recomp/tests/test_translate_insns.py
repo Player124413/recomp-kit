@@ -589,6 +589,11 @@ def built():
     clang = shutil.which("clang")
     if clang is None:
         pytest.skip("clang is not on PATH")
+    if platform.system() == "Windows":
+        # The harness is a POSIX shared library read through ctypes: clang's
+        # MSVC target takes no -fPIC and exports nothing without dllexport.
+        # The instruction semantics are checked on the other runners.
+        pytest.skip("the instruction harness builds as a POSIX shared library")
     errors, parts, ok = {}, ['#include "x86.h"', ""], []
     for case in CASES:
         try:
