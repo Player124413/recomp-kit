@@ -29,3 +29,11 @@ inline int host_confined_pointer_pixel(double point, double origin, double exten
         t = 1.0 - t;
     return int(std::lround(t * (pixels - 1)));
 }
+
+// The screen size a game is told about. A phone held upright reports a
+// portrait screen, but games choose a landscape mode from it and the portrait
+// game rectangle needs a landscape image, so the longer side is always the width.
+inline void host_landscape_screen_size(int w, int h, int *out_w, int *out_h) {
+    *out_w = h > w ? h : w;
+    *out_h = h > w ? w : h;
+}

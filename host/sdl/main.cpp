@@ -465,7 +465,9 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy) 
         int bw, bh, dw, dh;
         window_sizes(&bw, &bh, &dw, &dh);
         const double margin = 8 * (bw > 0 ? double(dw) / bw : 1.0);
-        if (host_pointer_at_resize_edge(px, py, dw, dh, margin))
+        // The pointer is in game-rectangle pixels.
+        const HostGameRect game = game_rect_for(dw, dh);
+        if (host_pointer_at_resize_edge(px, py, game.w, game.h, margin))
             apply_pointer_capture(false);
     }
     {
@@ -1681,7 +1683,7 @@ extern "C" int host_display_screen_size(int *w, int *h) {
     const int sw = g_screen_w.load(), sh = g_screen_h.load();
     if (!w || !h || sw <= 0 || sh <= 0)
         return 0;
-    *w = sw;
-    *h = sh;
+    // Never a portrait screen: the game's image goes above the controls.
+    host_landscape_screen_size(sw, sh, w, h);
     return 1;
 }

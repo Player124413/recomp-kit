@@ -8722,6 +8722,20 @@ static void test_portrait_presenter_maps_through_the_game_rect() {
     host_gate_reset();
 }
 
+// A phone held upright still tells the game about a landscape screen.
+static void test_landscape_screen_size() {
+    int w = 0, h = 0;
+    host_landscape_screen_size(390, 844, &w, &h);
+    CHECK_EQ(w, 844);
+    CHECK_EQ(h, 390);
+    host_landscape_screen_size(1920, 1080, &w, &h);
+    CHECK_EQ(w, 1920);
+    CHECK_EQ(h, 1080);
+    host_landscape_screen_size(1000, 1000, &w, &h);
+    CHECK_EQ(w, 1000);
+    CHECK_EQ(h, 1000);
+}
+
 static void test_display_settings_bridge() {
     display_offered_modes.clear();
     CHECK_EQ(host_display_offer_mode(1920, 1080, 16), 1);
@@ -9153,6 +9167,7 @@ int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--game-rect-only")) {
         test_game_rect_landscape_is_todays_placement();
         test_game_rect_portrait();
+        test_landscape_screen_size();
         test_portrait_presenter_maps_through_the_game_rect();
         printf("game rect: %d checks, %d failures\n", g_checks, g_failures);
         return g_failures ? 1 : 0;
@@ -9225,6 +9240,7 @@ int main(int argc, char **argv) {
         {"display settings bridge", test_display_settings_bridge},
         {"game rect: landscape is today's placement", test_game_rect_landscape_is_todays_placement},
         {"game rect: portrait", test_game_rect_portrait},
+        {"landscape screen size on a phone", test_landscape_screen_size},
         {"game rect: portrait presenter and gate",
          test_portrait_presenter_maps_through_the_game_rect},
         {"presentation service", test_presentation_service},

@@ -150,7 +150,20 @@ struct Service : std::enable_shared_from_this<Service> {
             *placed = r.x != 0 || r.y != 0 || r.w != dw || r.h != dh;
         if (gate_rect_w > 0 && (r.w != gate_rect_w || r.h != gate_rect_h))
             publish_gate_size(r);
+        published_rect.store(pack_rect(r), std::memory_order_relaxed);
         return r;
+    }
+    // The last rectangle game_rect() computed, packed into one word so the
+    // window host reads it without the mutex (guest threads hold that across
+    // GPU allocation) and can never see half of an update.
+    std::atomic<uint64_t> published_rect{0};
+    static uint64_t pack_rect(const HostGameRect &r) {
+        const auto field = [](int v) { return uint64_t(std::clamp(v, 0, 0xffff)); };
+        return field(r.x) << 48 | field(r.y) << 32 | field(r.w) << 16 | field(r.h);
+    }
+    static HostGameRect unpack_rect(uint64_t v) {
+        return {int(v >> 48 & 0xffff), int(v >> 32 & 0xffff), int(v >> 16 & 0xffff),
+                int(v & 0xffff)};
     }
     void publish_gate_size(const HostGameRect &r) { // mutex held
         gate_rect_w = r.w;
@@ -794,15 +807,16 @@ struct Service : std::enable_shared_from_this<Service> {
                            rect.x + rect.w <= drawable_desc.width &&
                            rect.y + rect.h <= drawable_desc.height &&
                            out->format == drawable_desc.format) {
-                    // Portrait: the game sits at its rectangle. Clear the rest
-                    // (the strip above it; the controls fill the area below).
+                    // Portrait: the game sits at its rectangle. The rest takes
+                    // the controls area's colour, drawn or not.
                     gpu::RenderPass clear;
                     clear.color_count = 1;
                     clear.color[0].texture = drawable;
                     clear.color[0].load = gpu::Load::Clear;
                     clear.color[0].store = gpu::Store::Store;
-                    clear.color[0].clear[0] = clear.color[0].clear[1] = 0;
-                    clear.color[0].clear[2] = 0;
+                    clear.color[0].clear[0] = 12 / 255.0f;
+                    clear.color[0].clear[1] = 14 / 255.0f;
+                    clear.color[0].clear[2] = 18 / 255.0f;
                     clear.color[0].clear[3] = 1;
                     device->begin_render_pass(cb, clear);
                     device->end_render_pass(cb);
@@ -1042,12 +1056,13 @@ void host_present_resize(int w, int h) {
     auto s = active.load();
     if (!s || w <= 0 || h <= 0)
         return;
-    s->drawable_w = w;
-    s->drawable_h = h;
     {
+        // Both sizes change together under the mutex, so game_rect() never
+        // sees (and publishes) a new width with an old height.
         std::lock_guard lock(s->mutex);
-        s->publish_gate_size(
-            host_present_game_rect(w, h, s->guest_w, s->guest_h, host_present_safe_top()));
+        s->drawable_w = w;
+        s->drawable_h = h;
+        s->publish_gate_size(s->game_rect());
     }
     auto m = std::make_shared<Message>();
     m->w = w;
@@ -1064,12 +1079,13 @@ void host_present_install_surface(void *native_surface, int w, int h) {
     auto s = active.load();
     if (!s)
         return;
-    s->drawable_w = w;
-    s->drawable_h = h;
     {
+        // Both sizes change together under the mutex, so game_rect() never
+        // sees (and publishes) a new width with an old height.
         std::lock_guard lock(s->mutex);
-        s->publish_gate_size(
-            host_present_game_rect(w, h, s->guest_w, s->guest_h, host_present_safe_top()));
+        s->drawable_w = w;
+        s->drawable_h = h;
+        s->publish_gate_size(s->game_rect());
     }
     auto m = std::make_shared<Message>();
     m->surface = native_surface;
@@ -1708,8 +1724,7 @@ extern "C" HostGameRect host_present_current_game_rect() {
     auto s = active.load();
     if (!s)
         return {0, 0, 0, 0};
-    std::lock_guard lock(s->mutex);
-    return s->game_rect();
+    return Service::unpack_rect(s->published_rect.load(std::memory_order_relaxed));
 }
 
 void host_present_set_controls(const controls::ControlsView &view) {
