@@ -4511,7 +4511,6 @@ void wait_multiple_objects(X86 *c) {
     set_eax(c, sched_wait_objects(handles_, n, wait_all != 0, timeout));
 }
 
-
 // ---------------------------------------------------------------------------
 // Process, priority and waitable-timer imports.
 // ---------------------------------------------------------------------------
@@ -4590,8 +4589,8 @@ void k_GlobalMemoryStatusEx(X86 *c) {
         wr32(p + off, (uint32_t)v);
         wr32(p + off + 4, (uint32_t)(v >> 32));
     };
-    wr32(p + 0, 64); // dwLength
-    wr32(p + 4, 25); // dwMemoryLoad, percent
+    wr32(p + 0, 64);         // dwLength
+    wr32(p + 4, 25);         // dwMemoryLoad, percent
     put64(8, 512ull * mb);   // ullTotalPhys
     put64(16, 384ull * mb);  // ullAvailPhys
     put64(24, 1024ull * mb); // ullTotalPageFile
@@ -4638,8 +4637,8 @@ void k_SetWaitableTimer(X86 *c) {
         return;
     }
     int64_t when = (int64_t)((uint64_t)rd32(due) | ((uint64_t)rd32(due + 4) << 32));
-    double from_now = when < 0 ? (double)(-when) * 1e-7
-                               : ((double)when - (double)system_filetime()) * 1e-7;
+    double from_now =
+        when < 0 ? (double)(-when) * 1e-7 : ((double)when - (double)system_filetime()) * 1e-7;
     if (from_now < 0.0)
         from_now = 0.0;
     o->signalled = false;
