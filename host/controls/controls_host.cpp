@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <stdio.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace controls {
@@ -58,16 +59,16 @@ Binding g_binding;
 // Reads a whole file as text; false (leaving *out alone) when it cannot be
 // opened, same contract as layout_store.cpp's own copy.
 bool read_text_file(const std::string &path, std::string *out) {
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f)
+    const int fd = os_fd_open(path.c_str(), OS_O_RDONLY);
+    if (fd < 0)
         return false;
     out->clear();
     char buf[4096];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
-        out->append(buf, n);
-    fclose(f);
-    return true;
+    int64_t n;
+    while ((n = os_fd_read(fd, buf, sizeof buf)) > 0)
+        out->append(buf, size_t(n));
+    os_fd_close(fd);
+    return n >= 0;
 }
 
 // RECOMP_CONTROLS_MAPPED, then <profile>/controls/binding.txt if present. A
@@ -285,13 +286,13 @@ class HostEditorHost : public EditorHost {
         std::error_code ec;
         std::filesystem::create_directories(std::string(mods_overlay_profile_dir()) + "/controls",
                                             ec);
-        FILE *f = fopen(path.c_str(), "wb");
-        if (!f) {
+        const int fd = os_fd_open(path.c_str(), OS_O_WRONLY | OS_O_CREAT | OS_O_TRUNC);
+        if (fd < 0) {
             fprintf(stderr, "[controls] could not write %s\n", path.c_str());
             return;
         }
-        fwrite(text.data(), 1, text.size(), f);
-        fclose(f);
+        os_fd_write(fd, text.data(), text.size());
+        os_fd_close(fd);
     }
     void apply_mapped(const MappedTable &table) override {
         g_binding.set_table(table);

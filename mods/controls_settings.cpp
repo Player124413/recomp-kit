@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdio>
 #include <mutex>
+#include <utility>
 
 namespace {
 // The layout names come from the host (mods_controls_set_names), which must

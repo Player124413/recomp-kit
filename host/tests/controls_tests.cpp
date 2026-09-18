@@ -20,12 +20,15 @@
 
 #include <SDL3/SDL_gamepad.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 static int g_failures = 0;
@@ -282,11 +285,11 @@ static void test_builtin_keys_matches_the_old_keypad() {
 static void write_file(const std::filesystem::path &path, const std::string &text) {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
-    FILE *f = fopen(path.string().c_str(), "wb");
-    CHECK(f != nullptr);
-    if (f) {
-        fwrite(text.data(), 1, text.size(), f);
-        fclose(f);
+    const int fd = os_fd_open(path.string().c_str(), OS_O_WRONLY | OS_O_CREAT | OS_O_TRUNC);
+    CHECK(fd >= 0);
+    if (fd >= 0) {
+        CHECK(os_fd_write(fd, text.data(), text.size()) == int64_t(text.size()));
+        os_fd_close(fd);
     }
 }
 

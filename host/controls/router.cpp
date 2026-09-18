@@ -4,6 +4,7 @@
 #include "../keypad_layout.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace controls {
 

@@ -17,18 +17,20 @@ namespace {
 // load(), in this order.
 const char *const kBuiltinNames[] = {"pad", "keys", "pad+keys"};
 
-// Reads a whole file as text; empty (not an error) when it cannot be opened.
+// Reads a whole file as text; false (leaving *out alone) when it cannot be
+// opened. The descriptor comes from the platform layer rather than fopen,
+// which the Windows CRT deprecates and this target builds with -Werror.
 bool read_file(const std::string &path, std::string *out) {
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f)
+    const int fd = os_fd_open(path.c_str(), OS_O_RDONLY);
+    if (fd < 0)
         return false;
     out->clear();
     char buf[8192];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
-        out->append(buf, n);
-    fclose(f);
-    return true;
+    int64_t n;
+    while ((n = os_fd_read(fd, buf, sizeof buf)) > 0)
+        out->append(buf, size_t(n));
+    os_fd_close(fd);
+    return n >= 0;
 }
 
 // "<name>.<form_name(form)>.json" or (form-agnostic) "<name>.json".

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdlib>
 #include <utility>
 
 namespace controls {
@@ -623,7 +625,7 @@ void Editor::finger_up(int64_t id) {
         ++i;
     if (i == fingers_.size())
         return;
-    fingers_.erase(fingers_.begin() + long(i));
+    fingers_.erase(fingers_.begin() + std::ptrdiff_t(i));
     if (pinching_) {
         // The remaining finger no longer drags until it lifts too.
         pinching_ = false;
@@ -658,7 +660,7 @@ void Editor::finger_cancel(int64_t id) {
         ++i;
     if (i == fingers_.size())
         return;
-    fingers_.erase(fingers_.begin() + long(i));
+    fingers_.erase(fingers_.begin() + std::ptrdiff_t(i));
     // A drag the system took away is undone, not committed: the control goes
     // back to where the finger picked it up, under the anchor it had (the
     // re-anchor only ever happens on a real lift). A pinch just ends, the
