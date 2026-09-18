@@ -133,6 +133,12 @@ std::vector<std::string> g_dumps;
 // The last presented surface, kept so a dump can be written on demand rather
 // than only when a frame arrives.
 std::vector<uint8_t> g_last_rgb;
+// Bumped wherever g_last_rgb is refilled. A Direct3D 9 device on the GPU
+// presents no CPU pixels, so that buffer is only refreshed when a dump reads
+// one back: without this the frame hash below re-reads the same picture every
+// present and reports that nothing ever changed.
+uint64_t g_last_rgb_version = 0, g_hashed_version = 0;
+uint32_t g_present_samples = 0;
 int g_last_w = 0, g_last_h = 0;
 
 D3DRenderer *g_renderer = nullptr;
@@ -193,6 +199,7 @@ void write_dump(const char *name) {
         std::vector<uint8_t> rgb((size_t)gw * gh * 3);
         if (host_d9_read_presented(rgb.data(), (uint32_t)rgb.size(), &gw, &gh)) {
             g_last_rgb.swap(rgb);
+            ++g_last_rgb_version;
             g_last_w = (int)gw;
             g_last_h = (int)gh;
         }
@@ -1916,8 +1923,8 @@ void report(FILE *out, bool abnormal) {
             g_next_step < g_step_count ? g_next_step : g_step_count, g_step_count);
     if (g_mode_w)
         fprintf(out, "display mode:       %dx%d %dbpp\n", g_mode_w, g_mode_h, g_mode_bpp);
-    fprintf(out, "presented frames:   %u (%u of them different from the one before)\n", g_presents,
-            g_present_changes);
+    fprintf(out, "presented frames:   %u (%u of the %u sampled differed from the one before)\n",
+            g_presents, g_present_changes, g_present_samples);
     if (g_renderer) {
         auto hd = g_renderer->hdTextureStats();
         fprintf(out,
@@ -2090,6 +2097,7 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
     }
     host_present_stage_rgba(rgba.data(), w, h);
     g_last_rgb.resize((size_t)w * (size_t)h * 3);
+    ++g_last_rgb_version;
     for (size_t i = 0, n = (size_t)w * (size_t)h; i < n; ++i) {
         g_last_rgb[i * 3 + 0] = rgba[i * 4 + 0];
         g_last_rgb[i * 3 + 1] = rgba[i * 4 + 1];
@@ -2169,14 +2177,18 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
 
     // A cheap hash over a sample of the frame: enough to tell one picture from
     // the next without walking every pixel of every frame.
-    uint64_t hash = 1469598103934665603ull;
-    for (size_t i = 0; i < g_last_rgb.size(); i += 997) {
-        hash ^= g_last_rgb[i];
-        hash *= 1099511628211ull;
-    }
-    if (hash != g_last_frame_hash) {
-        ++g_present_changes;
-        g_last_frame_hash = hash;
+    if (g_last_rgb_version != g_hashed_version) {
+        g_hashed_version = g_last_rgb_version;
+        ++g_present_samples;
+        uint64_t hash = 1469598103934665603ull;
+        for (size_t i = 0; i < g_last_rgb.size(); i += 997) {
+            hash ^= g_last_rgb[i];
+            hash *= 1099511628211ull;
+        }
+        if (hash != g_last_frame_hash) {
+            ++g_present_changes;
+            g_last_frame_hash = hash;
+        }
     }
 }
 
