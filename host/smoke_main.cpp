@@ -167,11 +167,18 @@ double nonblack_ratio(const uint8_t *rgb, int w, int h) {
     return n ? (double)lit / (double)n : 0.0;
 }
 
+// The script's pointer steps are in display-mode space, which they assume does
+// not move under them. Compare the mode with the mode: g_last_w/h is the size
+// of the last frame the device presented, and a Direct3D 9 device renders at
+// the window's own scale, so the two differ by design wherever a game draws
+// larger than the mode it reports.
 void pointer_space(uint32_t *w, uint32_t *h) {
     uint32_t bpp = 0;
     win32_display_mode(w, h, &bpp);
-    if (g_last_w && g_last_h)
-        assert(*w == uint32_t(g_last_w) && *h == uint32_t(g_last_h));
+    static uint32_t mode_w = 0, mode_h = 0;
+    assert((!mode_w && !mode_h) || (*w == mode_w && *h == mode_h));
+    mode_w = *w;
+    mode_h = *h;
 }
 
 void write_dump(const char *name) {
