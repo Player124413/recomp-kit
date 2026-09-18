@@ -4,18 +4,24 @@
 #pragma once
 
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace controls {
 
 struct Json {
+    // One object member, defined right after Json. It cannot be a
+    // std::pair<std::string, Json>: a pair is a class template that has to be
+    // instantiated where it is named, and Json is still incomplete there, so
+    // libstdc++ rejects it (libc++ happens not to). A vector of an incomplete
+    // element type is allowed, which is what `a` and `o` below rely on.
+    struct Member;
+
     enum Type { Null, Bool, Number, String, Array, Object } type = Null;
     bool b = false;
     double n = 0;
     std::string s;
     std::vector<Json> a;
-    std::vector<std::pair<std::string, Json>> o; // insertion order kept for stable output
+    std::vector<Member> o; // insertion order kept for stable output
 
     // The member's value, or nullptr if this is not an object or the key is absent.
     const Json *get(const char *key) const;
@@ -33,6 +39,12 @@ struct Json {
     static Json boolean_value(bool v);
     static Json array();
     static Json object();
+};
+
+// An object member: the key as it was written, and its value.
+struct Json::Member {
+    std::string key;
+    Json value;
 };
 
 // Parses `text` into `*out`. On success, returns true and leaves `*error`

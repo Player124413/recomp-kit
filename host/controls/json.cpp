@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 namespace controls {
 
@@ -334,7 +335,7 @@ class Parser {
             Json member;
             if (!value(&member))
                 return false;
-            out->o.emplace_back(std::move(key), std::move(member));
+            out->o.push_back(Json::Member{std::move(key), std::move(member)});
             skip_ws();
             if (at_end())
                 return fail("unterminated object");
@@ -439,9 +440,9 @@ void write_value(const Json &v, std::string *out, int indent, int depth) {
         *out += "{\n";
         for (size_t i = 0; i < v.o.size(); ++i) {
             out->append(size_t(depth + 1) * indent, ' ');
-            write_escaped_string(v.o[i].first, out);
+            write_escaped_string(v.o[i].key, out);
             *out += ": ";
-            write_value(v.o[i].second, out, indent, depth + 1);
+            write_value(v.o[i].value, out, indent, depth + 1);
             if (i + 1 < v.o.size())
                 out->push_back(',');
             out->push_back('\n');
@@ -457,9 +458,9 @@ void write_value(const Json &v, std::string *out, int indent, int depth) {
 const Json *Json::get(const char *key) const {
     if (type != Object)
         return nullptr;
-    for (const auto &kv : o)
-        if (kv.first == key)
-            return &kv.second;
+    for (const Member &m : o)
+        if (m.key == key)
+            return &m.value;
     return nullptr;
 }
 
@@ -480,13 +481,13 @@ bool Json::boolean(const char *key, bool fallback) const {
 
 Json &Json::set(const std::string &key, Json v) {
     type = Object;
-    for (auto &kv : o)
-        if (kv.first == key) {
-            kv.second = std::move(v);
-            return kv.second;
+    for (Member &m : o)
+        if (m.key == key) {
+            m.value = std::move(v);
+            return m.value;
         }
-    o.emplace_back(key, std::move(v));
-    return o.back().second;
+    o.push_back(Member{key, std::move(v)});
+    return o.back().value;
 }
 
 Json Json::number(double v) {
