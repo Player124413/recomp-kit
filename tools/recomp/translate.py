@@ -5123,11 +5123,11 @@ def main():
         """Is the pointer at `t` naming data rather than a function?"""
         if image.is_utf16_constant(t) or image.starts_with_utf16_run(t):
             return "a UTF-16 literal"
-        # The straight run from here, judged instruction by instruction.
-        # recover() abandons a block at the first thing it cannot turn into a
-        # listing Insn, so the offending bytes never reach it; asking the
-        # decoder directly is what catches 16-bit addressing and the rest of
-        # what a 32-bit compiler never emits.
+        # What the decoder itself refuses: bytes that do not decode at all,
+        # and the instructions no userland function opens with. This does NOT
+        # catch 16-bit addressing - ADD byte ptr [BX + DI],CH decodes cleanly
+        # and becomes an Insn without complaint, and it is the emitter below
+        # that refuses the operand.
         bad = image.undecodable_run(t)
         if bad:
             return bad
@@ -5152,6 +5152,7 @@ def main():
 
     pointer_only = {"reloc", "immediate"}
     literals = []
+    grown_literals = []
     for t in sorted(extra):
         marks = set(hook_evidence.get(t, ()))
         if not marks or not marks <= pointer_only:
@@ -5163,6 +5164,7 @@ def main():
         if why_data:
             literals.append((t, extra[t].addr, why_data))
             del extra[t]
+    tr.stats["_alternate_literals_dropped"] = len(literals)
     if literals and not args.quiet:
         print("  dropped %d alternate entr%s a pointer named and nothing else: %s"
               % (len(literals), "y" if len(literals) == 1 else "ies",
@@ -5266,6 +5268,18 @@ def main():
             candidate.measure(image)
             if not accepts(candidate):
                 continue
+            # The same question the alternate rule above asks, asked again
+            # here because this is where the answer is acted on: this pass
+            # grows a listed body with the bytes at `target` and then makes
+            # `target` an alternate entry of it. Dropping the entry earlier
+            # achieves nothing if this puts it straight back and brings the
+            # bytes with it - which is what happened to Siege of Avalon, where
+            # a pointer into L"kernel32.dll" was dropped and re-adopted in the
+            # same run.
+            literal = points_at_a_literal(target)
+            if literal:
+                grown_literals.append((target, home.addr, literal))
+                continue
             # A clean decode cannot replace bytes already owned by the listing.
             ends = {ins.addr: home.fallthrough[i] or ins.addr + 1
                     for i, ins in enumerate(home.insns)}
@@ -5309,6 +5323,11 @@ def main():
                 pending.update(set(targets) - known)
         pending.update(required_targets(home))
     tr.stats["_span_recovered_after_pruning"] = len(span_recovered)
+    tr.stats["_span_continuations_into_data"] = len(grown_literals)
+    if grown_literals and not args.quiet:
+        print("  refused %d span continuation%s into data: %s"
+              % (len(grown_literals), "" if len(grown_literals) == 1 else "s",
+                 ", ".join("%08x (in %08x, %s)" % row for row in grown_literals[:12])))
     if pruned:
         gone = set(pruned) - known
         for a in bodies:

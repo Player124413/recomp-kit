@@ -124,6 +124,35 @@ def test_initterm_refuses_a_range_of_text():
     img, fns = _walker_image(struct.unpack("<7I", text[:28]))
     ranges, entries = img.initterm_tables(fns)
     assert ranges == [] and entries == set()
+@pytest.mark.parametrize("what,code,expected", [
+    ("ordinary code", b"\x55\x8b\xec\xc3", None),
+    ("a halt", b"\xf4\xc3", "hlt"),
+    # 16-bit addressing - ADD byte ptr [BX + DI],CH - decodes cleanly and
+    # becomes a listing Insn without complaint; it is the EMITTER that refuses
+    # the operand, so this probe is not what catches it and must not pretend
+    # to. The acceptance check beside it is.
+    ("16-bit addressing", b"\x67\x00\x29\xc3", None),
+    # Past a terminator the bytes belong to whatever comes next.
+    ("a halt behind a RET", b"\xc3\xf4", None),
+])
+def test_undecodable_run_names_only_what_the_decoder_itself_refuses(what, code, expected):
+    """A pointer into .text is only an entry point if the bytes are code."""
+    at = 0x00401000
+    got = synthetic_image({at: code}).undecodable_run(at)
+    if expected is None:
+        assert got is None, "%s should read as ordinary code, got %r" % (what, got)
+    else:
+        assert got and expected in got, "%s should be refused, got %r" % (what, got)
+
+
+def test_a_wide_literal_reads_as_data_not_as_a_function_start():
+    """The shape the rule relies on: Delphi keeps literals in .text."""
+    at = 0x00401000
+    img = synthetic_image({at: "kernel32.dll\0".encode("utf-16-le")})
+    assert img.starts_with_utf16_run(at)
+    # and it is not refused as undecodable, which is why the literal test has
+    # to exist in its own right rather than leaning on the decoder.
+    assert img.undecodable_run(at) is None
 
 
 @pytest.mark.parametrize("code,expected", [
