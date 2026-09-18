@@ -66,7 +66,7 @@ Window *find_window(uint32_t hwnd);
 std::string class_key(uint32_t p, bool wide = false);
 uint32_t wide_units(const std::string &text);
 uint32_t put_text(uint32_t out, uint32_t cap, const std::string &text, bool wide);
-void register_class_named(X86 *c, bool wide);
+void register_class_named(X86 *c, bool wide, uint32_t shift);
 void create_window_named(X86 *c, bool wide);
 void def_window_proc(X86 *c, bool wide);
 void send_message(X86 *c, bool wide);

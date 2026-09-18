@@ -1,6 +1,7 @@
 """tools/build.py argument handling and CMake invocation, without CMake or game files."""
 
 import importlib.util
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,15 @@ class BuildPyTests(unittest.TestCase):
                         args, _ = build_py.parse_args(["--target", target] + extra, system=system)
                         self.assertEqual(args.preset, preset)
                         self.assertEqual(args.regenerate, bool(extra))
+
+    def test_web_target_uses_the_web_presets(self):
+        self.assertEqual(build_py.preset_name("macos", "Release", target="web"), "web")
+        self.assertEqual(build_py.preset_name("linux", "Release", stub=True, target="web"), "web-stub")
+        with patch.dict(os.environ, {"EMSDK": "/emsdk"}):
+            args, _ = build_py.parse_args(["--target", "web"], system="Linux")
+        self.assertEqual(args.target, "web")
+        with patch.dict(os.environ, {"EMSDK": ""}), self.assertRaises(SystemExit):
+            build_py.parse_args(["--target", "web"], system="Darwin")
 
     def test_jobs_must_be_positive(self):
         with self.assertRaises(SystemExit):

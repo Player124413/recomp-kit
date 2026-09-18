@@ -57,6 +57,11 @@ void os_thread_detach(OsThread *t) {
     pthread_detach(t->handle);
     free(t);
 }
+void os_thread_prefer_performance(void) {
+#ifdef __APPLE__
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+}
 void os_thread_exit(void) {
     pthread_exit(nullptr);
 }
@@ -296,7 +301,11 @@ void *os_fdopen(int fd, const char *mode) {
 }
 
 int os_exe_path(char *buf, size_t cap) {
-#ifdef __APPLE__
+#ifdef __EMSCRIPTEN__
+    // The web build's files are packaged under /app: resources in /app/resources.
+    snprintf(buf, cap, "/app/app");
+    return 0;
+#elif defined(__APPLE__)
     uint32_t size = (uint32_t)cap;
     return _NSGetExecutablePath(buf, &size) == 0 ? 0 : -1;
 #else
@@ -342,6 +351,12 @@ int os_gmtime(int64_t seconds, struct tm *out) {
 }
 
 uint64_t os_monotonic_ns(void) {
+#ifdef __APPLE__
+    // CLOCK_MONOTONIC on Darwin works out the boot time on every call
+    // (gettimeofday); the uptime clock is a plain mach_absolute_time read.
+    // Every import call reads this clock, so the difference is large.
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;

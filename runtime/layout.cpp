@@ -11,7 +11,8 @@ namespace {
 std::string g_test_exe;
 HostLayout g_layout;
 bool g_computed = false;
-std::string g_profile_env; // the RECOMP_PROFILE_DIR g_layout was computed with
+std::string g_profile_env;   // the RECOMP_PROFILE_DIR g_layout was computed with
+std::string g_resources_env; // the RECOMP_RESOURCES_DIR g_layout was computed with
 
 bool exists(const std::string &p) {
     OsStat st;
@@ -53,7 +54,18 @@ HostLayout compute() {
         }
         up = parent(up);
     }
-    if (ends_with(dir, "/Contents/MacOS"))
+    if (l.developer)
+        l.build_dir = ends_with(dir, "/recomp") && dir != l.checkout_root + "/build/recomp" &&
+                              exists(dir + "/mods")
+                          ? dir
+                          : l.checkout_root + "/build/recomp";
+    // An app that knows better than the executable path says so: the Android
+    // host has no executable of its own (the process is the system's
+    // app_process), so it points this at its data folder.
+    const char *resources = recomp_env("RESOURCES_DIR");
+    if (resources && *resources)
+        l.resources_dir = resources;
+    else if (ends_with(dir, "/Contents/MacOS"))
         l.resources_dir = parent(dir) + "/Resources";
     else if (exists(dir + "/resources"))
         l.resources_dir = dir + "/resources";
@@ -65,7 +77,7 @@ HostLayout compute() {
     if (env && *env)
         l.profile_dir = env;
     else if (l.developer)
-        l.profile_dir = l.checkout_root + "/build/recomp/profile";
+        l.profile_dir = l.build_dir + "/profile";
     else {
         char buf[4096];
         if (os_user_data_dir(RECOMP_APP_NAME, buf, sizeof buf) == 0)
@@ -78,15 +90,19 @@ HostLayout compute() {
 
 } // namespace
 
-// Computed once, and again if RECOMP_PROFILE_DIR changes afterwards: a
-// constructor (mods/run_record.cpp) asks before an Android host has set the
-// profile under its external files folder.
+// Computed once, and again if RECOMP_PROFILE_DIR or RECOMP_RESOURCES_DIR
+// changes afterwards: a constructor (mods/run_record.cpp) asks before an
+// Android host has set the profile and the resources under its external
+// files folder.
 const HostLayout &host_layout() {
-    const char *env = recomp_env("PROFILE_DIR");
-    const std::string profile_env = env ? env : "";
-    if (!g_computed || profile_env != g_profile_env) {
+    const char *profile = recomp_env("PROFILE_DIR");
+    const char *resources = recomp_env("RESOURCES_DIR");
+    const std::string profile_env = profile ? profile : "";
+    const std::string resources_env = resources ? resources : "";
+    if (!g_computed || profile_env != g_profile_env || resources_env != g_resources_env) {
         g_layout = compute();
         g_profile_env = profile_env;
+        g_resources_env = resources_env;
         g_computed = true;
     }
     return g_layout;
@@ -96,12 +112,16 @@ std::string host_resource(const char *rel) {
     const HostLayout &l = host_layout();
     if (l.resources_dir.empty())
         return "";
+    // The regenerated translation's index, beside the shared gen/.
     if (l.developer && strcmp(rel, "symbols.json") == 0)
-        return l.checkout_root +
-               "/build/recomp/symbols.json"; // the regenerated translation's index
+        return l.checkout_root + "/build/recomp/symbols.json";
+    // The game's on-screen controls layouts: its repository's layouts/ in a
+    // developer run (bundle or not), so an edit there needs no packaging.
+    if (l.developer && strcmp(rel, "controls") == 0)
+        return l.checkout_root + "/layouts";
     if (l.developer && l.resources_dir == l.checkout_root) {
         if (strcmp(rel, "mods/core") == 0)
-            return l.checkout_root + "/build/recomp/mods/core";
+            return l.build_dir + "/mods/core";
         if (strcmp(rel, "texture-pack") == 0)
             return l.checkout_root + "/build/texture-pack";
         if (strcmp(rel, "general-midi.sf2") == 0) {
@@ -124,7 +144,7 @@ std::string host_resource(const char *rel) {
 std::string host_state_file(const char *name) {
     const HostLayout &l = host_layout();
     if (l.developer)
-        return l.checkout_root + "/build/recomp/" + name;
+        return l.build_dir + "/" + name;
     return l.profile_dir + "/" + name;
 }
 

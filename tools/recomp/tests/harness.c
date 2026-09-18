@@ -1,3 +1,4 @@
+#define RECOMP_GUEST_MEMORY_OWNER 1 /* defines and maps g_mem */
 /* Test-only host for the generated code: owns g_mem, stubs the runtime
  * call-outs that runtime/ will provide for real, and exposes
  * run(addr, X86*) plus the memory base so a ctypes driver can drive one
@@ -133,6 +134,11 @@ void recomp_int(X86 *c, uint32_t v) {
 }
 /* Reaching one in a fixture is a test bug, so it aborts exactly as the
  * runtime's does. */
+uint32_t last_breakpoint = 0;
+void recomp_breakpoint(X86 *c, uint32_t addr) {
+    (void)c;
+    last_breakpoint = addr;
+}
 void recomp_unmodelled(X86 *c, uint32_t a) {
     (void)c;
     fprintf(stderr, "unmodelled %08x\n", a);

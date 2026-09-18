@@ -16,8 +16,8 @@ enum DisplayRow {
     DISPLAY_ROW_COUNT
 };
 // game.toml [settings] rows sets one bit per row in RECOMP_SETTINGS_ROWS, in
-// the order above; the keypad's rows share the bit after the display rows.
-constexpr int DISPLAY_KEYPAD_BIT = DISPLAY_ROW_COUNT;
+// the order above; the controls rows share the bit after the display rows.
+constexpr int DISPLAY_CONTROLS_BIT = DISPLAY_ROW_COUNT;
 bool mods_settings_row_listed(int bit);
 #ifdef POPM_TESTING
 // The kit's tests see every row whatever the game lists; one that checks the

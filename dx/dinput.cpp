@@ -1,11 +1,13 @@
 // dinput.cpp - DirectInput: the DirectInput object plus mouse and keyboard
-// devices, fed from host_input_state().
+// devices, fed from host_input_state(), and the joystick device whose
+// behaviour lives in dinput_joystick.cpp.
 //
 // GetDeviceState reports the host's current state. GetDeviceData replays the
 // buffered events the shim derives by diffing successive host states, which is
 // what a real buffered device delivers and what a guest that asks for relative
 // mouse motion needs.
 #include "com.h"
+#include "dinput_joystick.h"
 #include "dx.h"
 
 #include <mutex>
@@ -48,14 +50,6 @@ static const uint8_t GUID_SysMouse_[16] =
 static const uint8_t GUID_SysKeyboard_[16] =
     IID_BYTES(0x6F1D2B61, 0xD5A0, 0x11CF, 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00);
 
-// An ASCII name as UTF-16, NUL-terminated, in a field of `units` characters.
-static void put_wide(uint32_t at, const char *name, uint32_t units) {
-    uint32_t i = 0;
-    for (; name[i] && i + 1 < units; ++i)
-        wr16(at + 2 * i, (uint8_t)name[i]);
-    wr16(at + 2 * i, 0);
-}
-
 namespace {
 
 // DIPROP_* are GUIDs cast from small integers, so the pointer value itself is
@@ -82,6 +76,10 @@ uint32_t scratch(uint32_t n) {
     if (g_scratch)
         memset(gm_ptr(g_scratch), 0, g_scratch_size);
     return g_scratch;
+}
+
+bool is_joystick(const ComObj *d) {
+    return d->dev_type == DIDEVTYPE_JOYSTICK;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +182,10 @@ void refresh_host_input() {
 // state advances, so GetDeviceState and GetDeviceData always agree about what
 // "now" is.
 void poll_device(ComObj *d) {
+    // The joystick reads the pad's own state and edge queue on demand, and
+    // must not take the mouse's accumulated motion.
+    if (is_joystick(d))
+        return;
     refresh_host_input();
 
     if (d->dev_type == DIDEVTYPE_KEYBOARD) {
@@ -258,9 +260,13 @@ void Device_GetCapabilities(X86 *c) {
         return;
     }
     gm_zero(out + 4, size - 4);
+    if (is_joystick(d)) {
+        com_ret(c, joy_get_capabilities(d, out, size));
+        return;
+    }
     wr32(out + DIDC_OFF_dwFlags, DIDC_ATTACHED);
     wr32(out + DIDC_OFF_dwDevType, d->dev_type);
-    if (size >= DIDEVCAPS_SIZE) {
+    if (size >= DIDEVCAPS_DX3_SIZE) {
         wr32(out + DIDC_OFF_dwAxes, d->dev_type == DIDEVTYPE_MOUSE ? 3u : 0u);
         wr32(out + DIDC_OFF_dwButtons, d->dev_type == DIDEVTYPE_MOUSE ? 4u : 256u);
         wr32(out + DIDC_OFF_dwPOVs, 0);
@@ -268,7 +274,17 @@ void Device_GetCapabilities(X86 *c) {
     com_ret(c, DI_OK);
 }
 
-DX_STUB(Device_EnumObjects, DI_OK)
+// EnumObjects(callback, ref, dwFlags). Only the joystick lists its objects;
+// the mouse and keyboard keep the old silent success.
+void Device_EnumObjects(X86 *c) {
+    ComObj *d = this_device(c);
+    if (d && is_joystick(d)) {
+        com_ret(c, joy_enum_objects(c, d, arg(c, 1), arg(c, 2), arg(c, 3)));
+        return;
+    }
+    log_once("dx.Device_EnumObjects", "dx: Device_EnumObjects is not implemented; returning DI_OK");
+    com_ret(c, DI_OK);
+}
 
 void Device_GetProperty(X86 *c) {
     ComObj *d = this_device(c);
@@ -277,6 +293,11 @@ void Device_GetProperty(X86 *c) {
     // 20 bytes must be addressable before dwData is touched.
     if (!d || !ph || !gm_valid(ph, DIPROPDWORD_SIZE)) {
         com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    uint32_t hr = DI_OK;
+    if (is_joystick(d) && joy_get_property(d, prop, ph, &hr)) {
+        com_ret(c, hr);
         return;
     }
     if (prop == DIPROP_BUFFERSIZE) {
@@ -303,6 +324,11 @@ void Device_SetProperty(X86 *c) {
     uint32_t prop = arg(c, 1), ph = arg(c, 2);
     if (!d || !ph || !gm_valid(ph, DIPROPDWORD_SIZE)) {
         com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    uint32_t hr = DI_OK;
+    if (is_joystick(d) && joy_set_property(d, prop, ph, &hr)) {
+        com_ret(c, hr);
         return;
     }
     if (prop == DIPROP_BUFFERSIZE) {
@@ -348,6 +374,8 @@ void Device_Acquire(X86 *c) {
     d->events.clear();
     memset(d->last_keys, 0, sizeof d->last_keys);
     memset(d->last_buttons, 0, sizeof d->last_buttons);
+    if (is_joystick(d))
+        joy_acquired(d);
     com_ret(c, DI_OK);
 }
 
@@ -377,6 +405,10 @@ void Device_GetDeviceState(X86 *c) {
     }
     if (!d->acquired) {
         com_ret(c, DIERR_NOTACQUIRED);
+        return;
+    }
+    if (is_joystick(d)) {
+        com_ret(c, joy_get_device_state(d, size, out));
         return;
     }
 
@@ -451,6 +483,10 @@ void Device_GetDeviceData(X86 *c) {
         com_ret(c, DIERR_NOTACQUIRED);
         return;
     }
+    if (is_joystick(d)) {
+        com_ret(c, joy_get_device_data(d, objsize, out, inout, flags));
+        return;
+    }
 
     poll_device(d);
     uint32_t want = rd32(inout);
@@ -503,6 +539,10 @@ void Device_SetDataFormat(X86 *c) {
         com_ret(c, DIERR_INVALIDPARAM);
         return;
     }
+    if (is_joystick(d)) {
+        com_ret(c, joy_set_data_format(d, df));
+        return;
+    }
     // DIDATAFORMAT: dwSize, dwObjSize, dwFlags, dwDataSize, dwNumObjs, rgodf.
     uint32_t data_size = rd32(df + 12);
     if (!data_size) {
@@ -546,10 +586,16 @@ void Device_SetCooperativeLevel(X86 *c) {
     com_ret(c, DI_OK);
 }
 
+// GetObjectInfo(pdidoi, dwObj, dwHow).
 void Device_GetObjectInfo(X86 *c) {
+    ComObj *d = this_device(c);
     uint32_t out = arg(c, 1);
     if (!out || !gm_valid(out, 4)) {
         com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    if (d && is_joystick(d)) {
+        com_ret(c, joy_get_object_info(d, out, arg(c, 2), arg(c, 3)));
         return;
     }
     log_once("dinput.objectinfo", "dinput: GetObjectInfo is not supported");
@@ -574,6 +620,11 @@ void Device_GetDeviceInfo(X86 *c) {
         return;
     }
     gm_zero(out + 4, size - 4);
+    if (is_joystick(d)) {
+        joy_write_device_instance(out, size, d->di_wide, d->di_version);
+        com_ret(c, DI_OK);
+        return;
+    }
     bool mouse = d->dev_type == DIDEVTYPE_MOUSE;
     const uint8_t *g = mouse ? GUID_SysMouse_ : GUID_SysKeyboard_;
     if (size >= 4 + 16)
@@ -587,7 +638,7 @@ void Device_GetDeviceInfo(X86 *c) {
     if (d->di_wide) {
         for (uint32_t at : {40u, 560u})
             if (size >= at + 520)
-                put_wide(out + at, mouse ? "Mouse" : "Keyboard", 260);
+                di_put_wide(out + at, mouse ? "Mouse" : "Keyboard", 260);
         com_ret(c, DI_OK);
         return;
     }
@@ -620,6 +671,8 @@ void Device_Poll(X86 *c) {
         com_ret(c, DIERR_NOTACQUIRED);
         return;
     }
+    // A joystick has nothing to poll (poll_device skips it) and answers
+    // DI_OK, not DI_NOEFFECT, so a game that checks for DI_OK keeps reading.
     poll_device(d);
     com_ret(c, DI_OK);
 }
@@ -660,7 +713,7 @@ const ComMethod g_didevice[] = {
 // ===========================================================================
 // IDirectInputA
 // ===========================================================================
-void DI_CreateDevice(X86 *c) {
+static void create_device(X86 *c, ComIface iface) {
     ComObj *di = this_dinput(c);
     uint32_t guid = arg(c, 1);
     uint32_t out = arg(c, 2);
@@ -684,9 +737,12 @@ void DI_CreateDevice(X86 *c) {
         type = DIDEVTYPE_MOUSE;
     else if (memcmp(gm_ptr(guid), GUID_SysKeyboard_, 16) == 0)
         type = DIDEVTYPE_KEYBOARD;
+    else if (joy_served() && joy_guid(gm_ptr(guid)))
+        type = DIDEVTYPE_JOYSTICK;
     else {
-        // A joystick or any other instance GUID. There is no such device here,
-        // and the documented answer lets the game fall back cleanly.
+        // A joystick the game did not ask the pad to serve, or any other
+        // instance GUID. There is no such device here, and the documented
+        // answer lets the game fall back cleanly.
         log_once("dinput.createdevice", "dinput: CreateDevice for a device that is not the system "
                                         "mouse or keyboard: DIERR_DEVICENOTREG");
         com_ret(c, DIERR_DEVICENOTREG);
@@ -697,20 +753,33 @@ void DI_CreateDevice(X86 *c) {
     d->dev_type = type;
     d->di_wide = di->di_wide;
     d->di_version = di->di_version;
-    uint32_t view = com_view(d, IF_DINPUTDEVICE);
+    uint32_t view = com_view(d, iface);
     if (!view) {
         com_release(d);
         com_ret(c, E_OUTOFMEMORY);
         return;
     }
     com_out_ptr(out, view);
-    LOGV("dinput: created the %s device", type == DIDEVTYPE_MOUSE ? "mouse" : "keyboard");
+    LOGV("dinput: created the %s device", type == DIDEVTYPE_MOUSE      ? "mouse"
+                                          : type == DIDEVTYPE_KEYBOARD ? "keyboard"
+                                                                       : "joystick");
     com_ret(c, DI_OK);
 }
+void DI_CreateDevice(X86 *c) {
+    create_device(c, IF_DINPUTDEVICE);
+}
 
-void DI_EnumDevices(X86 *c) {
+// EnumDevices(dwDevType, callback, ref, dwFlags). The mouse and keyboard
+// always; the virtual pad when it is served, the filter admits a gamepad and
+// the caller did not ask for force feedback. DIEDFL_ATTACHEDONLY needs no
+// test: every device here is attached.
+//
+// `v8` says which interface asked: DirectInput 8 names the device types by
+// their DI8DEVTYPE_ codes and filters by DI8DEVCLASS_, so the records the
+// callback sees differ even though the devices do not.
+static void enum_devices(X86 *c, bool v8) {
     uint32_t devtype = arg(c, 1);
-    uint32_t cb = arg(c, 2), ref = arg(c, 3);
+    uint32_t cb = arg(c, 2), ref = arg(c, 3), flags = arg(c, 4);
     if (!cb) {
         com_ret(c, DIERR_INVALIDPARAM);
         return;
@@ -729,6 +798,7 @@ void DI_EnumDevices(X86 *c) {
         {DIDEVTYPE_MOUSE, GUID_SysMouse_, "Mouse"},
         {DIDEVTYPE_KEYBOARD, GUID_SysKeyboard_, "Keyboard"},
     };
+    bool stopped = false;
     for (const Dev &d : devs) {
         // DIEDFL_ALLDEVICES is 0, and a non-zero devtype filters by type.
         if (devtype && devtype != d.type)
@@ -740,18 +810,42 @@ void DI_EnumDevices(X86 *c) {
         wr32(a, INST_SIZE);
         memcpy(gm_ptr(a + 4), d.guid, 16);
         memcpy(gm_ptr(a + 20), d.guid, 16);
-        wr32(a + 36, d.type);
+        // DirectInput 8 codes: DI8DEVTYPE_MOUSE 0x12, DI8DEVTYPE_KEYBOARD 0x13,
+        // each with subtype 1. The class filter values happen to be the
+        // same numbers as the version 5 types compared above.
+        wr32(a + 36, v8 ? (d.type == DIDEVTYPE_MOUSE ? 0x0112u : 0x0113u) : d.type);
         if (wide) {
-            put_wide(a + 40, d.name, 260);
-            put_wide(a + 560, d.name, 260);
+            di_put_wide(a + 40, d.name, 260);
+            di_put_wide(a + 560, d.name, 260);
         } else {
             gm_put_str(a + 40, d.name, 260);
             gm_put_str(a + 300, d.name, 260);
         }
-        if (guest_call(c, cb, a, ref) != DDENUMRET_OK)
+        if (guest_call(c, cb, a, ref) != DDENUMRET_OK) {
+            stopped = true;
             break;
+        }
+    }
+    // The interface decides which set of type codes the pad is described and
+    // filtered by, not only the number the object was created with: a version
+    // 8 interface is a version 8 interface whatever DirectInput8Create was
+    // handed.
+    uint32_t version = di_ ? di_->di_version : 0;
+    if (v8 && version < DIRECTINPUT_VERSION_8)
+        version = DIRECTINPUT_VERSION_8;
+    if (!stopped && joy_served() && joy_enum_matches(devtype, version) &&
+        !(flags & DIEDFL_FORCEFEEDBACK)) {
+        uint32_t a = scratch(INST_SIZE);
+        if (a) {
+            wr32(a, INST_SIZE);
+            joy_write_device_instance(a, INST_SIZE, wide, version);
+            guest_call(c, cb, a, ref);
+        }
     }
     com_ret(c, DI_OK);
+}
+void DI_EnumDevices(X86 *c) {
+    enum_devices(c, false);
 }
 
 void DI_GetDeviceStatus(X86 *c) {
@@ -761,7 +855,8 @@ void DI_GetDeviceStatus(X86 *c) {
         return;
     }
     bool known = memcmp(gm_ptr(guid), GUID_SysMouse_, 16) == 0 ||
-                 memcmp(gm_ptr(guid), GUID_SysKeyboard_, 16) == 0;
+                 memcmp(gm_ptr(guid), GUID_SysKeyboard_, 16) == 0 ||
+                 (joy_served() && joy_guid(gm_ptr(guid)));
     com_ret(c, known ? DI_OK : S_FALSE);
 }
 
@@ -786,6 +881,67 @@ const ComMethod g_dinput[] = {
     {"GetDeviceStatus", 2, DI_GetDeviceStatus},
     {"RunControlPanel", 3, DI_RunControlPanel},
     {"Initialize", 3, DI_Initialize},
+};
+
+// ===========================================================================
+// IDirectInput8A and IDirectInputDevice8A
+//
+// The same objects through the version 8 layouts: the version 2 interface
+// plus action mapping and device configuration, and the version 7 device plus
+// action maps and image info. Those additions answer as unsupported, which is
+// what a game with no action-mapped controls sees on a machine without them.
+// ===========================================================================
+static const uint32_t DI8_UNSUPPORTED = 0x80004001u; // E_NOTIMPL
+
+void DI8_CreateDevice(X86 *c) {
+    create_device(c, IF_DINPUTDEVICE8);
+}
+void DI8_EnumDevices(X86 *c) {
+    enum_devices(c, true);
+}
+void DI8_FindDevice(X86 *c) {
+    com_ret(c, DIERR_DEVICENOTREG);
+}
+void DI8_EnumDevicesBySemantics(X86 *c) {
+    com_ret(c, DI_OK); // no action-mapped devices: the callback is never called
+}
+void DI8_ConfigureDevices(X86 *c) {
+    com_ret(c, DI8_UNSUPPORTED);
+}
+void Device8_Unsupported(X86 *c) {
+    com_ret(c, DI8_UNSUPPORTED);
+}
+
+const ComMethod g_dinput8[] = {
+    {"QueryInterface", 3, com_QueryInterface},
+    {"AddRef", 1, com_AddRef},
+    {"Release", 1, com_Release},
+    {"CreateDevice", 4, DI8_CreateDevice},
+    {"EnumDevices", 5, DI8_EnumDevices},
+    {"GetDeviceStatus", 2, DI_GetDeviceStatus},
+    {"RunControlPanel", 3, DI_RunControlPanel},
+    {"Initialize", 3, DI_Initialize},
+    {"FindDevice", 4, DI8_FindDevice},
+    {"EnumDevicesBySemantics", 6, DI8_EnumDevicesBySemantics},
+    {"ConfigureDevices", 5, DI8_ConfigureDevices},
+};
+
+const ComMethod g_didevice8[] = {
+    DIDEVICE_COMMON_SLOTS,
+    {"CreateEffect", 5, Device_CreateEffect},
+    {"EnumEffects", 4, Device_EnumEffects},
+    {"GetEffectInfo", 3, Device_GetEffectInfo},
+    {"GetForceFeedbackState", 2, Device_GetForceFeedbackState},
+    {"SendForceFeedbackCommand", 2, Device_SendForceFeedbackCommand},
+    {"EnumCreatedEffectObjects", 4, Device_EnumCreatedEffectObjects},
+    {"Escape", 2, Device_Escape},
+    {"Poll", 1, Device_Poll},
+    {"SendDeviceData", 5, Device_SendDeviceData},
+    {"EnumEffectsInFile", 5, Device8_Unsupported},
+    {"WriteEffectToFile", 5, Device8_Unsupported},
+    {"BuildActionMap", 4, Device8_Unsupported},
+    {"SetActionMap", 4, Device8_Unsupported},
+    {"GetImageInfo", 2, Device8_Unsupported},
 };
 
 // ===========================================================================
@@ -862,10 +1018,40 @@ void direct_input_create(X86 *c, uint32_t version, uint32_t out, uint32_t outer,
     com_ret(c, DI_OK);
 }
 
+void DirectInput8Create(X86 *c) {
+    uint32_t version = arg(c, 1);
+    uint32_t out = arg(c, 3);
+    uint32_t outer = arg(c, 4);
+    if (!out || !gm_valid(out, 4)) {
+        com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    wr32(out, 0);
+    if (outer) {
+        com_ret(c, CLASS_E_NOAGGREGATION);
+        return;
+    }
+    ComObj *di = com_new(K_DINPUT);
+    // Devices made through this object describe themselves with the version 8
+    // type codes, so the object remembers at least version 8 whatever number
+    // it was handed. Nothing else reads di_version.
+    di->di_version = version < DIRECTINPUT_VERSION_8 ? DIRECTINPUT_VERSION_8 : version;
+    uint32_t view = com_view(di, IF_DINPUT8);
+    if (!view) {
+        com_release(di);
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    wr32(out, view);
+    LOGV("dinput: DirectInput8Create(version=%04x) -> %08x", version, view);
+    com_ret(c, DI_OK);
+}
+
 const ImportShim g_dinput_exports[] = {
     {"DINPUT.dll", "DirectInputCreateA", 4, DirectInputCreateA},
     {"DINPUT.dll", "DirectInputCreateW", 4, DirectInputCreateW},
     {"DINPUT.dll", "DirectInputCreateEx", 5, DirectInputCreateEx},
+    {"DINPUT8.dll", "DirectInput8Create", 5, DirectInput8Create},
 };
 
 } // namespace
@@ -885,6 +1071,10 @@ extern "C" void dinput_host_input_changed(void) {
     std::lock_guard<std::mutex> lock(g_notify_m);
     for (const Notify &n : g_notify)
         guest_event_signal_from_host(n.event);
+}
+
+uint32_t di_scratch(uint32_t n) {
+    return scratch(n);
 }
 
 void dinput_reset() {
@@ -910,6 +1100,18 @@ void dinput_register() {
 
     com_bind(IF_DINPUT, K_DINPUT);
     com_bind(IF_DINPUTDEVICE, K_DIDEVICE);
+    com_define(IF_DINPUT8, "DINPUT8.dll", "IDirectInput8A", g_dinput8, std::size(g_dinput8));
+    com_define(IF_DINPUTDEVICE8, "DINPUT8.dll", "IDirectInputDevice8A", g_didevice8,
+               std::size(g_didevice8));
+    com_bind(IF_DINPUT8, K_DINPUT);
+    com_bind(IF_DINPUTDEVICE8, K_DIDEVICE);
+    // {BF798030-483A-4DA2-AA99-5D64ED369700}, {54D41080-DC15-4833-A41B-748F73A38179}
+    static const uint8_t iid8[16] =
+        IID_BYTES(0xBF798030, 0x483A, 0x4DA2, 0xAA, 0x99, 0x5D, 0x64, 0xED, 0x36, 0x97, 0x00);
+    static const uint8_t iid_dev8[16] =
+        IID_BYTES(0x54D41080, 0xDC15, 0x4833, 0xA4, 0x1B, 0x74, 0x8F, 0x73, 0xA3, 0x81, 0x79);
+    com_register_iid(IF_DINPUT8, iid8);
+    com_register_iid(IF_DINPUTDEVICE8, iid_dev8);
 
     com_register_iid(IF_DINPUT, IID_IDirectInputA_);
     com_register_iid(IF_DINPUT, IID_IDirectInput2A_);

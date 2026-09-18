@@ -1,3 +1,4 @@
+#define RECOMP_GUEST_MEMORY_OWNER 1 /* points g_mem at a replay arena around each call */
 // The mods test builder globs tests/*.cpp and is the only POPM_TESTING build.
 #ifdef POPM_TESTING
 #include "../native/replay.cpp"

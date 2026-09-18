@@ -75,21 +75,26 @@ struct TouchPoint {
 };
 
 struct TouchAction {
-    enum Kind { Motion, Button, Key } kind;
+    enum Kind { Motion, Button, Key, Wheel } kind;
     // Motion only: also place the game's own cursor here. True for a press
     // and for a left drag; false while the wheel button is held, when the
     // game scrolls or rotates from relative movement instead.
     bool place = true;
-    double x = 0, y = 0; // Motion, Button
+    double x = 0, y = 0; // Motion, Button, Wheel (the event's position)
     int button = 0;      // Button: 0 left, 1 right, 2 middle (wheel)
     bool down = false;   // Button, Key
     int scancode = 0;    // Key: an SDL_Scancode value
+    int wheel = 0;       // Wheel: notches, +1 up / -1 down
 };
 
 class TouchMapper {
   public:
     // The window's size in points. Enables edge snapping; zero disables it.
     void set_bounds(double w, double h);
+    // Where those bounds start, in window points: the game image's top-left
+    // corner when it does not fill the window (portrait on a phone). Edge
+    // snapping then works on the image's edges. Zero by default.
+    void set_origin(double x, double y);
     // Strips along the window's edges the system keeps for itself (a status
     // bar, a gesture zone), in points. A finger never reaches the app from
     // inside one, so the snap margin on that edge grows by the strip's depth.
@@ -127,6 +132,7 @@ class TouchMapper {
     double pan_cx_ = 0, pan_cy_ = 0, pan_acc_x_ = 0, pan_acc_y_ = 0;
     double tap2_x_ = 0, tap2_y_ = 0; // a two-finger tap right-clicks here
     double bounds_w_ = 0, bounds_h_ = 0;
+    double origin_x_ = 0, origin_y_ = 0;
     double inset_l_ = 0, inset_t_ = 0, inset_r_ = 0, inset_b_ = 0;
     bool snapped_ = false;               // the gesture's placed point sits on a window edge
     double placed_x_ = 0, placed_y_ = 0; // the last placed point

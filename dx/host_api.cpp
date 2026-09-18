@@ -98,6 +98,31 @@ HOST_DEFAULT void host_input_state(HostInputState *out) {
         memset(out, 0, sizeof(*out));
 }
 
+// No host means no pad either: off, no packet, nothing queued, no rumble
+// sink. The axis/button order strings still answer with the spec order, since
+// dx/dinput_joystick.cpp's ABI test reads them even with host_pad_mode() 0.
+HOST_DEFAULT int host_pad_mode(void) {
+    return 0;
+}
+HOST_DEFAULT int host_pad_native_apis(void) {
+    return 0;
+}
+HOST_DEFAULT uint32_t host_pad_state(HostPadState *out) {
+    if (out)
+        memset(out, 0, sizeof(*out));
+    return 0;
+}
+HOST_DEFAULT int host_pad_next_event(uint32_t, HostPadEvent *) {
+    return 0;
+}
+HOST_DEFAULT void host_pad_rumble(uint16_t, uint16_t) {}
+HOST_DEFAULT const char *host_pad_native_axes(void) {
+    return "x,y,z,rz,rx,ry";
+}
+HOST_DEFAULT const char *host_pad_native_buttons(void) {
+    return "square,cross,circle,triangle,l1,r1,l2,r2,select,start,l3,r3,ps";
+}
+
 } // extern "C"
 
 // Rectangles are disjoint. Subtracting a read leaves dirty islands intact,

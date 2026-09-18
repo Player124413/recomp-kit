@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import struct
 import sys
 import time
 from collections import defaultdict
@@ -43,6 +44,27 @@ ANIMATION_COUNTER = 0
 VISUAL_ANIMATION_READS = frozenset()
 EXTRA_ENTRY_POINTS = frozenset()
 FUNCTION_ALIGNMENT = 16
+
+#: game.toml [translate] rewrites: an instruction's memory operand moved to a
+#: free address, and the words the loader seeds before the game runs.
+OPERAND_REDIRECTS = {}
+INSTRUCTION_PATCHES = {}
+PATCHES_APPLIED = set()
+DATA_SEEDS = []
+
+
+def patch_instructions(insns):
+    """Replace every patched instruction in `insns`, in place."""
+    if not INSTRUCTION_PATCHES:
+        return insns
+    for k, ins in enumerate(insns):
+        text = INSTRUCTION_PATCHES.get(ins.addr)
+        if text is None:
+            continue
+        repl = parse_listing_text("%08x  %s\n" % (ins.addr, text))[0]
+        insns[k] = repl
+        PATCHES_APPLIED.add(ins.addr)
+    return insns
 
 
 #: Every global the generated tables define starts with this; a module
@@ -105,6 +127,18 @@ def configure(cfg):
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
     FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
+    global OPERAND_REDIRECTS, INSTRUCTION_PATCHES, DATA_SEEDS
+    OPERAND_REDIRECTS = {int(r["at"]): (int(r["from"]), int(r["to"]))
+                         for r in cfg["translate"].get("operand_redirects", ())}
+    INSTRUCTION_PATCHES = {int(r["at"]): str(r["text"])
+                           for r in cfg["translate"].get("instruction_patches", ())}
+    DATA_SEEDS = []
+    for r in cfg["translate"].get("data_seeds", ()):
+        if "float" in r:
+            value = struct.unpack("<I", struct.pack("<f", float(r["float"])))[0]
+        else:
+            value = int(r["value"]) & 0xFFFFFFFF
+        DATA_SEEDS.append((int(r["addr"]), value))
 
 
 def visual_animation_read(addr, body):
@@ -272,6 +306,67 @@ REG8H = ["AH", "CH", "DH", "BH"]
 
 R_EAX, R_ECX, R_EDX, R_EBX, R_ESP, R_EBP, R_ESI, R_EDI = range(8)
 
+#: MMX on the MMn registers, which the translator emits. The rest of the
+#: vector set (SSE, SSE2, and the SSE extensions to MMX) stays a trap.
+MMX_BINARY = {
+    "PADDB": ("mmx_padd", 8), "PADDW": ("mmx_padd", 16), "PADDD": ("mmx_padd", 32),
+    "PADDQ": ("mmx_padd", 64),
+    "PSUBB": ("mmx_psub", 8), "PSUBW": ("mmx_psub", 16), "PSUBD": ("mmx_psub", 32),
+    "PSUBQ": ("mmx_psub", 64),
+    "PADDSB": ("mmx_padds", 8), "PADDSW": ("mmx_padds", 16),
+    "PSUBSB": ("mmx_psubs", 8), "PSUBSW": ("mmx_psubs", 16),
+    "PADDUSB": ("mmx_paddus", 8), "PADDUSW": ("mmx_paddus", 16),
+    "PSUBUSB": ("mmx_psubus", 8), "PSUBUSW": ("mmx_psubus", 16),
+    "PMULLW": ("mmx_pmullw", 0), "PMULHW": ("mmx_pmulhw", 0), "PMADDWD": ("mmx_pmaddwd", 0),
+    "PCMPEQB": ("mmx_pcmpeq", 8), "PCMPEQW": ("mmx_pcmpeq", 16), "PCMPEQD": ("mmx_pcmpeq", 32),
+    "PCMPGTB": ("mmx_pcmpgt", 8), "PCMPGTW": ("mmx_pcmpgt", 16), "PCMPGTD": ("mmx_pcmpgt", 32),
+    "PACKSSWB": ("mmx_packsswb", 0), "PACKSSDW": ("mmx_packssdw", 0),
+    "PACKUSWB": ("mmx_packuswb", 0),
+    "PUNPCKLBW": ("mmx_punpckl", 8), "PUNPCKLWD": ("mmx_punpckl", 16),
+    "PUNPCKLDQ": ("mmx_punpckl", 32),
+    "PUNPCKHBW": ("mmx_punpckh", 8), "PUNPCKHWD": ("mmx_punpckh", 16),
+    "PUNPCKHDQ": ("mmx_punpckh", 32),
+    "PAND": ("mmx_pand", 0), "PANDN": ("mmx_pandn", 0), "POR": ("mmx_por", 0),
+    "PXOR": ("mmx_pxor", 0),
+}
+MMX_SHIFT = {
+    "PSRLW": ("mmx_psrl", 16), "PSRLD": ("mmx_psrl", 32), "PSRLQ": ("mmx_psrl", 64),
+    "PSRAW": ("mmx_psra", 16), "PSRAD": ("mmx_psra", 32),
+    "PSLLW": ("mmx_psll", 16), "PSLLD": ("mmx_psll", 32), "PSLLQ": ("mmx_psll", 64),
+}
+XMM_RE = re.compile(r"\b(?:XMM[0-7]|xmmword)\b")
+MMN_RE = re.compile(r"\bMM[0-7]\b")
+
+
+
+
+def is_mmx_insn(mnem, ops):
+    """An instruction the translator emits as MMX: an MMX mnemonic whose
+    operands name an MMn register and no XMM one."""
+    if mnem not in MMX_BINARY and mnem not in MMX_SHIFT and mnem not in ("MOVQ", "MOVD"):
+        return False
+    return (any(MMN_RE.search(o) for o in ops) and not any(XMM_RE.search(o) for o in ops))
+
+
+def apply_operand_redirects(parsed, redirects):
+    """Rewrite the memory operand of each redirected instruction; every
+    redirect has to find its instruction and its address, or the build stops."""
+    missing = dict(redirects)
+    for fn in parsed:
+        for ins in fn.insns:
+            if ins.addr not in redirects or not ins.ops:
+                continue
+            old, new = redirects[ins.addr]
+            pattern = re.compile(r"\[0x0*%x\]" % old, re.IGNORECASE)
+            ops = [pattern.sub("[0x%08x]" % new, o) for o in ins.ops]
+            if ops != list(ins.ops):
+                ins.ops = ops
+                missing.pop(ins.addr, None)
+    if missing:
+        raise TranslateError("operand redirects matched nothing: " +
+                             ", ".join("%08x" % a for a in sorted(missing)))
+
+
 ALL_FLAGS = frozenset(("cf", "zf", "sf", "of", "pf", "af"))
 NO_FLAGS = frozenset()
 
@@ -334,6 +429,31 @@ IMM_RE = re.compile(r"^-?0x[0-9a-fA-F]+$|^-?[0-9]+$")
 #: reloads a segment register.
 SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, "GS": 0x00}
 ST_RE = re.compile(r"^ST([0-7])$")
+MM_RE = re.compile(r"^MM([0-7])$")
+
+#: A vector instruction this translator does not model. CPUID advertises
+#: neither SSE nor SSE2, so a guest that checks (the CRT's own probe) never
+#: runs one; each becomes a recomp_unmodelled trap rather than a translation
+#: failure, which would lose the whole function. Anything naming an MMn or
+#: XMMn register counts, plus the extension instructions that name neither.
+VECTOR_REG_RE = re.compile(r"\b(?:X?MM[0-7]|xmmword)\b")
+VECTOR_MNEM = frozenset((
+    "STMXCSR", "LDMXCSR", "FXSAVE", "FXRSTOR", "SFENCE", "LFENCE", "MFENCE",
+    "PREFETCHNTA", "PREFETCHT0", "PREFETCHT1", "PREFETCHT2", "MOVNTI", "CLFLUSH",
+))
+
+
+def is_vector_insn(mnem, ops):
+    """True for an MMX/SSE/SSE2 instruction (see VECTOR_REG_RE).
+
+    EMMS is not one of them here: it names no register and only marks every
+    x87 register empty, which the x87 model can do. Codecs call a lone
+    `emms; ret` helper unconditionally, whatever CPUID said, so trapping it
+    stopped a game that never used MMX arithmetic at all.
+    """
+    if mnem == "EMMS":
+        return False
+    return mnem in VECTOR_MNEM or any(VECTOR_REG_RE.search(o) for o in ops)
 
 
 XMM_RE = re.compile(r"^XMM([0-7])$")
@@ -408,6 +528,9 @@ def parse_operand(text):
     m = ST_RE.match(text)
     if m:
         return Op("st", sti=int(m.group(1)))
+    m = MM_RE.match(text)
+    if m:
+        return Op("mm", reg=int(m.group(1)), size=64)
     if text in SEGMENT_SELECTOR:
         return Op("sreg", size=16, imm=SEGMENT_SELECTOR[text])
     if IMM_RE.match(text):
@@ -778,18 +901,13 @@ class Image(object):
         a bounded count/type/handler table. Stubs and blocks may be absent
         from every exported listing.
 
-        The same prologue - PUSH handler, PUSH FS:[0], MOV FS:[0],ESP - is
-        what every compiler writes, and only Delphi's handler is a JMP stub.
-        MSVC pushes the address of a CRT function (__except_handler3), whose
-        first byte is not E9, and nothing here is recovered from it: that
-        dialect has no landings to find, so it yields none rather than
-        refusing the image. A stub that IS a JMP but jumps outside code is
-        malformed, and still does.
+        A caller that may be looking at another compiler's handler - MSVC
+        pushes an ordinary CRT function, not a stub - asks through
+        seh_landings_opt instead of testing the shape itself.
         """
-        if not self.is_exec(stub) or self.rd8(stub) != 0xe9:
-            return [], None
         displacement = self.rd32(stub + 1)
-        if (displacement is None
+        if (not self.is_exec(stub) or self.rd8(stub) != 0xe9
+                or displacement is None
                 or not self.is_exec((stub + 5 + displacement) & 0xffffffff)):
             raise TranslateError("SEH stub %08x is not a JMP rel32 to code" % stub)
         n = self.rd32(stub + 5)
@@ -808,6 +926,21 @@ class Image(object):
         if not self.is_exec(stub + 5):
             raise TranslateError("SEH landing %08x is not in code" % (stub + 5))
         return [stub + 5], None
+
+    def seh_landings_opt(self, stub):
+        """seh_landings for a stub this pass may not be able to classify.
+
+        The frame idiom - three PUSHes and the chain MOV - is the same in
+        every compiler that establishes a TEB exception record, so a frame
+        site can name a handler that is not a Delphi stub at all: MSVC's is
+        an ordinary function reached through a scope table. There is no
+        landing block to discover behind one, so discovery skips it; the
+        frame itself is still modelled, because seh_frame_sites keeps it.
+        """
+        try:
+            return self.seh_landings(stub)
+        except TranslateError:
+            return None
 
     def seh_constructor_helper(self, va):
         """Return the handler stored by Delphi's returning constructor helper.
@@ -1295,7 +1428,7 @@ class Function(object):
         self.addr = addr
         self.name = name
         self.size = size
-        self.insns = insns
+        self.insns = patch_instructions(insns)
         self.addrs = {i.addr for i in insns}
         self.end = max(addr + size, insns[-1].addr + 1) if insns else addr
         # filled in by measure(): contiguous[i] is True when insn i+1 in the
@@ -1420,6 +1553,52 @@ def seh_frame_sites(fn, image=None):
         except TranslateError:
             continue
     return sites
+
+
+NORETURN_IMPORTS = frozenset(("RaiseException", "ExitProcess", "TerminateProcess",
+                              "ExitThread", "FatalAppExitA", "FatalExit"))
+
+
+def noreturn_callees_from(parsed, iat_names, image=None):
+    """Callees that never return, as the listings show them.
+
+    A listing that ends on a CALL was cut there because the callee never
+    returns; recovery from the PE must stop at those calls too, or it walks
+    into the padding and switch tables that follow them.  Ghidra also cuts
+    listings at calls for other reasons - a C++ catch funclet ends where its
+    rethrow begins - so a callee whose own listing returns is not taken on
+    that evidence, unless it hands control to an import that does not come
+    back (`_CxxThrowException` raises through RaiseException and has a RET
+    after it that never runs).  Padding (INT3) right after the call is
+    evidence of its own: the compiler put nothing there to return to."""
+    def ends_process(fn):
+        for i in fn.insns:
+            if i.mnem != "CALL" or not i.ops:
+                continue
+            m = re.match(r"dword ptr \[(0x[0-9a-fA-F]+)\]$", i.ops[0].strip())
+            if m and iat_names.get(int(m.group(1), 16)) in NORETURN_IMPORTS:
+                return True
+        return False
+
+    returns = {fn.addr for fn in parsed
+               if any(i.mnem == "RET" for i in fn.insns) and not ends_process(fn)}
+    out = set()
+    for fn in parsed:
+        # A loop that cannot fall out of itself never returns either.
+        if Translator.closed_noreturn_loop(fn):
+            out.add(fn.addr)
+        last = fn.insns[-1]
+        if last.mnem == "CALL":
+            target = Translator.branch_target(last)
+            if target is None:
+                continue
+            padded = False
+            if image is not None:
+                nxt = last.addr + 5 - image.base
+                padded = 0 <= nxt < len(image.data) and image.data[nxt] == 0xCC
+            if target not in returns or padded:
+                out.add(target)
+    return out
 
 
 class Translator(object):
@@ -1710,6 +1889,13 @@ class Translator(object):
         if t is not None and t not in fn.pushed_continuations:
             return [fn.index[t]] if t in fn.index else []
         nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
+        if m == "INT3":
+            # MSVC pads between functions with INT3, and a listing cut at a
+            # call that never returns runs that padding into the next
+            # function. Nothing falls out of the padding: the byte after it
+            # belongs to whatever comes next, and is not this block's
+            # successor. The instruction itself still traps at run time.
+            return []
         if m == "RET":
             return [fn.index[t] for t in sorted(fn.pushed_continuations)]
         if m in JCC:
@@ -2298,7 +2484,11 @@ class Translator(object):
             body = self.emit(fn, i, live_out[i])
             for line in body:
                 out.append("    " + line)
-            if not fn.contiguous[i] and ins.mnem not in TERMINATORS and not self.never_returns(ins):
+            # An INT3 the listing ran into is MSVC's padding between
+            # functions: the byte after it belongs to whatever comes next, so
+            # this body ends here rather than falling through into it.
+            if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
+                    and ins.mnem != "INT3" and not self.never_returns(ins)):
                 t = fn.fallthrough[i]
                 self.stats["_listing_gap"] += 1
                 self.notes.append(
@@ -2308,7 +2498,8 @@ class Translator(object):
         # A function whose last listed instruction is not a terminator falls
         # through into the next function.
         last = fn.insns[-1]
-        if last.mnem not in TERMINATORS and not self.never_returns(last):
+        if (last.mnem not in TERMINATORS and last.mnem != "INT3"
+                and not self.never_returns(last)):
             t = fn.fallthrough[-1] or fn.end
             self.stats["_fallthrough_exit"] += 1
             out.append("    " + " ".join(self.goto_target(fn, t, last)))
@@ -2570,6 +2761,10 @@ class Translator(object):
             return ["c->r[4] = c->r[5]; c->r[5] = rd32(c->r[4]); c->r[4] += 4;"]
         if m == "SAHF":
             return ["x86_sahf(c);"]
+        if m == "LAHF":
+            # AH = SF:ZF:0:AF:0:PF:1:CF
+            return ["c->r[0] = (c->r[0] & 0xffff00ffu) | "
+                    "(((x86_get_eflags(c) & 0xd5u) | 0x02u) << 8);"]
         if m == "XLAT":
             return ["xlat(c);"]
         if m == "BSWAP":
@@ -2828,6 +3023,10 @@ class Translator(object):
         # compiler supports, so there is no feature test to fail - while the
         # AVX forms beside them are gated on a CPUID bit this kit does not
         # set, and stay traps nobody reaches.
+        # MMX first: is_mmx_insn only matches an MMn operand with no XMM one,
+        # so the SSE2 path below still takes every xmm form of MOVQ/MOVD.
+        if is_mmx_insn(m, ins.ops):
+            return self.emit_mmx(ins, m)
         # Lane-wise integer, logical and unpack forms. Every one of them has
         # the same shape: both operands are read in full before either lane of
         # the destination is written, because a destination is commonly also
@@ -3038,8 +3237,12 @@ class Translator(object):
             port = read_op(ops[0], 32) if ops[0].kind == "reg" else read_op(ops[0], 32)
             L.append("recomp_out(c, %s, %s, %d);" % (port, read_op(ops[1], size), size // 8))
             return L
-        if m in ("NOP", "WAIT", "PAUSE", "EMMS"):
+        if m in ("NOP", "WAIT", "PAUSE"):
             return [";"]
+        if m == "EMMS":
+            # Every x87 register empty; TOP and the values are left alone.
+            # Codecs call a bare `emms; ret` whatever CPUID said.
+            return ["c->fpu_tag = 0xffffu;"]
         if m == "STMXCSR":
             # No translated SSE arithmetic changes MXCSR, so expose its reset value.
             return ["wr32(%s, 0x1f80u);" % addr_expr(ops[0])]
@@ -3050,6 +3253,10 @@ class Translator(object):
         if m.startswith("F"):
             return self.emit_x87(fn, ins, m, ops)
 
+        if is_vector_insn(m, ins.ops or ()):
+            # Not one of the forms modelled above: a trap says so if a guest
+            # that skipped the CPUID check ever reaches it.
+            return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
         raise TranslateError("unhandled mnemonic %s" % m)
 
     # ---- control-flow helpers -------------------------------------------
@@ -3206,6 +3413,46 @@ class Translator(object):
             return "(int%d_t)rd%d(%s)" % (op.size, op.size, addr_expr(op))
         raise TranslateError("bad x87 integer size %r" % op.size)
 
+    def emit_mmx(self, ins, m):
+        """MMX on the eight MMn registers, through runtime/x86.h's helpers."""
+        ops = [parse_operand(o) for o in ins.ops]
+
+        def src(op, width=64):
+            if op.kind == "mm":
+                return "c->mm[%d]" % op.reg
+            if op.kind == "mem":
+                return "rd64(%s)" % addr_expr(op) if width == 64 else "(uint64_t)rd32(%s)" % addr_expr(op)
+            if op.kind == "imm":
+                return "(uint64_t)0x%xu" % (op.imm & 0xff)
+            if op.kind == "reg" and op.size == 32:
+                return "(uint64_t)c->r[%d]" % op.reg
+            raise TranslateError("MMX operand %r" % op.kind)
+
+        if m == "MOVQ":
+            dst, s = ops
+            if dst.kind == "mm":
+                return ["c->mm[%d] = %s;" % (dst.reg, src(s))]
+            if dst.kind == "mem" and s.kind == "mm":
+                return ["wr64(%s, c->mm[%d]);" % (addr_expr(dst), s.reg)]
+            raise TranslateError("MOVQ form")
+        if m == "MOVD":
+            dst, s = ops
+            if dst.kind == "mm":
+                return ["c->mm[%d] = %s;" % (dst.reg, src(s, 32))]
+            if s.kind == "mm":
+                return [write_op(dst, 32, "(uint32_t)c->mm[%d]" % s.reg)]
+            raise TranslateError("MOVD form")
+        dst = ops[0]
+        if dst.kind != "mm":
+            raise TranslateError("%s destination is not an MMX register" % m)
+        if m in MMX_SHIFT:
+            fn, bits = MMX_SHIFT[m]
+            return ["c->mm[%d] = %s(c->mm[%d], %s, %du);" % (dst.reg, fn, dst.reg, src(ops[1]), bits)]
+        fn, bits = MMX_BINARY[m]
+        if bits:
+            return ["c->mm[%d] = %s(c->mm[%d], %s, %du);" % (dst.reg, fn, dst.reg, src(ops[1]), bits)]
+        return ["c->mm[%d] = %s(c->mm[%d], %s);" % (dst.reg, fn, dst.reg, src(ops[1]))]
+
     def emit_x87(self, fn, ins, m, ops):
         L = []
         st = lambda n: "ST(c, %d)" % n
@@ -3228,6 +3475,10 @@ class Translator(object):
             return ["fpush(c, 0.69314718055994530942);"]
         if m == "FLDL2E":
             return ["fpush(c, 1.44269504088896340736);"]
+        if m == "FLDLG2":
+            return ["fpush(c, 0.30102999566398119521);"]
+        if m == "FLDL2T":
+            return ["fpush(c, 3.32192809488736234787);"]
         if m == "FBSTP":
             return ["wrbcd80(%s, fpop(c));" % addr_expr(ops[0])]
         if m == "FILD":
@@ -3434,8 +3685,10 @@ class Translator(object):
             return ["x87_frstor(c, %s);" % addr_expr(ops[0])]
         if m in ("FINIT", "FNINIT"):
             return ["x87_finit(c);"]
-        if m in ("FNSTENV", "FLDENV"):
-            raise TranslateError("unsupported x87 environment op %s" % m)
+        if m in ("FNSTENV", "FSTENV"):
+            return ["x87_fnstenv(c, %s);" % addr_expr(ops[0])]
+        if m == "FLDENV":
+            return ["x87_fldenv(c, %s);" % addr_expr(ops[0])]
 
         raise TranslateError("unhandled x87 mnemonic %s" % m)
 
@@ -3631,15 +3884,9 @@ def main():
     # A listing that ends on a CALL was cut there because the callee never
     # returns; recovery from the PE must stop at those calls too, or it walks
     # into the padding and switch tables that follow them.
-    image.noreturn_callees = set()
-    for fn in parsed:
-        if Translator.closed_noreturn_loop(fn):
-            image.noreturn_callees.add(fn.addr)
-        last = fn.insns[-1]
-        if last.mnem == "CALL":
-            target = Translator.branch_target(last)
-            if target is not None:
-                image.noreturn_callees.add(target)
+    image.noreturn_callees = noreturn_callees_from(parsed, getattr(image, "iat_names", {}), image)
+    if OPERAND_REDIRECTS:
+        apply_operand_redirects(parsed, OPERAND_REDIRECTS)
 
     # The Ghidra export is not complete: control lands on addresses it never
     # listed, and functions get split at boundaries other code jumps past.
@@ -4012,7 +4259,10 @@ def main():
                         if op.kind == "imm" and t < op.imm < bounds[1]:
                             continuations.add(op.imm)
                 for stub in stubs:
-                    landings, _ = image.seh_landings(stub)
+                    got = image.seh_landings_opt(stub)
+                    if got is None:
+                        continue
+                    landings, _ = got
                     continuations.update(a for a in landings if t < a < bounds[1])
                 pending = continuations - stubs - attempted
                 if not pending:
@@ -4183,7 +4433,10 @@ def main():
             # reaching a finally cleanup. Seed those in-span landings into the
             # same owner too, retaining their callable alternate entries.
             for stub in sorted(stubs):
-                landings, _ = image.seh_landings(stub)
+                got = image.seh_landings_opt(stub)
+                if got is None:
+                    continue
+                landings, _ = got
                 for landing in landings:
                     if fn.addr <= landing < span_end:
                         changed |= adopt(landing, in_span=True)
@@ -4194,7 +4447,10 @@ def main():
                                 changed = True
 
         for stub in seh_frame_sites(fn, image).values():
-            landings, table_range = image.seh_landings(stub)
+            got = image.seh_landings_opt(stub)
+            if got is None:
+                continue
+            landings, table_range = got
             if table_range or landings != [stub + 5]:
                 continue
             landing = image.instruction_at(stub + 5)
@@ -4250,7 +4506,10 @@ def main():
     for addr in sorted(EXTRA_ENTRY_POINTS):
         if not image.is_exec(addr):
             raise TranslateError("[translate] entry_points: %08x is not in a code section" % addr)
-        if not resolve(addr, set(owner), why="config"):
+        # Its whole body: fragments recovered elsewhere must not cut a named
+        # function short. Entries are seeded in address order, so a thunk
+        # named with its target validates against an entry that exists.
+        if not resolve(addr, set(), why="config"):
             # Saying nothing here is how a declared entry point goes missing:
             # the run that needed it still calls an address the translation
             # does not carry, and the only symptom is a null call much later.
@@ -4288,10 +4547,16 @@ def main():
                 if stub in seh_stubs:
                     continue
                 seh_stubs.add(stub)
-                landings, table_range = image.seh_landings(stub)
+                # The handler is a function whatever its shape: MSVC's is an
+                # ordinary routine the prologue pushes. Adopt it first, then
+                # look for a Delphi landing block behind it.
+                changed |= resolve(stub, set(owner), why="immediate")
+                got = image.seh_landings_opt(stub)
+                if got is None:
+                    continue
+                landings, table_range = got
                 if table_range:
                     tr.table_ranges.add(table_range)
-                changed |= resolve(stub, set(owner), why="immediate")
                 for landing in landings:
                     changed |= resolve(landing, set(owner), why="seh")
         for fn in list(parsed):
@@ -4662,7 +4927,10 @@ def main():
                             targets.add(op.imm)
         for stub in seh_frame_sites(fn, image).values():
             targets.add(stub)
-            landings, table_range = image.seh_landings(stub)
+            got = image.seh_landings_opt(stub)
+            if got is None:
+                continue
+            landings, table_range = got
             targets.update(landings)
             seh_stubs.add(stub)
             if table_range:
@@ -4911,6 +5179,11 @@ def main():
             "%d literal dispatch targets are not entry points; every direct "
             "call and jump has to reach translated code" % len(dangling))
 
+    missing_patches = sorted(set(INSTRUCTION_PATCHES) - PATCHES_APPLIED)
+    if missing_patches:
+        raise TranslateError("instruction patches matched no instruction: " +
+                             ", ".join("%08x" % a for a in missing_patches))
+
     # funcs.h ---------------------------------------------------------------
     with open(os.path.join(args.out, "funcs.h"), "w") as fh:
         fh.write("/* generated by tools/recomp/translate.py -- do not edit */\n")
@@ -5035,6 +5308,17 @@ def main():
         for a in call_returns or [0]:  # valid C storage even for a call-free image
             fh.write("    0x%08xu,\n" % a)
         fh.write("};\nstatic const uint32_t %scall_return_count = %d;\n\n" % (P, len(call_returns)))
+        # Redirected operands read a new address; the loader seeds it with the
+        # original value so the game behaves unchanged until something writes
+        # it. Only the image carries these: an auxiliary module has no config.
+        if AUX_MODULE is None:
+            pairs = sorted(set(OPERAND_REDIRECTS.values()))
+            fh.write("const uint32_t recomp_operand_redirect_pairs[] = {%s};\n" %
+                     (", ".join("0x%08xu, 0x%08xu" % q for q in pairs) if pairs else "0u, 0u"))
+            fh.write("const uint32_t recomp_operand_redirect_count = %du;\n" % len(pairs))
+            fh.write("const uint32_t recomp_data_seed_pairs[] = {%s};\n" %
+                     (", ".join("0x%08xu, 0x%08xu" % q for q in DATA_SEEDS) if DATA_SEEDS else "0u, 0u"))
+            fh.write("const uint32_t recomp_data_seed_count = %du;\n\n" % len(DATA_SEEDS))
         fh.write("static const char *const profile_names[] = {\n")
         for symbol in functions:
             fh.write("    %s,\n" % json.dumps(symbol["name"]))
@@ -5104,7 +5388,26 @@ uint64_t recomp_override_hash(void)
     return h;
 }
 
+/* Indirect calls repeat the same few targets, so a direct-mapped cache sits
+ * in front of the binary search. An entry is (target << 32) | (index + 2),
+ * written as one word, so a racing reader sees an old or a new entry. */
+static uint64_t recomp_lookup_cache[1u << 14];
+
+static int32_t recomp_lookup_slow(uint32_t target);
+
 static int32_t recomp_lookup(uint32_t target)
+{
+    uint32_t slot = (uint32_t)(target * 2654435761u) >> 18;
+    uint64_t e = __atomic_load_n(&recomp_lookup_cache[slot], __ATOMIC_ACQUIRE);
+    if ((uint32_t)(e >> 32) == target && (uint32_t)e)
+        return (int32_t)((uint32_t)e - 2u); /* 1 caches "not a function" (a shim) */
+    int32_t i = recomp_lookup_slow(target);
+    __atomic_store_n(&recomp_lookup_cache[slot],
+                     ((uint64_t)target << 32) | (uint64_t)(uint32_t)(i + 2), __ATOMIC_RELEASE);
+    return i;
+}
+
+static int32_t recomp_lookup_slow(uint32_t target)
 {
     uint32_t lo = 0, hi = recomp_func_count;
     while (lo < hi) {

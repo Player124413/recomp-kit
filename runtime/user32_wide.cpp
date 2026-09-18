@@ -76,7 +76,7 @@ void display_rect(uint32_t out) {
 namespace {
 using namespace user32;
 void register_w(X86 *c) {
-    register_class_named(c, true);
+    register_class_named(c, true, 0);
 }
 void create_w(X86 *c) {
     create_window_named(c, true);

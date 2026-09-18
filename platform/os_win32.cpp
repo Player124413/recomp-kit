@@ -15,6 +15,14 @@
 #include <sys/stat.h>
 #include <string>
 
+// MinGW's headers predate these RegGetValue flags.
+#ifndef RRF_SUBKEY_WOW6464KEY
+#define RRF_SUBKEY_WOW6464KEY 0x00010000
+#endif
+#ifndef RRF_SUBKEY_WOW6432KEY
+#define RRF_SUBKEY_WOW6432KEY 0x00020000
+#endif
+
 namespace {
 
 std::wstring widen(const char *utf8) {
@@ -162,6 +170,9 @@ void os_thread_join(OsThread *t) {
 void os_thread_detach(OsThread *t) {
     CloseHandle(t->handle);
     free(t);
+}
+void os_thread_prefer_performance(void) {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 }
 void os_thread_exit(void) {
     _endthreadex(0);

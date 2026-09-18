@@ -987,6 +987,47 @@ static void test_memory_shims_2(X86 *c) {
               call_import(c, "KERNEL32.dll", "WaitForSingleObject", {s2, 0}) == 0x102,
           "and it consumed both");
 
+    // Waitable timers fire: once after a relative due time, periodically, at
+    // an absolute UTC time, and not at all once cancelled.
+    {
+        uint32_t timer = call_import(c, "KERNEL32.dll", "CreateWaitableTimerA", {0, 0, 0});
+        uint32_t due = scratch_block(8);
+        auto set_due = [&](int64_t v) {
+            wr32(due, (uint32_t)v);
+            wr32(due + 4, (uint32_t)((uint64_t)v >> 32));
+        };
+        set_due(-200000); // 20 ms from now
+        check(call_import(c, "KERNEL32.dll", "SetWaitableTimer", {timer, due, 0, 0, 0, 0}) == 1,
+              "SetWaitableTimer accepts a relative due time");
+        check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 0}) == 0x102,
+              "a timer is not signalled before its due time");
+        check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 2000}) == 0,
+              "a wait on it returns when the timer fires");
+        check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 50}) == 0x102,
+              "a one-shot synchronization timer fires once");
+        set_due(-10000);
+        call_import(c, "KERNEL32.dll", "SetWaitableTimer", {timer, due, 10, 0, 0, 0});
+        check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 2000}) == 0 &&
+                  call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 2000}) == 0 &&
+                  call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 2000}) == 0,
+              "a periodic timer fires every period");
+        call_import(c, "KERNEL32.dll", "CancelWaitableTimer", {timer});
+        uint32_t now = scratch_block(8);
+        call_import(c, "KERNEL32.dll", "GetSystemTimeAsFileTime", {now});
+        uint64_t ft = (uint64_t)rd32(now) | ((uint64_t)rd32(now + 4) << 32);
+        set_due((int64_t)(ft + 300000)); // 30 ms from now, absolute
+        call_import(c, "KERNEL32.dll", "SetWaitableTimer", {timer, due, 0, 0, 0, 0});
+        check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 0}) == 0x102 &&
+                  call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 2000}) == 0,
+              "an absolute due time is UTC FILETIME");
+        set_due(-100000000); // ten seconds
+        call_import(c, "KERNEL32.dll", "SetWaitableTimer", {timer, due, 0, 0, 0, 0});
+        call_import(c, "KERNEL32.dll", "CancelWaitableTimer", {timer});
+        check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {timer, 50}) == 0x102,
+              "a cancelled timer does not fire");
+        call_import(c, "KERNEL32.dll", "CloseHandle", {timer});
+    }
+
     // LoadLibraryA only succeeds for modules the runtime can serve.
     check(call_import(c, "KERNEL32.dll", "LoadLibraryA", {put_str("unregistered.dll")}) == 0,
           "LoadLibraryA(\"unregistered.dll\") fails: no shims for it");

@@ -1,8 +1,13 @@
 # Keypad design: a split on-screen keyboard for touch play
 
 Date: 2026-09-13
-Status: implemented 2026-09-13; accepted on the iPad (layout, tabs, hold/latch/lock,
-F10 size, relaunch persistence)
+Status: **superseded** by `2026-09-17-touch-controls-design.md`, which
+replaced the keypad with the data-driven controls system. Read that
+document for how the on-screen keyboard works now; this one is kept for the
+reasoning behind the split-halves layout, the modifier machine and the key
+tables, all of which the `keys` built-in layout still reproduces.
+Previously: implemented 2026-09-13; accepted on the iPad (layout, tabs,
+hold/latch/lock, F10 size, relaunch persistence)
 Parent spec: `2026-09-13-recomp-kit-design.md`; replaces the key strip of
 `2026-09-13-m1-ios-design.md` section 5.4
 

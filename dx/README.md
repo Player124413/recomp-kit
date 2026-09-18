@@ -22,9 +22,11 @@ Metal and AVAudioEngine. That keeps every test here headless.
 | `dsound.cpp` | IDirectSound, buffer, 3D buffer, 3D listener, notify |
 | `dshow.cpp` | DirectShow multimedia streaming, the reading side: IAMMultiMediaStream over an MP3 file, IAudioMediaStream, AMAudioData, IAudioStreamSample (minimp3) |
 | `dinput.cpp` | IDirectInputA, mouse and keyboard devices |
+| `dinput_joystick.cpp` | the virtual pad as a DirectInput joystick, when a game asks for native pad input |
 | `qmixer.cpp` | the 28 QMixer `QSWaveMix*` exports |
 | `weanetr.cpp` | the 17 MLDPlay methods, reporting no networking |
 | `tests/dx_tests.cpp` | the headless tests |
+| `tests/pad_tests.cpp` | the virtual pad through DirectInput, with its own host pad callbacks |
 
 ## Wiring it up
 

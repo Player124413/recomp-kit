@@ -7,6 +7,7 @@
 #include "intrinsics.h"
 #include "discovery.h"
 #include "interp.h"
+#include "loader.h"
 #include "win32.h"
 #include "thunks.h"
 #include "loader.h"
@@ -234,6 +235,24 @@ void recomp_div_error(X86 *c, uint32_t addr) {
     LOGW("divide error at %08x (EAX=%08x EDX=%08x)", addr, c->r[R_EAX], c->r[R_EDX]);
 }
 
+// An SSE/SSE2 instruction the translator left as a trap (MMX is translated).
+// The CPUID below advertises neither extension, so only a guest that skips the
+// CPUID check gets here; continuing would compute garbage, so this is fatal.
+void recomp_unmodelled(X86 *c, uint32_t addr) {
+    LOGW("unmodelled SSE instruction at %08x (ESP=%08x, return=%08x): the guest used a "
+         "CPU extension recomp_cpuid does not advertise",
+         addr, c->r[R_ESP], rd32(c->r[R_ESP]));
+    abort();
+}
+
+// INT3: a breakpoint no debugger will handle. On Windows that is an unhandled
+// exception, so the process ends; so does this one, with the address.
+void recomp_breakpoint(X86 *c, uint32_t addr) {
+    LOGW("INT3 at %08x (ESP=%08x, return=%08x): breakpoint reached, stopping", addr, c->r[R_ESP],
+         rd32(c->r[R_ESP]));
+    abort();
+}
+
 // A monotonically increasing cycle counter derived from the millisecond clock,
 // so repeated runs see the same ordering.
 void recomp_rdtsc(X86 *c) {
@@ -295,14 +314,6 @@ void recomp_sti(X86 *c) {
 void recomp_hlt(X86 *c) {
     (void)c;
     log_once("hlt", "HLT ignored");
-}
-
-void recomp_unmodelled(X86 *c, uint32_t addr) {
-    LOGW("unmodelled instruction at %08x reached (EAX=%08x ECX=%08x EDX=%08x EBX=%08x ESP=%08x "
-         "EBP=%08x ESI=%08x EDI=%08x)",
-         addr, c->r[R_EAX], c->r[R_ECX], c->r[R_EDX], c->r[R_EBX], c->r[R_ESP], c->r[R_EBP],
-         c->r[R_ESI], c->r[R_EDI]);
-    abort();
 }
 
 void recomp_int(X86 *c, uint32_t vec) {

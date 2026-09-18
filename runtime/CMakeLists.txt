@@ -1,8 +1,10 @@
 # The guest runtime. Object libraries, so every source is linked into every
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
-  memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp resources.cpp oleaut32.cpp
-  mods_seam.cpp interp.cpp discovery.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp media_foundation.cpp layout.cpp)
+  memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
+  resources.cpp oleaut32.cpp mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp
+  misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp
+  media_foundation.cpp layout.cpp interp.cpp discovery.cpp)
 
 # The faces the runtime's GDI draws Windows' own UI fonts with
 # (third_party/fonts/opensans/README.md), embedded as byte arrays.

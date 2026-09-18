@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- On-screen controls replace the split keypad. Every game now starts with a
+  PlayStation-styled gamepad as well as the keyboard: two sticks, a dpad,
+  ✕○□△, shoulders and triggers, start and select, drawn over the game. A
+  tab cycles between the `pad`, `keys` and `pad+keys` layouts and a Hidden
+  slot, and the F10 page carries the layout, its size, its opacity, button
+  haptics and whether the pad stays on screen when a controller is
+  connected. The keyboard itself is unchanged: same halves, same keys, same
+  hold-to-chord, tap-to-latch, double-tap-to-lock, and the old
+  `host.keypad/*` settings carry over on first run.
+
+- Layouts are files, and a player can edit them on the device. "Edit
+  controls" on the F10 page opens an editor: drag to move, pinch to resize,
+  add or delete a control, rebind it, snap to a 10 pt grid and to other
+  controls, then save or reset to the game's default. Edits are saved per
+  game and per form factor under `<profile>/controls/`, so a phone in
+  portrait and a tablet keep separate layouts. A game repo ships its own
+  starting layouts in a `layouts/` directory, which the build copies into
+  the app.
+
+- Physical controllers work everywhere: a DualSense, Xbox or MFi pad opens
+  through SDL with hot-plug, on desktop, iOS and Android, and feeds the
+  same virtual pad the on-screen controls do. A pad-only layout hides
+  itself while a controller is connected (turn that off with "Pad with
+  controller"), and a keyboard layout still hides itself when a hardware
+  keyboard is attached. Rumble from the game reaches the controller, or the
+  phone or tablet's own motor when there is no controller, and a light
+  haptic tap answers each on-screen press.
+
+- Phones are supported, including portrait. Layouts come in `tablet`,
+  `phone-landscape` and `phone-portrait` forms, iPhone and Android phones
+  may rotate, and in portrait the game is pinned to the top at full width
+  with the controls filling the space below it, so nothing covers the game.
+  Tablets stay landscape.
+
+- Games that read a controller can be given a real one. With
+  `[controls] pad = "native"` the virtual pad appears as a DirectInput
+  joystick and through `xinput1_3`, `xinput1_4` and `xinput9_1_0`, so the
+  game's own controller support drives it and its `XInputSetState` rumble
+  comes back out. Otherwise the pad is mapped to keys and the mouse, with a
+  per-game table under `[controls.mapped]`.
+
+- `game.toml` gains a `[controls]` section — `default_layout`, `pad`, and
+  the `[controls.mapped]` and `[controls.native]` tables — which replaces
+  `[touch] keypad`. The old spelling is still read (`"auto"` → `"keys"`,
+  `"hidden"` → `"hidden"`) so no game repo has to be re-pinned at once.
+  One behaviour change: `[touch] keypad = "hidden"` used to hide the two
+  halves but keep their KEYS tabs on screen; it now selects the Hidden
+  layout and draws nothing. No game in the kit sets it.
+
 - Video decoding works in the Windows build. With the presets' MSVC-ABI
   clang, FFmpeg is built by its own MSVC toolchain from an MSYS2 shell and
   make (found beside each other, so Git's or WSL's bash is not used), its
@@ -824,6 +873,146 @@
   omitted when none exists; ANSI and wide disk-space queries share the same
   virtual disk geometry.
 
+- The web: Direct3D 9 renders on WebGPU (`host/gpu/webgpu/d3d9_webgpu.cpp`,
+  WGSL from the shared generator, `dx/d3d9_wgsl.h`) over a `gpu::Device` for
+  the browser (`host/gpu/webgpu/webgpu_device.cpp`). The game runs on a
+  worker and reads its files from the browser's private storage; the main
+  thread drains the render queue as soon as work is handed over, not once
+  per animation frame (which held a race to 20 fps). `tools/build.py --target
+  web` builds the app and a servable site with the launcher and the player
+  page (`web/player/index.html`); `tools/web_launcher.py --web-build` places a
+  build and `--serve` serves a site with the COOP/COEP headers it needs. A
+  drain is asked for with a timeout, never a proxied call: the main thread runs
+  proxied calls wherever it happens to be blocked, including inside the WebGPU
+  binding's own lock, which drawing would take again.
+- Core mods are compiled into the app where plugins cannot be loaded (iOS,
+  the web): `cmake/BuiltinMods.cmake` renames each mod's entry points and
+  lists them in `recomp_builtin_mods`, which the loader consults by the
+  plugin's stem before opening a file. The iOS bundle carries the manifests.
+- Cross builds: `windows-cross` presets over llvm-mingw
+  (`cmake/toolchains/llvm-mingw.cmake`), `web` presets over Emscripten, each
+  with its own output directory beside the shared translation. A developer
+  run finds its mods and state files in its own `recomp/` directory.
+  `build_core.py` builds plugins for the compiler's target, not the host.
+- `RECOMP_SMOKE_SECONDS` raises the smoke host's 180-second limit for slow
+  (software) renderers.
+- The launcher offers only folders holding the whole game: a folder with the
+  executable but without every `[setup] required_dirs` entry (an unpacked
+  patch in Downloads, say) is no longer listed.
+- Direct3D 9 renders on Vulkan as well as Metal: `host/gpu/d3d9_host.cpp`
+  owns the `host_d9_*` entry points and the render thread and drives a
+  `D9Backend` (`host/gpu/d3d9_backend.h`) made from the host's GPU device.
+  `host/gpu/vulkan/d3d9_vulkan.cpp` records dynamic-rendering passes, compiles
+  the shaders' GLSL (`dx/d3d9_glsl.h`) to SPIR-V with glslang (fetched, 16.6.0)
+  and keeps every image in GENERAL layout. The MSL and GLSL come from one
+  generator, `dx/d3d9_shadergen.cpp`; its MSL output is unchanged.
+- Direct3D 9: the half-pixel correction moves geometry right and down (by
+  63/64 of half a pixel, as Wine does). It moved left and up, which put
+  post-processing one texel off and left the last column and row of a
+  full-target pass undrawn.
+- Direct3D 9 on Metal: multisampled surfaces and back buffers, a render thread,
+  and fewer copies and state changes per draw. `game.toml [translate] native`
+  names C replacements for hot guest functions.
+- The desktop app accepts `--launcher`; its argument check printed the usage
+  and exited before the launcher could read the flag.
+- Translator: MMX, SSE and SSE2 instructions become a `recomp_unmodelled`
+  trap rather than a translation failure, since `recomp_cpuid` advertises
+  none of those extensions and a guest that checks CPUID never reaches one.
+  The check runs before the string instructions, because `MOVSD` and `CMPSD`
+  name both a string instruction and an SSE2 scalar-double one and only the
+  operands tell them apart.
+- Translator: `XADD`, `CMPXCHG`, `LAHF`, the x87 constant loads (`FLDLN2`,
+  `FLDL2E`, `FLDLG2`, `FLDL2T`) and the x87 environment ops `FNSTENV` and
+  `FLDENV`, each covered by a Unicorn differential case.
+- Translator: `INT3` ends a block. MSVC pads between functions with it, and a
+  listing whose tail is a call that never returns otherwise ran that padding
+  into the next function. An unhandled breakpoint ends the process on
+  Windows; `recomp_breakpoint` reports the address and stops.
+- Runtime: `GetModuleHandleA` hands out the pseudo handle for a DLL the
+  runtime serves instead of reporting it missing, so a guest that asks before
+  loading anything gets a handle it can pass to `GetProcAddress`. The MSVC
+  CRT's `__mtinit` does exactly that and treats a null handle as "skip the
+  whole block", which left it calling a TLS function pointer it never filled.
+- Direct3D 9 (`dx/d3d9.cpp`): the factory object, the adapter and format
+  queries a game asks before it commits to a device, and CreateDevice. The
+  device's vtable is complete and in interface order, because a guest calls
+  these by slot index; a handful of methods do something and the rest report
+  themselves once and return D3D_OK. Nothing is rasterized yet.
+- D3DX 9 effects are real: compiled fx_2_0 effects are parsed from the
+  executable's own RCDATA (a null module is the executable), with parameter,
+  technique and pass handles, typed parameter storage, real descriptions, and
+  passes that bind their shader bytecode, fill constant registers through each
+  shader's CTAB and resolve every sampler's texture. Preshaded render states
+  are not evaluated yet.
+- A CPU renderer for Direct3D 9 (`dx/d3d9_raster.cpp`): SM 1.x/2.0 bytecode
+  interpreted without flow control, perspective-correct rasterization into
+  32-bit targets, and texture sampling in the usual 8-, 16- and 32-bit formats
+  and DXT1/3/5. Textures get a real mip chain, formats are kept per surface,
+  and the viewport is honoured.
+- DirectInput 8: DirectInput8Create and the version 8 interfaces, on the
+  existing mouse and keyboard devices.
+- Direct3D 9 reports its first 24 clears, copies and every present: colour,
+  target and whether it is the back buffer, and how much of the presented
+  frame is lit. A black frame is otherwise indistinguishable from a broken
+  presentation path.
+- Presentation accepts 32-bit X8R8G8B8 frames (`host_present_expand_xrgb8888`,
+  tested beside the 5-6-5 expansion) in the app and smoke hosts. Direct3D 9
+  Present hands the device's back buffer to it, Clear fills 32-bit targets,
+  and StretchRect copies between them. The back buffer now has its own field:
+  it used to share render_target, which SetRenderTarget overwrites. The
+  DirectDraw mode menu still offers only 8 and 16 bpp, deliberately.
+- Direct3D 9 draws report what they were asked to draw: primitive kind and
+  count, vertex stride, and where the vertices are. The two user-pointer forms
+  were bare stubs, so the geometry a renderer needs was not merely
+  unrasterized, it was unrecorded.
+- Direct3D 9: IDirect3DTexture9::LockRect takes five dwords with `this` and
+  the cube form six; both were declared one short, so a caller's stack drifted
+  between locking a texture and unlocking it and the unlock went through a
+  wrong stack slot. With the counts right, the game uploads its textures:
+  330 locks matched by 330 unlocks, and no unresolved calls anywhere.
+- Direct3D 9: a texture level or cube face references the texture it is a
+  view into, as the real interface does, and GetContainer reports it. A game
+  may take face zero, release the texture, and go on using it for the other
+  five faces; without the container reference that release destroyed it and
+  the next face came back through a dead pointer.
+- Direct3D 9 textures: GetCubeMapSurface returns a real surface per face,
+  kept on the texture so the same face comes back each time; GetLevelDesc
+  fills its structure; and GetLevelCount returns 1. That last one returns a
+  count rather than an HRESULT, so the stub's D3D_OK told callers a texture
+  had no levels at all. A method that reports success without writing what
+  the caller asked for is worse than one that fails.
+- Direct3D 9 and D3DX 9 pop counts: IDirect3DDevice9::CreateTexture takes
+  nine dwords with `this`, CreateVolumeTexture ten, ProcessVertices seven and
+  ID3DXEffect::GetParameterBySemantic three. Each was one short, so the
+  trampoline left the guest stack four bytes high and the caller returned into
+  rubbish; the game died at EIP zero straight after CreateTexture. A vtable
+  slot's argument count is part of the interface, not a detail.
+- Direct3D 9 resources: textures, cube textures, surfaces, vertex and index
+  buffers, vertex declarations and queries. Each is a real object over real
+  guest memory, so Lock hands the game storage it can fill and the contents
+  survive; the device keeps its own back buffer and depth buffer and answers
+  GetBackBuffer and GetDepthStencilSurface with them. Draws are counted, not
+  rasterized.
+- D3DX 9 (`dx/d3dx9.cpp`): the matrix and vector maths for real (multiply,
+  inverse, transpose, the left-handed projections, translation and the vector
+  transforms), plus an effect pool and effects loaded from a game's own
+  resources. Effects are accepted and not compiled, so what was a crash on a
+  null interface becomes a list of the methods a shader-era game really uses.
+- User32: RegisterClassExA registers the class the Ex structure describes, so
+  a game that uses it gets a window instead of a silent CreateWindowExA
+  failure; AdjustWindowRect joins its Ex form. Kernel32: GlobalMemoryStatusEx
+  reports the same machine GlobalMemoryStatus does, in 64-bit fields.
+- Kernel32: system and file time conversion, process id, `DuplicateHandle`,
+  `SleepEx`, waitable timers, priority and affinity, toolhelp snapshots that
+  report no processes, and `IsDebuggerPresent`.
+- Imports: stdcall pop counts for the unshimmed exports of `d3d9`,
+  `d3dx9_26`, `DINPUT8`, `SHFOLDER`, `WINMM`'s wave families, `WS2_32`,
+  `NETAPI32` and the remaining `USER32`, `GDI32` and `KERNEL32` gaps. A call
+  the runtime answers with zero now leaves the guest stack where the callee
+  would have; without a count the stack drifted and a later return landed in
+  rubbish.
+- runtime_tests: the "no shims for it" case names a module no table mentions.
+  `ddraw.dll` gained arity-only entries, so the runtime does serve it now.
 - Bink: close any movie left open at guest exit before host audio teardown.
   Release decoder state, audio channels and guest records in the shared
   smoke, headless and SDL host shutdown path, preventing a process-exit abort.

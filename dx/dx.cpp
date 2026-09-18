@@ -587,7 +587,10 @@ void dx_register_shims() {
     dxgi_register();
     d3dcompiler_register();
     d3dx10_register();
+    d3d9_register();
+    d3dx9_register();
     dinput_register();
+    xinput_register();
     dsound_register();
     dshow_register();
     qmixer_register();
@@ -621,6 +624,8 @@ void dx_reset() {
     ddraw_reset();
     d3d_reset();
     d3d11_reset();
+    d3d9_reset();
+    d3dx9_reset();
     dsound_reset();
     dshow_reset();
     dinput_reset();

@@ -73,6 +73,13 @@ Increasing the presentation limit must not advance game logic or animations fast
 
 `host/input_gate.cpp` maps window coordinates through the published frame layout,
 corrects the original relative cursor, and handles edge scrolling and focus.
+`host/controls/` holds the on-screen controls: a layout model and hit test, a
+router that owns each finger, a virtual pad that on-screen and physical
+controllers both write to, a binding stage that turns the pad into keys and
+mouse (or, in `native` mode, into the DirectInput joystick and XInput devices
+in `dx/`), the overlay that draws it and the on-device editor. Everything but
+the overlay and the SDL glue is SDL-free and unit-tested in `controls_tests`.
+See `docs/superpowers/specs/2026-09-17-touch-controls-design.md`.
 `mods/options_menu.cpp` extends the original Options page and queues changes at
 guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choices;
 `mods/settings.cpp` atomically persists host/mod settings in the selected profile.

@@ -1,3 +1,4 @@
+import pytest
 """Driver-level rules of the translator that need no game to check.
 
     .venv/bin/python -m pytest -q tools/recomp/tests/test_translate_driver.py
@@ -1423,3 +1424,58 @@ def test_a_truncated_listing_grows_into_its_pushed_continuation(tmp_path, monkey
     # And it is a block entry, so a second body that shares this code and
     # executes the same JMP reaches it through recomp_jump.
     assert "void fn_00401020(X86 *c) { body_00401000(c, %s); }" % T.hexlit(cont) in text
+def test_a_callee_that_returns_is_not_taken_as_never_returning():
+    """Ghidra ends a C++ catch funclet's listing on the call before its
+    rethrow, so ending a listing is not proof the callee never returns: a
+    callee whose own listing returns keeps returning.  The throw helper
+    returns too, but only after RaiseException, which does not come back."""
+    free_node, throw, funclet, thrower = 0x00401000, 0x00401100, 0x00401200, 0x00401300
+    listings = {
+        free_node: "00401000  MOV ECX,dword ptr [ESP + 0x4]\n00401004  RET 0x8\n",
+        throw: "00401100  CALL dword ptr [0x008901ac]\n00401106  RET 0x8\n",
+        funclet: "00401200  PUSH 0x0\n00401202  CALL 0x00401000\n",
+        thrower: "00401300  PUSH 0x0\n00401302  CALL 0x00401100\n",
+    }
+    parsed = [T.Function(a, "f%x" % a, 8, T.parse_listing_text(text)) for a, text in listings.items()]
+    found = T.noreturn_callees_from(parsed, {0x008901ac: "RaiseException"})
+    assert found == {throw}
+
+
+def test_padding_after_a_cut_call_keeps_the_callee_never_returning():
+    """`longjmp` has a RET on a path the call never takes; the INT3 padding
+    after the call says the compiler expected nothing to come back."""
+    jumper, fn = 0x00401000, 0x00401100
+    rel = (jumper - (fn + 5)) & 0xFFFFFFFF
+    img = synthetic_image({jumper: b"\xc3", fn: b"\xe8" + rel.to_bytes(4, "little") + b"\xcc\xcc"})
+    parsed = [T.Function(jumper, "jumper", 1, T.parse_listing_text("00401000  RET\n")),
+              T.Function(fn, "caller", 5, T.parse_listing_text("00401100  CALL 0x00401000\n"))]
+    assert T.noreturn_callees_from(parsed, {}) == set()
+    assert T.noreturn_callees_from(parsed, {}, img) == {jumper}
+
+
+def test_an_operand_redirect_rewrites_one_instruction():
+    listing = ("00401000  FLD float ptr [0x008970f0]\n"
+               "00401006  FMUL float ptr [0x008970f0]\n")
+    fn = T.Function(0x00401000, "f", 12, T.parse_listing_text(listing))
+    T.apply_operand_redirects([fn], {0x00401006: (0x008970f0, 0x00a37f10)})
+    assert fn.insns[0].ops == ["float ptr [0x008970f0]"]
+    assert fn.insns[1].ops == ["float ptr [0x00a37f10]"]
+    with pytest.raises(T.TranslateError):
+        T.apply_operand_redirects([fn], {0x00401000: (0x00123456, 0x00a37f10)})
+
+
+def test_an_instruction_patch_replaces_the_text_and_keeps_the_address():
+    listing = ("00401000  CMP DL,byte ptr [EBP + 0x34]\n"
+               "00401003  JNZ 0x00401010\n")
+    saved = dict(T.INSTRUCTION_PATCHES)
+    T.INSTRUCTION_PATCHES.clear()
+    T.INSTRUCTION_PATCHES[0x00401000] = "CMP DL,0x1"
+    try:
+        fn = T.Function(0x00401000, "f", 5, T.parse_listing_text(listing))
+    finally:
+        T.INSTRUCTION_PATCHES.clear()
+        T.INSTRUCTION_PATCHES.update(saved)
+    assert fn.insns[0].addr == 0x00401000
+    assert (fn.insns[0].mnem, fn.insns[0].ops) == ("CMP", ["DL", "0x1"])
+    assert 0x00401000 in T.PATCHES_APPLIED
+    assert fn.insns[1].mnem == "JNZ"

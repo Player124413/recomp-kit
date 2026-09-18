@@ -156,6 +156,28 @@ void mods_settings_declare(uint32_t owner, const char *mod_id, const char *key, 
     sort_entries();
 }
 
+void mods_settings_set_range(uint32_t owner, const char *key, int64_t min, int64_t max) {
+    Entry *e = key ? find(owner, key) : nullptr;
+    if (!e || min > max)
+        return;
+    e->min = min;
+    e->max = max;
+    if (e->value < min)
+        e->value = min;
+    if (e->value > max)
+        e->value = max;
+}
+
+bool mods_settings_stored_value(const char *mod_id_slash_key, int64_t *out) {
+    if (!mod_id_slash_key || !out)
+        return false;
+    auto it = stored().find(mod_id_slash_key);
+    if (it == stored().end())
+        return false;
+    *out = it->second;
+    return true;
+}
+
 PopModStatus mods_settings_get(uint32_t owner, const char *key, int64_t *out) {
     if (!key || !out)
         return POP_E_INVAL;

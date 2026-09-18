@@ -71,6 +71,7 @@ class X86(C.Structure):
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),
         ("xmm", (C.c_uint32 * 4) * 8),
+        ("mm", C.c_uint64 * 8),
     ]
 
 
@@ -839,6 +840,35 @@ def test_case(case, built):
             run_once(case, native, emu, rng)
         except UcError as e:
             pytest.fail("unicorn: %s" % e)
+
+
+def test_mmx_goes_to_the_mm_registers_and_xmm_forms_still_go_to_sse():
+    """MMX is translated onto the MMn registers, because some codecs use it
+    without asking CPUID, and the NFS Most Wanted race needs it.  MOVQ and MOVD
+    are spelled the same for both register files, so the operands are what
+    decide: an MMn operand takes the MMX path, an XMM one the SSE2 path, whose
+    MOVQ also clears the upper half of the destination.  EMMS marks every x87
+    register empty, which is all the x87 model has to do for it."""
+    tr = T.Translator(NoImage(), {0x0D01D000}, Opts())
+    insns = T.parse_listing_text(
+        "0d01d000  MOVQ MM0,qword ptr [ESI]\n"
+        "0d01d003  PXOR MM7,MM7\n"
+        "0d01d006  PADDW MM0,MM7\n"
+        "0d01d009  EMMS\n"
+        "0d01d00b  MOVQ XMM0,qword ptr [EDX]\n"
+        "0d01d00f  RET\n")
+    fn = T.Function(0x0D01D000, "simd", 0x10, insns)
+    fn.measure(NoImage())
+    tr.prepare(fn)
+    text = "\n".join(tr.translate(fn))
+    assert "c->mm[0] = rd64(" in text
+    assert "c->mm[7] = mmx_pxor(c->mm[7], c->mm[7]);" in text
+    assert "c->mm[0] = mmx_padd(c->mm[0], c->mm[7], 16u);" in text
+    assert "c->fpu_tag = 0xffffu;" in text
+    # The XMM spelling of MOVQ keeps the SSE2 lanes, and zeroes the upper half.
+    assert "c->xmm[0][0] = s0_;" in text and "c->xmm[0][2] = 0u;" in text
+    # MMX must not touch the SSE2 register file, nor the reverse.
+    assert "c->xmm[0][0] = c->mm" not in text
 
 
 def test_segment_register_loads_do_not_reach_the_flat_model():

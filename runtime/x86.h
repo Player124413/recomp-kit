@@ -27,6 +27,15 @@
 extern "C" {
 #endif
 
+/* The hot guest-memory and x87 helpers below are large enough that the
+ * compiler stops inlining them on its own, which costs a call per guest
+ * memory access, so these insist. */
+#if defined(__GNUC__) || defined(__clang__)
+#define RECOMP_HOT_INLINE static inline __attribute__((always_inline))
+#else
+#define RECOMP_HOT_INLINE static inline
+#endif
+
 /* ---------------------------------------------------------------- memory */
 
 #ifndef GUEST_SIZE
@@ -62,20 +71,20 @@ extern uint8_t *g_mem;
 #define GUEST_RETURN_SENTINEL 0x0fdfff00u
 
 /* Little-endian host (ARM64) matches the guest, so memcpy is a plain load. */
-static inline uint8_t rd8(uint32_t a) {
+RECOMP_HOT_INLINE uint8_t rd8(uint32_t a) {
     return g_mem[a];
 }
-static inline uint16_t rd16(uint32_t a) {
+RECOMP_HOT_INLINE uint16_t rd16(uint32_t a) {
     uint16_t v;
     memcpy(&v, g_mem + a, 2);
     return v;
 }
-static inline uint32_t rd32(uint32_t a) {
+RECOMP_HOT_INLINE uint32_t rd32(uint32_t a) {
     uint32_t v;
     memcpy(&v, g_mem + a, 4);
     return v;
 }
-static inline uint64_t rd64(uint32_t a) {
+RECOMP_HOT_INLINE uint64_t rd64(uint32_t a) {
     uint64_t v;
     memcpy(&v, g_mem + a, 8);
     return v;
@@ -123,38 +132,38 @@ static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
         recomp_dirty(a, n);
 }
 
-static inline void wr8(uint32_t a, uint8_t v) {
+RECOMP_HOT_INLINE void wr8(uint32_t a, uint8_t v) {
     g_mem[a] = v;
     recomp_watch(a, 1, v);
 }
-static inline void wr16(uint32_t a, uint16_t v) {
+RECOMP_HOT_INLINE void wr16(uint32_t a, uint16_t v) {
     memcpy(g_mem + a, &v, 2);
     recomp_watch(a, 2, v);
 }
-static inline void wr32(uint32_t a, uint32_t v) {
+RECOMP_HOT_INLINE void wr32(uint32_t a, uint32_t v) {
     memcpy(g_mem + a, &v, 4);
     recomp_watch(a, 4, v);
 }
-static inline void wr64(uint32_t a, uint64_t v) {
+RECOMP_HOT_INLINE void wr64(uint32_t a, uint64_t v) {
     memcpy(g_mem + a, &v, 8);
     recomp_watch(a, 8, v);
 }
-static inline float rdf32(uint32_t a) {
+RECOMP_HOT_INLINE float rdf32(uint32_t a) {
     float v;
     memcpy(&v, g_mem + a, 4);
     return v;
 }
-static inline double rdf64(uint32_t a) {
+RECOMP_HOT_INLINE double rdf64(uint32_t a) {
     double v;
     memcpy(&v, g_mem + a, 8);
     return v;
 }
-static inline void wrf32(uint32_t a, float v) {
+RECOMP_HOT_INLINE void wrf32(uint32_t a, float v) {
     memcpy(g_mem + a, &v, 4);
     if (g_dirty_count != 0)
         recomp_dirty(a, 4);
 }
-static inline void wrf64(uint32_t a, double v) {
+RECOMP_HOT_INLINE void wrf64(uint32_t a, double v) {
     memcpy(g_mem + a, &v, 8);
     if (g_dirty_count != 0)
         recomp_dirty(a, 8);
@@ -263,6 +272,10 @@ struct X86 {
      * little-endian host the byte order of a copy then takes care of
      * itself. Lane 0 is the low four bytes. */
     uint32_t xmm[8][4];
+    /* The eight MMX registers. Kept apart from the x87 stack: a program that
+     * leaves MMX without EMMS and then uses the FPU sees its old values, not
+     * the MMX ones, which no game this runtime serves relies on. */
+    uint64_t mm[8];
 };
 typedef struct X86 X86;
 
@@ -396,6 +409,7 @@ void recomp_int(X86 *c, uint32_t vec);
  * image, because a listing routinely decodes the data past a function's last
  * instruction as code. Reaching one is fatal and says where. */
 void recomp_unmodelled(X86 *c, uint32_t addr);
+void recomp_breakpoint(X86 *c, uint32_t addr);
 
 /* ------------------------------------------------------ hook dispatch -- */
 
@@ -483,7 +497,7 @@ static inline void recomp_return(X86 *c) {
 
 /* --------------------------------------------------------------- flags */
 
-static inline uint32_t parity8(uint32_t v) {
+RECOMP_HOT_INLINE uint32_t parity8(uint32_t v) {
     v &= 0xffu;
     v ^= v >> 4;
     v ^= v >> 2;
@@ -1063,7 +1077,7 @@ X86_CMPS_SCAS(d, 32, 0xffffffffu)
  * A subnormal double is a NORMAL extended - the extended exponent range
  * reaches 2^-16382, far below 2^-1074 - so it tags valid, not special.  An
  * 80-bit subnormal cannot occur at all while the registers are doubles. */
-static inline unsigned ftag_classify(double v) {
+RECOMP_HOT_INLINE unsigned ftag_classify(double v) {
     /* The runtime already represents x87 registers as IEEE binary64. Read
      * the representation without aliasing or floating-point operations:
      * tagging every FPU write must not call libm or quiet a signaling NaN. */
@@ -1077,19 +1091,19 @@ static inline unsigned ftag_classify(double v) {
     return FTAG_VALID; /* NORMAL and SUBNORMAL */
 }
 
-static inline unsigned ftag_of(const X86 *c, unsigned phys) {
+RECOMP_HOT_INLINE unsigned ftag_of(const X86 *c, unsigned phys) {
     return (c->fpu_tag >> (2u * (phys & 7u))) & 3u;
 }
-static inline void ftag_put(X86 *c, unsigned phys, unsigned tag) {
+RECOMP_HOT_INLINE void ftag_put(X86 *c, unsigned phys, unsigned tag) {
     unsigned sh = 2u * (phys & 7u);
     c->fpu_tag = (uint16_t)((c->fpu_tag & ~(3u << sh)) | (tag << sh));
 }
 /* ST(i) is empty (nothing has been pushed into it since the last FINIT). */
-static inline unsigned fempty(const X86 *c, unsigned i) {
+RECOMP_HOT_INLINE unsigned fempty(const X86 *c, unsigned i) {
     return ftag_of(c, (c->fpu_top + i) & 7u) == FTAG_EMPTY;
 }
 
-static inline void fpush(X86 *c, double v) {
+RECOMP_HOT_INLINE void fpush(X86 *c, double v) {
     c->fpu_top = (c->fpu_top - 1u) & 7u;
     c->st[c->fpu_top] = v;
     c->st_bits[c->fpu_top] = 0;
@@ -1113,14 +1127,14 @@ static inline void fpush_st(X86 *c, unsigned i) {
     c->st_exact[c->fpu_top] = exact;
     ftag_put(c, c->fpu_top, tag);
 }
-static inline double fpop(X86 *c) {
+RECOMP_HOT_INLINE double fpop(X86 *c) {
     double v = c->st[c->fpu_top];
     c->st_exact[c->fpu_top] = 0;
     ftag_put(c, c->fpu_top, FTAG_EMPTY);
     c->fpu_top = (c->fpu_top + 1u) & 7u;
     return v;
 }
-static inline void fdrop(X86 *c) {
+RECOMP_HOT_INLINE void fdrop(X86 *c) {
     c->st_exact[c->fpu_top] = 0;
     ftag_put(c, c->fpu_top, FTAG_EMPTY);
     c->fpu_top = (c->fpu_top + 1u) & 7u;
@@ -1130,7 +1144,7 @@ static inline void fdrop(X86 *c) {
  * this, so an arithmetic result that turns out to be zero, a NaN, an infinity
  * or a denormal leaves the tag word describing what the register now holds
  * rather than what it held before. */
-static inline void fset(X86 *c, unsigned i, double v) {
+RECOMP_HOT_INLINE void fset(X86 *c, unsigned i, double v) {
     unsigned phys = (c->fpu_top + i) & 7u;
     c->st[phys] = v;
     c->st_bits[phys] = 0;
@@ -1148,7 +1162,7 @@ static inline void fcopy(X86 *c, unsigned dst, unsigned src) {
 }
 
 /* FXCH: the tags and exact integers travel with the values. */
-static inline void fxch(X86 *c, unsigned i) {
+RECOMP_HOT_INLINE void fxch(X86 *c, unsigned i) {
     unsigned a = c->fpu_top & 7u, b = (c->fpu_top + i) & 7u;
     double v = c->st[a];
     unsigned t = ftag_of(c, a);
@@ -1185,13 +1199,13 @@ static inline double x87_indefinite(void) {
 /* x87 raises #Z when a finite non-zero dividend meets a zero divisor.  This
  * is the one exception besides IE that the parity oracle also reports, so
  * modelling it keeps the exemption down to IE alone. */
-static inline double fdivz(X86 *c, double a, double b) {
+RECOMP_HOT_INLINE double fdivz(X86 *c, double a, double b) {
     if (b == 0.0 && a == a && !isinf(a) && a != 0.0)
         c->fpu_sw |= 0x0004u;
     return a / b;
 }
 
-static inline double fx87_exact(X86 *c, double r) {
+RECOMP_HOT_INLINE double fx87_exact(X86 *c, double r) {
     if (r == r)
         return r;
     c->fpu_sw |= 0x0001u; /* IE: invalid operation */
@@ -1202,7 +1216,7 @@ static inline double fx87_exact(X86 *c, double r) {
  * observe the precision-control field.  PC=00 rounds to single; PC=10
  * (53-bit) and PC=11 (64-bit) both land on the double we store, 64-bit
  * approximated by 53 per the plan ruling. */
-static inline double fx87(X86 *c, double r) {
+RECOMP_HOT_INLINE double fx87(X86 *c, double r) {
     if (r != r) {
         c->fpu_sw |= 0x0001u;
         return x87_indefinite();
@@ -1213,7 +1227,7 @@ static inline double fx87(X86 *c, double r) {
 }
 
 /* A signalling NaN has the quiet bit (mantissa MSB) clear. */
-static inline int is_snan(double v) {
+RECOMP_HOT_INLINE int is_snan(double v) {
     uint64_t b;
     memcpy(&b, &v, 8);
     return ((b >> 52) & 0x7ffu) == 0x7ffu && (b & 0x000fffffffffffffull) != 0 &&
@@ -1223,7 +1237,7 @@ static inline int is_snan(double v) {
 /* FCOM/FUCOM: C3 C2 C0 = ZF PF CF of the comparison.  They differ only in
  * which NaNs raise the invalid-operation exception: FCOM raises on any NaN,
  * FUCOM only on a signalling one. */
-static inline void fcom_common(X86 *c, double a, double b, int quiet) {
+RECOMP_HOT_INLINE void fcom_common(X86 *c, double a, double b, int quiet) {
     uint16_t sw = (uint16_t)(c->fpu_sw & (uint16_t)~0x4700u);
     if (isnan(a) || isnan(b)) {
         sw |= 0x4500u; /* unordered: C3 C2 C0 */
@@ -1235,10 +1249,10 @@ static inline void fcom_common(X86 *c, double a, double b, int quiet) {
         sw |= 0x4000u; /* C3 */
     c->fpu_sw = sw;
 }
-static inline void fcom(X86 *c, double a, double b) {
+RECOMP_HOT_INLINE void fcom(X86 *c, double a, double b) {
     fcom_common(c, a, b, 0);
 }
-static inline void fucom(X86 *c, double a, double b) {
+RECOMP_HOT_INLINE void fucom(X86 *c, double a, double b) {
     fcom_common(c, a, b, 1);
 }
 /* FCOMI/FUCOMI report into EFLAGS instead of the status word, with the same
@@ -1357,6 +1371,30 @@ static inline void x87_finit(X86 *c) {
  * with the opcode, FDP, FDS), which this model does not track and writes as
  * zero, then ST(0) through ST(7) as 80-bit values in stack order.  FNSAVE
  * then reinitialises the FPU, which is why the CRT pairs it with FRSTOR. */
+/* FNSTENV m28: the control, status and tag words, then the exception
+ * pointers this model does not track, written as zero. Every exception is
+ * masked afterwards, as on hardware; the register stack is untouched. */
+static inline void x87_fnstenv(X86 *c, uint32_t a) {
+    wr32(a, c->fpu_cw);
+    wr32(a + 4, fstsw(c));
+    wr32(a + 8, c->fpu_tag);
+    wr32(a + 12, 0);
+    wr32(a + 16, 0);
+    wr32(a + 20, 0);
+    wr32(a + 24, 0);
+    x87_set_cw(c, (uint16_t)(c->fpu_cw | 0x3fu));
+}
+
+/* FLDENV m28: control word, status word with TOP, tag word. The registers
+ * stay in their physical slots, so ST(i) follows the restored TOP. */
+static inline void x87_fldenv(X86 *c, uint32_t a) {
+    uint16_t sw = rd16(a + 4);
+    x87_set_cw(c, rd16(a));
+    c->fpu_top = (sw >> 11) & 7u;
+    c->fpu_sw = (uint16_t)(sw & (uint16_t)~0x3800u);
+    c->fpu_tag = rd16(a + 8);
+}
+
 static inline void x87_fnsave(X86 *c, uint32_t a) {
     unsigned i;
     wr32(a, c->fpu_cw);
@@ -1536,6 +1574,182 @@ static inline double fprem_common(X86 *c, double a, double b, int ieee) {
 /* FSCALE: ST(0) *= 2 ** trunc(ST(1)) */
 static inline double fscale(double a, double b) {
     return ldexp(a, (int)trunc(b));
+}
+
+/* ----------------------------------------------------------------- MMX ---
+ * The MMn registers, as translate.py's MMX_BINARY/MMX_SHIFT emit them. Each
+ * helper takes and returns a packed 64-bit register; the lane width is the
+ * caller's, so one helper serves every element size of an operation. */
+static inline uint64_t mmx_mask(unsigned bits) {
+    return bits >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << bits) - 1);
+}
+static inline uint64_t mmx_lane(uint64_t v, unsigned bits, unsigned i) {
+    return (v >> (bits * i)) & mmx_mask(bits);
+}
+static inline int64_t mmx_slane(uint64_t v, unsigned bits, unsigned i) {
+    uint64_t x = mmx_lane(v, bits, i);
+    if (bits < 64 && (x >> (bits - 1)) & 1)
+        x |= ~mmx_mask(bits);
+    return (int64_t)x;
+}
+static inline uint64_t mmx_put(uint64_t acc, unsigned bits, unsigned i, uint64_t x) {
+    uint64_t m = mmx_mask(bits);
+    return (acc & ~(m << (bits * i))) | ((x & m) << (bits * i));
+}
+static inline int64_t mmx_sat_s(int64_t x, unsigned bits) {
+    int64_t hi = ((int64_t)1 << (bits - 1)) - 1, lo = -hi - 1;
+    return x > hi ? hi : x < lo ? lo : x;
+}
+static inline int64_t mmx_sat_u(int64_t x, unsigned bits) {
+    int64_t hi = ((int64_t)1 << bits) - 1;
+    return x > hi ? hi : x < 0 ? 0 : x;
+}
+#define MMX_LANES(bits) (64u / (bits))
+static inline uint64_t mmx_padd(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, mmx_lane(a, bits, i) + mmx_lane(b, bits, i));
+    return r;
+}
+static inline uint64_t mmx_psub(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, mmx_lane(a, bits, i) - mmx_lane(b, bits, i));
+    return r;
+}
+static inline uint64_t mmx_padds(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i,
+                    (uint64_t)mmx_sat_s(mmx_slane(a, bits, i) + mmx_slane(b, bits, i), bits));
+    return r;
+}
+static inline uint64_t mmx_psubs(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i,
+                    (uint64_t)mmx_sat_s(mmx_slane(a, bits, i) - mmx_slane(b, bits, i), bits));
+    return r;
+}
+static inline uint64_t mmx_paddus(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i,
+                    (uint64_t)mmx_sat_u(
+                        (int64_t)mmx_lane(a, bits, i) + (int64_t)mmx_lane(b, bits, i), bits));
+    return r;
+}
+static inline uint64_t mmx_psubus(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i,
+                    (uint64_t)mmx_sat_u(
+                        (int64_t)mmx_lane(a, bits, i) - (int64_t)mmx_lane(b, bits, i), bits));
+    return r;
+}
+static inline uint64_t mmx_pmullw(uint64_t a, uint64_t b) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < 4; i++)
+        r = mmx_put(r, 16, i, (uint64_t)(mmx_slane(a, 16, i) * mmx_slane(b, 16, i)));
+    return r;
+}
+static inline uint64_t mmx_pmulhw(uint64_t a, uint64_t b) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < 4; i++)
+        r = mmx_put(r, 16, i, (uint64_t)((mmx_slane(a, 16, i) * mmx_slane(b, 16, i)) >> 16));
+    return r;
+}
+static inline uint64_t mmx_pmaddwd(uint64_t a, uint64_t b) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < 2; i++) {
+        int64_t s = mmx_slane(a, 16, 2 * i) * mmx_slane(b, 16, 2 * i) +
+                    mmx_slane(a, 16, 2 * i + 1) * mmx_slane(b, 16, 2 * i + 1);
+        r = mmx_put(r, 32, i, (uint64_t)s);
+    }
+    return r;
+}
+static inline uint64_t mmx_pcmpeq(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, mmx_lane(a, bits, i) == mmx_lane(b, bits, i) ? ~(uint64_t)0 : 0);
+    return r;
+}
+static inline uint64_t mmx_pcmpgt(uint64_t a, uint64_t b, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, mmx_slane(a, bits, i) > mmx_slane(b, bits, i) ? ~(uint64_t)0 : 0);
+    return r;
+}
+/* Packing: the destination's lanes narrow into the low half, the source's
+ * into the high half. */
+static inline uint64_t mmx_pack(uint64_t a, uint64_t b, unsigned from, int is_signed) {
+    unsigned to = from / 2, n = 64 / from;
+    uint64_t r = 0;
+    for (unsigned i = 0; i < n; i++) {
+        int64_t x = mmx_slane(a, from, i), y = mmx_slane(b, from, i);
+        r = mmx_put(r, to, i, (uint64_t)(is_signed ? mmx_sat_s(x, to) : mmx_sat_u(x, to)));
+        r = mmx_put(r, to, n + i, (uint64_t)(is_signed ? mmx_sat_s(y, to) : mmx_sat_u(y, to)));
+    }
+    return r;
+}
+static inline uint64_t mmx_packsswb(uint64_t a, uint64_t b) {
+    return mmx_pack(a, b, 16, 1);
+}
+static inline uint64_t mmx_packssdw(uint64_t a, uint64_t b) {
+    return mmx_pack(a, b, 32, 1);
+}
+static inline uint64_t mmx_packuswb(uint64_t a, uint64_t b) {
+    return mmx_pack(a, b, 16, 0);
+}
+/* Unpacking interleaves the low (or high) half of each operand, destination
+ * lane first. */
+static inline uint64_t mmx_punpck(uint64_t a, uint64_t b, unsigned bits, unsigned half) {
+    unsigned n = 64 / bits / 2;
+    uint64_t r = 0;
+    for (unsigned i = 0; i < n; i++) {
+        r = mmx_put(r, bits, 2 * i, mmx_lane(a, bits, half + i));
+        r = mmx_put(r, bits, 2 * i + 1, mmx_lane(b, bits, half + i));
+    }
+    return r;
+}
+static inline uint64_t mmx_punpckl(uint64_t a, uint64_t b, unsigned bits) {
+    return mmx_punpck(a, b, bits, 0);
+}
+static inline uint64_t mmx_punpckh(uint64_t a, uint64_t b, unsigned bits) {
+    return mmx_punpck(a, b, bits, 64 / bits / 2);
+}
+static inline uint64_t mmx_pand(uint64_t a, uint64_t b) {
+    return a & b;
+}
+static inline uint64_t mmx_pandn(uint64_t a, uint64_t b) {
+    return ~a & b;
+}
+static inline uint64_t mmx_por(uint64_t a, uint64_t b) {
+    return a | b;
+}
+static inline uint64_t mmx_pxor(uint64_t a, uint64_t b) {
+    return a ^ b;
+}
+/* Shifts take their count from all 64 bits of the source; a count past the
+ * lane width clears the lane, or fills it with the sign for PSRA. */
+static inline uint64_t mmx_psll(uint64_t a, uint64_t count, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, count >= bits ? 0 : mmx_lane(a, bits, i) << count);
+    return r;
+}
+static inline uint64_t mmx_psrl(uint64_t a, uint64_t count, unsigned bits) {
+    uint64_t r = 0;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, count >= bits ? 0 : mmx_lane(a, bits, i) >> count);
+    return r;
+}
+static inline uint64_t mmx_psra(uint64_t a, uint64_t count, unsigned bits) {
+    uint64_t r = 0;
+    unsigned c = count >= bits ? bits - 1 : (unsigned)count;
+    for (unsigned i = 0; i < MMX_LANES(bits); i++)
+        r = mmx_put(r, bits, i, (uint64_t)(mmx_slane(a, bits, i) >> c));
+    return r;
 }
 
 /* ----------------------------------------------------------------- misc */

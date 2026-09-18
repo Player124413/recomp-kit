@@ -18,7 +18,9 @@
 //  5. Shutdown, after guest threads stop: pop_mod_exit in reverse load order,
 //     every tracked resource reclaimed, then the Lua runtime last.
 #include "mods_internal.h"
+#include "builtin_mods.h"
 #include "../runtime/layout.h"
+#include "controls_settings.h"
 #include "options_menu.h"
 #include "sprite_view.h"
 #include "manifest_types.h"
@@ -34,6 +36,7 @@
 #include <deque>
 #include <set>
 #include <stdio.h>
+#include <string.h>
 #include <string>
 #include <vector>
 
@@ -358,6 +361,8 @@ void build_api(ModContext &c) {
     c.api.display_transition = guarded<&PopModApi::display_transition>;
     c.api.set_scene_domain = guarded<&PopModApi::set_scene_domain>;
     c.api.hook_install_at_callsite = guarded<&PopModApi::hook_install_at_callsite>;
+    c.api.guest_call = guarded<&PopModApi::guest_call>;
+    c.api.screen_size = guarded<&PopModApi::screen_size>;
     c.api.hook_install_ex = guarded<&PopModApi::hook_install_ex>;
 }
 
@@ -406,11 +411,46 @@ void rollback(uint32_t owner) {
     }
 }
 
+// ---- plugin handles: a loaded library, or an entry of recomp_builtin_mods ----
+
+bool is_builtin(void *handle) {
+    for (const RecompBuiltinMod *m = recomp_builtin_mods; m->stem; ++m)
+        if (handle == (void *)m)
+            return true;
+    return false;
+}
+
+// The built-in plugin a manifest's plugin path names, by the file's stem.
+const RecompBuiltinMod *builtin_for(const std::string &plugin_path) {
+    size_t slash = plugin_path.find_last_of("/\\");
+    std::string stem = plugin_path.substr(slash == std::string::npos ? 0 : slash + 1);
+    size_t dot = stem.rfind('.');
+    if (dot != std::string::npos)
+        stem.resize(dot);
+    for (const RecompBuiltinMod *m = recomp_builtin_mods; m->stem; ++m)
+        if (stem == m->stem)
+            return m;
+    return nullptr;
+}
+
+void *plugin_sym(void *handle, const char *name) {
+    if (!is_builtin(handle))
+        return os_dlsym(handle, name);
+    const RecompBuiltinMod *m = (const RecompBuiltinMod *)handle;
+    if (!strcmp(name, "pop_mod_abi"))
+        return (void *)m->abi;
+    if (!strcmp(name, "pop_mod_init"))
+        return (void *)m->init;
+    if (!strcmp(name, "pop_mod_exit"))
+        return (void *)m->exit;
+    return nullptr;
+}
+
 // Returns POP_OK, or POP_E_ABI with `why` set. The status is typed and kept,
 // because "abi" appearing somewhere in a sentence is not something a caller or
 // a test can act on.
 PopModStatus validate_abi(void *handle, std::string *why) {
-    const PopModAbi *abi = (const PopModAbi *)os_dlsym(handle, "pop_mod_abi");
+    const PopModAbi *abi = (const PopModAbi *)plugin_sym(handle, "pop_mod_abi");
     if (!abi) {
         *why = "no pop_mod_abi record";
         return POP_E_ABI;
@@ -682,7 +722,10 @@ bool mods_load_all() {
             }
         }
 
-        if (why.empty() && !m.plugin_path.empty()) {
+        const RecompBuiltinMod *builtin = why.empty() ? builtin_for(m.plugin_path) : nullptr;
+        if (builtin) {
+            c.handle = (void *)builtin;
+        } else if (why.empty() && !m.plugin_path.empty()) {
             std::string path = m.dir + "/" + m.plugin_path;
             OsStat st;
             if (os_stat(path.c_str(), &st) != 0) {
@@ -693,18 +736,21 @@ bool mods_load_all() {
                     path = m.dir + "/" + m.plugin_path.substr(0, dot) + os_plugin_extension();
             }
             c.handle = os_dlopen(path.c_str());
-            if (!c.handle) {
+            if (!c.handle)
                 why = std::string("dlopen failed: ") + os_dlerror();
-            } else if ((c.status = validate_abi(c.handle, &why)) != POP_OK) {
+        }
+        if (why.empty() && c.handle) {
+            if ((c.status = validate_abi(c.handle, &why)) != POP_OK) {
                 // validate_abi said what is wrong and gave the typed status
             } else {
-                auto init = (PopModStatus (*)(const PopModApi *))os_dlsym(c.handle, "pop_mod_init");
+                auto init =
+                    (PopModStatus (*)(const PopModApi *))plugin_sym(c.handle, "pop_mod_init");
                 if (!init) {
                     why = "no pop_mod_init export";
                 } else {
-                    const PopModAbi *abi = (const PopModAbi *)os_dlsym(c.handle, "pop_mod_abi");
+                    const PopModAbi *abi = (const PopModAbi *)plugin_sym(c.handle, "pop_mod_abi");
                     mods_hooks_set_cpu_size(c.owner, abi->cpu_size);
-                    c.exit_fn = (PopModStatus (*)())os_dlsym(c.handle, "pop_mod_exit");
+                    c.exit_fn = (PopModStatus (*)())plugin_sym(c.handle, "pop_mod_exit");
                     // Open across pop_mod_init and nothing else. A [script]
                     // running afterwards can call back into a plugin API the
                     // mod retained, and that must not be a second chance to
@@ -820,9 +866,13 @@ void shutdown_now() {
     // guard it would reach is only reachable while the code that calls it is.
     for (size_t i = generation_base(); i < contexts().size(); ++i)
         if (contexts()[i].handle) {
-            os_dlclose(contexts()[i].handle);
+            if (!is_builtin(contexts()[i].handle))
+                os_dlclose(contexts()[i].handle);
             contexts()[i].handle = nullptr;
         }
+    // The on-screen controls hold their last hidden-group change until a pump
+    // flushes it; there is no pump after this one.
+    mods_controls_flush();
     mods_settings_save();
     // The runtime's own registrations go last, so nothing is left believing it
     // has hooks in a registry that is about to be gone.

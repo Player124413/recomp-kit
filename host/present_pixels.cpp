@@ -125,6 +125,22 @@ extern "C" void host_present_expand_rgb565(const uint8_t *src, int w, int h, int
     }
 }
 
+extern "C" void host_present_expand_xrgb8888(const uint8_t *src, int w, int h, int pitch,
+                                             uint8_t *out) {
+    if (!src || !out || w <= 0 || h <= 0)
+        return;
+    for (int y = 0; y < h; ++y) {
+        const uint8_t *row = src + (size_t)y * (size_t)pitch;
+        uint8_t *o = out + (size_t)y * (size_t)w * 4;
+        for (int x = 0; x < w; ++x) {
+            o[4 * x + 0] = row[4 * x + 2];
+            o[4 * x + 1] = row[4 * x + 1];
+            o[4 * x + 2] = row[4 * x + 0];
+            o[4 * x + 3] = 255;
+        }
+    }
+}
+
 extern "C" struct HostFit host_present_fit(double dw, double dh, int gw, int gh) {
     HostFit fit = {0, 0, dw, dh, 1.0};
     if (gw <= 0 || gh <= 0 || dw <= 0 || dh <= 0)
@@ -143,6 +159,34 @@ extern "C" struct HostFit host_present_fit(double dw, double dh, int gw, int gh)
     fit.x = std::floor((dw - fit.w) / 2);
     fit.y = std::floor((dh - fit.h) / 2);
     return fit;
+}
+
+extern "C" struct HostGameRect host_present_game_rect(int dw, int dh, int gw, int gh,
+                                                      int safe_top) {
+    const HostGameRect whole = {0, 0, dw, dh};
+    if (dh <= dw || gw <= 0 || gh <= 0 || dw <= 0)
+        return whole;
+    const int top = safe_top > 0 ? safe_top : 0;
+    const long h = lround(dw * gh / double(gw));
+    if (h > dh - top)
+        return whole;
+    return {0, top, dw, int(h)};
+}
+
+static std::atomic<int> g_present_safe_top{0};
+extern "C" void host_present_set_safe_top(int pixels) {
+    g_present_safe_top.store(pixels > 0 ? pixels : 0);
+}
+extern "C" int host_present_safe_top(void) {
+    return g_present_safe_top.load();
+}
+
+extern "C" void host_present_point_to_game(struct HostGameRect rect, int32_t x, int32_t y,
+                                           int32_t *out_x, int32_t *out_y) {
+    if (out_x)
+        *out_x = x - rect.x;
+    if (out_y)
+        *out_y = y - rect.y;
 }
 
 extern "C" struct HostWindowSize host_window_size_for(int gw, int gh, int uw, int uh,

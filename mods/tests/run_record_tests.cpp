@@ -16,6 +16,7 @@
 #include "../mods_internal.h"
 
 #include <condition_variable>
+#include <pthread.h>
 #include <chrono>
 #include <mutex>
 #include <string>

@@ -1,5 +1,19 @@
 #include "seh.h"
 #include "loader.h"
+
+// From the generated table (tools/recomp/translate.py); absent in hosts
+// without one.
+// Weak defaults, which the generated table replaces.
+extern "C" {
+extern const uint32_t recomp_operand_redirect_pairs[];
+extern const uint32_t recomp_operand_redirect_count;
+__attribute__((weak)) const uint32_t recomp_operand_redirect_pairs[2] = {0, 0};
+__attribute__((weak)) const uint32_t recomp_operand_redirect_count = 0;
+extern const uint32_t recomp_data_seed_pairs[];
+extern const uint32_t recomp_data_seed_count;
+__attribute__((weak)) const uint32_t recomp_data_seed_pairs[2] = {0, 0};
+__attribute__((weak)) const uint32_t recomp_data_seed_count = 0;
+}
 #include "memory.h"
 #include "imports.h"
 #include "win32.h"
@@ -598,6 +612,22 @@ bool loader_load(const char *exe_path) {
             memcpy(g_mem + si.va, file.data() + si.raw_ptr, copy);
         }
         g_sections.push_back(si);
+    }
+
+    // game.toml operand_redirects: each new location starts with the value of
+    // the one it replaces (8 bytes, enough for a double).
+    for (uint32_t i = 0; i < recomp_operand_redirect_count; ++i) {
+        uint32_t from = recomp_operand_redirect_pairs[2 * i],
+                 to = recomp_operand_redirect_pairs[2 * i + 1];
+        if ((uint64_t)from + 8 <= GUEST_SIZE && (uint64_t)to + 8 <= GUEST_SIZE)
+            memcpy(g_mem + to, g_mem + from, 8);
+    }
+
+    // game.toml data_seeds: slots the translation's patches read.
+    for (uint32_t i = 0; i < recomp_data_seed_count; ++i) {
+        uint32_t addr = recomp_data_seed_pairs[2 * i];
+        if ((uint64_t)addr + 4 <= GUEST_SIZE)
+            memcpy(g_mem + addr, &recomp_data_seed_pairs[2 * i + 1], 4);
     }
 
     imports_init();

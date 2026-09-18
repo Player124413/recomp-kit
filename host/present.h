@@ -22,6 +22,10 @@ void host_present_expand_indexed(const uint8_t *src, int w, int h, int pitch,
 // 5-6-5, the depth the front end switches to. Each channel is scaled to the
 // full 0..255 range rather than shifted, so white stays white.
 void host_present_expand_rgb565(const uint8_t *src, int w, int h, int pitch, uint8_t *out);
+// X8R8G8B8, the depth a Direct3D 9 back buffer has: little-endian B, G, R and
+// an ignored byte per pixel. Alpha comes out 255, because the X byte is not
+// alpha and a presented frame is opaque.
+void host_present_expand_xrgb8888(const uint8_t *src, int w, int h, int pitch, uint8_t *out);
 
 // Where a guest frame lands inside a drawable, aspect preserved. Integer
 // scaling when a whole multiple fits, which keeps 320x200-era art free of
@@ -55,6 +59,34 @@ struct HostWindowSize host_window_size_for(int guest_w, int guest_h, int usable_
 // which is what a full-screen game's own cursor clamp does anyway.
 void host_present_point_to_guest(double drawable_w, double drawable_h, int guest_w, int guest_h,
                                  double px, double py, int32_t *out_x, int32_t *out_y);
+
+// The game rectangle: the part of the drawable the presenter composes the
+// game into, in drawable pixels. Everything that places the game or maps a
+// point onto it goes through this one rectangle: the presenter's composite
+// and published layout, the input gate (fed game-rectangle pixels by the
+// window host), the gesture mapper's edges and the on-screen controls' area.
+//
+// Landscape (dw >= dh): the whole drawable, which is where the presenter has
+// always composed; the compositor then places the guest image inside it as
+// before. Portrait (dh > dw, a phone held upright): full width, the guest's
+// aspect kept, pinned `safe_top` pixels down, leaving the space below for the
+// controls. A portrait image too tall to fit below `safe_top` takes the
+// landscape rule. No guest mode yet (gw or gh <= 0): the whole drawable.
+struct HostGameRect {
+    int x, y, w, h;
+};
+struct HostGameRect host_present_game_rect(int dw, int dh, int gw, int gh, int safe_top);
+// The system strip above the game in portrait (a status bar, a notch), in
+// drawable pixels. Set by the window host whenever it reads the safe area.
+void host_present_set_safe_top(int pixels);
+int host_present_safe_top(void);
+// The rectangle for the live drawable, guest mode and safe top: what the
+// presenter composes into right now. The whole drawable before it starts.
+struct HostGameRect host_present_current_game_rect(void);
+// A drawable pixel as a pixel in the game rectangle. May fall outside it
+// (negative, or past its size): the gate treats such a point as off the game.
+void host_present_point_to_game(struct HostGameRect rect, int32_t x, int32_t y, int32_t *out_x,
+                                int32_t *out_y);
 
 // ---------------------------------------------------------------------------
 // Frame dumps, for looking at actual pixels instead of describing them.
@@ -239,12 +271,6 @@ void host_present_stop(void); // only after the guest scheduler has stopped
 // no drawable and presents nothing: what an iOS app must do in the background.
 void host_present_suspend(bool suspended);
 bool host_present_suspended(void);
-// The on-screen keypad (host/keypad_layout.h) the worker draws over every
-// presented frame. The host publishes what to show; the worker reads it once
-// per frame.
-#include "keypad_layout.h"
-void host_present_set_keypad(const KeypadView &view);
-KeypadView host_present_keypad(void);
 void host_frame_seal(void);
 void host_present_first_write(void);
 void host_present_stage_rgba(const uint8_t *rgba, int w, int h);
@@ -268,10 +294,21 @@ void host_present_tick_for_test(double ts);
 #endif
 
 #ifdef __cplusplus
+// The on-screen controls (host/controls/overlay.h) the worker draws over every
+// presented frame. The host publishes what to show; the worker reads it once
+// per frame.
+#include "controls/overlay.h"
+void host_present_set_controls(const controls::ControlsView &view);
+controls::ControlsView host_present_controls(void);
+#endif
+
+#ifdef __cplusplus
 #include "compositor.h"
 #include "gpu/gpu.h"
 #include <functional>
 #include <memory>
+// The drawable the presenter composes into, in pixels; false before one exists.
+bool host_present_drawable(int *w, int *h);
 #include <vector>
 
 // The device every presenter texture and command buffer belongs to. Set once,
@@ -282,6 +319,9 @@ gpu::Device *host_present_device(void);
 // `native_surface` is what the window layer hands over (a CAMetalLayer* on
 // macOS); the presenter makes its swapchain from it on the worker.
 void host_present_start(void *native_surface, int drawable_w, int drawable_h);
+// One presenter turn on the calling thread, for a host that drives the GPU from
+// its own loop (the web); host_present_start starts no worker there.
+void host_present_pump(void);
 void host_present_start_offscreen(int w, int h);
 // Main-thread messages. No GPU work or wait for the worker here.
 void host_present_resize(int drawable_w, int drawable_h);

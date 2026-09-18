@@ -41,6 +41,11 @@ void TouchMapper::set_bounds(double w, double h) {
     bounds_h_ = h;
 }
 
+void TouchMapper::set_origin(double x, double y) {
+    origin_x_ = x;
+    origin_y_ = y;
+}
+
 double TouchMapper::centroid_x() const {
     double s = 0;
     for (const Finger &f : fingers_)
@@ -67,18 +72,19 @@ void TouchMapper::set_edge_insets(double left, double top, double right, double 
 void TouchMapper::place(std::vector<TouchAction> *out, double x, double y, bool snap) {
     bool at_edge = false;
     if (snap && bounds_w_ > 0 && bounds_h_ > 0) {
-        if (x < kTouchEdgeMargin + inset_l_) {
-            x = 0;
+        const double rx = x - origin_x_, ry = y - origin_y_;
+        if (rx < kTouchEdgeMargin + inset_l_) {
+            x = origin_x_;
             at_edge = true;
-        } else if (x > bounds_w_ - 1 - kTouchEdgeMargin - inset_r_) {
-            x = bounds_w_ - 1;
+        } else if (rx > bounds_w_ - 1 - kTouchEdgeMargin - inset_r_) {
+            x = origin_x_ + bounds_w_ - 1;
             at_edge = true;
         }
-        if (y < kTouchEdgeMargin + inset_t_) {
-            y = 0;
+        if (ry < kTouchEdgeMargin + inset_t_) {
+            y = origin_y_;
             at_edge = true;
-        } else if (y > bounds_h_ - 1 - kTouchEdgeMargin - inset_b_) {
-            y = bounds_h_ - 1;
+        } else if (ry > bounds_h_ - 1 - kTouchEdgeMargin - inset_b_) {
+            y = origin_y_ + bounds_h_ - 1;
             at_edge = true;
         }
     }
@@ -134,7 +140,8 @@ void TouchMapper::end_edge_hold(std::vector<TouchAction> *out) {
     if (!snapped_)
         return;
     snapped_ = false;
-    double x = placed_x_, y = placed_y_;
+    // Relative to the bounds' origin, and back.
+    double x = placed_x_ - origin_x_, y = placed_y_ - origin_y_;
     if (x <= 0)
         x = kTouchEdgeRelease;
     else if (x >= bounds_w_ - 1)
@@ -143,6 +150,8 @@ void TouchMapper::end_edge_hold(std::vector<TouchAction> *out) {
         y = kTouchEdgeRelease;
     else if (y >= bounds_h_ - 1)
         y = bounds_h_ - 1 - kTouchEdgeRelease;
+    x += origin_x_;
+    y += origin_y_;
     if (release_pending_) {
         nudge_pending_ = true;
         nudge_x_ = x;

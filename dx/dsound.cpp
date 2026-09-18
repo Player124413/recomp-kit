@@ -326,6 +326,11 @@ void read_wave_format(ComObj *b, uint32_t wfx) {
     if (!wfx || !gm_valid(wfx, 16))
         return;
     uint16_t tag = rd16(wfx + WFX_OFF_wFormatTag);
+    // WAVEFORMATEXTENSIBLE (0xFFFE) names its real format in a SubFormat
+    // GUID whose first four bytes are the old tag: 1 for PCM.
+    if (tag == 0xfffe && gm_valid(wfx, 40) && rd16(wfx + 16) >= 22 &&
+        rd32(wfx + 24) == WAVE_FORMAT_PCM && rd16(wfx + 28) == 0 && rd16(wfx + 30) == 0x10)
+        tag = WAVE_FORMAT_PCM;
     if (tag != WAVE_FORMAT_PCM) {
         log_once("dsound.fmt",
                  "dsound: wave format tag %u is not PCM; the buffer is treated "

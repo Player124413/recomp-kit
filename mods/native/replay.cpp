@@ -1,3 +1,4 @@
+#define RECOMP_GUEST_MEMORY_OWNER 1 /* points g_mem at a replay arena around each call */
 #include "replay.h"
 #include "shim_capture.h"
 #include "../../runtime/guest.h"

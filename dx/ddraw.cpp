@@ -2113,6 +2113,21 @@ void seal_frame(const char * /*why*/) {
 
 } // namespace
 
+// A device that renders by itself (the Direct3D 9 shim) presents a finished
+// CPU image with no DirectDraw surface behind it. Its frame opens before the
+// pixels are handed over and seals right after, as a Flip would, and it is
+// always composed from those pixels, never from recorded blits.
+void ddraw_external_present_begin(void) {
+    presenter_write();
+}
+void ddraw_external_present_end(void) {
+    Frame &f = current_frame();
+    legacy_interleave(f);
+    f.palette_changed = true; // content with no records: the pixels changed
+    g_present_since_seal = true;
+    seal_frame("external present");
+}
+
 // A CPU write, seen at Unlock. The decoder's frames arrive this way, and a
 // write to the primary while a movie is playing is what makes the frame FMV.
 // Called only when the write actually changed pixels: FMV is a property of

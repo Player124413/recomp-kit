@@ -287,6 +287,17 @@ struct PopModApi {
     /* Size-gated optional tail; original providers continue to work. */
     PopModStatus (*texture_override_provider_ex)(const PopModApi *api, PopTextureProviderExFn cb,
                                                  void *user);
+    /* Optional v1 tail. Only inside a hook callback: runs the guest function
+     * at `addr` (a listed function) with ECX = `ecx` and `nargs` dword
+     * arguments on a scratch stack below the hooked frame, and returns its
+     * EAX. Every register and the x87 state are restored afterwards, so
+     * cdecl, stdcall and thiscall all work. Guest memory it writes stays
+     * written. */
+    PopModStatus (*guest_call)(const PopModApi *api, uint32_t addr, uint32_t ecx,
+                               const uint32_t *args, uint32_t nargs, uint32_t *out_eax);
+    /* Optional v1 tail. The screen the window is on, in pixels
+     * (POP_E_NOTFOUND before the host knows it). */
+    PopModStatus (*screen_size)(const PopModApi *api, uint32_t *w, uint32_t *h);
 };
 
 /* ---------------------------------------------------------- plugin ABI --- */

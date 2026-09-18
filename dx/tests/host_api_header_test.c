@@ -25,6 +25,8 @@ int host_api_header_compiles_as_c(void) {
     HostD3DSurface surface;
     HostD3DTexture texture;
     HostAudioPlay play;
+    HostPadState pad;
+    HostPadEvent pad_event;
 
     blit.seq = 0u;
     blit.cpu_bpp = 0u;
@@ -42,8 +44,18 @@ int host_api_header_compiles_as_c(void) {
     surface.width = 0;
     texture.width = 0;
     play.channel = 0;
+    pad.buttons = 0u;
+    pad.hat = 0u;
+    pad.reserved = 0u;
+    pad.lx = 0;
+    pad_event.sequence = 0u;
+    pad_event.kind = 0u;
+    pad_event.index = 0u;
+    pad_event.value = 0;
 
     return (int)(key.surface + px.w + blit.seq + (uint32_t)frame.id + (uint32_t)cls +
                  state.light_count + draw.primitive_type + counts.clean_reads +
-                 (uint32_t)input.mouse_x + cmd.vertex_count);
+                 (uint32_t)input.mouse_x + cmd.vertex_count + pad.buttons + pad.hat + pad.reserved +
+                 (uint32_t)pad.lx + pad_event.sequence + pad_event.kind + pad_event.index +
+                 (uint32_t)pad_event.value);
 }

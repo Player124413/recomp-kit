@@ -213,6 +213,7 @@ enum HostScriptOp {
     HOST_SCRIPT_CAMERA,      // deterministic fixture camera x/z, preserving basis
     HOST_SCRIPT_ENTITYMOVE,  // same semantic resolution, motion only
     HOST_SCRIPT_WORLDMOVE,
+    HOST_SCRIPT_FOCUS, // down: 1 the window gains focus, 0 it loses it
 };
 
 struct HostScriptStep {
