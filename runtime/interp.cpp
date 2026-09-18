@@ -11,8 +11,8 @@ namespace {
 
 enum Op : uint8_t {
     NOP,
-    MOV,   // dst = src
-    MOV8,  // byte [mem] = imm
+    MOV,  // dst = src
+    MOV8, // byte [mem] = imm
     LEA,
     ADD,
     OR,
@@ -21,12 +21,12 @@ enum Op : uint8_t {
     XOR,
     CMP,
     TEST,
-    IMUL,  // dst = dst * src, or dst = src * imm with has_imm3
+    IMUL, // dst = dst * src, or dst = src * imm with has_imm3
     INC,
     DEC,
     PUSH,
     POP,
-    CALL,  // direct: target; indirect: src
+    CALL, // direct: target; indirect: src
     RET,
     JMP,
     JCC,
@@ -132,33 +132,52 @@ bool decode(uint32_t a, Ins &in) {
     case 0x90:
         in.op = NOP;
         break;
-    case 0x01: case 0x09: case 0x21: case 0x29: case 0x31: case 0x39: case 0x89: case 0x85:
-    case 0x03: case 0x0b: case 0x23: case 0x2b: case 0x33: case 0x3b: case 0x8b: {
+    case 0x01:
+    case 0x09:
+    case 0x21:
+    case 0x29:
+    case 0x31:
+    case 0x39:
+    case 0x89:
+    case 0x85:
+    case 0x03:
+    case 0x0b:
+    case 0x23:
+    case 0x2b:
+    case 0x33:
+    case 0x3b:
+    case 0x8b: {
         Operand rm;
         if (!(n = modrm(p, rm, reg)))
             return false;
         p += n;
         const uint8_t kind = b & 0xf8;
-        in.op = b == 0x85 ? TEST
+        in.op = b == 0x85                ? TEST
                 : b == 0x89 || b == 0x8b ? MOV
-                : kind == 0x00 ? ADD
-                : kind == 0x08 ? OR
-                : kind == 0x20 ? AND
-                : kind == 0x28 ? SUB
-                : kind == 0x30 ? XOR
-                               : CMP;
+                : kind == 0x00           ? ADD
+                : kind == 0x08           ? OR
+                : kind == 0x20           ? AND
+                : kind == 0x28           ? SUB
+                : kind == 0x30           ? XOR
+                                         : CMP;
         bool to_reg = (b & 2) && b != 0x85;
         in.dst = to_reg ? reg_operand(reg) : rm;
         in.src = to_reg ? rm : reg_operand(reg);
         break;
     }
-    case 0x05: case 0x0d: case 0x25: case 0x2d: case 0x35: case 0x3d:
+    case 0x05:
+    case 0x0d:
+    case 0x25:
+    case 0x2d:
+    case 0x35:
+    case 0x3d:
         in.op = kGroup1[(b >> 3) & 7];
         in.dst = reg_operand(R_EAX);
         in.src = imm_operand((int32_t)rd32(p));
         p += 4;
         break;
-    case 0x81: case 0x83: {
+    case 0x81:
+    case 0x83: {
         Operand rm;
         if (!(n = modrm(p, rm, reg)))
             return false;
@@ -186,7 +205,8 @@ bool decode(uint32_t a, Ins &in) {
         in.src = rm;
         break;
     }
-    case 0xc6: case 0xc7: {
+    case 0xc6:
+    case 0xc7: {
         Operand rm;
         if (!(n = modrm(p, rm, reg)) || reg != 0)
             return false;
@@ -205,7 +225,8 @@ bool decode(uint32_t a, Ins &in) {
         }
         break;
     }
-    case 0x69: case 0x6b: {
+    case 0x69:
+    case 0x6b: {
         Operand rm;
         if (!(n = modrm(p, rm, reg)))
             return false;
@@ -336,15 +357,17 @@ std::shared_ptr<Routine> build(uint32_t start) {
         }
         if (!decode(a, in)) {
             uint32_t n = readable(a, 4) ? rd32(a) : 0;
-            snprintf(g_error, sizeof g_error, "unsupported instruction at %08x (bytes %02x %02x %02x %02x)", a,
-                     n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, n >> 24);
+            snprintf(g_error, sizeof g_error,
+                     "unsupported instruction at %08x (bytes %02x %02x %02x %02x)", a, n & 0xff,
+                     (n >> 8) & 0xff, (n >> 16) & 0xff, n >> 24);
             return nullptr;
         }
         r->at[a] = (uint32_t)r->code.size();
         r->code.push_back(in);
         if ((in.op == JMP || in.op == JCC) && !in.indirect) {
             if (in.target < start) {
-                snprintf(g_error, sizeof g_error, "branch at %08x leaves the routine for %08x", a, in.target);
+                snprintf(g_error, sizeof g_error, "branch at %08x leaves the routine for %08x", a,
+                         in.target);
                 return nullptr;
             }
             if (in.target > furthest)
@@ -356,8 +379,8 @@ std::shared_ptr<Routine> build(uint32_t start) {
     }
     for (const Ins &in : r->code)
         if ((in.op == JMP || in.op == JCC) && !r->at.count(in.target)) {
-            snprintf(g_error, sizeof g_error, "branch at %08x lands inside an instruction (%08x)", in.addr,
-                     in.target);
+            snprintf(g_error, sizeof g_error, "branch at %08x lands inside an instruction (%08x)",
+                     in.addr, in.target);
             return nullptr;
         }
     r->bytes.assign(g_mem + start, g_mem + a);
@@ -376,7 +399,8 @@ std::shared_ptr<Routine> routine_at(uint32_t start) {
         auto it = cache().find(start);
         if (it != cache().end()) {
             const auto &b = it->second->bytes;
-            if (readable(start, (uint32_t)b.size()) && memcmp(g_mem + start, b.data(), b.size()) == 0)
+            if (readable(start, (uint32_t)b.size()) &&
+                memcmp(g_mem + start, b.data(), b.size()) == 0)
                 return it->second;
             cache().erase(it);
         }
@@ -502,14 +526,30 @@ uint32_t arith(X86 *c, Op op, uint32_t a, uint32_t b) {
 bool condition(const X86 *c, uint8_t cc) {
     bool v;
     switch (cc >> 1) {
-    case 0: v = c->eflags_of; break;
-    case 1: v = c->eflags_cf; break;
-    case 2: v = c->eflags_zf; break;
-    case 3: v = c->eflags_cf || c->eflags_zf; break;
-    case 4: v = c->eflags_sf; break;
-    case 5: v = c->eflags_pf; break;
-    case 6: v = c->eflags_sf != c->eflags_of; break;
-    default: v = c->eflags_zf || c->eflags_sf != c->eflags_of; break;
+    case 0:
+        v = c->eflags_of;
+        break;
+    case 1:
+        v = c->eflags_cf;
+        break;
+    case 2:
+        v = c->eflags_zf;
+        break;
+    case 3:
+        v = c->eflags_cf || c->eflags_zf;
+        break;
+    case 4:
+        v = c->eflags_sf;
+        break;
+    case 5:
+        v = c->eflags_pf;
+        break;
+    case 6:
+        v = c->eflags_sf != c->eflags_of;
+        break;
+    default:
+        v = c->eflags_zf || c->eflags_sf != c->eflags_of;
+        break;
     }
     return (cc & 1) ? !v : v;
 }

@@ -12,39 +12,97 @@ namespace {
 // operand is the destination for every op that has one.
 int operand_count(uint32_t op, uint32_t major, uint32_t minor, bool pixel) {
     switch (op) {
-    case OP_NOP: return 0;
-    case OP_MOV: case OP_MOVA: case OP_RCP: case OP_RSQ: case OP_EXP: case OP_LOG:
-    case OP_LIT: case OP_FRC: case OP_ABS: case OP_NRM: case OP_EXPP: case OP_LOGP:
+    case OP_NOP:
+        return 0;
+    case OP_MOV:
+    case OP_MOVA:
+    case OP_RCP:
+    case OP_RSQ:
+    case OP_EXP:
+    case OP_LOG:
+    case OP_LIT:
+    case OP_FRC:
+    case OP_ABS:
+    case OP_NRM:
+    case OP_EXPP:
+    case OP_LOGP:
     case OP_TEXDP3:
         return 2;
-    case OP_ADD: case OP_SUB: case OP_MUL: case OP_DP3: case OP_DP4: case OP_MIN: case OP_MAX:
-    case OP_SLT: case OP_SGE: case OP_DST: case OP_M4X4: case OP_M4X3: case OP_M3X4:
-    case OP_M3X3: case OP_M3X2: case OP_POW: case OP_CRS:
+    case OP_ADD:
+    case OP_SUB:
+    case OP_MUL:
+    case OP_DP3:
+    case OP_DP4:
+    case OP_MIN:
+    case OP_MAX:
+    case OP_SLT:
+    case OP_SGE:
+    case OP_DST:
+    case OP_M4X4:
+    case OP_M4X3:
+    case OP_M3X4:
+    case OP_M3X3:
+    case OP_M3X2:
+    case OP_POW:
+    case OP_CRS:
         return 3;
-    case OP_MAD: case OP_LRP: case OP_SGN: case OP_CND: case OP_CMP: case OP_DP2ADD:
+    case OP_MAD:
+    case OP_LRP:
+    case OP_SGN:
+    case OP_CND:
+    case OP_CMP:
+    case OP_DP2ADD:
         return 4;
-    case OP_SINCOS: return major >= 3 ? 2 : 4;
-    case OP_TEXCOORD: return (pixel && major == 1 && minor == 4) ? 2 : 1;
-    case OP_TEXKILL: return 1;
+    case OP_SINCOS:
+        return major >= 3 ? 2 : 4;
+    case OP_TEXCOORD:
+        return (pixel && major == 1 && minor == 4) ? 2 : 1;
+    case OP_TEXKILL:
+        return 1;
     case OP_TEX:
-        if (major >= 2) return 3;
+        if (major >= 2)
+            return 3;
         return (major == 1 && minor == 4) ? 2 : 1;
-    case OP_DCL: return 2;
-    case OP_DEF: case OP_DEFI: return 5;
-    case OP_DEFB: return 2;
-    case OP_TEXLDL: return 3;
+    case OP_DCL:
+        return 2;
+    case OP_DEF:
+    case OP_DEFI:
+        return 5;
+    case OP_DEFB:
+        return 2;
+    case OP_TEXLDL:
+        return 3;
     // Control flow: operands but no destination (see has_destination).
-    case OP_REP: case OP_IF: return 1;
-    case OP_IFC: case OP_BREAKC: case OP_LOOP: return 2;
-    case OP_ENDREP: case OP_ELSE: case OP_ENDIF: case OP_BREAK: case OP_ENDLOOP: return 0;
-    default: return -1;
+    case OP_REP:
+    case OP_IF:
+        return 1;
+    case OP_IFC:
+    case OP_BREAKC:
+    case OP_LOOP:
+        return 2;
+    case OP_ENDREP:
+    case OP_ELSE:
+    case OP_ENDIF:
+    case OP_BREAK:
+    case OP_ENDLOOP:
+        return 0;
+    default:
+        return -1;
     }
 }
 
 bool has_destination(uint32_t op) {
     switch (op) {
-    case OP_REP: case OP_IF: case OP_IFC: case OP_BREAKC: case OP_LOOP:
-    case OP_ENDREP: case OP_ELSE: case OP_ENDIF: case OP_BREAK: case OP_ENDLOOP:
+    case OP_REP:
+    case OP_IF:
+    case OP_IFC:
+    case OP_BREAKC:
+    case OP_LOOP:
+    case OP_ENDREP:
+    case OP_ELSE:
+    case OP_ENDIF:
+    case OP_BREAK:
+    case OP_ENDLOOP:
         return false;
     default:
         return true;
@@ -59,9 +117,9 @@ Program load(const std::vector<uint8_t> &code) {
     }
     auto tok = [&](size_t i) -> uint32_t {
         size_t o = i * 4;
-        return o + 4 <= code.size()
-                   ? (uint32_t)(code[o] | code[o + 1] << 8 | code[o + 2] << 16 | (uint32_t)code[o + 3] << 24)
-                   : 0xffffffffu;
+        return o + 4 <= code.size() ? (uint32_t)(code[o] | code[o + 1] << 8 | code[o + 2] << 16 |
+                                                 (uint32_t)code[o + 3] << 24)
+                                    : 0xffffffffu;
     };
     uint32_t version = tok(0);
     p.pixel = (version >> 16) == 0xffff;

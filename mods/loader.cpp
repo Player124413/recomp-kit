@@ -743,7 +743,8 @@ bool mods_load_all() {
             if ((c.status = validate_abi(c.handle, &why)) != POP_OK) {
                 // validate_abi said what is wrong and gave the typed status
             } else {
-                auto init = (PopModStatus (*)(const PopModApi *))plugin_sym(c.handle, "pop_mod_init");
+                auto init =
+                    (PopModStatus (*)(const PopModApi *))plugin_sym(c.handle, "pop_mod_init");
                 if (!init) {
                     why = "no pop_mod_init export";
                 } else {

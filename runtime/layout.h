@@ -16,7 +16,7 @@ struct HostLayout {
     // it runs from one (a second build root, such as a cross build's), else
     // <checkout>/build/recomp.
     std::string build_dir;
-    bool developer = false;    // checkout_root is set
+    bool developer = false; // checkout_root is set
 };
 const HostLayout &host_layout();
 // resources_dir + "/" + rel, with the developer mapping for the names

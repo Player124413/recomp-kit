@@ -9227,10 +9227,11 @@ static void test_d3d9_gpu_renderer() {
     CHECK_EQ(p[1], 255);
     CHECK_EQ(p[2], 0);
 
-    std::vector<uint8_t> vs = d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u,
-                                        0xC00F0000u, 0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u,
-                                        0x0000FFFFu});
-    std::vector<uint8_t> ps = d9_words({0xFFFF0101u, 0x00000001u, 0x800F0000u, 0x90E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> vs =
+        d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u, 0xC00F0000u,
+                  0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> ps =
+        d9_words({0xFFFF0101u, 0x00000001u, 0x800F0000u, 0x90E40000u, 0x0000FFFFu});
     const uint8_t decl[16] = {0, 0, 0, 0, 2, 0, 0, 0, 0xff, 0, 0, 0, 17, 0, 0, 0};
     D9Pipeline pl;
     pl.rs[7] = 1; // ZENABLE
@@ -9274,7 +9275,7 @@ static void test_d3d9_gpu_renderer() {
     CHECK_EQ(p[0], 0);
 
     // Depth: a nearer triangle wins, a farther one does not.
-    pl.rs[22] = 1; // CULLMODE none
+    pl.rs[22] = 1;                            // CULLMODE none
     d.inline_vertices = (const uint8_t *)ccw; // z 0.25, nearer than 0.5
     host_d9_draw(&d);
     d9_pixel(RT, 3, 3, p);
@@ -9336,11 +9337,12 @@ static void test_d3d9_gpu_renderer() {
     shadow_pass.depth = {SHADOW, 0, 0};
     host_d9_clear(&shadow_pass, vp, 0, nullptr, 2, 0, 0.5f, 0);
     // vs: mov oPos, v0; mov oD0, c0; mov oT0, c1. ps 1.1: tex t0; mov r0, t0.
-    std::vector<uint8_t> vs_t = d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u,
-                                          0xC00F0000u, 0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u,
-                                          0x00000001u, 0xE00F0000u, 0xA0E40001u, 0x0000FFFFu});
-    std::vector<uint8_t> ps_t = d9_words({0xFFFF0101u, 0x00000042u, 0xB00F0000u, 0x00000001u, 0x800F0000u,
-                                          0xB0E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> vs_t =
+        d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u, 0xC00F0000u,
+                  0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u, 0x00000001u, 0xE00F0000u,
+                  0xA0E40001u, 0x0000FFFFu});
+    std::vector<uint8_t> ps_t = d9_words({0xFFFF0101u, 0x00000042u, 0xB00F0000u, 0x00000001u,
+                                          0x800F0000u, 0xB0E40000u, 0x0000FFFFu});
     pl.rs[7] = 0;
     pl.rs[27] = 0;
     d.target = HostD9Target{};
@@ -9368,19 +9370,15 @@ static void test_d3d9_gpu_renderer() {
     // Shader model 3.0: outputs named by their dcl, and a rep loop on a defi
     // count. vs: dcl_position o0; dcl_color o1; mov o0, v0; mov o1, c0.
     // ps: defi i0 = 3; def c1 = 0.25; rep i0 { r0 += c1 }; oC0 = r0 (r0 starts at 0).
-    std::vector<uint8_t> vs3 = d9_words({0xFFFE0300u, 0x0200001Fu, 0x80000000u, 0x900F0000u,
-                                         0x0200001Fu, 0x80000000u, 0xE00F0000u,
-                                         0x0200001Fu, 0x8000000Au, 0xE00F0001u,
-                                         0x02000001u, 0xE00F0000u, 0x90E40000u,
-                                         0x02000001u, 0xE00F0001u, 0xA0E40000u, 0x0000FFFFu});
-    std::vector<uint8_t> ps3 = d9_words({0xFFFF0300u, 0x05000030u, 0xF00F0000u, 3u, 0u, 0u, 0u,
-                                         0x05000051u, 0xA00F0001u, 0x3E800000u, 0x3E800000u,
-                                         0x3E800000u, 0x3E800000u,
-                                         0x0200001Fu, 0x8000000Au, 0x900F0000u,
-                                         0x01000026u, 0xF0E40000u,
-                                         0x03000002u, 0x800F0000u, 0x80E40000u, 0xA0E40001u,
-                                         0x00000027u,
-                                         0x02000001u, 0x800F0800u, 0x80E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> vs3 =
+        d9_words({0xFFFE0300u, 0x0200001Fu, 0x80000000u, 0x900F0000u, 0x0200001Fu, 0x80000000u,
+                  0xE00F0000u, 0x0200001Fu, 0x8000000Au, 0xE00F0001u, 0x02000001u, 0xE00F0000u,
+                  0x90E40000u, 0x02000001u, 0xE00F0001u, 0xA0E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> ps3 = d9_words(
+        {0xFFFF0300u, 0x05000030u, 0xF00F0000u, 3u,          0u,          0u,          0u,
+         0x05000051u, 0xA00F0001u, 0x3E800000u, 0x3E800000u, 0x3E800000u, 0x3E800000u, 0x0200001Fu,
+         0x8000000Au, 0x900F0000u, 0x01000026u, 0xF0E40000u, 0x03000002u, 0x800F0000u, 0x80E40000u,
+         0xA0E40001u, 0x00000027u, 0x02000001u, 0x800F0800u, 0x80E40000u, 0x0000FFFFu});
     d.vs = vs3.data();
     d.vs_size = (uint32_t)vs3.size();
     d.ps = ps3.data();

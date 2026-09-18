@@ -62,17 +62,39 @@ MtlFormat format_info(uint32_t fmt, bool bc) {
     m.bytes = f.bytes;
     m.block = f.block;
     switch (f.store) {
-    case Store::BGRA8: m.pixel = MTLPixelFormatBGRA8Unorm; break;
-    case Store::A8: m.pixel = MTLPixelFormatA8Unorm; break;
-    case Store::RGBA16: m.pixel = MTLPixelFormatRGBA16Unorm; break;
-    case Store::R16F: m.pixel = MTLPixelFormatR16Float; break;
-    case Store::RGBA16F: m.pixel = MTLPixelFormatRGBA16Float; break;
-    case Store::R32F: m.pixel = MTLPixelFormatR32Float; break;
-    case Store::RGBA32F: m.pixel = MTLPixelFormatRGBA32Float; break;
-    case Store::BC1: m.pixel = MTLPixelFormatBC1_RGBA; break;
-    case Store::BC2: m.pixel = MTLPixelFormatBC2_RGBA; break;
-    case Store::BC3: m.pixel = MTLPixelFormatBC3_RGBA; break;
-    case Store::Depth: m.pixel = MTLPixelFormatDepth32Float_Stencil8; break;
+    case Store::BGRA8:
+        m.pixel = MTLPixelFormatBGRA8Unorm;
+        break;
+    case Store::A8:
+        m.pixel = MTLPixelFormatA8Unorm;
+        break;
+    case Store::RGBA16:
+        m.pixel = MTLPixelFormatRGBA16Unorm;
+        break;
+    case Store::R16F:
+        m.pixel = MTLPixelFormatR16Float;
+        break;
+    case Store::RGBA16F:
+        m.pixel = MTLPixelFormatRGBA16Float;
+        break;
+    case Store::R32F:
+        m.pixel = MTLPixelFormatR32Float;
+        break;
+    case Store::RGBA32F:
+        m.pixel = MTLPixelFormatRGBA32Float;
+        break;
+    case Store::BC1:
+        m.pixel = MTLPixelFormatBC1_RGBA;
+        break;
+    case Store::BC2:
+        m.pixel = MTLPixelFormatBC2_RGBA;
+        break;
+    case Store::BC3:
+        m.pixel = MTLPixelFormatBC3_RGBA;
+        break;
+    case Store::Depth:
+        m.pixel = MTLPixelFormatDepth32Float_Stencil8;
+        break;
     }
     return m;
 }
@@ -82,7 +104,7 @@ struct Tex {
     MtlFormat info;
     id<MTLTexture> texture = nil;
     gpu::Texture imported;
-    uint64_t used = 0; // the last frame serial that read or wrote it
+    uint64_t used = 0;  // the last frame serial that read or wrote it
     float scale = 1.0f; // physical pixels per guest pixel: render targets are rendered larger
     bool cube = false, depth = false; // what `texture` is, without asking it
     // A multisampled target draws into `msaa` and resolves into `texture`,
@@ -106,62 +128,105 @@ struct Buf {
 
 MTLBlendFactor blend_factor(uint32_t b, bool alpha) {
     switch (b) {
-    case 1: return MTLBlendFactorZero;
-    case 2: return MTLBlendFactorOne;
-    case 3: return alpha ? MTLBlendFactorSourceAlpha : MTLBlendFactorSourceColor;
-    case 4: return alpha ? MTLBlendFactorOneMinusSourceAlpha : MTLBlendFactorOneMinusSourceColor;
-    case 5: case 12: return MTLBlendFactorSourceAlpha;
-    case 6: case 13: return MTLBlendFactorOneMinusSourceAlpha;
-    case 7: return MTLBlendFactorDestinationAlpha;
-    case 8: return MTLBlendFactorOneMinusDestinationAlpha;
-    case 9: return alpha ? MTLBlendFactorDestinationAlpha : MTLBlendFactorDestinationColor;
-    case 10: return alpha ? MTLBlendFactorOneMinusDestinationAlpha : MTLBlendFactorOneMinusDestinationColor;
-    case 11: return MTLBlendFactorSourceAlphaSaturated;
-    case 14: return alpha ? MTLBlendFactorBlendAlpha : MTLBlendFactorBlendColor;
-    case 15: return alpha ? MTLBlendFactorOneMinusBlendAlpha : MTLBlendFactorOneMinusBlendColor;
-    default: return MTLBlendFactorOne;
+    case 1:
+        return MTLBlendFactorZero;
+    case 2:
+        return MTLBlendFactorOne;
+    case 3:
+        return alpha ? MTLBlendFactorSourceAlpha : MTLBlendFactorSourceColor;
+    case 4:
+        return alpha ? MTLBlendFactorOneMinusSourceAlpha : MTLBlendFactorOneMinusSourceColor;
+    case 5:
+    case 12:
+        return MTLBlendFactorSourceAlpha;
+    case 6:
+    case 13:
+        return MTLBlendFactorOneMinusSourceAlpha;
+    case 7:
+        return MTLBlendFactorDestinationAlpha;
+    case 8:
+        return MTLBlendFactorOneMinusDestinationAlpha;
+    case 9:
+        return alpha ? MTLBlendFactorDestinationAlpha : MTLBlendFactorDestinationColor;
+    case 10:
+        return alpha ? MTLBlendFactorOneMinusDestinationAlpha
+                     : MTLBlendFactorOneMinusDestinationColor;
+    case 11:
+        return MTLBlendFactorSourceAlphaSaturated;
+    case 14:
+        return alpha ? MTLBlendFactorBlendAlpha : MTLBlendFactorBlendColor;
+    case 15:
+        return alpha ? MTLBlendFactorOneMinusBlendAlpha : MTLBlendFactorOneMinusBlendColor;
+    default:
+        return MTLBlendFactorOne;
     }
 }
 MTLBlendOperation blend_op(uint32_t op) {
     switch (op) {
-    case 2: return MTLBlendOperationSubtract;
-    case 3: return MTLBlendOperationReverseSubtract;
-    case 4: return MTLBlendOperationMin;
-    case 5: return MTLBlendOperationMax;
-    default: return MTLBlendOperationAdd;
+    case 2:
+        return MTLBlendOperationSubtract;
+    case 3:
+        return MTLBlendOperationReverseSubtract;
+    case 4:
+        return MTLBlendOperationMin;
+    case 5:
+        return MTLBlendOperationMax;
+    default:
+        return MTLBlendOperationAdd;
     }
 }
 MTLCompareFunction compare_fn(uint32_t f) {
     switch (f) {
-    case 1: return MTLCompareFunctionNever;
-    case 2: return MTLCompareFunctionLess;
-    case 3: return MTLCompareFunctionEqual;
-    case 4: return MTLCompareFunctionLessEqual;
-    case 5: return MTLCompareFunctionGreater;
-    case 6: return MTLCompareFunctionNotEqual;
-    case 7: return MTLCompareFunctionGreaterEqual;
-    default: return MTLCompareFunctionAlways;
+    case 1:
+        return MTLCompareFunctionNever;
+    case 2:
+        return MTLCompareFunctionLess;
+    case 3:
+        return MTLCompareFunctionEqual;
+    case 4:
+        return MTLCompareFunctionLessEqual;
+    case 5:
+        return MTLCompareFunctionGreater;
+    case 6:
+        return MTLCompareFunctionNotEqual;
+    case 7:
+        return MTLCompareFunctionGreaterEqual;
+    default:
+        return MTLCompareFunctionAlways;
     }
 }
 MTLStencilOperation stencil_op(uint32_t op) {
     switch (op) {
-    case 2: return MTLStencilOperationZero;
-    case 3: return MTLStencilOperationReplace;
-    case 4: return MTLStencilOperationIncrementClamp;
-    case 5: return MTLStencilOperationDecrementClamp;
-    case 6: return MTLStencilOperationInvert;
-    case 7: return MTLStencilOperationIncrementWrap;
-    case 8: return MTLStencilOperationDecrementWrap;
-    default: return MTLStencilOperationKeep;
+    case 2:
+        return MTLStencilOperationZero;
+    case 3:
+        return MTLStencilOperationReplace;
+    case 4:
+        return MTLStencilOperationIncrementClamp;
+    case 5:
+        return MTLStencilOperationDecrementClamp;
+    case 6:
+        return MTLStencilOperationInvert;
+    case 7:
+        return MTLStencilOperationIncrementWrap;
+    case 8:
+        return MTLStencilOperationDecrementWrap;
+    default:
+        return MTLStencilOperationKeep;
     }
 }
 MTLSamplerAddressMode address_mode(uint32_t a) {
     switch (a) {
-    case 2: return MTLSamplerAddressModeMirrorRepeat;
-    case 3: return MTLSamplerAddressModeClampToEdge;
-    case 4: return MTLSamplerAddressModeClampToBorderColor;
-    case 5: return MTLSamplerAddressModeMirrorClampToEdge;
-    default: return MTLSamplerAddressModeRepeat;
+    case 2:
+        return MTLSamplerAddressModeMirrorRepeat;
+    case 3:
+        return MTLSamplerAddressModeClampToEdge;
+    case 4:
+        return MTLSamplerAddressModeClampToBorderColor;
+    case 5:
+        return MTLSamplerAddressModeMirrorClampToEdge;
+    default:
+        return MTLSamplerAddressModeRepeat;
     }
 }
 
@@ -171,14 +236,25 @@ bool vertex_format(uint32_t type, MTLVertexFormat *fmt, float scale[4]) {
     for (int k = 0; k < 4; ++k)
         scale[k] = 1.0f;
     switch (type) {
-    case 0: *fmt = MTLVertexFormatFloat; return true;
-    case 1: *fmt = MTLVertexFormatFloat2; return true;
-    case 2: *fmt = MTLVertexFormatFloat3; return true;
-    case 3: *fmt = MTLVertexFormatFloat4; return true;
-    case 4: *fmt = MTLVertexFormatUChar4Normalized_BGRA; return true;
+    case 0:
+        *fmt = MTLVertexFormatFloat;
+        return true;
+    case 1:
+        *fmt = MTLVertexFormatFloat2;
+        return true;
+    case 2:
+        *fmt = MTLVertexFormatFloat3;
+        return true;
+    case 3:
+        *fmt = MTLVertexFormatFloat4;
+        return true;
+    case 4:
+        *fmt = MTLVertexFormatUChar4Normalized_BGRA;
+        return true;
     case 5:
         *fmt = MTLVertexFormatUChar4Normalized;
-        for (int k = 0; k < 4; ++k) scale[k] = 255.0f;
+        for (int k = 0; k < 4; ++k)
+            scale[k] = 255.0f;
         return true;
     case 6:
         *fmt = MTLVertexFormatShort2Normalized;
@@ -186,21 +262,39 @@ bool vertex_format(uint32_t type, MTLVertexFormat *fmt, float scale[4]) {
         return true;
     case 7:
         *fmt = MTLVertexFormatShort4Normalized;
-        for (int k = 0; k < 4; ++k) scale[k] = 32767.0f;
+        for (int k = 0; k < 4; ++k)
+            scale[k] = 32767.0f;
         return true;
-    case 8: *fmt = MTLVertexFormatUChar4Normalized; return true;
-    case 9: *fmt = MTLVertexFormatShort2Normalized; return true;
-    case 10: *fmt = MTLVertexFormatShort4Normalized; return true;
-    case 11: *fmt = MTLVertexFormatUShort2Normalized; return true;
-    case 12: *fmt = MTLVertexFormatUShort4Normalized; return true;
+    case 8:
+        *fmt = MTLVertexFormatUChar4Normalized;
+        return true;
+    case 9:
+        *fmt = MTLVertexFormatShort2Normalized;
+        return true;
+    case 10:
+        *fmt = MTLVertexFormatShort4Normalized;
+        return true;
+    case 11:
+        *fmt = MTLVertexFormatUShort2Normalized;
+        return true;
+    case 12:
+        *fmt = MTLVertexFormatUShort4Normalized;
+        return true;
     case 13:
         *fmt = MTLVertexFormatUInt1010102Normalized;
         scale[0] = scale[1] = scale[2] = 1023.0f;
         return true;
-    case 14: *fmt = MTLVertexFormatInt1010102Normalized; return true;
-    case 15: *fmt = MTLVertexFormatHalf2; return true;
-    case 16: *fmt = MTLVertexFormatHalf4; return true;
-    default: return false;
+    case 14:
+        *fmt = MTLVertexFormatInt1010102Normalized;
+        return true;
+    case 15:
+        *fmt = MTLVertexFormatHalf2;
+        return true;
+    case 16:
+        *fmt = MTLVertexFormatHalf4;
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -274,7 +368,8 @@ class Renderer final : public D9Backend {
             fprintf(stderr, "d3d9 metal: texture format %08x is drawn as BGRA8\n", d.format);
             t.info.conv = Conv::Direct;
         }
-        bool depth = (d.usage & HOST_D9_USAGE_DEPTH) || t.info.pixel == MTLPixelFormatDepth32Float_Stencil8;
+        bool depth =
+            (d.usage & HOST_D9_USAGE_DEPTH) || t.info.pixel == MTLPixelFormatDepth32Float_Stencil8;
         if (depth)
             t.info.pixel = MTLPixelFormatDepth32Float_Stencil8;
         MTLTextureDescriptor *td = [MTLTextureDescriptor new];
@@ -336,8 +431,8 @@ class Renderer final : public D9Backend {
         }
         index_texture(d.id, &t);
         if (!t.texture)
-            fprintf(stderr, "d3d9 metal: texture %u (%ux%u fmt %08x) was not created\n", d.id, d.width,
-                    d.height, d.format);
+            fprintf(stderr, "d3d9 metal: texture %u (%ux%u fmt %08x) was not created\n", d.id,
+                    d.width, d.height, d.format);
     }
 
     void drop(uint32_t id) override {
@@ -351,7 +446,8 @@ class Renderer final : public D9Backend {
         textures_.erase(it);
     }
 
-    void upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes, uint32_t pitch) override {
+    void upload(uint32_t id, uint32_t face, uint32_t level, const uint8_t *bytes,
+                uint32_t pitch) override {
         auto it = textures_.find(id);
         if (it == textures_.end() || !it->second.texture || !bytes)
             return;
@@ -359,10 +455,11 @@ class Renderer final : public D9Backend {
         if (level >= t.texture.mipmapLevelCount)
             return;
         if (t.info.pixel == MTLPixelFormatDepth32Float_Stencil8)
-            return; // the game's view of a depth buffer is not uploaded
+            return;     // the game's view of a depth buffer is not uploaded
         settle(t.used); // draws already encoded read the old contents
         uint32_t w = std::max<uint32_t>((uint32_t)t.desc.width >> level, 1);
-        uint32_t h = std::max<uint32_t>((uint32_t)(t.desc.kind == HOST_D9_TEX_CUBE ? t.desc.width : t.desc.height) >> level, 1);
+        uint32_t h = std::max<uint32_t>(
+            (uint32_t)(t.desc.kind == HOST_D9_TEX_CUBE ? t.desc.width : t.desc.height) >> level, 1);
         MTLRegion region = MTLRegionMake2D(0, 0, w, h);
         if (t.scale != 1.0f) {
             // The game wrote a scaled target: stretch its pixels to the target's size.
@@ -382,20 +479,40 @@ class Renderer final : public D9Backend {
                 uint32_t sy = std::min(h - 1, (uint32_t)(y * (uint64_t)h / ph));
                 for (uint32_t x = 0; x < pw; ++x) {
                     uint32_t sx = std::min(w - 1, (uint32_t)(x * (uint64_t)w / pw));
-                    memcpy(&packed[((size_t)y * pw + x) * bpp], src + (size_t)sy * src_pitch + (size_t)sx * bpp, bpp);
+                    memcpy(&packed[((size_t)y * pw + x) * bpp],
+                           src + (size_t)sy * src_pitch + (size_t)sx * bpp, bpp);
                 }
             }
-            [t.texture replaceRegion:MTLRegionMake2D(0, 0, pw, ph) mipmapLevel:level slice:face
-                           withBytes:packed.data() bytesPerRow:pw * bpp bytesPerImage:0];
+            [t.texture replaceRegion:MTLRegionMake2D(0, 0, pw, ph)
+                         mipmapLevel:level
+                               slice:face
+                           withBytes:packed.data()
+                         bytesPerRow:pw * bpp
+                       bytesPerImage:0];
             return;
         }
         if (t.info.block) {
-            [t.texture replaceRegion:region mipmapLevel:level slice:face withBytes:bytes bytesPerRow:pitch bytesPerImage:0];
+            [t.texture replaceRegion:region
+                         mipmapLevel:level
+                               slice:face
+                           withBytes:bytes
+                         bytesPerRow:pitch
+                       bytesPerImage:0];
         } else if (t.info.conv == Conv::Direct) {
-            [t.texture replaceRegion:region mipmapLevel:level slice:face withBytes:bytes bytesPerRow:pitch bytesPerImage:0];
+            [t.texture replaceRegion:region
+                         mipmapLevel:level
+                               slice:face
+                           withBytes:bytes
+                         bytesPerRow:pitch
+                       bytesPerImage:0];
         } else {
             convert(t.info.conv, bytes, w, h, pitch, scratch_);
-            [t.texture replaceRegion:region mipmapLevel:level slice:face withBytes:scratch_.data() bytesPerRow:w * 4 bytesPerImage:0];
+            [t.texture replaceRegion:region
+                         mipmapLevel:level
+                               slice:face
+                           withBytes:scratch_.data()
+                         bytesPerRow:w * 4
+                       bytesPerImage:0];
         }
     }
 
@@ -410,28 +527,38 @@ class Renderer final : public D9Backend {
         uint32_t pw = std::max<uint32_t>((uint32_t)t.texture.width >> level, 1);
         uint32_t ph = std::max<uint32_t>((uint32_t)t.texture.height >> level, 1);
         if (t.scale == 1.0f) {
-            [t.texture getBytes:bytes bytesPerRow:pitch bytesPerImage:0 fromRegion:MTLRegionMake2D(0, 0, pw, ph)
-                    mipmapLevel:level slice:face];
+            [t.texture getBytes:bytes
+                    bytesPerRow:pitch
+                  bytesPerImage:0
+                     fromRegion:MTLRegionMake2D(0, 0, pw, ph)
+                    mipmapLevel:level
+                          slice:face];
             return true;
         }
         // A scaled target reads back at the game's size, one sample per pixel.
         uint32_t w = std::max<uint32_t>(t.desc.width >> level, 1);
         uint32_t h = std::max<uint32_t>(t.desc.height >> level, 1);
         std::vector<uint8_t> full((size_t)pw * ph * 4);
-        [t.texture getBytes:full.data() bytesPerRow:pw * 4 bytesPerImage:0 fromRegion:MTLRegionMake2D(0, 0, pw, ph)
-                mipmapLevel:level slice:face];
+        [t.texture getBytes:full.data()
+                bytesPerRow:pw * 4
+              bytesPerImage:0
+                 fromRegion:MTLRegionMake2D(0, 0, pw, ph)
+                mipmapLevel:level
+                      slice:face];
         for (uint32_t y = 0; y < h; ++y) {
             uint32_t sy = std::min(ph - 1, (uint32_t)((y + 0.5) * ph / h));
             for (uint32_t x = 0; x < w; ++x) {
                 uint32_t sx = std::min(pw - 1, (uint32_t)((x + 0.5) * pw / w));
-                memcpy(bytes + (size_t)y * pitch + (size_t)x * 4, &full[((size_t)sy * pw + sx) * 4], 4);
+                memcpy(bytes + (size_t)y * pitch + (size_t)x * 4, &full[((size_t)sy * pw + sx) * 4],
+                       4);
             }
         }
         return true;
     }
 
     // ---- buffers --------------------------------------------------------
-    void buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes, uint32_t size) override {
+    void buffer_upload(uint32_t id, uint32_t total, uint32_t offset, const uint8_t *bytes,
+                       uint32_t size) override {
         Buf &b = buffers_[id];
         if (offset + size > total || !bytes)
             return;
@@ -468,7 +595,8 @@ class Renderer final : public D9Backend {
                 SpareBuf s = b.spares[pick];
                 b.spares.erase(b.spares.begin() + (ptrdiff_t)pick);
                 if (s.hi > s.lo)
-                    memcpy((uint8_t *)s.buffer.contents + s.lo, b.shadow.data() + s.lo, s.hi - s.lo);
+                    memcpy((uint8_t *)s.buffer.contents + s.lo, b.shadow.data() + s.lo,
+                           s.hi - s.lo);
                 b.buffer = s.buffer;
             } else {
                 b.buffer = [mtl_ newBufferWithBytes:b.shadow.data()
@@ -502,9 +630,11 @@ class Renderer final : public D9Backend {
         const d9sh::Program &pp = d9sh::program_for_key(ps_key, d.ps, d.ps_size);
         if (!vp.ok || !pp.ok) {
             skip("undecoded shader");
-            const std::string why = std::string(vp.ok ? "pixel shader: " + pp.why : "vertex shader: " + vp.why);
+            const std::string why =
+                std::string(vp.ok ? "pixel shader: " + pp.why : "vertex shader: " + vp.why);
             if (undecoded_.insert(why + (d.label ? d.label : "")).second)
-                fprintf(stderr, "d3d9 metal: skipping draws: %s (%s)\n", why.c_str(), d.label ? d.label : "no label");
+                fprintf(stderr, "d3d9 metal: skipping draws: %s (%s)\n", why.c_str(),
+                        d.label ? d.label : "no label");
             return;
         }
         d9msl::PixelVariant variant;
@@ -534,7 +664,8 @@ class Renderer final : public D9Backend {
         for (auto &a : ascale)
             for (float &x : a)
                 x = 1.0f;
-        uint64_t vkey = mix(mix((uint64_t)d.decl_id << 32 | d.decl_size, vs_key), fnv(d.decl, d.decl_size));
+        uint64_t vkey =
+            mix(mix((uint64_t)d.decl_id << 32 | d.decl_size, vs_key), fnv(d.decl, d.decl_size));
         {
             uint64_t strides = 0;
             for (int i = 0; i < 8; ++i)
@@ -557,12 +688,14 @@ class Renderer final : public D9Backend {
         key = mix(key, df);
         bool blend = rs[27] != 0;
         uint32_t cw[4] = {rs[168], rs[190], rs[191], rs[192]};
-        uint64_t bkey = blend ? (1ull | (uint64_t)rs[19] << 1 | (uint64_t)rs[20] << 5 | (uint64_t)rs[171] << 9 |
-                                 (uint64_t)(rs[206] != 0) << 13 | (uint64_t)rs[207] << 14 |
-                                 (uint64_t)rs[208] << 18 | (uint64_t)rs[209] << 22)
-                              : 0;
+        uint64_t bkey =
+            blend ? (1ull | (uint64_t)rs[19] << 1 | (uint64_t)rs[20] << 5 | (uint64_t)rs[171] << 9 |
+                     (uint64_t)(rs[206] != 0) << 13 | (uint64_t)rs[207] << 14 |
+                     (uint64_t)rs[208] << 18 | (uint64_t)rs[209] << 22)
+                  : 0;
         key = mix(key, bkey);
-        key = mix(key, (uint64_t)cw[0] | (uint64_t)cw[1] << 4 | (uint64_t)cw[2] << 8 | (uint64_t)cw[3] << 12);
+        key = mix(key, (uint64_t)cw[0] | (uint64_t)cw[1] << 4 | (uint64_t)cw[2] << 8 |
+                           (uint64_t)cw[3] << 12);
         id<MTLRenderPipelineState> pso = pipeline(key, vfn, ffn, vdesc, cf, df, blend, rs, cw);
         if (!pso) {
             skip("no pipeline");
@@ -595,7 +728,9 @@ class Renderer final : public D9Backend {
 
         // Rasterizer.
         {
-            int cull = rs[22] == 2 ? (int)MTLCullModeFront : rs[22] == 3 ? (int)MTLCullModeBack : (int)MTLCullModeNone;
+            int cull = rs[22] == 2   ? (int)MTLCullModeFront
+                       : rs[22] == 3 ? (int)MTLCullModeBack
+                                     : (int)MTLCullModeNone;
             if (cull != es_.cull) {
                 [enc_ setCullMode:(MTLCullMode)cull];
                 es_.cull = cull;
@@ -617,19 +752,21 @@ class Renderer final : public D9Backend {
             es_.slope = slope;
         }
         const double s = pass_scale_;
-        MTLViewport vpm = {d.viewport[0] * s, d.viewport[1] * s, d.viewport[2] * s, d.viewport[3] * s,
-                           d.depth_range[0], d.depth_range[1]};
+        MTLViewport vpm = {d.viewport[0] * s, d.viewport[1] * s, d.viewport[2] * s,
+                           d.viewport[3] * s, d.depth_range[0],  d.depth_range[1]};
         if (!es_.viewport_valid || memcmp(&vpm, &es_.viewport, sizeof vpm) != 0) {
             [enc_ setViewport:vpm];
             es_.viewport = vpm;
             es_.viewport_valid = true;
         }
         set_scissor(rs[174] != 0, d.scissor);
-        if (blend && (rs[19] == 14 || rs[19] == 15 || rs[20] == 14 || rs[20] == 15 || rs[207] == 14 ||
-                      rs[208] == 14)) {
+        if (blend && (rs[19] == 14 || rs[19] == 15 || rs[20] == 14 || rs[20] == 15 ||
+                      rs[207] == 14 || rs[208] == 14)) {
             uint32_t f = rs[193];
-            [enc_ setBlendColorRed:((f >> 16) & 255) / 255.0f green:((f >> 8) & 255) / 255.0f
-                              blue:(f & 255) / 255.0f alpha:((f >> 24) & 255) / 255.0f];
+            [enc_ setBlendColorRed:((f >> 16) & 255) / 255.0f
+                             green:((f >> 8) & 255) / 255.0f
+                              blue:(f & 255) / 255.0f
+                             alpha:((f >> 24) & 255) / 255.0f];
         }
 
         // Constants and parameters.
@@ -732,16 +869,18 @@ class Renderer final : public D9Backend {
             float c0[4] = {0, 0, 0, 0};
             if (d.vconst && d.vconst_count)
                 memcpy(c0, d.vconst, sizeof c0);
-            fprintf(stderr,
-                    "probe draw %llu: rt %u/%u/%u depth %u vp %d,%d %dx%d prim %u x%u start %u base %d "
-                    "ib %u stream0 %u+%u/%u inline %u vs %s ps %s z %u/%u/%u cull %u blend %u %u/%u "
-                    "cw %x atest %u/%u fog %u tex0 %u c0 %g %g %g %g %s\n",
-                    (unsigned long long)draws_, d.target.color[0].id, d.target.color[0].face,
-                    d.target.color[0].level, d.target.depth.id, d.viewport[0], d.viewport[1], d.viewport[2],
-                    d.viewport[3], d.primitive, d.primitive_count, d.start, d.base_vertex, d.index_buffer,
-                    d.stream[0].buffer, d.stream[0].offset, d.stream[0].stride, d.inline_bytes, vs_hash,
-                    ps_hash, rs[7], rs[14], rs[23], rs[22], rs[27], rs[19], rs[20], rs[168], rs[15], rs[25],
-                    rs[28], d.sampler_texture[0], c0[0], c0[1], c0[2], c0[3], d.label ? d.label : "-");
+            fprintf(
+                stderr,
+                "probe draw %llu: rt %u/%u/%u depth %u vp %d,%d %dx%d prim %u x%u start %u base %d "
+                "ib %u stream0 %u+%u/%u inline %u vs %s ps %s z %u/%u/%u cull %u blend %u %u/%u "
+                "cw %x atest %u/%u fog %u tex0 %u c0 %g %g %g %g %s\n",
+                (unsigned long long)draws_, d.target.color[0].id, d.target.color[0].face,
+                d.target.color[0].level, d.target.depth.id, d.viewport[0], d.viewport[1],
+                d.viewport[2], d.viewport[3], d.primitive, d.primitive_count, d.start,
+                d.base_vertex, d.index_buffer, d.stream[0].buffer, d.stream[0].offset,
+                d.stream[0].stride, d.inline_bytes, vs_hash, ps_hash, rs[7], rs[14], rs[23], rs[22],
+                rs[27], rs[19], rs[20], rs[168], rs[15], rs[25], rs[28], d.sampler_texture[0],
+                c0[0], c0[1], c0[2], c0[3], d.label ? d.label : "-");
         }
     }
 
@@ -820,7 +959,8 @@ class Renderer final : public D9Backend {
         }
         pass_slot_ = (int)vis_used_++;
         ((uint64_t *)vis_.contents)[pass_slot_] = 0;
-        [enc_ setVisibilityResultMode:MTLVisibilityResultModeCounting offset:(NSUInteger)pass_slot_ * 8];
+        [enc_ setVisibilityResultMode:MTLVisibilityResultModeCounting
+                               offset:(NSUInteger)pass_slot_ * 8];
         q.slots.push_back({vis_, (uint32_t)pass_slot_, serial_});
     }
     id<MTLBuffer> vis_buffer() {
@@ -848,17 +988,22 @@ class Renderer final : public D9Backend {
     void probe_next(const char *tag) override {
         probe_frame_ = presents_ + 2; // the frame after the one in progress, whole
         probe_tag_ = tag ? tag : "";
-        fprintf(stderr, "probe %s: frame %llu\n", probe_tag_.c_str(), (unsigned long long)probe_frame_);
+        fprintf(stderr, "probe %s: frame %llu\n", probe_tag_.c_str(),
+                (unsigned long long)probe_frame_);
     }
     void probe_dump() {
         settle(serial_);
         for (auto &kv : textures_) {
             Tex &t = kv.second;
-            if (!t.texture || t.info.pixel != MTLPixelFormatBGRA8Unorm || t.desc.kind != HOST_D9_TEX_2D)
+            if (!t.texture || t.info.pixel != MTLPixelFormatBGRA8Unorm ||
+                t.desc.kind != HOST_D9_TEX_2D)
                 continue;
             uint32_t w = (uint32_t)t.texture.width, h = (uint32_t)t.texture.height;
             std::vector<uint8_t> bgra((size_t)w * h * 4), rgb((size_t)w * h * 3);
-            [t.texture getBytes:bgra.data() bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+            [t.texture getBytes:bgra.data()
+                    bytesPerRow:w * 4
+                     fromRegion:MTLRegionMake2D(0, 0, w, h)
+                    mipmapLevel:0];
             size_t lit = 0;
             for (size_t i = 0, n = (size_t)w * h; i < n; ++i) {
                 rgb[i * 3] = bgra[i * 4 + 2];
@@ -867,11 +1012,12 @@ class Renderer final : public D9Backend {
                 lit += (bgra[i * 4] | bgra[i * 4 + 1] | bgra[i * 4 + 2]) > 8;
             }
             char path[1024];
-            snprintf(path, sizeof path, "%s/probe%s%s_%u_%ux%u_%s.ppm", host_dump_dir(), probe_tag_.empty() ? "" : "_",
-                     probe_tag_.c_str(), kv.first, w, h, (t.desc.usage & HOST_D9_USAGE_RENDERTARGET) ? "rt" : "tex");
+            snprintf(path, sizeof path, "%s/probe%s%s_%u_%ux%u_%s.ppm", host_dump_dir(),
+                     probe_tag_.empty() ? "" : "_", probe_tag_.c_str(), kv.first, w, h,
+                     (t.desc.usage & HOST_D9_USAGE_RENDERTARGET) ? "rt" : "tex");
             host_write_ppm(path, rgb.data(), (int)w, (int)h);
-            fprintf(stderr, "probe texture %u %ux%u fmt %08x usage %u: %zu of %zu lit\n", kv.first, w, h,
-                    t.desc.format, t.desc.usage, lit, (size_t)w * h);
+            fprintf(stderr, "probe texture %u %ux%u fmt %08x usage %u: %zu of %zu lit\n", kv.first,
+                    w, h, t.desc.format, t.desc.usage, lit, (size_t)w * h);
         }
     }
 
@@ -883,7 +1029,9 @@ class Renderer final : public D9Backend {
             return;
         double now = CACurrentMediaTime();
         double fps = report_time_ > 0 ? (presents_ - report_frames_) / (now - report_time_) : 0.0;
-        double dpf = presents_ > report_frames_ ? double(draws_ - report_draws_) / double(presents_ - report_frames_) : 0.0;
+        double dpf = presents_ > report_frames_
+                         ? double(draws_ - report_draws_) / double(presents_ - report_frames_)
+                         : 0.0;
         const uint64_t frames = presents_ > report_frames_ ? presents_ - report_frames_ : 1;
         const uint64_t gpu_us = gpu_us_.exchange(0);
         // The thread presenting is the game's: its CPU time is the frame's cost.
@@ -905,19 +1053,27 @@ class Renderer final : public D9Backend {
         report_time_ = now;
         report_frames_ = presents_;
         report_draws_ = draws_;
-        fprintf(stderr, "d3d9 metal: frame %llu: %.1f fps, %.0f draws/frame, %llu draw calls, %llu encoded, %zu textures, %zu pipelines, %.1fM instructions/frame, game thread %.2f ms/frame, gpu %.2f ms/frame, waited %.2f ms/frame",
-                (unsigned long long)presents_, fps, dpf, (unsigned long long)stat_calls_, (unsigned long long)draws_,
-                textures_.size(), pipelines_.size(), minstr, cpu_ms, gpu_us / 1000.0 / frames, waited * 1000.0 / frames);
+        fprintf(stderr,
+                "d3d9 metal: frame %llu: %.1f fps, %.0f draws/frame, %llu draw calls, %llu "
+                "encoded, %zu textures, %zu pipelines, %.1fM instructions/frame, game thread %.2f "
+                "ms/frame, gpu %.2f ms/frame, waited %.2f ms/frame",
+                (unsigned long long)presents_, fps, dpf, (unsigned long long)stat_calls_,
+                (unsigned long long)draws_, textures_.size(), pipelines_.size(), minstr, cpu_ms,
+                gpu_us / 1000.0 / frames, waited * 1000.0 / frames);
         for (auto &s : skips_)
             fprintf(stderr, ", %s %llu", s.first.c_str(), (unsigned long long)s.second);
         fprintf(stderr, "\n");
     }
 
-    void clear(const HostD9Target &target, const int32_t vp[4], uint32_t count, const int32_t *rects,
-               uint32_t flags, uint32_t color, float z, uint32_t stencil) override {
+    void clear(const HostD9Target &target, const int32_t vp[4], uint32_t count,
+               const int32_t *rects, uint32_t flags, uint32_t color, float z,
+               uint32_t stencil) override {
         if (probing())
-            fprintf(stderr, "probe clear: rt %u depth %u flags %x colour %08x z %g rects %u vp %d,%d %dx%d\n",
-                    target.color[0].id, target.depth.id, flags, color, z, count, vp[0], vp[1], vp[2], vp[3]);
+            fprintf(
+                stderr,
+                "probe clear: rt %u depth %u flags %x colour %08x z %g rects %u vp %d,%d %dx%d\n",
+                target.color[0].id, target.depth.id, flags, color, z, count, vp[0], vp[1], vp[2],
+                vp[3]);
         id<MTLTexture> c0 = texture_for(target.color[0]);
         id<MTLTexture> dz = texture_for(target.depth);
         if (!c0)
@@ -926,7 +1082,8 @@ class Renderer final : public D9Backend {
         int32_t lw = (int32_t)std::max<uint32_t>(ct.desc.width >> target.color[0].level, 1);
         int32_t lh = (int32_t)std::max<uint32_t>(ct.desc.height >> target.color[0].level, 1);
         bool whole = count == 0 && vp[0] <= 0 && vp[1] <= 0 && vp[2] >= lw && vp[3] >= lh;
-        bool want_color = flags & 1, want_depth = (flags & 2) && dz, want_stencil = (flags & 4) && dz;
+        bool want_color = flags & 1, want_depth = (flags & 2) && dz,
+             want_stencil = (flags & 4) && dz;
         float rgba[4] = {((color >> 16) & 255) / 255.0f, ((color >> 8) & 255) / 255.0f,
                          (color & 255) / 255.0f, ((color >> 24) & 255) / 255.0f};
         if (whole) {
@@ -958,10 +1115,14 @@ class Renderer final : public D9Backend {
         [enc_ setTriangleFillMode:MTLTriangleFillModeFill];
         [enc_ setDepthBias:0 slopeScale:0 clamp:0];
         int32_t tw = lw, th = lh; // quads are placed in guest pixels; the viewport scales them
-        [enc_ setViewport:(MTLViewport){0, 0, (double)std::max<NSUInteger>(c0.width >> target.color[0].level, 1),
-                                        (double)std::max<NSUInteger>(c0.height >> target.color[0].level, 1), 0, 1}];
-        [enc_ setScissorRect:(MTLScissorRect){0, 0, std::max<NSUInteger>(c0.width >> target.color[0].level, 1),
-                                              std::max<NSUInteger>(c0.height >> target.color[0].level, 1)}];
+        [enc_ setViewport:(MTLViewport){
+                              0, 0,
+                              (double)std::max<NSUInteger>(c0.width >> target.color[0].level, 1),
+                              (double)std::max<NSUInteger>(c0.height >> target.color[0].level, 1),
+                              0, 1}];
+        [enc_ setScissorRect:(MTLScissorRect){
+                                 0, 0, std::max<NSUInteger>(c0.width >> target.color[0].level, 1),
+                                 std::max<NSUInteger>(c0.height >> target.color[0].level, 1)}];
         std::vector<int32_t> list;
         if (count && rects)
             list.assign(rects, rects + 4 * count);
@@ -987,11 +1148,13 @@ class Renderer final : public D9Backend {
         }
     }
 
-    void stretch(HostD9Surface src, const int32_t sr[4], HostD9Surface dst, const int32_t dr[4], uint32_t filter) override {
+    void stretch(HostD9Surface src, const int32_t sr[4], HostD9Surface dst, const int32_t dr[4],
+                 uint32_t filter) override {
         if (probing())
-            fprintf(stderr, "probe stretch: %u/%u/%u (%d,%d,%d,%d) -> %u/%u/%u (%d,%d,%d,%d) filter %u\n", src.id,
-                    src.face, src.level, sr[0], sr[1], sr[2], sr[3], dst.id, dst.face, dst.level, dr[0], dr[1],
-                    dr[2], dr[3], filter);
+            fprintf(stderr,
+                    "probe stretch: %u/%u/%u (%d,%d,%d,%d) -> %u/%u/%u (%d,%d,%d,%d) filter %u\n",
+                    src.id, src.face, src.level, sr[0], sr[1], sr[2], sr[3], dst.id, dst.face,
+                    dst.level, dr[0], dr[1], dr[2], dr[3], filter);
         id<MTLTexture> s = view_for(src);
         id<MTLTexture> t = texture_for(dst);
         if (!s || !t || s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8)
@@ -1002,17 +1165,26 @@ class Renderer final : public D9Backend {
         const Tex &st_ = textures_[src.id];
         const Tex &dt_ = textures_[dst.id];
         // Rectangles are in each surface's guest pixels.
-        const float ssx = (float)s.width / std::max<uint32_t>(1, st_.desc.kind == HOST_D9_TEX_CUBE ? st_.desc.width >> src.level : std::max<uint32_t>(st_.desc.width >> src.level, 1));
-        const float ssy = (float)s.height / std::max<uint32_t>(1, st_.desc.kind == HOST_D9_TEX_CUBE ? st_.desc.width >> src.level : std::max<uint32_t>(st_.desc.height >> src.level, 1));
+        const float ssx =
+            (float)s.width /
+            std::max<uint32_t>(1, st_.desc.kind == HOST_D9_TEX_CUBE
+                                      ? st_.desc.width >> src.level
+                                      : std::max<uint32_t>(st_.desc.width >> src.level, 1));
+        const float ssy =
+            (float)s.height /
+            std::max<uint32_t>(1, st_.desc.kind == HOST_D9_TEX_CUBE
+                                      ? st_.desc.width >> src.level
+                                      : std::max<uint32_t>(st_.desc.height >> src.level, 1));
         const float dsx = (float)tw / std::max<uint32_t>(dt_.desc.width >> dst.level, 1);
         const float dsy = (float)th / std::max<uint32_t>(dt_.desc.height >> dst.level, 1);
         uint32_t sw = (uint32_t)s.width, sh = (uint32_t)s.height;
         HostD9Target target{};
         target.color[0] = dst;
         begin_pass(target, false, nullptr, false, 0, false, 0);
-        MTLPixelFormat cf[4] = {t.pixelFormat, MTLPixelFormatInvalid, MTLPixelFormatInvalid, MTLPixelFormatInvalid};
-        id<MTLRenderPipelineState> pso = utility_pipeline(mix(0xb117ull, t.pixelFormat), @"copy_fs", cf,
-                                                          MTLPixelFormatInvalid, true);
+        MTLPixelFormat cf[4] = {t.pixelFormat, MTLPixelFormatInvalid, MTLPixelFormatInvalid,
+                                MTLPixelFormatInvalid};
+        id<MTLRenderPipelineState> pso = utility_pipeline(mix(0xb117ull, t.pixelFormat), @"copy_fs",
+                                                          cf, MTLPixelFormatInvalid, true);
         if (!pso)
             return;
         es_ = EncoderState{}; // what follows is not a draw's state
@@ -1082,17 +1254,24 @@ class Renderer final : public D9Backend {
             return;
         std::lock_guard<std::mutex> lock(kept_mutex_);
         if (!kept_ || kept_.width != w || kept_.height != h) {
-            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                          width:w
-                                                                                         height:h
-                                                                                      mipmapped:NO];
+            MTLTextureDescriptor *td =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                   width:w
+                                                                  height:h
+                                                               mipmapped:NO];
             td.storageMode = MTLStorageModeShared;
             kept_ = [mtl_ newTextureWithDescriptor:td];
         }
         begin_frame();
         id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
-        [blit copyFromTexture:t.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(w, h, 1) toTexture:kept_ destinationSlice:0 destinationLevel:0
+        [blit copyFromTexture:t.texture
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(w, h, 1)
+                    toTexture:kept_
+             destinationSlice:0
+             destinationLevel:0
             destinationOrigin:MTLOriginMake(0, 0, 0)];
         [blit endEncoding];
         kept_cmd_ = cmd_;
@@ -1135,8 +1314,9 @@ class Renderer final : public D9Backend {
         fitted_depth_.clear();
         std::vector<HostD9TextureDesc> again;
         for (auto &kv : textures_)
-            if (kv.second.scale != 1.0f || ((kv.second.desc.usage & (HOST_D9_USAGE_RENDERTARGET | HOST_D9_USAGE_DEPTH)) &&
-                                             kv.second.desc.kind == HOST_D9_TEX_2D))
+            if (kv.second.scale != 1.0f ||
+                ((kv.second.desc.usage & (HOST_D9_USAGE_RENDERTARGET | HOST_D9_USAGE_DEPTH)) &&
+                 kv.second.desc.kind == HOST_D9_TEX_2D))
                 again.push_back(kv.second.desc);
         for (const HostD9TextureDesc &d : again)
             define(d);
@@ -1161,7 +1341,10 @@ class Renderer final : public D9Backend {
         [cmd waitUntilCompleted];
         std::vector<uint8_t> bgra((size_t)fw * fh * 4);
         std::lock_guard<std::mutex> lock(kept_mutex_);
-        [kept getBytes:bgra.data() bytesPerRow:fw * 4 fromRegion:MTLRegionMake2D(0, 0, fw, fh) mipmapLevel:0];
+        [kept getBytes:bgra.data()
+            bytesPerRow:fw * 4
+             fromRegion:MTLRegionMake2D(0, 0, fw, fh)
+            mipmapLevel:0];
         size_t n = (size_t)fw * fh;
         for (size_t i = 0; i < n; ++i) {
             rgb[i * 3] = bgra[i * 4 + 2];
@@ -1203,8 +1386,10 @@ class Renderer final : public D9Backend {
             return nil;
         if (t.textureType == MTLTextureType2D && s.level == 0 && t.mipmapLevelCount == 1)
             return t;
-        return [t newTextureViewWithPixelFormat:t.pixelFormat textureType:MTLTextureType2D
-                                         levels:NSMakeRange(s.level, 1) slices:NSMakeRange(s.face, 1)];
+        return [t newTextureViewWithPixelFormat:t.pixelFormat
+                                    textureType:MTLTextureType2D
+                                         levels:NSMakeRange(s.level, 1)
+                                         slices:NSMakeRange(s.face, 1)];
     }
 
     bool same_target(const HostD9Target &t) const {
@@ -1216,8 +1401,8 @@ class Renderer final : public D9Backend {
         end_pass();
         return begin_pass(t, false, nullptr, false, 0, false, 0);
     }
-    bool begin_pass(const HostD9Target &t, bool clear_color, const float *rgba, bool clear_depth, float z,
-                    bool clear_stencil, uint32_t stencil) {
+    bool begin_pass(const HostD9Target &t, bool clear_color, const float *rgba, bool clear_depth,
+                    float z, bool clear_stencil, uint32_t stencil) {
         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
         bool any = false;
         pass_samples_ = 0;
@@ -1248,7 +1433,8 @@ class Renderer final : public D9Backend {
             }
             if (i == 0 && clear_color) {
                 rp.colorAttachments[i].loadAction = MTLLoadActionClear;
-                rp.colorAttachments[i].clearColor = MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]);
+                rp.colorAttachments[i].clearColor =
+                    MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]);
             } else {
                 rp.colorAttachments[i].loadAction = MTLLoadActionLoad;
             }
@@ -1280,16 +1466,21 @@ class Renderer final : public D9Backend {
             rp.depthAttachment.clearDepth = z;
             rp.depthAttachment.storeAction = MTLStoreActionStore;
             rp.stencilAttachment.texture = dz;
-            rp.stencilAttachment.loadAction = clear_stencil ? MTLLoadActionClear : MTLLoadActionLoad;
+            rp.stencilAttachment.loadAction =
+                clear_stencil ? MTLLoadActionClear : MTLLoadActionLoad;
             rp.stencilAttachment.clearStencil = stencil & 0xff;
             rp.stencilAttachment.storeAction = MTLStoreActionStore;
         }
         if (!any)
             return false;
         // Metal requires every attachment to be the same size.
-        if (pass_depth_ && (pass_depth_.width != std::max<NSUInteger>(pass_color_[0].width >> t.color[0].level, 1) ||
-                            pass_depth_.height != std::max<NSUInteger>(pass_color_[0].height >> t.color[0].level, 1))) {
-            id<MTLTexture> fit = depth_for_size(pass_depth_, pass_color_[0], t.color[0].level, pass_samples_);
+        if (pass_depth_ &&
+            (pass_depth_.width !=
+                 std::max<NSUInteger>(pass_color_[0].width >> t.color[0].level, 1) ||
+             pass_depth_.height !=
+                 std::max<NSUInteger>(pass_color_[0].height >> t.color[0].level, 1))) {
+            id<MTLTexture> fit =
+                depth_for_size(pass_depth_, pass_color_[0], t.color[0].level, pass_samples_);
             pass_depth_ = fit;
             rp.depthAttachment.texture = fit;
             rp.stencilAttachment.texture = fit;
@@ -1319,16 +1510,19 @@ class Renderer final : public D9Backend {
     }
     // Direct3D allows a depth buffer larger than the colour target; Metal does
     // not. A draw into a smaller target gets a depth buffer of its own size.
-    id<MTLTexture> depth_for_size(id<MTLTexture> depth, id<MTLTexture> color, uint32_t level, uint32_t samples = 1) {
-        NSUInteger w = std::max<NSUInteger>(color.width >> level, 1), h = std::max<NSUInteger>(color.height >> level, 1);
+    id<MTLTexture> depth_for_size(id<MTLTexture> depth, id<MTLTexture> color, uint32_t level,
+                                  uint32_t samples = 1) {
+        NSUInteger w = std::max<NSUInteger>(color.width >> level, 1),
+                   h = std::max<NSUInteger>(color.height >> level, 1);
         uint64_t key = mix(mix(mix((uint64_t)(__bridge void *)depth, w), h), samples);
         auto it = fitted_depth_.find(key);
         if (it != fitted_depth_.end())
             return it->second;
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:depth.pixelFormat
-                                                                                      width:w
-                                                                                     height:h
-                                                                                  mipmapped:NO];
+        MTLTextureDescriptor *td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:depth.pixelFormat
+                                                               width:w
+                                                              height:h
+                                                           mipmapped:NO];
         if (samples > 1) {
             td.textureType = MTLTextureType2DMultisample;
             td.sampleCount = samples;
@@ -1358,7 +1552,8 @@ class Renderer final : public D9Backend {
           if (cb.GPUEndTime > cb.GPUStartTime)
               gpu_us->fetch_add((uint64_t)((cb.GPUEndTime - cb.GPUStartTime) * 1e6));
           if (cb.error)
-              fprintf(stderr, "d3d9 metal: command buffer failed: %s\n", cb.error.localizedDescription.UTF8String);
+              fprintf(stderr, "d3d9 metal: command buffer failed: %s\n",
+                      cb.error.localizedDescription.UTF8String);
           done->store(serial);
           dispatch_semaphore_signal(sem);
         }];
@@ -1396,19 +1591,27 @@ class Renderer final : public D9Backend {
     }
 
     void set_scissor(bool on, const int32_t sc[4]) {
-        NSUInteger tw = pass_color_[0] ? std::max<NSUInteger>(pass_color_[0].width >> pass_target_.color[0].level, 1) : 1;
-        NSUInteger th = pass_color_[0] ? std::max<NSUInteger>(pass_color_[0].height >> pass_target_.color[0].level, 1) : 1;
+        NSUInteger tw =
+            pass_color_[0]
+                ? std::max<NSUInteger>(pass_color_[0].width >> pass_target_.color[0].level, 1)
+                : 1;
+        NSUInteger th =
+            pass_color_[0]
+                ? std::max<NSUInteger>(pass_color_[0].height >> pass_target_.color[0].level, 1)
+                : 1;
         MTLScissorRect r = {0, 0, tw, th};
         if (on) {
             const float s = pass_scale_;
-            int32_t x0 = std::max(0, (int32_t)std::lround(sc[0] * s)), y0 = std::max(0, (int32_t)std::lround(sc[1] * s));
+            int32_t x0 = std::max(0, (int32_t)std::lround(sc[0] * s)),
+                    y0 = std::max(0, (int32_t)std::lround(sc[1] * s));
             int32_t x1 = std::min((int32_t)tw, (int32_t)std::lround(sc[2] * s));
             int32_t y1 = std::min((int32_t)th, (int32_t)std::lround(sc[3] * s));
             if (x1 <= x0 || y1 <= y0) {
                 x0 = y0 = 0;
                 x1 = y1 = 0;
             }
-            r = {(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)std::max(0, x1 - x0), (NSUInteger)std::max(0, y1 - y0)};
+            r = {(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)std::max(0, x1 - x0),
+                 (NSUInteger)std::max(0, y1 - y0)};
         }
         if (!es_.scissor_valid || memcmp(&r, &es_.scissor, sizeof r) != 0) {
             [enc_ setScissorRect:r];
@@ -1418,13 +1621,15 @@ class Renderer final : public D9Backend {
     }
 
     // ---- shaders --------------------------------------------------------
-    id<MTLFunction> function(uint64_t code_key, const d9sh::Program &p, const d9msl::PixelVariant &v, bool pixel) {
+    id<MTLFunction> function(uint64_t code_key, const d9sh::Program &p,
+                             const d9msl::PixelVariant &v, bool pixel) {
         uint64_t key = mix(code_key, pixel ? v.key() + 1 : 0);
         auto it = functions_.find(key);
         if (it != functions_.end())
             return it->second;
         std::string src, why;
-        bool ok = pixel ? d9msl::pixel_source(p, v, &src, &why) : d9msl::vertex_source(p, &src, &why);
+        bool ok =
+            pixel ? d9msl::pixel_source(p, v, &src, &why) : d9msl::vertex_source(p, &src, &why);
         if (const char *dir = recomp_env("D3D9_SHADER_DUMP"); dir && ok) {
             char path[1024];
             snprintf(path, sizeof path, "%s/%016llx.msl", dir, (unsigned long long)key);
@@ -1439,26 +1644,28 @@ class Renderer final : public D9Backend {
             MTLCompileOptions *opts = [MTLCompileOptions new];
             if (@available(macOS 15.0, iOS 18.0, *))
                 opts.mathMode = MTLMathModeSafe;
-            id<MTLLibrary> lib = [mtl_ newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
-                                                    options:opts
-                                                      error:&error];
+            id<MTLLibrary> lib =
+                [mtl_ newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
+                                   options:opts
+                                     error:&error];
             if (lib)
                 fn = [lib newFunctionWithName:pixel ? @"ps_main" : @"vs_main"];
             else
-                fprintf(stderr, "d3d9 metal: a %s shader failed to compile: %s\n", pixel ? "pixel" : "vertex",
-                        error.localizedDescription.UTF8String);
+                fprintf(stderr, "d3d9 metal: a %s shader failed to compile: %s\n",
+                        pixel ? "pixel" : "vertex", error.localizedDescription.UTF8String);
         } else {
             char key_text[64];
-            snprintf(key_text, sizeof key_text, "d3d9.metal.untranslated.%llx", (unsigned long long)key);
-            log_once(key_text, "d3d9 metal: a %s shader is not translated: %s", pixel ? "pixel" : "vertex",
-                     why.c_str());
+            snprintf(key_text, sizeof key_text, "d3d9.metal.untranslated.%llx",
+                     (unsigned long long)key);
+            log_once(key_text, "d3d9 metal: a %s shader is not translated: %s",
+                     pixel ? "pixel" : "vertex", why.c_str());
         }
         functions_[key] = fn;
         return fn;
     }
 
-    MTLVertexDescriptor *vertex_descriptor(const HostD9Draw &d, const d9sh::Program &vp, uint64_t key,
-                                           float ascale[16][4]) {
+    MTLVertexDescriptor *vertex_descriptor(const HostD9Draw &d, const d9sh::Program &vp,
+                                           uint64_t key, float ascale[16][4]) {
         auto it = vdescs_.find(key);
         if (it != vdescs_.end()) {
             memcpy(ascale, it->second.ascale, sizeof it->second.ascale);
@@ -1494,7 +1701,8 @@ class Renderer final : public D9Backend {
                 desc.attributes[reg].bufferIndex = stream;
                 memcpy(v.ascale[reg], scale, sizeof scale);
                 streams |= 1u << stream;
-                stream_end[stream] = std::max<uint32_t>(stream_end[stream], offset + vertex_format_bytes(type));
+                stream_end[stream] =
+                    std::max<uint32_t>(stream_end[stream], offset + vertex_format_bytes(type));
                 found = true;
                 break;
             }
@@ -1532,8 +1740,9 @@ class Renderer final : public D9Backend {
     }
 
     id<MTLRenderPipelineState> pipeline(uint64_t key, id<MTLFunction> vfn, id<MTLFunction> ffn,
-                                        MTLVertexDescriptor *vdesc, const MTLPixelFormat cf[4], MTLPixelFormat df,
-                                        bool blend, const uint32_t *rs, const uint32_t cw[4]) {
+                                        MTLVertexDescriptor *vdesc, const MTLPixelFormat cf[4],
+                                        MTLPixelFormat df, bool blend, const uint32_t *rs,
+                                        const uint32_t cw[4]) {
         key = mix(key, 0x5a3f0000ull + pass_samples_);
         auto it = pipelines_.find(key);
         if (it != pipelines_.end())
@@ -1549,15 +1758,19 @@ class Renderer final : public D9Backend {
             MTLRenderPipelineColorAttachmentDescriptor *a = pd.colorAttachments[i];
             a.pixelFormat = cf[i];
             MTLColorWriteMask m = MTLColorWriteMaskNone;
-            if (cw[i] & 1) m |= MTLColorWriteMaskRed;
-            if (cw[i] & 2) m |= MTLColorWriteMaskGreen;
-            if (cw[i] & 4) m |= MTLColorWriteMaskBlue;
-            if (cw[i] & 8) m |= MTLColorWriteMaskAlpha;
+            if (cw[i] & 1)
+                m |= MTLColorWriteMaskRed;
+            if (cw[i] & 2)
+                m |= MTLColorWriteMaskGreen;
+            if (cw[i] & 4)
+                m |= MTLColorWriteMaskBlue;
+            if (cw[i] & 8)
+                m |= MTLColorWriteMaskAlpha;
             a.writeMask = m;
             if (blend) {
                 a.blendingEnabled = YES;
                 a.sourceRGBBlendFactor = blend_factor(rs[19], false);
-                a.destinationRGBBlendFactor = blend_factor(rs[20] , false);
+                a.destinationRGBBlendFactor = blend_factor(rs[20], false);
                 // BOTHSRCALPHA / BOTHINVSRCALPHA override the destination too.
                 if (rs[19] == 12)
                     a.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
@@ -1584,15 +1797,18 @@ class Renderer final : public D9Backend {
             pd.stencilAttachmentPixelFormat = df;
         }
         NSError *error = nil;
-        id<MTLRenderPipelineState> pso = [mtl_ newRenderPipelineStateWithDescriptor:pd error:&error];
+        id<MTLRenderPipelineState> pso = [mtl_ newRenderPipelineStateWithDescriptor:pd
+                                                                              error:&error];
         if (!pso)
-            fprintf(stderr, "d3d9 metal: pipeline failed: %s\n", error.localizedDescription.UTF8String);
+            fprintf(stderr, "d3d9 metal: pipeline failed: %s\n",
+                    error.localizedDescription.UTF8String);
         pipelines_[key] = pso;
         return pso;
     }
 
-    id<MTLRenderPipelineState> utility_pipeline(uint64_t key, NSString *fragment, const MTLPixelFormat cf[4],
-                                                MTLPixelFormat df, bool write_color) {
+    id<MTLRenderPipelineState> utility_pipeline(uint64_t key, NSString *fragment,
+                                                const MTLPixelFormat cf[4], MTLPixelFormat df,
+                                                bool write_color) {
         key = mix(key, 0x5a3f0000ull + pass_samples_);
         auto it = pipelines_.find(key);
         if (it != pipelines_.end())
@@ -1604,16 +1820,19 @@ class Renderer final : public D9Backend {
         for (int i = 0; i < 4; ++i)
             if (cf[i] != MTLPixelFormatInvalid) {
                 pd.colorAttachments[i].pixelFormat = cf[i];
-                pd.colorAttachments[i].writeMask = (i == 0 && write_color) ? MTLColorWriteMaskAll : MTLColorWriteMaskNone;
+                pd.colorAttachments[i].writeMask =
+                    (i == 0 && write_color) ? MTLColorWriteMaskAll : MTLColorWriteMaskNone;
             }
         if (df != MTLPixelFormatInvalid) {
             pd.depthAttachmentPixelFormat = df;
             pd.stencilAttachmentPixelFormat = df;
         }
         NSError *error = nil;
-        id<MTLRenderPipelineState> pso = [mtl_ newRenderPipelineStateWithDescriptor:pd error:&error];
+        id<MTLRenderPipelineState> pso = [mtl_ newRenderPipelineStateWithDescriptor:pd
+                                                                              error:&error];
         if (!pso)
-            fprintf(stderr, "d3d9 metal: utility pipeline failed: %s\n", error.localizedDescription.UTF8String);
+            fprintf(stderr, "d3d9 metal: utility pipeline failed: %s\n",
+                    error.localizedDescription.UTF8String);
         pipelines_[key] = pso;
         return pso;
     }
@@ -1681,13 +1900,14 @@ class Renderer final : public D9Backend {
         sd.rAddressMode = address_mode(st[3]);
         sd.magFilter = st[5] >= 2 ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
         sd.minFilter = st[6] >= 2 ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-        sd.mipFilter = st[7] == 0 ? MTLSamplerMipFilterNotMipmapped
-                                  : st[7] == 1 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterLinear;
+        sd.mipFilter = st[7] == 0   ? MTLSamplerMipFilterNotMipmapped
+                       : st[7] == 1 ? MTLSamplerMipFilterNearest
+                                    : MTLSamplerMipFilterLinear;
         if (st[6] == 3 || st[5] == 3)
             sd.maxAnisotropy = std::max<NSUInteger>(1, std::min<NSUInteger>(16, st[10]));
         sd.lodMinClamp = (float)st[9];
         uint32_t border = st[4];
-        sd.borderColor = (border >> 24) < 128 ? MTLSamplerBorderColorTransparentBlack
+        sd.borderColor = (border >> 24) < 128  ? MTLSamplerBorderColorTransparentBlack
                          : (border & 0xffffff) ? MTLSamplerBorderColorOpaqueWhite
                                                : MTLSamplerBorderColorOpaqueBlack;
         id<MTLSamplerState> s = [mtl_ newSamplerStateWithDescriptor:sd];
@@ -1699,17 +1919,24 @@ class Renderer final : public D9Backend {
         __strong id<MTLTexture> &t = cube ? white_cube_ : white_;
         if (t)
             return t;
-        MTLTextureDescriptor *td = cube ? [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                                 size:1
-                                                                                            mipmapped:NO]
-                                        : [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                             width:1
-                                                                                            height:1
-                                                                                         mipmapped:NO];
+        MTLTextureDescriptor *td =
+            cube ? [MTLTextureDescriptor
+                       textureCubeDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                       size:1
+                                                  mipmapped:NO]
+                 : [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                      width:1
+                                                                     height:1
+                                                                  mipmapped:NO];
         t = [mtl_ newTextureWithDescriptor:td];
         const uint8_t black[4] = {0, 0, 0, 255};
         for (NSUInteger s = 0; s < (cube ? 6u : 1u); ++s)
-            [t replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 slice:s withBytes:black bytesPerRow:4 bytesPerImage:0];
+            [t replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+                  mipmapLevel:0
+                        slice:s
+                    withBytes:black
+                  bytesPerRow:4
+                bytesPerImage:0];
         return t;
     }
 
@@ -1717,10 +1944,11 @@ class Renderer final : public D9Backend {
     id<MTLTexture> placeholder_depth() {
         if (white_depth_)
             return white_depth_;
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8
-                                                                                      width:1
-                                                                                     height:1
-                                                                                  mipmapped:NO];
+        MTLTextureDescriptor *td = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8
+                                         width:1
+                                        height:1
+                                     mipmapped:NO];
         td.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
         td.storageMode = MTLStorageModePrivate;
         white_depth_ = [mtl_ newTextureWithDescriptor:td];
@@ -1746,9 +1974,13 @@ class Renderer final : public D9Backend {
             if (def.first < n)
                 memcpy(&constants_[def.first * 4], def.second.data(), 4 * sizeof(float));
         if (vertex)
-            [enc_ setVertexBytes:constants_.data() length:constants_.size() * sizeof(float) atIndex:16];
+            [enc_ setVertexBytes:constants_.data()
+                          length:constants_.size() * sizeof(float)
+                         atIndex:16];
         else
-            [enc_ setFragmentBytes:constants_.data() length:constants_.size() * sizeof(float) atIndex:0];
+            [enc_ setFragmentBytes:constants_.data()
+                            length:constants_.size() * sizeof(float)
+                           atIndex:0];
     }
 
     void bind_inline(int slot, const uint8_t *bytes, uint32_t size) {
@@ -1778,13 +2010,31 @@ class Renderer final : public D9Backend {
         uint32_t count = d.primitive_count;
         bool fan = false;
         switch (d.primitive) {
-        case 1: type = MTLPrimitiveTypePoint; break;
-        case 2: type = MTLPrimitiveTypeLine; count *= 2; break;
-        case 3: type = MTLPrimitiveTypeLineStrip; count += 1; break;
-        case 4: type = MTLPrimitiveTypeTriangle; count *= 3; break;
-        case 5: type = MTLPrimitiveTypeTriangleStrip; count += 2; break;
-        case 6: type = MTLPrimitiveTypeTriangle; fan = true; break;
-        default: return;
+        case 1:
+            type = MTLPrimitiveTypePoint;
+            break;
+        case 2:
+            type = MTLPrimitiveTypeLine;
+            count *= 2;
+            break;
+        case 3:
+            type = MTLPrimitiveTypeLineStrip;
+            count += 1;
+            break;
+        case 4:
+            type = MTLPrimitiveTypeTriangle;
+            count *= 3;
+            break;
+        case 5:
+            type = MTLPrimitiveTypeTriangleStrip;
+            count += 2;
+            break;
+        case 6:
+            type = MTLPrimitiveTypeTriangle;
+            fan = true;
+            break;
+        default:
+            return;
         }
         if (!d.primitive_count)
             return;
@@ -1803,14 +2053,22 @@ class Renderer final : public D9Backend {
                 if ((uint64_t)(d.start + count) * isize > b->second.buffer.length)
                     return;
                 b->second.used = serial_;
-                [enc_ drawIndexedPrimitives:type indexCount:count indexType:itype indexBuffer:b->second.buffer
-                          indexBufferOffset:d.start * isize instanceCount:1 baseVertex:d.base_vertex
+                [enc_ drawIndexedPrimitives:type
+                                 indexCount:count
+                                  indexType:itype
+                                indexBuffer:b->second.buffer
+                          indexBufferOffset:d.start * isize
+                              instanceCount:1
+                                 baseVertex:d.base_vertex
                                baseInstance:0];
             } else {
                 id<MTLBuffer> b = transient(count * isize);
                 memcpy((uint8_t *)b.contents + transient_used_ - ((count * isize + 15) & ~15u),
                        d.inline_indices, count * isize);
-                [enc_ drawIndexedPrimitives:type indexCount:count indexType:itype indexBuffer:b
+                [enc_ drawIndexedPrimitives:type
+                                 indexCount:count
+                                  indexType:itype
+                                indexBuffer:b
                           indexBufferOffset:transient_used_ - ((count * isize + 15) & ~15u)];
             }
             return;
@@ -1831,8 +2089,9 @@ class Renderer final : public D9Backend {
                     return 0;
                 p = b->second.shadow.data() + at;
             }
-            uint32_t v = isize == 4 ? (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24)
-                                    : (uint32_t)(p[0] | p[1] << 8);
+            uint32_t v = isize == 4
+                             ? (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24)
+                             : (uint32_t)(p[0] | p[1] << 8);
             return v + (uint32_t)(d.inline_indices ? 0 : d.base_vertex);
         };
         for (uint32_t i = 0; i < count; ++i) {
@@ -1844,8 +2103,11 @@ class Renderer final : public D9Backend {
         id<MTLBuffer> b = transient(bytes);
         NSUInteger off = transient_used_ - ((bytes + 15) & ~15u);
         memcpy((uint8_t *)b.contents + off, list.data(), bytes);
-        [enc_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:list.size() indexType:MTLIndexTypeUInt32
-                        indexBuffer:b indexBufferOffset:off];
+        [enc_ drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                         indexCount:list.size()
+                          indexType:MTLIndexTypeUInt32
+                        indexBuffer:b
+                  indexBufferOffset:off];
     }
 
     void dump(Tex &t, uint32_t w, uint32_t h) {
@@ -1853,7 +2115,10 @@ class Renderer final : public D9Backend {
             return;
         settle(t.used);
         std::vector<uint8_t> bgra((size_t)w * h * 4);
-        [t.texture getBytes:bgra.data() bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+        [t.texture getBytes:bgra.data()
+                bytesPerRow:w * 4
+                 fromRegion:MTLRegionMake2D(0, 0, w, h)
+                mipmapLevel:0];
         std::vector<uint8_t> rgb((size_t)w * h * 3);
         for (size_t i = 0, n = (size_t)w * h; i < n; ++i) {
             rgb[i * 3] = bgra[i * 4 + 2];
@@ -1861,7 +2126,8 @@ class Renderer final : public D9Backend {
             rgb[i * 3 + 2] = bgra[i * 4];
         }
         char path[1024];
-        snprintf(path, sizeof path, "%s/present_%05u.ppm", host_dump_dir(), (unsigned)(presents_ + 1));
+        snprintf(path, sizeof path, "%s/present_%05u.ppm", host_dump_dir(),
+                 (unsigned)(presents_ + 1));
         host_write_ppm(path, rgb.data(), (int)w, (int)h);
     }
 
@@ -1900,7 +2166,9 @@ class Renderer final : public D9Backend {
     uint32_t base_rows_ = 0;
     int rescale_frames_ = 0;
     // Render targets are this many times the guest's size (RECOMP_D3D9_SCALE).
-    float scale_ = recomp_env("D3D9_SCALE") ? std::max(1.0f, std::min(8.0f, (float)atof(recomp_env("D3D9_SCALE")))) : 1.0f;
+    float scale_ = recomp_env("D3D9_SCALE")
+                       ? std::max(1.0f, std::min(8.0f, (float)atof(recomp_env("D3D9_SCALE"))))
+                       : 1.0f;
     id<MTLTexture> pass_color_[4] = {nil, nil, nil, nil};
     id<MTLTexture> pass_depth_ = nil;
     uint32_t stream_mask_ = 0;
@@ -1947,7 +2215,8 @@ class Renderer final : public D9Backend {
     id<MTLCommandBuffer> kept_cmd_ = nil;
     uint32_t kept_w_ = 0, kept_h_ = 0;
     std::string probe_tag_;
-    uint64_t probe_frame_ = recomp_env("D3D9_PROBE") ? strtoull(recomp_env("D3D9_PROBE"), nullptr, 10) : 0;
+    uint64_t probe_frame_ =
+        recomp_env("D3D9_PROBE") ? strtoull(recomp_env("D3D9_PROBE"), nullptr, 10) : 0;
 };
 
 } // namespace

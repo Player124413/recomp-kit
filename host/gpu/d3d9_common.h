@@ -48,28 +48,47 @@ struct FormatInfo {
 // `bc`: the device samples BC1-3. Without it DXT is decoded to BGRA8 on upload.
 inline FormatInfo format_info(uint32_t fmt, bool bc) {
     switch (fmt) {
-    case 21: return {Store::BGRA8, Conv::Direct, 4};
-    case 22: return {Store::BGRA8, Conv::ForceAlpha, 4};
-    case 23: return {Store::BGRA8, Conv::R5G6B5, 2};
-    case 24: return {Store::BGRA8, Conv::X1R5G5B5, 2};
-    case 25: return {Store::BGRA8, Conv::A1R5G5B5, 2};
-    case 26: return {Store::BGRA8, Conv::A4R4G4B4, 2};
-    case 28: return {Store::A8, Conv::Direct, 1};
-    case 50: return {Store::BGRA8, Conv::L8, 1};
-    case 51: return {Store::BGRA8, Conv::A8L8, 2};
-    case 36: return {Store::RGBA16, Conv::Direct, 8};
-    case 111: return {Store::R16F, Conv::Direct, 2};
-    case 113: return {Store::RGBA16F, Conv::Direct, 8};
-    case 114: return {Store::R32F, Conv::Direct, 4};
-    case 116: return {Store::RGBA32F, Conv::Direct, 16};
+    case 21:
+        return {Store::BGRA8, Conv::Direct, 4};
+    case 22:
+        return {Store::BGRA8, Conv::ForceAlpha, 4};
+    case 23:
+        return {Store::BGRA8, Conv::R5G6B5, 2};
+    case 24:
+        return {Store::BGRA8, Conv::X1R5G5B5, 2};
+    case 25:
+        return {Store::BGRA8, Conv::A1R5G5B5, 2};
+    case 26:
+        return {Store::BGRA8, Conv::A4R4G4B4, 2};
+    case 28:
+        return {Store::A8, Conv::Direct, 1};
+    case 50:
+        return {Store::BGRA8, Conv::L8, 1};
+    case 51:
+        return {Store::BGRA8, Conv::A8L8, 2};
+    case 36:
+        return {Store::RGBA16, Conv::Direct, 8};
+    case 111:
+        return {Store::R16F, Conv::Direct, 2};
+    case 113:
+        return {Store::RGBA16F, Conv::Direct, 8};
+    case 114:
+        return {Store::R32F, Conv::Direct, 4};
+    case 116:
+        return {Store::RGBA32F, Conv::Direct, 16};
     case FMT_DXT1:
-        if (bc) return {Store::BC1, Conv::Direct, 8, true};
+        if (bc)
+            return {Store::BC1, Conv::Direct, 8, true};
         break;
-    case FMT_DXT2: case FMT_DXT3:
-        if (bc) return {Store::BC2, Conv::Direct, 16, true};
+    case FMT_DXT2:
+    case FMT_DXT3:
+        if (bc)
+            return {Store::BC2, Conv::Direct, 16, true};
         break;
-    case FMT_DXT4: case FMT_DXT5:
-        if (bc) return {Store::BC3, Conv::Direct, 16, true};
+    case FMT_DXT4:
+    case FMT_DXT5:
+        if (bc)
+            return {Store::BC3, Conv::Direct, 16, true};
         break;
     default:
         break;
@@ -80,11 +99,13 @@ inline FormatInfo format_info(uint32_t fmt, bool bc) {
 }
 
 inline bool is_dxt(uint32_t fmt) {
-    return fmt == FMT_DXT1 || fmt == FMT_DXT2 || fmt == FMT_DXT3 || fmt == FMT_DXT4 || fmt == FMT_DXT5;
+    return fmt == FMT_DXT1 || fmt == FMT_DXT2 || fmt == FMT_DXT3 || fmt == FMT_DXT4 ||
+           fmt == FMT_DXT5;
 }
 
 // Source bytes to tightly packed BGRA8 pixels.
-inline void convert(Conv conv, const uint8_t *src, uint32_t w, uint32_t h, uint32_t pitch, std::vector<uint8_t> &out) {
+inline void convert(Conv conv, const uint8_t *src, uint32_t w, uint32_t h, uint32_t pitch,
+                    std::vector<uint8_t> &out) {
     out.resize((size_t)w * h * 4);
     for (uint32_t y = 0; y < h; ++y) {
         const uint8_t *s = src + (size_t)y * pitch;
@@ -142,7 +163,8 @@ inline void rgb565(uint16_t c, uint8_t *o) {
     o[1] = (uint8_t)(((c >> 5) & 63) * 255 / 63);
     o[0] = (uint8_t)((c & 31) * 255 / 31);
 }
-inline void decode_dxt(const uint8_t *src, uint32_t w, uint32_t h, uint32_t fmt, std::vector<uint8_t> &out) {
+inline void decode_dxt(const uint8_t *src, uint32_t w, uint32_t h, uint32_t fmt,
+                       std::vector<uint8_t> &out) {
     out.assign((size_t)w * h * 4, 0);
     uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
     uint32_t block = fmt == FMT_DXT1 ? 8 : 16;
@@ -210,16 +232,48 @@ inline uint32_t vertex_format_bytes(uint32_t type) {
 
 // Render states by D3DRENDERSTATETYPE, the ones every backend reads.
 enum RS : uint32_t {
-    RS_ZENABLE = 7, RS_FILLMODE = 8, RS_ZWRITEENABLE = 14, RS_ALPHATESTENABLE = 15, RS_SRCBLEND = 19,
-    RS_DESTBLEND = 20, RS_CULLMODE = 22, RS_ZFUNC = 23, RS_ALPHAREF = 24, RS_ALPHAFUNC = 25,
-    RS_ALPHABLENDENABLE = 27, RS_FOGENABLE = 28, RS_FOGCOLOR = 34, RS_FOGTABLEMODE = 35, RS_FOGSTART = 36,
-    RS_FOGEND = 37, RS_FOGDENSITY = 38, RS_STENCILENABLE = 52, RS_STENCILFAIL = 53, RS_STENCILZFAIL = 54,
-    RS_STENCILPASS = 55, RS_STENCILFUNC = 56, RS_STENCILREF = 57, RS_STENCILMASK = 58,
-    RS_STENCILWRITEMASK = 59, RS_COLORWRITEENABLE = 168, RS_BLENDOP = 171, RS_SCISSORTESTENABLE = 174,
-    RS_SLOPESCALEDEPTHBIAS = 175, RS_TWOSIDEDSTENCILMODE = 185, RS_CCW_STENCILFAIL = 186,
-    RS_CCW_STENCILZFAIL = 187, RS_CCW_STENCILPASS = 188, RS_CCW_STENCILFUNC = 189,
-    RS_COLORWRITEENABLE1 = 190, RS_COLORWRITEENABLE2 = 191, RS_COLORWRITEENABLE3 = 192, RS_BLENDFACTOR = 193,
-    RS_DEPTHBIAS = 195, RS_SEPARATEALPHABLENDENABLE = 206, RS_SRCBLENDALPHA = 207, RS_DESTBLENDALPHA = 208,
+    RS_ZENABLE = 7,
+    RS_FILLMODE = 8,
+    RS_ZWRITEENABLE = 14,
+    RS_ALPHATESTENABLE = 15,
+    RS_SRCBLEND = 19,
+    RS_DESTBLEND = 20,
+    RS_CULLMODE = 22,
+    RS_ZFUNC = 23,
+    RS_ALPHAREF = 24,
+    RS_ALPHAFUNC = 25,
+    RS_ALPHABLENDENABLE = 27,
+    RS_FOGENABLE = 28,
+    RS_FOGCOLOR = 34,
+    RS_FOGTABLEMODE = 35,
+    RS_FOGSTART = 36,
+    RS_FOGEND = 37,
+    RS_FOGDENSITY = 38,
+    RS_STENCILENABLE = 52,
+    RS_STENCILFAIL = 53,
+    RS_STENCILZFAIL = 54,
+    RS_STENCILPASS = 55,
+    RS_STENCILFUNC = 56,
+    RS_STENCILREF = 57,
+    RS_STENCILMASK = 58,
+    RS_STENCILWRITEMASK = 59,
+    RS_COLORWRITEENABLE = 168,
+    RS_BLENDOP = 171,
+    RS_SCISSORTESTENABLE = 174,
+    RS_SLOPESCALEDEPTHBIAS = 175,
+    RS_TWOSIDEDSTENCILMODE = 185,
+    RS_CCW_STENCILFAIL = 186,
+    RS_CCW_STENCILZFAIL = 187,
+    RS_CCW_STENCILPASS = 188,
+    RS_CCW_STENCILFUNC = 189,
+    RS_COLORWRITEENABLE1 = 190,
+    RS_COLORWRITEENABLE2 = 191,
+    RS_COLORWRITEENABLE3 = 192,
+    RS_BLENDFACTOR = 193,
+    RS_DEPTHBIAS = 195,
+    RS_SEPARATEALPHABLENDENABLE = 206,
+    RS_SRCBLENDALPHA = 207,
+    RS_DESTBLENDALPHA = 208,
     RS_BLENDOPALPHA = 209,
 };
 

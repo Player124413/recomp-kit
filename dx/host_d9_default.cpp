@@ -9,17 +9,19 @@ HOST_D9_DEFAULT int host_d9_active(void) {
 }
 HOST_D9_DEFAULT void host_d9_texture_define(const HostD9TextureDesc *) {}
 HOST_D9_DEFAULT void host_d9_texture_drop(uint32_t) {}
-HOST_D9_DEFAULT void host_d9_texture_upload(uint32_t, uint32_t, uint32_t, const uint8_t *, uint32_t) {}
+HOST_D9_DEFAULT void host_d9_texture_upload(uint32_t, uint32_t, uint32_t, const uint8_t *,
+                                            uint32_t) {}
 HOST_D9_DEFAULT int host_d9_texture_read(uint32_t, uint32_t, uint32_t, uint8_t *, uint32_t) {
     return 0;
 }
-HOST_D9_DEFAULT void host_d9_buffer_upload(uint32_t, uint32_t, uint32_t, const uint8_t *, uint32_t) {}
+HOST_D9_DEFAULT void host_d9_buffer_upload(uint32_t, uint32_t, uint32_t, const uint8_t *,
+                                           uint32_t) {}
 HOST_D9_DEFAULT void host_d9_buffer_drop(uint32_t) {}
 HOST_D9_DEFAULT void host_d9_draw(const HostD9Draw *) {}
-HOST_D9_DEFAULT void host_d9_clear(const HostD9Target *, const int32_t[4], uint32_t, const int32_t *,
-                                   uint32_t, uint32_t, float, uint32_t) {}
-HOST_D9_DEFAULT void host_d9_stretch(HostD9Surface, const int32_t[4], HostD9Surface, const int32_t[4],
-                                     uint32_t) {}
+HOST_D9_DEFAULT void host_d9_clear(const HostD9Target *, const int32_t[4], uint32_t,
+                                   const int32_t *, uint32_t, uint32_t, float, uint32_t) {}
+HOST_D9_DEFAULT void host_d9_stretch(HostD9Surface, const int32_t[4], HostD9Surface,
+                                     const int32_t[4], uint32_t) {}
 HOST_D9_DEFAULT void host_d9_present(uint32_t, uint32_t, uint32_t) {}
 HOST_D9_DEFAULT int host_d9_read_presented(uint8_t *, uint32_t, uint32_t *, uint32_t *) {
     return 0;

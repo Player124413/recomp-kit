@@ -6,5 +6,6 @@
 #ifdef _WIN32
 extern const RecompBuiltinMod recomp_builtin_mods[] = {{nullptr, nullptr, nullptr, nullptr}};
 #else
-__attribute__((weak)) extern const RecompBuiltinMod recomp_builtin_mods[] = {{nullptr, nullptr, nullptr, nullptr}};
+__attribute__((weak)) extern const RecompBuiltinMod recomp_builtin_mods[] = {
+    {nullptr, nullptr, nullptr, nullptr}};
 #endif

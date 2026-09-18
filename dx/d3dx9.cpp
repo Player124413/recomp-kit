@@ -98,8 +98,8 @@ void X_D3DXMatrixInverse(X86 *c) {
              m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
     inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] +
               m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
-    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] +
-             m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] +
+             m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
     inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] -
              m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
     inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] +
@@ -108,12 +108,12 @@ void X_D3DXMatrixInverse(X86 *c) {
               m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
     inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] -
              m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
-    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] +
-             m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
-    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] -
-              m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
-    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] +
-              m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] +
+             m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] -
+              m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] +
+              m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
     float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
     if (pdet)
         wf(pdet, det);
@@ -273,20 +273,47 @@ static const uint32_t D3D_OKX = 0u;
 static const uint32_t E_NOTIMPLX = 0x80004001u;
 static const uint32_t D3DERR_INVALIDCALLX = 0x8876086cu;
 
-enum : uint32_t { FXC_SCALAR = 0, FXC_VECTOR, FXC_MATRIX_ROWS, FXC_MATRIX_COLUMNS, FXC_OBJECT, FXC_STRUCT };
-enum : uint32_t { FXT_BOOL = 1, FXT_INT = 2, FXT_FLOAT = 3, FXT_TEXTURE = 5, FXT_TEXTURECUBE = 9,
-                  FXT_SAMPLER = 10, FXT_SAMPLERCUBE = 14, FXT_PIXELSHADER = 15, FXT_VERTEXSHADER = 16 };
+enum : uint32_t {
+    FXC_SCALAR = 0,
+    FXC_VECTOR,
+    FXC_MATRIX_ROWS,
+    FXC_MATRIX_COLUMNS,
+    FXC_OBJECT,
+    FXC_STRUCT
+};
+enum : uint32_t {
+    FXT_BOOL = 1,
+    FXT_INT = 2,
+    FXT_FLOAT = 3,
+    FXT_TEXTURE = 5,
+    FXT_TEXTURECUBE = 9,
+    FXT_SAMPLER = 10,
+    FXT_SAMPLERCUBE = 14,
+    FXT_PIXELSHADER = 15,
+    FXT_VERTEXSHADER = 16
+};
 // The state-table positions Wine's effect.c gives these.
-enum : uint32_t { FXS_VERTEXSHADER = 146, FXS_PIXELSHADER = 147, FXS_SAMPLER_TEXTURE = 164,
-                  FXS_SAMPLER_FIRST = 165, FXS_SAMPLER_LAST = 177 };
+enum : uint32_t {
+    FXS_VERTEXSHADER = 146,
+    FXS_PIXELSHADER = 147,
+    FXS_SAMPLER_TEXTURE = 164,
+    FXS_SAMPLER_FIRST = 165,
+    FXS_SAMPLER_LAST = 177
+};
 
 struct FxType {
     uint32_t type = 0, cls = 0, rows = 0, cols = 0, elements = 0;
     std::string name, semantic;
     std::vector<FxType> members;
-    bool numeric() const { return cls <= FXC_MATRIX_COLUMNS; }
-    bool sampler() const { return cls == FXC_OBJECT && type >= FXT_SAMPLER && type <= FXT_SAMPLERCUBE; }
-    uint32_t count() const { return elements ? elements : 1; }
+    bool numeric() const {
+        return cls <= FXC_MATRIX_COLUMNS;
+    }
+    bool sampler() const {
+        return cls == FXC_OBJECT && type >= FXT_SAMPLER && type <= FXT_SAMPLERCUBE;
+    }
+    uint32_t count() const {
+        return elements ? elements : 1;
+    }
     uint32_t bytes() const {
         if (numeric())
             return 4 * rows * cols * count();
@@ -313,7 +340,11 @@ struct FxState {
     mutable uint64_t pres_stamp = 0;
     mutable float pres_result = 0.0f;
     mutable bool pres_ok = false;
-    uint32_t object() const { return value.size() >= 4 ? (uint32_t)(value[0] | value[1] << 8 | value[2] << 16 | (uint32_t)value[3] << 24) : 0; }
+    uint32_t object() const {
+        return value.size() >= 4 ? (uint32_t)(value[0] | value[1] << 8 | value[2] << 16 |
+                                              (uint32_t)value[3] << 24)
+                                 : 0;
+    }
 };
 struct FxParam {
     FxType t;
@@ -322,8 +353,8 @@ struct FxParam {
     uint32_t texture = 0; // COM object id set with SetTexture
     uint32_t guest_name = 0, guest_semantic = 0;
     std::vector<uint32_t> annotations; // indices into FxEffect::annotations
-    bool shared = false; // D3DX_PARAMETER_SHARED: one value across the effect pool
-    uint64_t stamp = 0;  // g_param_stamp at the last write
+    bool shared = false;               // D3DX_PARAMETER_SHARED: one value across the effect pool
+    uint64_t stamp = 0;                // g_param_stamp at the last write
 };
 // Counts parameter writes, so a result computed from parameters can tell
 // whether any of them changed.
@@ -530,7 +561,8 @@ static bool fx_parse(const uint8_t *blob, size_t size, FxEffect &fx) {
         r.p += (len + 3) & ~3u;
     }
     for (uint32_t i = 0; i < nresources && r.ok && i < 65536; ++i) {
-        uint32_t tech = r.u32(), index = r.u32(), element = r.u32(), state = r.u32(), usage = r.u32();
+        uint32_t tech = r.u32(), index = r.u32(), element = r.u32(), state = r.u32(),
+                 usage = r.u32();
         uint32_t len = r.u32();
         std::vector<uint8_t> data = r.bytes(r.p, len);
         r.p += (len + 3) & ~3u;
@@ -566,7 +598,8 @@ static bool name_matches(uint32_t entry_name, const std::string &want) {
     if (len != want.size())
         return false;
     for (uint16_t i = 0; i < len; ++i) {
-        uint16_t ch = (uint16_t)(gm_ptr(entry_name + 2 + 2u * i)[0] | gm_ptr(entry_name + 2 + 2u * i)[1] << 8);
+        uint16_t ch = (uint16_t)(gm_ptr(entry_name + 2 + 2u * i)[0] |
+                                 gm_ptr(entry_name + 2 + 2u * i)[1] << 8);
         if (ch > 0x7f || std::toupper(ch) != std::toupper((unsigned char)want[i]))
             return false;
     }
@@ -590,7 +623,8 @@ static bool find_rcdata(uint32_t module, uint32_t name_arg, uint32_t *addr, uint
     else
         want_id = name_arg;
     auto find = [&](uint32_t dir, bool by_type, uint32_t type) -> uint32_t {
-        uint16_t named = (uint16_t)(rd32(dir + 12) & 0xffff), ids = (uint16_t)(rd32(dir + 12) >> 16);
+        uint16_t named = (uint16_t)(rd32(dir + 12) & 0xffff),
+                 ids = (uint16_t)(rd32(dir + 12) >> 16);
         for (uint32_t i = 0; i < (uint32_t)named + ids; ++i) {
             uint32_t e = dir + 16 + 8 * i, nm = rd32(e), off = rd32(e + 4);
             bool hit;
@@ -706,7 +740,8 @@ static const FxObject *pass_shader_object(const FxEffect &fx, const FxPass &pass
     return nullptr;
 }
 
-static const std::vector<uint8_t> *pass_shader(const FxEffect &fx, const FxPass &pass, uint32_t op) {
+static const std::vector<uint8_t> *pass_shader(const FxEffect &fx, const FxPass &pass,
+                                               uint32_t op) {
     for (const FxState &s : pass.states)
         if (s.op == op && s.t.cls == FXC_OBJECT) {
             auto it = fx.objects.find(s.object());
@@ -883,7 +918,8 @@ struct D9Pipeline;
 static void apply_state(FxEffect &fx, D9Pipeline &pl, const FxState &s, uint32_t sampler_stage);
 
 static uint32_t bind_constants(FxEffect &fx, const std::vector<uint8_t> &code, float (*reg)[4],
-                               uint32_t limit, D9Pipeline &pl, uint32_t *missing, uint64_t key = 0) {
+                               uint32_t limit, D9Pipeline &pl, uint32_t *missing,
+                               uint64_t key = 0) {
     uint32_t bound = 0;
     if (!key)
         key = d9sh::code_key(code.data(), code.size());
@@ -918,8 +954,10 @@ static uint32_t bind_constants(FxEffect &fx, const std::vector<uint8_t> &code, f
         if (c.cls == FXC_MATRIX_ROWS || c.cls == FXC_MATRIX_COLUMNS) {
             uint32_t pr = p->t.rows ? p->t.rows : 1, pc = p->t.cols ? p->t.cols : 1;
             for (uint32_t r = 0; r < c.count && c.index + r < limit; ++r) {
-                uint32_t el = c.cls == FXC_MATRIX_COLUMNS ? r / (c.cols ? c.cols : 4) : r / (c.rows ? c.rows : 4);
-                uint32_t line = c.cls == FXC_MATRIX_COLUMNS ? r % (c.cols ? c.cols : 4) : r % (c.rows ? c.rows : 4);
+                uint32_t el = c.cls == FXC_MATRIX_COLUMNS ? r / (c.cols ? c.cols : 4)
+                                                          : r / (c.rows ? c.rows : 4);
+                uint32_t line = c.cls == FXC_MATRIX_COLUMNS ? r % (c.cols ? c.cols : 4)
+                                                            : r % (c.rows ? c.rows : 4);
                 for (uint32_t k = 0; k < 4; ++k) {
                     uint32_t row = c.cls == FXC_MATRIX_COLUMNS ? k : line;
                     uint32_t col = c.cls == FXC_MATRIX_COLUMNS ? line : k;
@@ -936,7 +974,8 @@ static uint32_t bind_constants(FxEffect &fx, const std::vector<uint8_t> &code, f
                 per = 4;
             for (uint32_t r = 0; r < c.count && c.index + r < limit; ++r)
                 for (uint32_t k = 0; k < 4; ++k)
-                    reg[c.index + r][k] = (k < per && r * per + k < n) ? param_get_float(*p, r * per + k) : 0.0f;
+                    reg[c.index + r][k] =
+                        (k < per && r * per + k < n) ? param_get_float(*p, r * per + k) : 0.0f;
         }
     }
     return bound;
@@ -1013,15 +1052,22 @@ static bool pres_eval(FxEffect &fx, D9Pipeline &pl, const std::vector<uint8_t> &
         }
         return rd32_le(w + 4 * pc++);
     };
-    struct Arg { uint32_t table = 0, offset = 0; };
+    struct Arg {
+        uint32_t table = 0, offset = 0;
+    };
     auto get = [&](const Arg &a, uint32_t i) -> double {
         uint32_t o = a.offset + i;
         switch (a.table) {
-        case 1: return o < lit.size() ? lit[o] : 0.0;
-        case 2: return o / 4 < 256 ? in[o / 4][o % 4] : 0.0;
-        case 4: return o < 64 ? out[o] : 0.0;
-        case 7: return o < 64 ? temp[o] : 0.0;
-        default: return 0.0;
+        case 1:
+            return o < lit.size() ? lit[o] : 0.0;
+        case 2:
+            return o / 4 < 256 ? in[o / 4][o % 4] : 0.0;
+        case 4:
+            return o < 64 ? out[o] : 0.0;
+        case 7:
+            return o < 64 ? temp[o] : 0.0;
+        default:
+            return 0.0;
         }
     };
     bool ok = true;
@@ -1047,17 +1093,39 @@ static bool pres_eval(FxEffect &fx, D9Pipeline &pl, const std::vector<uint8_t> &
             auto x = [&](uint32_t a) { return get(args[a], (scalar && a == 0) ? 0 : i); };
             double v;
             switch (op) {
-            case 0x100: v = x(0); break;                                   // mov
-            case 0x101: v = -x(0); break;                                  // neg
-            case 0x200: v = std::min(x(0), x(1)); break;                   // min
-            case 0x201: v = std::max(x(0), x(1)); break;                   // max
-            case 0x202: v = x(0) < x(1) ? 1.0 : 0.0; break;                // lt
-            case 0x203: v = x(0) >= x(1) ? 1.0 : 0.0; break;               // ge
-            case 0x204: v = x(0) + x(1); break;                            // add
-            case 0x205: v = x(0) * x(1); break;                            // mul
-            case 0x208: v = x(1) != 0.0 ? x(0) / x(1) : 0.0; break;        // div
-            case 0x300: v = x(0) >= 0.0 ? x(1) : x(2); break;              // cmp
-            case 0x301: v = x(0) != 0.0 ? x(1) : x(2); break;              // movc
+            case 0x100:
+                v = x(0);
+                break; // mov
+            case 0x101:
+                v = -x(0);
+                break; // neg
+            case 0x200:
+                v = std::min(x(0), x(1));
+                break; // min
+            case 0x201:
+                v = std::max(x(0), x(1));
+                break; // max
+            case 0x202:
+                v = x(0) < x(1) ? 1.0 : 0.0;
+                break; // lt
+            case 0x203:
+                v = x(0) >= x(1) ? 1.0 : 0.0;
+                break; // ge
+            case 0x204:
+                v = x(0) + x(1);
+                break; // add
+            case 0x205:
+                v = x(0) * x(1);
+                break; // mul
+            case 0x208:
+                v = x(1) != 0.0 ? x(0) / x(1) : 0.0;
+                break; // div
+            case 0x300:
+                v = x(0) >= 0.0 ? x(1) : x(2);
+                break; // cmp
+            case 0x301:
+                v = x(0) != 0.0 ? x(1) : x(2);
+                break; // movc
             default: {
                 char key[48];
                 snprintf(key, sizeof key, "d3dx9.pres.%03x", op);
@@ -1125,22 +1193,23 @@ static bool state_value(FxEffect &fx, D9Pipeline &pl, const FxState &s, uint32_t
 // Wine's state table (d3dx9 effect.c), render-state part: the
 // D3DRENDERSTATETYPE at each position 0..102. WRAP8-15 follow WRAP7 directly.
 static const uint8_t kFxRenderState[103] = {
-    7, 8, 9, 14, 15, 16, 19, 20,  // 0: ZENABLE
-    22, 23, 24, 25, 26, 27, 28, 29,  // 8: CULLMODE
-    34, 35, 36, 37, 38, 48, 52, 53,  // 16: FOGCOLOR
-    54, 55, 56, 57, 58, 59, 60, 128,  // 24: STENCILZFAIL
-    129, 130, 131, 132, 133, 134, 135, 198,  // 32: WRAP1
-    199, 200, 201, 202, 203, 204, 205, 136,  // 40: WRAP9
-    137, 139, 140, 141, 142, 143, 145, 146,  // 48: LIGHTING
-    147, 148, 151, 152, 154, 155, 166, 156,  // 56: AMBIENTMATERIALSOURCE
-    157, 158, 159, 160, 161, 162, 163, 165,  // 64: POINTSCALEENABLE
-    167, 168, 170, 171, 172, 173, 174, 175,  // 72: INDEXEDVERTEXBLENDENABLE
-    176, 178, 179, 180, 181, 182, 183, 184,  // 80: ANTIALIASEDLINEENABLE
-    185, 186, 187, 188, 189, 190, 191, 192,  // 88: TWOSIDEDSTENCILMODE
-    193, 194, 195, 206, 207, 208, 209,  // 96: BLENDFACTOR
+    7,   8,   9,   14,  15,  16,  19,  20,  // 0: ZENABLE
+    22,  23,  24,  25,  26,  27,  28,  29,  // 8: CULLMODE
+    34,  35,  36,  37,  38,  48,  52,  53,  // 16: FOGCOLOR
+    54,  55,  56,  57,  58,  59,  60,  128, // 24: STENCILZFAIL
+    129, 130, 131, 132, 133, 134, 135, 198, // 32: WRAP1
+    199, 200, 201, 202, 203, 204, 205, 136, // 40: WRAP9
+    137, 139, 140, 141, 142, 143, 145, 146, // 48: LIGHTING
+    147, 148, 151, 152, 154, 155, 166, 156, // 56: AMBIENTMATERIALSOURCE
+    157, 158, 159, 160, 161, 162, 163, 165, // 64: POINTSCALEENABLE
+    167, 168, 170, 171, 172, 173, 174, 175, // 72: INDEXEDVERTEXBLENDENABLE
+    176, 178, 179, 180, 181, 182, 183, 184, // 80: ANTIALIASEDLINEENABLE
+    185, 186, 187, 188, 189, 190, 191, 192, // 88: TWOSIDEDSTENCILMODE
+    193, 194, 195, 206, 207, 208, 209,      // 96: BLENDFACTOR
 };
 // Positions 103..120: the D3DTEXTURESTAGESTATETYPE of each, COLOROP first.
-static const uint8_t kFxStageState[18] = {1, 26, 2, 3, 4, 27, 5, 6, 28, 7, 8, 9, 10, 11, 22, 23, 24, 32};
+static const uint8_t kFxStageState[18] = {1, 26, 2, 3,  4,  27, 5,  6,  28,
+                                          7, 8,  9, 10, 11, 22, 23, 24, 32};
 
 static void apply_state(FxEffect &fx, D9Pipeline &pl, const FxState &s, uint32_t sampler_stage) {
     if (s.t.cls == FXC_OBJECT)
@@ -1160,7 +1229,8 @@ static void apply_state(FxEffect &fx, D9Pipeline &pl, const FxState &s, uint32_t
             pl.tss[s.index][kFxStageState[s.op - 103]] = v;
     } else if (s.op >= FXS_SAMPLER_FIRST && s.op <= FXS_SAMPLER_LAST) {
         uint32_t stage = sampler_stage != 0xffffffffu ? sampler_stage : s.index;
-        if (stage < 16 && state_value(fx, pl, s, &v) && pl.sampler_state[stage][s.op - FXS_SAMPLER_FIRST + 1] != v) {
+        if (stage < 16 && state_value(fx, pl, s, &v) &&
+            pl.sampler_state[stage][s.op - FXS_SAMPLER_FIRST + 1] != v) {
             pl.sampler_state[stage][s.op - FXS_SAMPLER_FIRST + 1] = v;
             pl.states_changed();
         }
@@ -1232,7 +1302,7 @@ static void apply_pass(FxEffect &fx) {
 // ---------------------------------------------------------------------------
 #define FX_STUB(name)                                                                              \
     void Fx_##name(X86 *c) {                                                                       \
-        log_once("d3dx9.fx." #name, "d3dx9: ID3DXEffect::" #name " is not implemented");            \
+        log_once("d3dx9.fx." #name, "d3dx9: ID3DXEffect::" #name " is not implemented");           \
         com_ret(c, D3D_OKX);                                                                       \
     }
 
@@ -1423,7 +1493,8 @@ void Fx_GetString(X86 *c) {
         com_ret(c, D3DERR_INVALIDCALLX);
         return;
     }
-    uint32_t id = (uint32_t)(p->value[0] | p->value[1] << 8 | p->value[2] << 16 | (uint32_t)p->value[3] << 24);
+    uint32_t id = (uint32_t)(p->value[0] | p->value[1] << 8 | p->value[2] << 16 |
+                             (uint32_t)p->value[3] << 24);
     auto it = fx->objects.find(id);
     if (it == fx->objects.end()) {
         com_ret(c, D3DERR_INVALIDCALLX);
@@ -1544,10 +1615,18 @@ static void get_int_array(X86 *c, bool as_bool) {
     }
     com_ret(c, D3D_OKX);
 }
-void Fx_SetBoolArray(X86 *c) { put_int_array(c, true); }
-void Fx_GetBoolArray(X86 *c) { get_int_array(c, true); }
-void Fx_SetIntArray(X86 *c) { put_int_array(c, false); }
-void Fx_GetIntArray(X86 *c) { get_int_array(c, false); }
+void Fx_SetBoolArray(X86 *c) {
+    put_int_array(c, true);
+}
+void Fx_GetBoolArray(X86 *c) {
+    get_int_array(c, true);
+}
+void Fx_SetIntArray(X86 *c) {
+    put_int_array(c, false);
+}
+void Fx_GetIntArray(X86 *c) {
+    get_int_array(c, false);
+}
 void Fx_SetFloat(X86 *c) {
     FX_PARAM_OR_FAIL();
     param_put_float(*p, 0, argf(c, 2));
@@ -1577,10 +1656,18 @@ static void get_floats(X86 *c, uint32_t per) {
         wf(data + 4 * i, param_get_float(*p, i));
     com_ret(c, D3D_OKX);
 }
-void Fx_SetFloatArray(X86 *c) { put_floats(c, 0); }
-void Fx_GetFloatArray(X86 *c) { get_floats(c, 0); }
-void Fx_SetVectorArray(X86 *c) { put_floats(c, 4); }
-void Fx_GetVectorArray(X86 *c) { get_floats(c, 4); }
+void Fx_SetFloatArray(X86 *c) {
+    put_floats(c, 0);
+}
+void Fx_GetFloatArray(X86 *c) {
+    get_floats(c, 0);
+}
+void Fx_SetVectorArray(X86 *c) {
+    put_floats(c, 4);
+}
+void Fx_GetVectorArray(X86 *c) {
+    get_floats(c, 4);
+}
 // (this, h, pVector): as many of the four as the parameter holds.
 void Fx_SetVector(X86 *c) {
     FX_PARAM_OR_FAIL();
@@ -1609,11 +1696,21 @@ static void put_matrices(X86 *c, bool transpose, bool pointers, bool array) {
     }
     com_ret(c, D3D_OKX);
 }
-void Fx_SetMatrix(X86 *c) { put_matrices(c, false, false, false); }
-void Fx_SetMatrixArray(X86 *c) { put_matrices(c, false, false, true); }
-void Fx_SetMatrixPointerArray(X86 *c) { put_matrices(c, false, true, true); }
-void Fx_SetMatrixTranspose(X86 *c) { put_matrices(c, true, false, false); }
-void Fx_SetMatrixTransposeArray(X86 *c) { put_matrices(c, true, false, true); }
+void Fx_SetMatrix(X86 *c) {
+    put_matrices(c, false, false, false);
+}
+void Fx_SetMatrixArray(X86 *c) {
+    put_matrices(c, false, false, true);
+}
+void Fx_SetMatrixPointerArray(X86 *c) {
+    put_matrices(c, false, true, true);
+}
+void Fx_SetMatrixTranspose(X86 *c) {
+    put_matrices(c, true, false, false);
+}
+void Fx_SetMatrixTransposeArray(X86 *c) {
+    put_matrices(c, true, false, true);
+}
 static void get_matrices(X86 *c, bool transpose, uint32_t count) {
     FX_PARAM_OR_FAIL();
     uint32_t data = arg(c, 2);
@@ -1628,9 +1725,15 @@ static void get_matrices(X86 *c, bool transpose, uint32_t count) {
     }
     com_ret(c, D3D_OKX);
 }
-void Fx_GetMatrix(X86 *c) { get_matrices(c, false, 1); }
-void Fx_GetMatrixArray(X86 *c) { get_matrices(c, false, arg(c, 3)); }
-void Fx_GetMatrixTranspose(X86 *c) { get_matrices(c, true, 1); }
+void Fx_GetMatrix(X86 *c) {
+    get_matrices(c, false, 1);
+}
+void Fx_GetMatrixArray(X86 *c) {
+    get_matrices(c, false, arg(c, 3));
+}
+void Fx_GetMatrixTranspose(X86 *c) {
+    get_matrices(c, true, 1);
+}
 // (this, h, pData, ByteOffset, Bytes)
 void Fx_SetRawValue(X86 *c) {
     FX_PARAM_OR_FAIL();
@@ -1813,7 +1916,8 @@ static void share_parameter(uint32_t from_effect, uint32_t index) {
     }
     const size_t n = value.value.size();
     for (FxParam *other : found->second) {
-        if (other->texture == value.texture && (n == 0 || memcmp(other->value.data(), value.value.data(), n) == 0))
+        if (other->texture == value.texture &&
+            (n == 0 || memcmp(other->value.data(), value.value.data(), n) == 0))
             continue;
         if (n)
             memcpy(other->value.data(), value.value.data(), n);
@@ -1849,8 +1953,8 @@ template <void (*F)(X86 *)> void shared_setter(X86 *c) {
     uint32_t handle = arg(c, 1);
     int64_t index = -1;
     if (FxEffect *fx = this_fx(c))
-        if (FxParam *p = param_of(*fx, handle); p && p->shared && p >= fx->params.data() &&
-                                                p < fx->params.data() + fx->params.size())
+        if (FxParam *p = param_of(*fx, handle);
+            p && p->shared && p >= fx->params.data() && p < fx->params.data() + fx->params.size())
             index = p - fx->params.data();
     F(c);
     if (index >= 0)
