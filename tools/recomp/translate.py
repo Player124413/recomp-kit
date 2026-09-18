@@ -1308,7 +1308,8 @@ class Image(object):
     #: 00430ad2 was reaching back 60 KB to 0041fc70.
     RECOVER_WINDOW = 0x8000
 
-    def recover(self, start, listed, limit=None, bounds=None, boundaries=()):
+    def recover(self, start, listed, limit=None, bounds=None, boundaries=(),
+                may_pass=None):
         """Decode the block at `start`, following its branches.
 
         Recursive descent rather than a linear sweep.  A sweep stops at the
@@ -1326,6 +1327,9 @@ class Image(object):
         decode, rejecting padding or an instruction that crosses the bound.
         Candidate boundaries stop each linear path, including partial opcodes;
         a branch can still skip a separate stub to another block of this body.
+        `may_pass` is asked about a stop before it is honoured, so a caller
+        that has judged a claim worthless can rebuild the body it covers
+        instead of stopping one instruction short of it.
         """
         if limit is None:
             limit = self.RECOVER_LIMIT
@@ -1341,7 +1345,8 @@ class Image(object):
         while pending and len(seen) < limit:
             va = pending.pop()
             while len(seen) < limit:
-                if va in seen or va in listed or va in boundary_set or not (lo <= va < hi):
+                claimed = va in listed and not (may_pass is not None and may_pass(va))
+                if va in seen or claimed or va in boundary_set or not (lo <= va < hi):
                     break
                 got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
                                           va, count=1))
@@ -4355,17 +4360,51 @@ def main():
             # or anything already owned, keeps its claim and the fragment
             # stays rejected.
             retry_fn = None
-            retry = image.recover(t, recovery_stops, bounds=bounds) if boundaries else []
+
+            def worthless_claim(a):
+                """Is `a` held only by a guess with nothing behind it?
+
+                Being owned already is not evidence: a bare scan guess that
+                happened to be resolved first owns its own address and every
+                byte it swallowed, and that alone would let it keep a real
+                function's body for no better reason than arriving earlier.
+                A claim counts when something names it - an entry a listing
+                or a table gives, a relocation, a callee of a stored pointer
+                - and not when the owner is another strength-0 guess.
+                """
+                o = owner.get(a)
+                return (o is not None and entry_strength.get(o.addr, 0) == 0
+                        and provenance.get(o.addr, "branch") not in STRUCTURAL_PROVENANCE
+                        and o.addr not in relocated and o.addr not in pointer_callees)
+
+            retry = image.recover(t, recovery_stops, bounds=bounds,
+                                  may_pass=worthless_claim)
             if retry:
                 candidate = Function(t, name, retry[-1].addr + 1 - t, retry)
                 candidate.measure(image)
-                # Only a boundary inside the body can have cut it, and only
-                # one nothing names may be overruled: a callee of a relocated
-                # pointer, or anything already owned, keeps its claim.
-                inside = [a for a in boundaries if t < a < candidate.end]
-                if inside and all(entry_strength.get(a, 0) == 0 and a not in owner
-                                  and a not in pointer_callees and a not in relocated
-                                  for a in inside):
+                # Only what lies inside the body can have cut it, and only a
+                # claim nothing stands behind may be overruled.
+                #
+                # The body's last instruction can straddle the boundary that
+                # cut it: recover() will not consume another candidate's first
+                # opcode byte, so a candidate landing inside that instruction
+                # truncates the body one instruction early and then sits at
+                # its end rather than inside it. MSVC's two-instruction EH
+                # funclets are the shape that shows it - MOV EAX,<handler
+                # data>; JMP <shared unwinder> - where a stray scan hit inside
+                # the JMP's displacement dropped the JMP and left a fragment
+                # that falls out of itself. Measure to the last instruction's
+                # final byte so that boundary is judged like the rest.
+                #
+                # Nothing inside is not a reason to refuse: recovery may have
+                # been cut by a worthless claim rather than by a boundary, and
+                # may_pass has already limited what it could step over.
+                end = image.insn_end(retry[-1].addr, retry[-1].mnem)
+                inside = [a for a in boundaries if t < a < end]
+                if all(entry_strength.get(a, 0) == 0
+                       and a not in pointer_callees and a not in relocated
+                       and (a not in owner or worthless_claim(a))
+                       for a in inside):
                     retry_fn = candidate
             # The wider body is judged by the same rule as the first one: a
             # block a branch reached may still end in another entry.
