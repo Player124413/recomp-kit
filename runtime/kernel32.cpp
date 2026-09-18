@@ -119,6 +119,11 @@ struct HObj {
     int32_t max_count = 0;
     bool signalled = false;
     bool manual_reset = false;
+    // A waitable timer is an event that time sets: at timer_due (sched_now
+    // seconds) while armed, and again every timer_period seconds after.
+    bool timer = false;
+    bool timer_armed = false;
+    double timer_due = 0.0, timer_period = 0.0;
     // A mutex is owned, recursively, by one thread at a time. Ownership is why
     // a mutex cannot be answered with a plain "signalled" flag once guest
     // threads interleave: the owner may re-enter it, nobody else may.
@@ -2233,10 +2238,29 @@ bool thread_runnable(const GuestThread *t) {
 // Object availability.  Ownership matters now that threads interleave, so a
 // mutex answers per thread and taking it is a separate step from testing it.
 // ---------------------------------------------------------------------------
+// Signals a timer whose time has come and arms its next period. A periodic
+// timer that fell behind fires once and continues from now, as Windows does.
+void timer_fire(HObj *o) {
+    if (!o->timer || !o->timer_armed)
+        return;
+    double now = sched_now();
+    if (now < o->timer_due)
+        return;
+    o->signalled = true;
+    if (o->timer_period > 0.0) {
+        o->timer_due += o->timer_period;
+        if (o->timer_due <= now)
+            o->timer_due = now + o->timer_period;
+    } else {
+        o->timer_armed = false;
+    }
+}
+
 bool object_available(uint32_t h, uint32_t tid) {
     HObj *o = handle_any(h);
     if (!o)
         return false;
+    timer_fire(o);
     switch (o->kind) {
     case H_SEM:
         return o->count > 0;
@@ -4487,6 +4511,152 @@ void wait_multiple_objects(X86 *c) {
     set_eax(c, sched_wait_objects(handles_, n, wait_all != 0, timeout));
 }
 
+
+// ---------------------------------------------------------------------------
+// Process, priority and waitable-timer imports.
+// ---------------------------------------------------------------------------
+uint64_t system_filetime() {
+    const auto since_epoch = std::chrono::system_clock::now().time_since_epoch();
+    const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(since_epoch).count();
+    return (uint64_t)(us * 10) + 11644473600ull * 10000000ull;
+}
+
+void k_CancelWaitableTimer(X86 *c) {
+    HObj *o = handle_get(arg(c, 0), H_EVENT);
+    if (o && o->timer)
+        o->timer_armed = false;
+    set_eax(c, o ? 1 : 0);
+}
+
+// A snapshot the guest cannot walk: Process32First reports none. A game that
+// looks for another copy of itself concludes it is the only one.
+void k_CreateToolhelp32Snapshot(X86 *c) {
+    set_last_error(ERROR_ACCESS_DENIED_);
+    set_eax(c, 0xffffffffu); // INVALID_HANDLE_VALUE
+}
+
+void k_CreateWaitableTimerA(X86 *c) {
+    uint32_t h = handle_new(H_EVENT);
+    HObj &o = handles()[h];
+    o.manual_reset = arg(c, 1) != 0; // a notification timer stays signalled
+    o.signalled = false;
+    o.timer = true;
+    set_eax(c, h);
+}
+
+void k_DuplicateHandle(X86 *c) {
+    // One process, so a duplicate is the same handle. Closing either is
+    // harmless: handle_close on an already closed handle reports failure.
+    uint32_t source = arg(c, 1), target = arg(c, 3);
+    if (target)
+        wr32(target, source);
+    set_eax(c, 1);
+}
+
+void k_GetPriorityClass(X86 *c) {
+    set_eax(c, 0x00000020); // NORMAL_PRIORITY_CLASS
+}
+
+void k_GetProcessAffinityMask(X86 *c) {
+    uint32_t proc = arg(c, 1), sys = arg(c, 2);
+    if (proc)
+        wr32(proc, 1);
+    if (sys)
+        wr32(sys, 1);
+    set_eax(c, 1); // one logical processor: the guest is single threaded here
+}
+
+void k_GetSystemTimeAsFileTime(X86 *c) {
+    uint64_t ft = system_filetime();
+    uint32_t out = arg(c, 0);
+    if (out && gm_valid(out, 8)) {
+        wr32(out, (uint32_t)ft);
+        wr32(out + 4, (uint32_t)(ft >> 32));
+    }
+    set_eax(c, 0);
+}
+
+// The 64-bit form of the same machine. Every field is a ULONGLONG, so the
+// structure is 64 bytes and each value is written as a pair of dwords.
+void k_GlobalMemoryStatusEx(X86 *c) {
+    uint32_t p = arg(c, 0);
+    if (!p) {
+        set_last_error(87 /* ERROR_INVALID_PARAMETER */);
+        set_eax(c, 0);
+        return;
+    }
+    const uint64_t mb = 1024ull * 1024ull;
+    auto put64 = [&](uint32_t off, uint64_t v) {
+        wr32(p + off, (uint32_t)v);
+        wr32(p + off + 4, (uint32_t)(v >> 32));
+    };
+    wr32(p + 0, 64); // dwLength
+    wr32(p + 4, 25); // dwMemoryLoad, percent
+    put64(8, 512ull * mb);   // ullTotalPhys
+    put64(16, 384ull * mb);  // ullAvailPhys
+    put64(24, 1024ull * mb); // ullTotalPageFile
+    put64(32, 768ull * mb);  // ullAvailPageFile
+    put64(40, 2047ull * mb); // ullTotalVirtual: a 32-bit process's 2 GB
+    put64(48, 1900ull * mb); // ullAvailVirtual
+    put64(56, 0);            // ullAvailExtendedVirtual is always zero
+    set_eax(c, 1);
+}
+
+void k_Process32First(X86 *c) {
+    set_last_error(ERROR_NO_MORE_FILES_);
+    set_eax(c, 0);
+}
+
+void k_Process32Next(X86 *c) {
+    set_last_error(ERROR_NO_MORE_FILES_);
+    set_eax(c, 0);
+}
+
+void k_SetPriorityClass(X86 *c) {
+    set_eax(c, 1); // accepted and ignored: the scheduler is cooperative
+}
+
+void k_SetProcessAffinityMask(X86 *c) {
+    set_eax(c, 1);
+}
+
+void k_SetThreadAffinityMask(X86 *c) {
+    set_eax(c, 1); // the previous mask
+}
+
+// (hTimer, pDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine,
+// fResume). A negative due time is relative, in 100 ns; a positive one is an
+// absolute UTC FILETIME. Completion routines need an alertable wait, which
+// nothing here performs, so they are not called.
+void k_SetWaitableTimer(X86 *c) {
+    HObj *o = handle_get(arg(c, 0), H_EVENT);
+    uint32_t due = arg(c, 1);
+    int32_t period = (int32_t)arg(c, 2);
+    if (!o || !o->timer || !due || !gm_valid(due, 8) || period < 0) {
+        set_last_error(87 /* ERROR_INVALID_PARAMETER */);
+        set_eax(c, 0);
+        return;
+    }
+    int64_t when = (int64_t)((uint64_t)rd32(due) | ((uint64_t)rd32(due + 4) << 32));
+    double from_now = when < 0 ? (double)(-when) * 1e-7
+                               : ((double)when - (double)system_filetime()) * 1e-7;
+    if (from_now < 0.0)
+        from_now = 0.0;
+    o->signalled = false;
+    o->timer_armed = true;
+    o->timer_due = sched_now() + from_now;
+    o->timer_period = (double)period / 1000.0;
+    sched_wake_all(); // a sleeping scheduler recomputes its deadline
+    set_eax(c, 1);
+}
+
+void k_SleepEx(X86 *c) {
+    // No APCs are ever queued, so an alertable wait is a plain one and
+    // nothing was delivered.
+    k_Sleep(c);
+    set_eax(c, 0);
+}
+
 const ImportShim g_kernel32_shims[] = {
     // memory
     {"KERNEL32.dll", "HeapCreate", 3, k_HeapCreate},
@@ -4578,6 +4748,38 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "Sleep", 1, k_Sleep},
     {"KERNEL32.dll", "GetLocalTime", 1, k_GetLocalTime},
     {"KERNEL32.dll", "GetSystemTime", 1, k_GetSystemTime},
+    // Restored with the merge: these were on the branch this game was ported
+    // on, and main had never needed them. An import with no entry here has an
+    // unknown argument count, so imports_dispatch pops only the return address
+    // and every call leaks its arguments - a polling thread walks the guest
+    // stack pointer clean out of its stack.
+    {"KERNEL32.dll", "GetSystemTimeAsFileTime", 1, k_GetSystemTimeAsFileTime},
+    {"KERNEL32.dll", "SleepEx", 2, k_SleepEx},
+    {"KERNEL32.dll", "CreateWaitableTimerA", 3, k_CreateWaitableTimerA},
+    {"KERNEL32.dll", "SetWaitableTimer", 6, k_SetWaitableTimer},
+    {"KERNEL32.dll", "CancelWaitableTimer", 1, k_CancelWaitableTimer},
+    {"KERNEL32.dll", "DuplicateHandle", 7, k_DuplicateHandle},
+    {"KERNEL32.dll", "GlobalMemoryStatusEx", 1, k_GlobalMemoryStatusEx},
+    {"KERNEL32.dll", "CreateToolhelp32Snapshot", 2, k_CreateToolhelp32Snapshot},
+    {"KERNEL32.dll", "Process32First", 2, k_Process32First},
+    {"KERNEL32.dll", "Process32Next", 2, k_Process32Next},
+    {"KERNEL32.dll", "GetPriorityClass", 1, k_GetPriorityClass},
+    {"KERNEL32.dll", "SetPriorityClass", 2, k_SetPriorityClass},
+    {"KERNEL32.dll", "GetProcessAffinityMask", 3, k_GetProcessAffinityMask},
+    {"KERNEL32.dll", "SetProcessAffinityMask", 2, k_SetProcessAffinityMask},
+    {"KERNEL32.dll", "SetThreadAffinityMask", 2, k_SetThreadAffinityMask},
+    {"KERNEL32.dll", "CreateProcessA", 10, nullptr},
+    {"KERNEL32.dll", "DebugBreak", 0, nullptr},
+    {"KERNEL32.dll", "FatalAppExitA", 2, nullptr},
+    {"KERNEL32.dll", "GetDateFormatA", 6, nullptr},
+    {"KERNEL32.dll", "GetTimeFormatA", 6, nullptr},
+    {"KERNEL32.dll", "GetDiskFreeSpaceExA", 4, nullptr},
+    {"KERNEL32.dll", "GetLongPathNameA", 3, nullptr},
+    {"KERNEL32.dll", "GetOverlappedResult", 4, nullptr},
+    {"KERNEL32.dll", "HeapValidate", 3, nullptr},
+    {"KERNEL32.dll", "QueueUserAPC", 3, nullptr},
+    {"KERNEL32.dll", "SetConsoleCtrlHandler", 2, nullptr},
+    {"KERNEL32.dll", "TerminateThread", 2, nullptr},
     {"KERNEL32.dll", "GetTimeZoneInformation", 1, k_GetTimeZoneInformation},
     // TLS / interlocked / critical sections
     {"KERNEL32.dll", "TlsAlloc", 0, k_TlsAlloc},
