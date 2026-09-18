@@ -1044,6 +1044,33 @@ class Image(object):
                        for i in range(off, off + 8, 2))
                    for off in range(len(head) - 7))
 
+    def undecodable_run(self, va, limit=32):
+        """What a straight decode from `va` hits that no 32-bit compiler emits.
+
+        Returns a description, or None when the run is ordinary code. Only the
+        instructions before the first terminator are judged: past a RET or a
+        JMP the bytes belong to whatever comes next.
+        """
+        if self.md is None or not (self.base <= va < self.end):
+            return None
+        self.md.detail = True
+        at = va
+        for _ in range(limit):
+            got = list(self.md.disasm(self.data[at - self.base:at - self.base + 16], at, count=1))
+            if not got:
+                return "bytes that do not decode"
+            ci = got[0]
+            if ci.mnemonic in ("(bad)", "hlt"):
+                return "a %s" % ci.mnemonic
+            try:
+                ins = self.to_insn(ci)
+            except TranslateError as e:
+                return "%s" % e
+            if ins.mnem in TERMINATORS or ins.mnem.startswith("RET"):
+                return None
+            at = ci.address + ci.size
+        return None
+
     def is_utf16_constant(self, va):
         """Recognize a complete Delphi UnicodeString constant, including short text.
 
@@ -5054,6 +5081,92 @@ def main():
             pruned.append(a)
         for t in [t for t, f in extra.items() if f.addr in drop]:
             del extra[t]
+
+    # An alternate entry named only by a stored pointer is not control flow.
+    #
+    # A relocated dword, or an instruction immediate that happens to hold an
+    # address, says the program keeps a pointer there. It does not say the
+    # pointer is to code, and Delphi keeps string literals and interface GUIDs
+    # in .text among its code, so a .text pointer is as often a literal as a
+    # callback. The withdraw pass above judges standalone guesses; an
+    # alternate absorbed into a listed body never faced it at all, whatever
+    # its provenance, so a pointer into the middle of a literal stayed an
+    # entry point and kept the bytes behind it alive as code.
+    #
+    # Real control flow still wins, as starts_with_utf16_run says it must: a
+    # direct call or jump, a jump table, an __initterm entry, a configured
+    # entry and an SEH landing all name code, and none is dropped here. Only
+    # an address with pointer evidence and nothing else is asked to look like
+    # code as well as be pointed at.
+    def emitter_refuses(fn):
+        """The vocabulary check alone, without `accepts`'s fall-out rule.
+
+        An alternate is an entry into a body that continues past it, so a
+        block decoded from one falls into the rest of that body by design and
+        the fall-out rule would condemn every real alternate. What is still
+        decisive is the emitter refusing the instructions themselves."""
+        notes, stats = len(tr.notes), dict(tr.stats)
+        try:
+            tr.prepare(fn)
+            tr.translate(fn)
+            return False
+        except TranslateError:
+            return True
+        except Exception:                       # noqa: BLE001
+            return True
+        finally:
+            del tr.notes[notes:]
+            tr.stats.clear()
+            tr.stats.update(stats)
+
+    def points_at_a_literal(t):
+        """Is the pointer at `t` naming data rather than a function?"""
+        if image.is_utf16_constant(t) or image.starts_with_utf16_run(t):
+            return "a UTF-16 literal"
+        # The straight run from here, judged instruction by instruction.
+        # recover() abandons a block at the first thing it cannot turn into a
+        # listing Insn, so the offending bytes never reach it; asking the
+        # decoder directly is what catches 16-bit addressing and the rest of
+        # what a 32-bit compiler never emits.
+        bad = image.undecodable_run(t)
+        if bad:
+            return bad
+        # No limit: recover() discards a recovery its limit truncated, so a
+        # small one would report every alternate inside a long function as
+        # undecodable and drop it. And nothing decoded is no opinion, not a
+        # verdict - only positive evidence drops an entry.
+        block = image.recover(t, set())
+        if not block:
+            return None
+        fn = Function(t, "alternate_%08x" % t, block[-1].addr + 1 - t, block)
+        fn.measure(image)
+        if emitter_refuses(fn):
+            return "instructions this compiler never emits"
+        for ins in block:
+            if ins.mnem not in ("CALL", "JMP") and not ins.mnem.startswith("J"):
+                continue
+            target = tr.branch_target(ins)
+            if target is not None and not (image.base <= target < image.end):
+                return "a direct transfer to %08x, outside the image" % target
+        return None
+
+    pointer_only = {"reloc", "immediate"}
+    literals = []
+    for t in sorted(extra):
+        marks = set(hook_evidence.get(t, ()))
+        if not marks or not marks <= pointer_only:
+            continue
+        if (provenance.get(t, "branch") in STRUCTURAL_PROVENANCE
+                or t in listed_functions or t in protected_entries):
+            continue
+        why_data = points_at_a_literal(t)
+        if why_data:
+            literals.append((t, extra[t].addr, why_data))
+            del extra[t]
+    if literals and not args.quiet:
+        print("  dropped %d alternate entr%s a pointer named and nothing else: %s"
+              % (len(literals), "y" if len(literals) == 1 else "ies",
+                 ", ".join("%08x (in %08x, %s)" % row for row in literals[:12])))
 
     # A speculative owner stays prunable even when it covers a real cleanup.
     # Its removal must not erase a dispatch still required by protected code.
