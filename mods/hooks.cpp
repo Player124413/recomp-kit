@@ -410,7 +410,12 @@ static void mods_hook_dispatch(X86 *c, uint32_t index) {
     }
 
     PopHookInvocation *inv = &t_stack.frames[t_stack.depth++];
-    memset(inv, 0, sizeof *inv);
+    // Only the scalars: the three chains are 2 KB and copy_chain fills each
+    // up to its count, which is all anything reads.
+    inv->n_before = inv->n_after = inv->n_replace = 0;
+    inv->replace_pos = inv->cur_bound = inv->phase = 0;
+    inv->active_desc = nullptr;
+    inv->base_ran = inv->ret_done = 0;
     inv->index = index;
     inv->addr = recomp_func_addrs[index];
     inv->cpu = c;
@@ -1055,6 +1060,35 @@ void mods_hooks_set_test_cpu_buffer(void *buf, uint32_t bytes) {
 
 // ------------------------------------------------------------- delegation
 
+// Run a guest function from inside a hook, on a scratch stack below the
+// hooked frame, and put every register back afterwards.
+PopModStatus mods_guest_call(const PopModApi *api, uint32_t addr, uint32_t ecx, const uint32_t *args,
+                             uint32_t nargs, uint32_t *out_eax) {
+    (void)api;
+    if (!t_stack.depth)
+        return POP_E_STATE;
+    if (recomp_index_of(addr) < 0)
+        return POP_E_NOSYMBOL;
+    if (nargs > 16 || (nargs && !args))
+        return POP_E_INVAL;
+    X86 *c = t_stack.frames[t_stack.depth - 1].cpu;
+    X86 saved = *c;
+    uint32_t esp = (c->r[R_ESP] - 512u) & ~3u;
+    esp -= 4u * nargs;
+    for (uint32_t i = 0; i < nargs; ++i)
+        wr32(esp + 4u * i, args[i]);
+    esp -= 4;
+    wr32(esp, GUEST_RETURN_SENTINEL);
+    c->r[R_ESP] = esp;
+    c->r[R_ECX] = ecx;
+    recomp_call(c, addr);
+    uint32_t eax = c->r[R_EAX];
+    *c = saved;
+    if (out_eax)
+        *out_eax = eax;
+    return POP_OK;
+}
+
 PopModStatus mods_call_original(const PopModApi *api, uint32_t addr, pop_cpu_v1 *cpu) {
     (void)api;
     if (!t_stack.depth)
@@ -1229,6 +1263,7 @@ void mods_fill_hooks_api(PopModApi *api) {
         return mods_hook_remove(a->mod_index, id);
     };
     api->call_original = mods_call_original;
+    api->guest_call = mods_guest_call;
     api->call_next = mods_call_next;
     api->hook_return = mods_hook_return;
 }

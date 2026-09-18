@@ -24,6 +24,7 @@
 #include "../runtime/mods_seam.h"
 #include "../mods/sprite_view.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <vector>
 #include <map>

@@ -444,6 +444,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
         log_once(desc, "unimplemented import %s: returning 0", desc);
         set_eax(c, 0);
     }
+    // Read after the shim ran, so the pointer is into the table as it is now.
     if (g_return_observer)
         g_return_observer(desc, c->r[R_EAX]);
     LOGV("<- %s (eax=%08x)", desc, c->r[R_EAX]);

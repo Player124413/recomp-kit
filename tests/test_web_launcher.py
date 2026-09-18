@@ -37,6 +37,18 @@ class WebLauncherTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 web_launcher.build([ROOT / "games/stub", ROOT / "games/stub"], tmp / "dup")
 
+    def test_web_build_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            build = tmp / "build"
+            build.mkdir()
+            with self.assertRaises(ValueError):
+                web_launcher.copy_web_build("stub", build, tmp / "site")
+            for name in ("index.html", "App.js", "App.wasm", "App.data", "libgen.a"):
+                (build / name).write_text(name)
+            web_launcher.copy_web_build("stub", build, tmp / "site")
+            copied = sorted(f.name for f in (tmp / "site/stub").iterdir())
+            self.assertEqual(copied, ["App.data", "App.js", "App.wasm", "index.html"])
     def test_core_suite(self):
         node = shutil.which("node")
         if not node:

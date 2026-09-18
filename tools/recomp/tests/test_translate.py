@@ -204,6 +204,7 @@ class X86(C.Structure):
         ("fpu_cw", C.c_uint16), ("fpu_sw", C.c_uint16),
         ("fpu_tag", C.c_uint16),
         ("fs_base", C.c_uint32),
+        ("mm", C.c_uint64 * 8),
     ]
 
 

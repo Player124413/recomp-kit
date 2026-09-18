@@ -6,6 +6,28 @@
 
 namespace gpu {
 
+#ifdef __EMSCRIPTEN__
+// The web has one backend: the browser's WebGPU.
+std::unique_ptr<Device> webgpu_create_device();
+
+std::unique_ptr<Device> create_default_device() {
+    return webgpu_create_device();
+}
+const char *default_backend_name() {
+    return "webgpu";
+}
+void *test_native_surface(int, int) {
+    return (void *)"#canvas";
+}
+void *native_surface_for_window(void *) {
+    return (void *)"#canvas"; // the canvas selector create_swapchain takes
+}
+void release_window_surface(void *) {}
+const char *vulkan_loader_path() {
+    return nullptr;
+}
+#else
+
 std::unique_ptr<Device> vulkan_create_device();
 void *vulkan_test_native_surface(int w, int h);
 void *vulkan_native_surface_for_window(void *sdl_window);
@@ -85,5 +107,7 @@ void release_window_surface(void *surface) {
 const char *vulkan_loader_path() {
     return vulkan_loader_path_impl();
 }
+
+#endif // __EMSCRIPTEN__
 
 } // namespace gpu

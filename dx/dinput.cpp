@@ -713,7 +713,7 @@ const ComMethod g_didevice[] = {
 // ===========================================================================
 // IDirectInputA
 // ===========================================================================
-void DI_CreateDevice(X86 *c) {
+static void create_device(X86 *c, ComIface iface) {
     ComObj *di = this_dinput(c);
     uint32_t guid = arg(c, 1);
     uint32_t out = arg(c, 2);
@@ -753,7 +753,7 @@ void DI_CreateDevice(X86 *c) {
     d->dev_type = type;
     d->di_wide = di->di_wide;
     d->di_version = di->di_version;
-    uint32_t view = com_view(d, IF_DINPUTDEVICE);
+    uint32_t view = com_view(d, iface);
     if (!view) {
         com_release(d);
         com_ret(c, E_OUTOFMEMORY);
@@ -765,12 +765,19 @@ void DI_CreateDevice(X86 *c) {
                                                                        : "joystick");
     com_ret(c, DI_OK);
 }
+void DI_CreateDevice(X86 *c) {
+    create_device(c, IF_DINPUTDEVICE);
+}
 
 // EnumDevices(dwDevType, callback, ref, dwFlags). The mouse and keyboard
 // always; the virtual pad when it is served, the filter admits a gamepad and
 // the caller did not ask for force feedback. DIEDFL_ATTACHEDONLY needs no
 // test: every device here is attached.
-void DI_EnumDevices(X86 *c) {
+//
+// `v8` says which interface asked: DirectInput 8 names the device types by
+// their DI8DEVTYPE_ codes and filters by DI8DEVCLASS_, so the records the
+// callback sees differ even though the devices do not.
+static void enum_devices(X86 *c, bool v8) {
     uint32_t devtype = arg(c, 1);
     uint32_t cb = arg(c, 2), ref = arg(c, 3), flags = arg(c, 4);
     if (!cb) {
@@ -803,7 +810,10 @@ void DI_EnumDevices(X86 *c) {
         wr32(a, INST_SIZE);
         memcpy(gm_ptr(a + 4), d.guid, 16);
         memcpy(gm_ptr(a + 20), d.guid, 16);
-        wr32(a + 36, d.type);
+        // DirectInput 8 codes: DI8DEVTYPE_MOUSE 0x12, DI8DEVTYPE_KEYBOARD 0x13,
+        // each with subtype 1. The class filter values happen to be the
+        // same numbers as the version 5 types compared above.
+        wr32(a + 36, v8 ? (d.type == DIDEVTYPE_MOUSE ? 0x0112u : 0x0113u) : d.type);
         if (wide) {
             di_put_wide(a + 40, d.name, 260);
             di_put_wide(a + 560, d.name, 260);
@@ -816,7 +826,13 @@ void DI_EnumDevices(X86 *c) {
             break;
         }
     }
+    // The interface decides which set of type codes the pad is described and
+    // filtered by, not only the number the object was created with: a version
+    // 8 interface is a version 8 interface whatever DirectInput8Create was
+    // handed.
     uint32_t version = di_ ? di_->di_version : 0;
+    if (v8 && version < DIRECTINPUT_VERSION_8)
+        version = DIRECTINPUT_VERSION_8;
     if (!stopped && joy_served() && joy_enum_matches(devtype, version) &&
         !(flags & DIEDFL_FORCEFEEDBACK)) {
         uint32_t a = scratch(INST_SIZE);
@@ -827,6 +843,9 @@ void DI_EnumDevices(X86 *c) {
         }
     }
     com_ret(c, DI_OK);
+}
+void DI_EnumDevices(X86 *c) {
+    enum_devices(c, false);
 }
 
 void DI_GetDeviceStatus(X86 *c) {
@@ -862,6 +881,67 @@ const ComMethod g_dinput[] = {
     {"GetDeviceStatus", 2, DI_GetDeviceStatus},
     {"RunControlPanel", 3, DI_RunControlPanel},
     {"Initialize", 3, DI_Initialize},
+};
+
+// ===========================================================================
+// IDirectInput8A and IDirectInputDevice8A
+//
+// The same objects through the version 8 layouts: the version 2 interface
+// plus action mapping and device configuration, and the version 7 device plus
+// action maps and image info. Those additions answer as unsupported, which is
+// what a game with no action-mapped controls sees on a machine without them.
+// ===========================================================================
+static const uint32_t DI8_UNSUPPORTED = 0x80004001u; // E_NOTIMPL
+
+void DI8_CreateDevice(X86 *c) {
+    create_device(c, IF_DINPUTDEVICE8);
+}
+void DI8_EnumDevices(X86 *c) {
+    enum_devices(c, true);
+}
+void DI8_FindDevice(X86 *c) {
+    com_ret(c, DIERR_DEVICENOTREG);
+}
+void DI8_EnumDevicesBySemantics(X86 *c) {
+    com_ret(c, DI_OK); // no action-mapped devices: the callback is never called
+}
+void DI8_ConfigureDevices(X86 *c) {
+    com_ret(c, DI8_UNSUPPORTED);
+}
+void Device8_Unsupported(X86 *c) {
+    com_ret(c, DI8_UNSUPPORTED);
+}
+
+const ComMethod g_dinput8[] = {
+    {"QueryInterface", 3, com_QueryInterface},
+    {"AddRef", 1, com_AddRef},
+    {"Release", 1, com_Release},
+    {"CreateDevice", 4, DI8_CreateDevice},
+    {"EnumDevices", 5, DI8_EnumDevices},
+    {"GetDeviceStatus", 2, DI_GetDeviceStatus},
+    {"RunControlPanel", 3, DI_RunControlPanel},
+    {"Initialize", 3, DI_Initialize},
+    {"FindDevice", 4, DI8_FindDevice},
+    {"EnumDevicesBySemantics", 6, DI8_EnumDevicesBySemantics},
+    {"ConfigureDevices", 5, DI8_ConfigureDevices},
+};
+
+const ComMethod g_didevice8[] = {
+    DIDEVICE_COMMON_SLOTS,
+    {"CreateEffect", 5, Device_CreateEffect},
+    {"EnumEffects", 4, Device_EnumEffects},
+    {"GetEffectInfo", 3, Device_GetEffectInfo},
+    {"GetForceFeedbackState", 2, Device_GetForceFeedbackState},
+    {"SendForceFeedbackCommand", 2, Device_SendForceFeedbackCommand},
+    {"EnumCreatedEffectObjects", 4, Device_EnumCreatedEffectObjects},
+    {"Escape", 2, Device_Escape},
+    {"Poll", 1, Device_Poll},
+    {"SendDeviceData", 5, Device_SendDeviceData},
+    {"EnumEffectsInFile", 5, Device8_Unsupported},
+    {"WriteEffectToFile", 5, Device8_Unsupported},
+    {"BuildActionMap", 4, Device8_Unsupported},
+    {"SetActionMap", 4, Device8_Unsupported},
+    {"GetImageInfo", 2, Device8_Unsupported},
 };
 
 // ===========================================================================
@@ -938,10 +1018,40 @@ void direct_input_create(X86 *c, uint32_t version, uint32_t out, uint32_t outer,
     com_ret(c, DI_OK);
 }
 
+void DirectInput8Create(X86 *c) {
+    uint32_t version = arg(c, 1);
+    uint32_t out = arg(c, 3);
+    uint32_t outer = arg(c, 4);
+    if (!out || !gm_valid(out, 4)) {
+        com_ret(c, DIERR_INVALIDPARAM);
+        return;
+    }
+    wr32(out, 0);
+    if (outer) {
+        com_ret(c, CLASS_E_NOAGGREGATION);
+        return;
+    }
+    ComObj *di = com_new(K_DINPUT);
+    // Devices made through this object describe themselves with the version 8
+    // type codes, so the object remembers at least version 8 whatever number
+    // it was handed. Nothing else reads di_version.
+    di->di_version = version < DIRECTINPUT_VERSION_8 ? DIRECTINPUT_VERSION_8 : version;
+    uint32_t view = com_view(di, IF_DINPUT8);
+    if (!view) {
+        com_release(di);
+        com_ret(c, E_OUTOFMEMORY);
+        return;
+    }
+    wr32(out, view);
+    LOGV("dinput: DirectInput8Create(version=%04x) -> %08x", version, view);
+    com_ret(c, DI_OK);
+}
+
 const ImportShim g_dinput_exports[] = {
     {"DINPUT.dll", "DirectInputCreateA", 4, DirectInputCreateA},
     {"DINPUT.dll", "DirectInputCreateW", 4, DirectInputCreateW},
     {"DINPUT.dll", "DirectInputCreateEx", 5, DirectInputCreateEx},
+    {"DINPUT8.dll", "DirectInput8Create", 5, DirectInput8Create},
 };
 
 } // namespace
@@ -990,6 +1100,18 @@ void dinput_register() {
 
     com_bind(IF_DINPUT, K_DINPUT);
     com_bind(IF_DINPUTDEVICE, K_DIDEVICE);
+    com_define(IF_DINPUT8, "DINPUT8.dll", "IDirectInput8A", g_dinput8, std::size(g_dinput8));
+    com_define(IF_DINPUTDEVICE8, "DINPUT8.dll", "IDirectInputDevice8A", g_didevice8,
+               std::size(g_didevice8));
+    com_bind(IF_DINPUT8, K_DINPUT);
+    com_bind(IF_DINPUTDEVICE8, K_DIDEVICE);
+    // {BF798030-483A-4DA2-AA99-5D64ED369700}, {54D41080-DC15-4833-A41B-748F73A38179}
+    static const uint8_t iid8[16] =
+        IID_BYTES(0xBF798030, 0x483A, 0x4DA2, 0xAA, 0x99, 0x5D, 0x64, 0xED, 0x36, 0x97, 0x00);
+    static const uint8_t iid_dev8[16] =
+        IID_BYTES(0x54D41080, 0xDC15, 0x4833, 0xA4, 0x1B, 0x74, 0x8F, 0x73, 0xA3, 0x81, 0x79);
+    com_register_iid(IF_DINPUT8, iid8);
+    com_register_iid(IF_DINPUTDEVICE8, iid_dev8);
 
     com_register_iid(IF_DINPUT, IID_IDirectInputA_);
     com_register_iid(IF_DINPUT, IID_IDirectInput2A_);

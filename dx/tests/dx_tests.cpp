@@ -5578,15 +5578,26 @@ static void enum_modes_now(uint32_t dd, uint32_t cb) {
     CHECK_EQ(call_method(dd, DD_EnumDisplayModes, {0, 0, 0, cb}), DD_OK);
 }
 
+#ifdef _WIN32
+extern "C" char ***__p__environ(void); // the CRT's; strict C++ hides _environ
+static char **process_environ() {
+    return *__p__environ();
+}
+#else
+extern char **environ;
+static char **process_environ() {
+    return environ;
+}
+#endif
+
 static void test_classic_probe_surface_creation() {
     // Match mode_probe.py: scrub inherited POP tuning, preserve runtime paths,
     // offer both boot depths plus the candidate, then reapply after Classic init.
     struct ProbeEnvironment {
         std::map<std::string, std::string> saved;
         static std::map<std::string, std::string> take() {
-            extern char **environ;
             std::map<std::string, std::string> values;
-            for (char **p = environ; *p; ++p) {
+            for (char **p = process_environ(); *p; ++p) {
                 std::string entry(*p);
                 if (entry.starts_with("POPM_") || entry.starts_with("POP_SMOKE_") ||
                     entry.starts_with("POP_HOST_") || entry.starts_with("POP_RECOMP_")) {

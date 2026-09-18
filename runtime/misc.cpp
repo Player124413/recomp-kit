@@ -612,6 +612,28 @@ void reg_create(X86 *c, const std::string &sub) {
     set_eax(c, 0);
 }
 
+// The pre-Win32s spelling: no options, no access mask, no disposition. It
+// creates or opens exactly as RegCreateKeyExA does, because the store has no
+// notion of either.
+void a_RegCreateKeyA(X86 *c) {
+    std::string path = key_path(arg(c, 0), gm_str(arg(c, 1), 512));
+    uint32_t presult = arg(c, 2);
+    if (path.empty()) {
+        set_eax(c, 6);
+        return;
+    }
+    if (regstore().find(path) == regstore().end()) {
+        regstore()[path];
+        g_registry_dirty = true;
+    }
+    uint32_t h = g_next_hkey;
+    g_next_hkey += 4;
+    regkeys()[h] = path;
+    if (presult)
+        wr32(presult, h);
+    set_eax(c, 0);
+}
+
 void a_RegCloseKey(X86 *c) {
     regkeys().erase(arg(c, 0));
     registry_flush();
@@ -896,6 +918,20 @@ void g_GetSystemPaletteEntries(X86 *c) {
 // game keeps its settings and saves in.  They live under the guest root, so
 // they resolve like every other game path (and the mod layer's file seam can
 // redirect them); the folder is created when asked.
+//
+// SHGetFolderPathA(hwnd, csidl, hToken, dwFlags, pszPath) is the same folders
+// in the HRESULT form, and CSIDL_FLAG_CREATE (0x8000) asks for one to exist.
+void s_SHGetFolderPathA(X86 *c) {
+    uint32_t csidl = arg(c, 1), buf = arg(c, 4);
+    if (!buf) {
+        set_eax(c, 0x80070057u); // E_INVALIDARG
+        return;
+    }
+    std::string guest = shell_folder_guest_path(csidl, (csidl & 0x8000u) != 0);
+    gm_put_str(buf, guest.c_str(), 260);
+    set_eax(c, 0); // S_OK
+}
+
 void s_SHGetSpecialFolderPathA(X86 *c) {
     uint32_t buf = arg(c, 1);
     std::string guest = shell_folder_guest_path(arg(c, 2), arg(c, 3) != 0);
@@ -1905,6 +1941,7 @@ const ImportShim g_misc_shims[] = {
     {"ADVAPI32.dll", "RegOpenKeyA", 3, a_RegOpenKeyA},
     {"ADVAPI32.dll", "RegOpenKeyExA", 5, a_RegOpenKeyExA},
     {"ADVAPI32.dll", "RegCreateKeyExA", 9, a_RegCreateKeyExA},
+    {"ADVAPI32.dll", "RegCreateKeyA", 3, a_RegCreateKeyA},
     {"ADVAPI32.dll", "RegCloseKey", 1, a_RegCloseKey},
     {"ADVAPI32.dll", "RegQueryValueExA", 6, a_RegQueryValueExA},
     {"ADVAPI32.dll", "RegSetValueExA", 6, a_RegSetValueExA},
@@ -1930,6 +1967,7 @@ const ImportShim g_misc_shims[] = {
     // SHELL32
     {"SHELL32.dll", "ShellExecuteA", 6, s_ShellExecuteA},
     {"SHELL32.dll", "SHGetSpecialFolderPathA", 4, s_SHGetSpecialFolderPathA},
+    {"SHFOLDER.dll", "SHGetFolderPathA", 5, s_SHGetFolderPathA},
     // ole32
     {"ole32.dll", "CoInitialize", 1, o_CoInitialize},
     {"ole32.dll", "OleInitialize", 1, o_CoInitialize},
@@ -2009,6 +2047,84 @@ const ImportShim g_misc_shims[] = {
     {"WINMM.dll", "auxSetVolume", 2, nullptr},
     // DirectX and third-party DLLs are owned by later tasks; these entries only
     // record the callee's pop count so an early call cannot unbalance the stack.
+    // Direct3D 9, D3DX 9 and DirectInput 8: a shader-era game's graphics and
+    // input DLLs. The kit models neither yet, so these record the callee's
+    // stdcall pop count and nothing else. Without a count the runtime cannot
+    // balance the stack after the call, and a game that calls a few of them
+    // during start-up returns into rubbish.
+    {"d3d9.dll", "Direct3DCreate9", 1, nullptr},
+    {"d3dx9_26.dll", "D3DXCreateEffectPool", 1, nullptr},
+    {"d3dx9_26.dll", "D3DXCreateEffectFromResourceA", 9, nullptr},
+    {"d3dx9_26.dll", "D3DXMatrixMultiply", 3, nullptr},
+    {"d3dx9_26.dll", "D3DXMatrixInverse", 3, nullptr},
+    {"d3dx9_26.dll", "D3DXMatrixTranspose", 2, nullptr},
+    {"d3dx9_26.dll", "D3DXMatrixOrthoLH", 5, nullptr},
+    {"d3dx9_26.dll", "D3DXMatrixPerspectiveLH", 5, nullptr},
+    {"d3dx9_26.dll", "D3DXMatrixTranslation", 4, nullptr},
+    {"d3dx9_26.dll", "D3DXVec4Transform", 3, nullptr},
+    {"d3dx9_26.dll", "D3DXVec3Transform", 3, nullptr},
+    {"d3dx9_26.dll", "D3DXVec3TransformNormal", 3, nullptr},
+    {"d3dx9_26.dll", "D3DXVec3TransformCoordArray", 6, nullptr},
+    {"d3dx9_26.dll", "D3DXVec3Normalize", 2, nullptr},
+    {"DINPUT8.dll", "DirectInput8Create", 5, nullptr},
+    {"SHFOLDER.dll", "SHGetFolderPathA", 5, s_SHGetFolderPathA},
+    {"DSOUND.dll", "ord6", 3, nullptr}, // DirectSoundCaptureCreate
+    // Wave in and out: the audio task owns the behaviour; these keep the
+    // stack balanced until it lands.
+    {"WINMM.dll", "waveOutGetNumDevs", 0, nullptr},
+    {"WINMM.dll", "waveOutGetDevCapsA", 3, nullptr},
+    {"WINMM.dll", "waveOutOpen", 6, nullptr},
+    {"WINMM.dll", "waveOutClose", 1, nullptr},
+    {"WINMM.dll", "waveOutPrepareHeader", 3, nullptr},
+    {"WINMM.dll", "waveOutUnprepareHeader", 3, nullptr},
+    {"WINMM.dll", "waveOutWrite", 3, nullptr},
+    {"WINMM.dll", "waveOutReset", 1, nullptr},
+    {"WINMM.dll", "waveOutGetPosition", 3, nullptr},
+    {"WINMM.dll", "waveOutSetVolume", 2, nullptr},
+    {"WINMM.dll", "waveInGetNumDevs", 0, nullptr},
+    {"WINMM.dll", "waveInGetDevCapsA", 3, nullptr},
+    {"WINMM.dll", "waveInOpen", 6, nullptr},
+    {"WINMM.dll", "waveInClose", 1, nullptr},
+    {"WINMM.dll", "waveInPrepareHeader", 3, nullptr},
+    {"WINMM.dll", "waveInUnprepareHeader", 3, nullptr},
+    {"WINMM.dll", "waveInAddBuffer", 3, nullptr},
+    {"WINMM.dll", "waveInStart", 1, nullptr},
+    {"WINMM.dll", "waveInStop", 1, nullptr},
+    {"WINMM.dll", "waveInReset", 1, nullptr},
+    {"WINMM.dll", "waveInGetPosition", 3, nullptr},
+    // Winsock 2: networking is out of scope, but the pop counts are not.
+    {"WS2_32.dll", "WSAStartup", 2, nullptr},
+    {"WS2_32.dll", "WSACleanup", 0, nullptr},
+    {"WS2_32.dll", "WSAGetLastError", 0, nullptr},
+    {"WS2_32.dll", "WSAIoctl", 9, nullptr},
+    {"WS2_32.dll", "WSACreateEvent", 0, nullptr},
+    {"WS2_32.dll", "WSACloseEvent", 1, nullptr},
+    {"WS2_32.dll", "WSASetEvent", 1, nullptr},
+    {"WS2_32.dll", "WSAResetEvent", 1, nullptr},
+    {"WS2_32.dll", "WSAWaitForMultipleEvents", 5, nullptr},
+    {"WS2_32.dll", "WSARecv", 7, nullptr},
+    {"WS2_32.dll", "WSARecvFrom", 9, nullptr},
+    {"WS2_32.dll", "WSAGetOverlappedResult", 5, nullptr},
+    {"WS2_32.dll", "socket", 3, nullptr},
+    {"WS2_32.dll", "bind", 3, nullptr},
+    {"WS2_32.dll", "connect", 3, nullptr},
+    {"WS2_32.dll", "listen", 2, nullptr},
+    {"WS2_32.dll", "accept", 3, nullptr},
+    {"WS2_32.dll", "send", 4, nullptr},
+    {"WS2_32.dll", "recv", 4, nullptr},
+    {"WS2_32.dll", "sendto", 6, nullptr},
+    {"WS2_32.dll", "recvfrom", 6, nullptr},
+    {"WS2_32.dll", "select", 5, nullptr},
+    {"WS2_32.dll", "shutdown", 2, nullptr},
+    {"WS2_32.dll", "closesocket", 1, nullptr},
+    {"WS2_32.dll", "ioctlsocket", 3, nullptr},
+    {"WS2_32.dll", "getsockopt", 5, nullptr},
+    {"WS2_32.dll", "setsockopt", 5, nullptr},
+    {"WS2_32.dll", "getpeername", 3, nullptr},
+    {"WS2_32.dll", "getsockname", 3, nullptr},
+    {"WS2_32.dll", "gethostbyname", 1, nullptr},
+    {"WS2_32.dll", "gethostname", 2, nullptr},
+    {"NETAPI32.dll", "Netbios", 1, nullptr},
     {"DDRAW.dll", "DirectDrawCreate", 3, nullptr},
     {"DDRAW.dll", "DirectDrawEnumerateA", 2, nullptr},
     {"DINPUT.dll", "DirectInputCreateA", 4, nullptr},

@@ -1,4 +1,5 @@
 #include "seh.h"
+#define RECOMP_GUEST_MEMORY_OWNER 1 /* defines and maps g_mem */
 #include "memory.h"
 #include "win32.h"
 #include "loader.h"

@@ -27,6 +27,9 @@ OsThread *os_thread_create(void *(*fn)(void *), void *arg, size_t stack_bytes);
 void os_thread_join(OsThread *t);   // waits, then frees the handle
 void os_thread_detach(OsThread *t); // frees the handle; the thread runs on
 void os_thread_exit(void);          // ends the calling thread; never returns
+// Asks the scheduler to keep the calling thread on the fastest cores: the
+// guest's threads draw every frame. A no-op where there is no such control.
+void os_thread_prefer_performance(void);
 OsThreadId os_thread_self(void);
 OsThreadId os_thread_id_of(const OsThread *t);
 

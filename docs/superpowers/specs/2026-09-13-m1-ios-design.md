@@ -140,7 +140,7 @@ pixel size.
 | Hold within 16 pt of a window edge | the cursor is placed exactly on that edge for as long as the finger rests (edge scrolling); no right click; on the lift the cursor moves 48 pt inside so scrolling stops |
 | One-finger drag (travel over 20 px) | left down at start, motion while moving, left up at release |
 | Two-finger drag | arrow-key down/up pulses matching the dominant direction, one pulse per 24 px |
-| Two-finger tap | Escape down, Escape up |
+| Two-finger tap | motion to the point between the two fingers, right down, right up |
 | Three-finger tap | F10 down, F10 up (Options) |
 | Four-finger tap | toggles the on-screen keyboard (`SDL_StartTextInput` / `SDL_StopTextInput`) |
 
@@ -230,7 +230,7 @@ On the iPad Pro, launched from the home screen after `tools/build.py --target io
 1. The main menu appears fullscreen in landscape.
 2. A level loads from the menu by touch alone.
 3. Units can be selected and ordered by tap and drag; the camera pans with a
-   two-finger drag; Escape (two-finger tap) and Options (three-finger tap) work.
+   two-finger drag; a right click (two-finger tap) and Options (three-finger tap) work.
 4. The pulled gameplay log shows the game's native frame rate sustained
    during play (the same measure the macOS smoke run reports).
 5. Backgrounding and returning resumes play with audio.

@@ -35,8 +35,9 @@ typedef struct HostInputState HostInputState;
 // ---------------------------------------------------------------------------
 // Presentation. Called when the primary surface's contents become visible:
 // on Flip, on Unlock of the primary, and on a Blt whose destination is the
-// primary. `bpp` is 8 or 16. For 8 bpp, `palette` points at 256 entries of
-// 0x00RRGGBB; for 16 bpp it is null and the pixels are 5-6-5.
+// primary. `bpp` is 8, 16 or 32. For 8 bpp, `palette` points at 256 entries of
+// 0x00RRGGBB; for 16 bpp it is null and the pixels are 5-6-5; for 32 bpp it is
+// null and the pixels are X8R8G8B8, a Direct3D 9 back buffer.
 // `pitch` is the distance in bytes between rows.
 // ---------------------------------------------------------------------------
 void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *palette, int pitch);

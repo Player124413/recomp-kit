@@ -504,6 +504,7 @@ void boot_run() {
         fprintf(stderr, "[host] fault reporting is not available on this platform\n");
 
     g_t0 = now_seconds();
+    os_thread_prefer_performance();
     g_guest_thread = os_thread_self();
     g_guest_thread_known = true;
     g_bail_armed = true;

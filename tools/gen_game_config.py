@@ -120,6 +120,15 @@ def render_cmake(cfg):
     lines.append("set(RECOMP_AUX_MODULES %s)" % ";".join(m["key"] for m in cfg["aux_modules"]))
     lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_exe_path"].parent.as_posix())
     lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % cfg["developer_exe_path"].as_posix())
+    # [translate] native: C replacements for hot functions, compiled with the
+    # translation. The header #defines FN_<addr> to each replacement (see the
+    # override note in funcs.h); the sources define them.
+    native = cfg["translate"].get("native", {})
+    game_dir = Path(cfg["dir"])
+    if native.get("header"):
+        lines.append('set(RECOMP_NATIVE_HEADER "%s")' % (game_dir / native["header"]).resolve().as_posix())
+        sources = [(game_dir / s).resolve().as_posix() for s in native.get("sources", ())]
+        lines.append('set(RECOMP_NATIVE_SOURCES "%s")' % ";".join(sources))
     return "\n".join(lines) + "\n"
 
 

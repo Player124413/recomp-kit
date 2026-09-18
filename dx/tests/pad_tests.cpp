@@ -136,7 +136,13 @@ enum {
     DID_GetObjectInfo = 14,
     DID_GetDeviceInfo = 15,
     DID_Poll = 25,
+    // IDirectInputDevice8A continues the same vtable: EnumEffectsInFile,
+    // WriteEffectToFile, BuildActionMap, SetActionMap, GetImageInfo.
+    DID8_GetImageInfo = 31,
 };
+
+// E_NOTIMPL, which the version 8 device's own additions answer with.
+static const uint32_t DI8_E_NOTIMPL = 0x80004001u;
 
 // SDK numbers, from dinput.h's field lists rather than the shim's constants,
 // so a layout mistake cannot hide behind both sides agreeing on it.
@@ -199,8 +205,8 @@ static void test_joy_sdk_layouts() {
     CHECK(!memcmp(GUID_Joystick_, kGuidJoystick, 16));
 }
 
-// The pure helpers, including the DirectInput 8 branch no interface reaches
-// yet: a DI8 caller filters by class, and sees a gamepad devtype.
+// The pure helpers on their own: a DirectInput 8 caller filters by class and
+// sees a gamepad devtype, an older one filters and sees DIDEVTYPE_JOYSTICK.
 static void test_joy_pure_helpers() {
     pad_reset();
     CHECK(joy_served());
@@ -386,6 +392,109 @@ static void set_range(uint32_t dev, uint32_t how, uint32_t obj, int32_t lo, int3
     wr32(p + 16, (uint32_t)lo);
     wr32(p + 20, (uint32_t)hi);
     CHECK_EQ(call_method(dev, DID_SetProperty, {PROP_RANGE, p}), DI_OK);
+}
+
+// IID_IDirectInput8A {BF798030-483A-4DA2-AA99-5D64ED369700}.
+static const uint8_t kIidDirectInput8A[16] = {0x30, 0x80, 0x79, 0xBF, 0x3A, 0x48, 0xD2, 0x4A,
+                                              0xAA, 0x99, 0x5D, 0x64, 0xED, 0x36, 0x97, 0x00};
+// DI8DEVCLASS_* / DI8DEVTYPE_* filter values, and the pad's version 8 type.
+static const uint32_t DI8_CLASS_ALL = 0, DI8_CLASS_GAMECTRL = 4, DI8_TYPE_GAMEPAD = 0x15;
+static const uint32_t DI8_PAD_DEVTYPE = 0x0215; // DI8DEVTYPE_GAMEPAD, STANDARD subtype
+
+// DirectInput8Create(hinst, dwVersion, riid, ppvOut, punkOuter). The shim
+// serves IID_IDirectInput8A alone, so the riid is handed over as itself.
+static uint32_t make_dinput8(uint32_t version) {
+    put_guid(sc(0x20), kIidDirectInput8A);
+    CHECK_EQ(call_shim(tramp("DINPUT8.dll", "DirectInput8Create"),
+                       {0x400000, version, sc(0x20), sc(0), 0}),
+             DI_OK);
+    return rd32(sc(0));
+}
+
+// The pad through DirectInput 8. The version 8 interfaces serve the same
+// devices, so the pad has to be enumerated, created and read there too - and
+// described by its DI8DEVTYPE_, which is what a version 8 game filters on.
+static void test_joy_dinput8() {
+    cpu_reset();
+    pad_reset();
+    static uint32_t cb = imports_alloc_trampoline("TEST", "EnumDevices8Cb", enum_devices_cb, 2);
+    uint32_t di = make_dinput8(0x0800);
+    CHECK(di != 0);
+
+    // DI8DEVCLASS_GAMECTRL: the pad alone, as a version 8 gamepad.
+    g_enum_calls = 0;
+    CHECK_EQ(call_method(di, DI_EnumDevices, {DI8_CLASS_GAMECTRL, cb, 0, 1}), DI_OK);
+    CHECK_EQ(g_enum_calls, 1u);
+    CHECK(!strcmp(g_enum_name, "Recomp Virtual Pad"));
+    CHECK_EQ(g_enum_devtype, DI8_PAD_DEVTYPE);
+    CHECK(!memcmp(g_enum_instance, GUID_RecompPadInstance_, 16));
+
+    // An exact DI8DEVTYPE_GAMEPAD names it too.
+    g_enum_calls = 0;
+    CHECK_EQ(call_method(di, DI_EnumDevices, {DI8_TYPE_GAMEPAD, cb, 0, 0}), DI_OK);
+    CHECK_EQ(g_enum_calls, 1u);
+    CHECK_EQ(g_enum_devtype, DI8_PAD_DEVTYPE);
+
+    // DI8DEVCLASS_ALL: the mouse, the keyboard and the pad.
+    g_enum_calls = 0;
+    CHECK_EQ(call_method(di, DI_EnumDevices, {DI8_CLASS_ALL, cb, 0, 0}), DI_OK);
+    CHECK_EQ(g_enum_calls, 3u);
+
+    // A pad with force feedback was asked for: there is none.
+    g_enum_calls = 0;
+    CHECK_EQ(call_method(di, DI_EnumDevices, {DI8_CLASS_GAMECTRL, cb, 0, 0x100}), DI_OK);
+    CHECK_EQ(g_enum_calls, 0u);
+
+    // Mapped mode: the version 8 interface serves no joystick either.
+    g_pad_mode = 1;
+    g_enum_calls = 0;
+    CHECK_EQ(call_method(di, DI_EnumDevices, {DI8_CLASS_GAMECTRL, cb, 0, 1}), DI_OK);
+    CHECK_EQ(g_enum_calls, 0u);
+    put_guid(sc(0x40), kGuidJoystick);
+    CHECK_EQ(call_method(di, DI_CreateDevice, {sc(0x40), sc(0x50), 0}), DIERR_DEVICENOTREG);
+    CHECK_EQ(call_method(di, DI_GetDeviceStatus, {sc(0x40)}), S_FALSE);
+    g_pad_mode = 2;
+    CHECK_EQ(call_method(di, DI_GetDeviceStatus, {sc(0x40)}), DI_OK);
+
+    // CreateDevice hands out the version 8 device, whose joystick methods are
+    // the same ones: capabilities, the device instance and a read of a stick.
+    wr32(sc(0x50), 0);
+    CHECK_EQ(call_method(di, DI_CreateDevice, {sc(0x40), sc(0x50), 0}), DI_OK);
+    uint32_t dev = rd32(sc(0x50));
+    CHECK(dev != 0);
+    if (!dev)
+        return;
+
+    uint32_t caps = sc(0x200);
+    gm_zero(caps, SDK_DIDEVCAPS);
+    wr32(caps, SDK_DIDEVCAPS);
+    CHECK_EQ(call_method(dev, DID_GetCapabilities, {caps}), DI_OK);
+    CHECK_EQ(rd32(caps + 4), 1u); // DIDC_ATTACHED
+    CHECK_EQ(rd32(caps + 8), DI8_PAD_DEVTYPE);
+    CHECK_EQ(rd32(caps + 12), 6u);
+    CHECK_EQ(rd32(caps + 16), 13u);
+    CHECK_EQ(rd32(caps + 20), 1u);
+
+    uint32_t info = sc(0x800);
+    gm_zero(info, DIDEVICEINSTANCEA_SIZE);
+    wr32(info, DIDEVICEINSTANCEA_SIZE);
+    CHECK_EQ(call_method(dev, DID_GetDeviceInfo, {info}), DI_OK);
+    CHECK_EQ(rd32(info + DIDI_OFF_dwDevType), DI8_PAD_DEVTYPE);
+    CHECK(!memcmp(gm_ptr(info + DIDI_OFF_guidInstance), GUID_RecompPadInstance_, 16));
+
+    uint32_t df = sc(0x80);
+    gm_zero(df, SDK_DIDATAFORMAT);
+    wr32(df, SDK_DIDATAFORMAT);
+    wr32(df + 4, SDK_DIOBJECTDATAFORMAT);
+    wr32(df + 8, 1); // DIDF_ABSAXIS
+    wr32(df + 12, SDK_DIJOYSTATE);
+    CHECK_EQ(call_method(dev, DID_SetDataFormat, {df}), DI_OK);
+    CHECK_EQ(call_method(dev, DID_Acquire, {}), DI_OK);
+    CHECK_EQ(call_method(dev, DID_Poll, {}), DI_OK);
+    g_pad.lx = 32767;
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 32767);
+    // The version 8 device's own slots, past the ones it shares.
+    CHECK_EQ(call_method(dev, DID8_GetImageInfo, {sc(0x900)}), DI8_E_NOTIMPL);
 }
 
 static void test_joy_device_state() {
@@ -923,6 +1032,7 @@ int main() {
         {"joystick SDK layouts", test_joy_sdk_layouts},
         {"joystick pure helpers", test_joy_pure_helpers},
         {"joystick enumeration", test_joy_enum_devices},
+        {"joystick through DirectInput 8", test_joy_dinput8},
         {"joystick state", test_joy_device_state},
         {"joystick objects", test_joy_objects},
         {"joystick buffered data", test_joy_device_data},

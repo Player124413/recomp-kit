@@ -75,6 +75,11 @@ if(POP_HAVE_GEN)
     list(APPEND POP_GEN_AUX_TARGETS ${aux_target})
     message(STATUS "Auxiliary module translation: ${dir}")
   endforeach()
+  # The game's native replacements (game.toml [translate] native).
+  if(RECOMP_NATIVE_HEADER AND NOT POP_TRANSLATE STREQUAL "STUB")
+    target_sources(recomp_gen PRIVATE ${RECOMP_NATIVE_SOURCES})
+    target_compile_definitions(recomp_gen PRIVATE RECOMP_OVERRIDE_HEADER="${RECOMP_NATIVE_HEADER}")
+  endif()
 endif()
 
 # The portable spelling of -Wl,-force_load: every generated object is kept

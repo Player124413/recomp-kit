@@ -14,6 +14,19 @@ add_test(NAME gpu_fake_tests COMMAND gpu_fake_tests WORKING_DIRECTORY ${POP_ROOT
 set_tests_properties(gpu_fake_tests PROPERTIES LABELS nogame)
 endif()
 
+if(EMSCRIPTEN)
+  # The web renders through the browser's WebGPU and nothing else.
+  add_library(gpu_backend STATIC gpu_factory.cpp webgpu/webgpu_device.cpp)
+  set_target_properties(gpu_backend PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${POP_OUT})
+  target_include_directories(gpu_backend PUBLIC ${POP_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(gpu_backend PRIVATE ${POP_WARN_HOST})
+  target_compile_options(gpu_backend PUBLIC --use-port=emdawnwebgpu)
+  target_link_options(gpu_backend PUBLIC --use-port=emdawnwebgpu)
+  target_link_libraries(gpu_backend PUBLIC recomp_platform)
+  pop_optimize(gpu_backend 1)
+  return()
+endif()
+
 # The Vulkan backend builds everywhere; the loader is found at run time.
 add_library(volk OBJECT ${POP_ROOT}/third_party/volk/volk.c)
 target_include_directories(volk PUBLIC ${POP_ROOT}/third_party/volk ${POP_ROOT}/third_party/vulkan-headers/include)

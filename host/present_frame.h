@@ -30,6 +30,7 @@ struct Target {
     HostSceneTarget scene;
     gpu::Texture pixels;
     int pixels_w = 0, pixels_h = 0;
+    gpu::Format pixels_format = gpu::Format::RGBA8;
     std::vector<uint8_t> test_pixels;
     void release_scene() {
         if (device) {

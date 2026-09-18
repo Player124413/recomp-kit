@@ -58,6 +58,11 @@ foreach(src ${POP_FIXTURE_SOURCES})
   if(stem STREQUAL "old_cpu")
     set(first INCLUDE_FIRST ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/old_header)
   endif()
+  # capture_mod calls the host's capture seam directly, which a Windows DLL
+  # cannot import; the replay suite that loads it is not built there either.
+  if(WIN32 AND stem STREQUAL "capture_mod")
+    continue()
+  endif()
   # display_projection wraps the game's own display mod; without that game
   # there is nothing to wrap.
   if(stem STREQUAL "display_projection")
@@ -112,6 +117,9 @@ if(TARGET recomp_gen AND NOT IOS AND NOT ANDROID)
   add_dependencies(mods_tests mod_fixtures)
   if(TARGET core_mods) # the game's core mods, when the game has any
     add_dependencies(mods_tests core_mods)
+  endif()
+  if(MINGW)
+    target_link_libraries(mods_tests PRIVATE pthread) # the run-record test's small-stack thread
   endif()
   add_test(NAME mods_tests COMMAND mods_tests WORKING_DIRECTORY ${POP_ROOT})
   set_tests_properties(mods_tests PROPERTIES LABELS mods ENVIRONMENT RECOMP_BUILD_ROOT=${POP_BUILD_ROOT})

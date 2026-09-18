@@ -1,3 +1,4 @@
+#include <atomic>
 #include "../mods/pop_mod_api.h"
 // mods_seam.cpp - the weak defaults. Each one is what an unmodded build does.
 #include "mods_seam.h"
@@ -90,6 +91,20 @@ __attribute__((weak)) uint32_t host_display_elements(uint64_t *, uint32_t) {
 }
 __attribute__((weak)) float host_display_aspect() {
     return 4.0f / 3.0f;
+}
+// The screen is recorded by whichever host knows it; nothing needs a lock
+// beyond the atomics, since it is written before the guest starts.
+static std::atomic<int32_t> g_screen_w{0}, g_screen_h{0};
+void host_display_set_screen(int32_t w, int32_t h) {
+    g_screen_w.store(w);
+    g_screen_h.store(h);
+}
+int host_display_screen(int32_t *w, int32_t *h) {
+    if (g_screen_w.load() <= 0 || g_screen_h.load() <= 0)
+        return 0;
+    *w = g_screen_w.load();
+    *h = g_screen_h.load();
+    return 1;
 }
 __attribute__((weak)) uint64_t host_display_epoch() {
     return 0;

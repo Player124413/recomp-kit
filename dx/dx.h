@@ -27,6 +27,8 @@ void dx_reset();
 // of these; each is idempotent.
 void ddraw_register();
 void d3d_register();
+void d3d9_register();
+void d3dx9_register();
 void dsound_register();
 void dshow_register();
 void dinput_register();
@@ -50,6 +52,8 @@ void mf_reset();
 // all; the guest heap those records point into is gone by then.
 void ddraw_reset();
 void d3d_reset();
+void d3d9_reset();
+void d3dx9_reset();
 void dsound_reset();
 void dshow_reset();
 void dinput_reset();
@@ -121,6 +125,11 @@ void ddraw_frame_pump(X86 *c);
 void qmixer_gate_reset_for_test();
 // Test only: XInputEnable's stored state and the keystroke replay position.
 void xinput_reset_for_test();
+
+// A frame presented by a device that renders a whole CPU image itself: begin
+// before host_present, end right after it, which seals the frame.
+void ddraw_external_present_begin(void);
+void ddraw_external_present_end(void);
 
 // Diagnostics: live COM objects, surfaces and audio channels.
 void dx_dump(FILE *out);

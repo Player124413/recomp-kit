@@ -166,7 +166,10 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
             ++rates()[g_current_rate].presents;
     }
 
-    if (!pixels || w <= 0 || h <= 0 || (bpp != 8 && bpp != 16))
+    // The page's input is registered on the first present of any kind; a
+    // Direct3D 9 game presents without guest pixels and returns just below.
+    host_page_overlay(nullptr, 0, 0, 0, 0, nullptr);
+    if (!pixels || w <= 0 || h <= 0 || (bpp != 8 && bpp != 16 && bpp != 32))
         return;
     // The page goes on a copy this host owns, never on the guest's surface:
     // the staging buffer below is RGBA and the page draws in the guest's own
@@ -174,7 +177,6 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
     // Classic uses the chosen guest mode and a whole-frame aspect fit in the
     // presenter. The settings page is composed separately in host UI space;
     // baking it into this guest-sized copy would scale it a second time.
-    host_page_overlay(nullptr, w, h, bpp, pitch, palette); // initialize page input
     const bool stage = host_present_needs_legacy_pixels() != 0;
     const uint32_t every = host_dump_every();
     const bool dump = every && (g_present_count % every) == 0;
@@ -186,6 +188,8 @@ extern "C" void host_present(const void *pixels, int w, int h, int bpp, const ui
     g_staged.rgba.resize((size_t)w * (size_t)h * 4);
     if (bpp == 8)
         host_present_expand_indexed(frame, w, h, pitch, palette, g_staged.rgba.data());
+    else if (bpp == 32)
+        host_present_expand_xrgb8888(frame, w, h, pitch, g_staged.rgba.data());
     else
         host_present_expand_rgb565(frame, w, h, pitch, g_staged.rgba.data());
 

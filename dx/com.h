@@ -116,6 +116,25 @@ enum ComIface : uint16_t {
     IF_MF_PRESENTATION_CLOCK, // a second view of the clock
     IF_MF_VIDEO_DISPLAY,
     IF_MF_AUDIO_VOLUME,
+    // Direct3D 9 (d3d9.cpp), for a shader-era game. Nothing else in the kit
+    // shares these: the version 2 interfaces above are a different object
+    // model on a DirectDraw object, while IDirect3D9 stands alone.
+    IF_D3D9,
+    IF_D3DDEVICE9,
+    IF_D3DXEFFECTPOOL,
+    IF_D3DXEFFECT,
+    // The device's resources: what a game creates to draw with.
+    IF_D3DTEXTURE9,
+    IF_D3DCUBETEXTURE9,
+    IF_D3DSURFACE9,
+    IF_D3DVERTEXBUFFER9,
+    IF_D3DINDEXBUFFER9,
+    IF_D3DVERTEXDECL9,
+    IF_D3DQUERY9,
+    // DirectInput 8: the same objects as DirectInput, reached through the
+    // version 8 vtables.
+    IF_DINPUT8,
+    IF_DINPUTDEVICE8,
     IF_COUNT
 };
 
@@ -173,6 +192,16 @@ enum ComKind : uint16_t {
     K_MF_CLOCK,
     K_MF_VIDEO_DISPLAY, // IMFVideoDisplayControl on the session's renderer
     K_MF_AUDIO_VOLUME,
+    K_D3D9,           // the IDirect3D9 factory object
+    K_D3D9DEVICE,     // one device created from it
+    K_D3DXEFFECTPOOL, // the D3DX effect pool a game shares between effects
+    K_D3DXEFFECT,     // one effect loaded from the executable's resources
+    K_D3D9TEXTURE,    // a 2D or cube texture and its levels
+    K_D3D9SURFACE,    // one surface: a texture level, a back buffer, a depth buffer
+    K_D3D9VB,         // a vertex buffer
+    K_D3D9IB,         // an index buffer
+    K_D3D9DECL,       // a vertex declaration
+    K_D3D9QUERY,      // an occlusion or event query
 };
 
 // A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
@@ -294,6 +323,7 @@ struct ComObj {
     uint32_t di_version = 0;
     bool di_wide = false;  // created through DirectInputCreateW: DIDEVICEINSTANCEW layouts
     uint32_t dev_type = 0; // DIDEVTYPE_MOUSE / _KEYBOARD / _JOYSTICK
+    uint32_t samples = 0;  // Direct3D 9 surfaces and devices: multisample count, 0 for none
     bool acquired = false;
     uint32_t di_coop = 0;
     uint32_t data_format_size = 0;

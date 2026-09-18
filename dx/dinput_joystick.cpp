@@ -328,8 +328,8 @@ bool joy_guid(const uint8_t *guid16) {
 
 // DirectInput 8 enumerates by class (DI8DEVCLASS_ALL, _GAMECTRL) or by an
 // exact DI8DEVTYPE; older versions by DIDEVTYPE, where 0 is every device.
-// This file only serves DirectInput up to 7 today; the DI8 branch is here so
-// a DirectInput8 interface only has to call it.
+// Both branches are live: dx/dinput.cpp enumerates the pad for the version 8
+// interface as well as the older ones, and the version decides which.
 bool joy_enum_matches(uint32_t devtype_filter, uint32_t di_version) {
     uint32_t t = devtype_filter & 0xFFu;
     if (di_version >= DIRECTINPUT_VERSION_8)

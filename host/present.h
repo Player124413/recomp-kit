@@ -22,6 +22,10 @@ void host_present_expand_indexed(const uint8_t *src, int w, int h, int pitch,
 // 5-6-5, the depth the front end switches to. Each channel is scaled to the
 // full 0..255 range rather than shifted, so white stays white.
 void host_present_expand_rgb565(const uint8_t *src, int w, int h, int pitch, uint8_t *out);
+// X8R8G8B8, the depth a Direct3D 9 back buffer has: little-endian B, G, R and
+// an ignored byte per pixel. Alpha comes out 255, because the X byte is not
+// alpha and a presented frame is opaque.
+void host_present_expand_xrgb8888(const uint8_t *src, int w, int h, int pitch, uint8_t *out);
 
 // Where a guest frame lands inside a drawable, aspect preserved. Integer
 // scaling when a whole multiple fits, which keeps 320x200-era art free of
@@ -303,6 +307,8 @@ controls::ControlsView host_present_controls(void);
 #include "gpu/gpu.h"
 #include <functional>
 #include <memory>
+// The drawable the presenter composes into, in pixels; false before one exists.
+bool host_present_drawable(int *w, int *h);
 #include <vector>
 
 // The device every presenter texture and command buffer belongs to. Set once,
@@ -313,6 +319,9 @@ gpu::Device *host_present_device(void);
 // `native_surface` is what the window layer hands over (a CAMetalLayer* on
 // macOS); the presenter makes its swapchain from it on the worker.
 void host_present_start(void *native_surface, int drawable_w, int drawable_h);
+// One presenter turn on the calling thread, for a host that drives the GPU from
+// its own loop (the web); host_present_start starts no worker there.
+void host_present_pump(void);
 void host_present_start_offscreen(int w, int h);
 // Main-thread messages. No GPU work or wait for the worker here.
 void host_present_resize(int drawable_w, int drawable_h);
