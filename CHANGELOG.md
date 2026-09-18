@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- On-screen controls replace the split keypad. Every game now starts with a
+  PlayStation-styled gamepad as well as the keyboard: two sticks, a dpad,
+  ✕○□△, shoulders and triggers, start and select, drawn over the game. A
+  tab cycles between the `pad`, `keys` and `pad+keys` layouts and a Hidden
+  slot, and the F10 page carries the layout, its size, its opacity, button
+  haptics and whether the pad stays on screen when a controller is
+  connected. The keyboard itself is unchanged: same halves, same keys, same
+  hold-to-chord, tap-to-latch, double-tap-to-lock, and the old
+  `host.keypad/*` settings carry over on first run.
+
+- Layouts are files, and a player can edit them on the device. "Edit
+  controls" on the F10 page opens an editor: drag to move, pinch to resize,
+  add or delete a control, rebind it, snap to a 10 pt grid and to other
+  controls, then save or reset to the game's default. Edits are saved per
+  game and per form factor under `<profile>/controls/`, so a phone in
+  portrait and a tablet keep separate layouts. A game repo ships its own
+  starting layouts in a `layouts/` directory, which the build copies into
+  the app.
+
+- Physical controllers work everywhere: a DualSense, Xbox or MFi pad opens
+  through SDL with hot-plug, on desktop, iOS and Android, and feeds the
+  same virtual pad the on-screen controls do. A pad-only layout hides
+  itself while a controller is connected (turn that off with "Pad with
+  controller"), and a keyboard layout still hides itself when a hardware
+  keyboard is attached. Rumble from the game reaches the controller, or the
+  phone or tablet's own motor when there is no controller, and a light
+  haptic tap answers each on-screen press.
+
+- Phones are supported, including portrait. Layouts come in `tablet`,
+  `phone-landscape` and `phone-portrait` forms, iPhone and Android phones
+  may rotate, and in portrait the game is pinned to the top at full width
+  with the controls filling the space below it, so nothing covers the game.
+  Tablets stay landscape.
+
+- Games that read a controller can be given a real one. With
+  `[controls] pad = "native"` the virtual pad appears as a DirectInput
+  joystick and through `xinput1_3`, `xinput1_4` and `xinput9_1_0`, so the
+  game's own controller support drives it and its `XInputSetState` rumble
+  comes back out. Otherwise the pad is mapped to keys and the mouse, with a
+  per-game table under `[controls.mapped]`.
+
+- `game.toml` gains a `[controls]` section — `default_layout`, `pad`, and
+  the `[controls.mapped]` and `[controls.native]` tables — which replaces
+  `[touch] keypad`. The old spelling is still read (`"auto"` → `"keys"`,
+  `"hidden"` → `"hidden"`) so no game repo has to be re-pinned at once.
+  One behaviour change: `[touch] keypad = "hidden"` used to hide the two
+  halves but keep their KEYS tabs on screen; it now selects the Hidden
+  layout and draws nothing. No game in the kit sets it.
+
 - Video decoding works in the Windows build. With the presets' MSVC-ABI
   clang, FFmpeg is built by its own MSVC toolchain from an MSYS2 shell and
   make (found beside each other, so Git's or WSL's bash is not used), its

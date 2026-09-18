@@ -37,7 +37,8 @@ constexpr uint32_t kConstantRegisters = 256;
 constexpr uint32_t kSamplerBinding = 4;
 
 bool vertex_source(const d9sh::Program &p, std::string *out, std::string *why);
-bool pixel_source(const d9sh::Program &p, const d9msl::PixelVariant &v, std::string *out, std::string *why);
+bool pixel_source(const d9sh::Program &p, const d9msl::PixelVariant &v, std::string *out,
+                  std::string *why);
 // The float constant registers the program's source declares.
 uint32_t constant_registers(const d9sh::Program &p);
 

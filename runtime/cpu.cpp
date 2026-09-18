@@ -241,8 +241,8 @@ void recomp_unmodelled(X86 *c, uint32_t addr) {
 // INT3: a breakpoint no debugger will handle. On Windows that is an unhandled
 // exception, so the process ends; so does this one, with the address.
 void recomp_breakpoint(X86 *c, uint32_t addr) {
-    LOGW("INT3 at %08x (ESP=%08x, return=%08x): breakpoint reached, stopping", addr,
-         c->r[R_ESP], rd32(c->r[R_ESP]));
+    LOGW("INT3 at %08x (ESP=%08x, return=%08x): breakpoint reached, stopping", addr, c->r[R_ESP],
+         rd32(c->r[R_ESP]));
     abort();
 }
 

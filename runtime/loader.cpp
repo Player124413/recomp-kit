@@ -617,7 +617,8 @@ bool loader_load(const char *exe_path) {
     // game.toml operand_redirects: each new location starts with the value of
     // the one it replaces (8 bytes, enough for a double).
     for (uint32_t i = 0; i < recomp_operand_redirect_count; ++i) {
-        uint32_t from = recomp_operand_redirect_pairs[2 * i], to = recomp_operand_redirect_pairs[2 * i + 1];
+        uint32_t from = recomp_operand_redirect_pairs[2 * i],
+                 to = recomp_operand_redirect_pairs[2 * i + 1];
         if ((uint64_t)from + 8 <= GUEST_SIZE && (uint64_t)to + 8 <= GUEST_SIZE)
             memcpy(g_mem + to, g_mem + from, 8);
     }

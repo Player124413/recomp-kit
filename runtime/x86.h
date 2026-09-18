@@ -1522,27 +1522,31 @@ static inline uint64_t mmx_psub(uint64_t a, uint64_t b, unsigned bits) {
 static inline uint64_t mmx_padds(uint64_t a, uint64_t b, unsigned bits) {
     uint64_t r = 0;
     for (unsigned i = 0; i < MMX_LANES(bits); i++)
-        r = mmx_put(r, bits, i, (uint64_t)mmx_sat_s(mmx_slane(a, bits, i) + mmx_slane(b, bits, i), bits));
+        r = mmx_put(r, bits, i,
+                    (uint64_t)mmx_sat_s(mmx_slane(a, bits, i) + mmx_slane(b, bits, i), bits));
     return r;
 }
 static inline uint64_t mmx_psubs(uint64_t a, uint64_t b, unsigned bits) {
     uint64_t r = 0;
     for (unsigned i = 0; i < MMX_LANES(bits); i++)
-        r = mmx_put(r, bits, i, (uint64_t)mmx_sat_s(mmx_slane(a, bits, i) - mmx_slane(b, bits, i), bits));
+        r = mmx_put(r, bits, i,
+                    (uint64_t)mmx_sat_s(mmx_slane(a, bits, i) - mmx_slane(b, bits, i), bits));
     return r;
 }
 static inline uint64_t mmx_paddus(uint64_t a, uint64_t b, unsigned bits) {
     uint64_t r = 0;
     for (unsigned i = 0; i < MMX_LANES(bits); i++)
         r = mmx_put(r, bits, i,
-                    (uint64_t)mmx_sat_u((int64_t)mmx_lane(a, bits, i) + (int64_t)mmx_lane(b, bits, i), bits));
+                    (uint64_t)mmx_sat_u(
+                        (int64_t)mmx_lane(a, bits, i) + (int64_t)mmx_lane(b, bits, i), bits));
     return r;
 }
 static inline uint64_t mmx_psubus(uint64_t a, uint64_t b, unsigned bits) {
     uint64_t r = 0;
     for (unsigned i = 0; i < MMX_LANES(bits); i++)
         r = mmx_put(r, bits, i,
-                    (uint64_t)mmx_sat_u((int64_t)mmx_lane(a, bits, i) - (int64_t)mmx_lane(b, bits, i), bits));
+                    (uint64_t)mmx_sat_u(
+                        (int64_t)mmx_lane(a, bits, i) - (int64_t)mmx_lane(b, bits, i), bits));
     return r;
 }
 static inline uint64_t mmx_pmullw(uint64_t a, uint64_t b) {
@@ -1590,9 +1594,15 @@ static inline uint64_t mmx_pack(uint64_t a, uint64_t b, unsigned from, int is_si
     }
     return r;
 }
-static inline uint64_t mmx_packsswb(uint64_t a, uint64_t b) { return mmx_pack(a, b, 16, 1); }
-static inline uint64_t mmx_packssdw(uint64_t a, uint64_t b) { return mmx_pack(a, b, 32, 1); }
-static inline uint64_t mmx_packuswb(uint64_t a, uint64_t b) { return mmx_pack(a, b, 16, 0); }
+static inline uint64_t mmx_packsswb(uint64_t a, uint64_t b) {
+    return mmx_pack(a, b, 16, 1);
+}
+static inline uint64_t mmx_packssdw(uint64_t a, uint64_t b) {
+    return mmx_pack(a, b, 32, 1);
+}
+static inline uint64_t mmx_packuswb(uint64_t a, uint64_t b) {
+    return mmx_pack(a, b, 16, 0);
+}
 /* Unpacking interleaves the low (or high) half of each operand, destination
  * lane first. */
 static inline uint64_t mmx_punpck(uint64_t a, uint64_t b, unsigned bits, unsigned half) {
@@ -1604,14 +1614,24 @@ static inline uint64_t mmx_punpck(uint64_t a, uint64_t b, unsigned bits, unsigne
     }
     return r;
 }
-static inline uint64_t mmx_punpckl(uint64_t a, uint64_t b, unsigned bits) { return mmx_punpck(a, b, bits, 0); }
+static inline uint64_t mmx_punpckl(uint64_t a, uint64_t b, unsigned bits) {
+    return mmx_punpck(a, b, bits, 0);
+}
 static inline uint64_t mmx_punpckh(uint64_t a, uint64_t b, unsigned bits) {
     return mmx_punpck(a, b, bits, 64 / bits / 2);
 }
-static inline uint64_t mmx_pand(uint64_t a, uint64_t b) { return a & b; }
-static inline uint64_t mmx_pandn(uint64_t a, uint64_t b) { return ~a & b; }
-static inline uint64_t mmx_por(uint64_t a, uint64_t b) { return a | b; }
-static inline uint64_t mmx_pxor(uint64_t a, uint64_t b) { return a ^ b; }
+static inline uint64_t mmx_pand(uint64_t a, uint64_t b) {
+    return a & b;
+}
+static inline uint64_t mmx_pandn(uint64_t a, uint64_t b) {
+    return ~a & b;
+}
+static inline uint64_t mmx_por(uint64_t a, uint64_t b) {
+    return a | b;
+}
+static inline uint64_t mmx_pxor(uint64_t a, uint64_t b) {
+    return a ^ b;
+}
 /* Shifts take their count from all 64 bits of the source; a count past the
  * lane width clears the lane, or fills it with the sign for PSRA. */
 static inline uint64_t mmx_psll(uint64_t a, uint64_t count, unsigned bits) {

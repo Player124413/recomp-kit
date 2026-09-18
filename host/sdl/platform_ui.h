@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
 #include <string>
 
 // Hints that must be set before SDL_Init. Desktop: click-through focus, no
@@ -30,9 +31,14 @@ SDL_Window *platform_ui_create_window(const char *title, int window_w, int windo
 // always false.
 bool platform_ui_handle_lifecycle(const SDL_Event &e);
 
-// Whether the on-screen keypad (host/keypad_layout.h) should show:
+// Whether the on-screen controls (host/controls/controls_host.h) should show:
 // iOS/Android without a hardware keyboard. Desktop: never.
 bool platform_ui_keypad_wanted();
+
+// Whether this is a phone or tablet: the on-screen controls may show at all
+// (desktop shows them only under RECOMP_KEYPAD), and a device motor can stand
+// in for controller rumble. iOS and Android: true. Desktop: false.
+bool platform_ui_touch_device();
 
 // Whether this platform has a pointer the host may hide and confine. Desktop:
 // yes. iOS/Android: no; fingers are placed absolutely and a captured host would read
@@ -46,3 +52,14 @@ int platform_ui_default_overlay();
 // The guest has exited and the host has torn down: a desktop process returns
 // from main; iOS and Android end the process after SDL_Quit.
 void platform_ui_process_exit(int code);
+
+// A light tap tick for an on-screen control press. iOS: UIImpactFeedbackGenerator
+// (light style). Android: performHapticFeedback(KEYBOARD_TAP). Desktop: no-op.
+void platform_ui_haptic_tap();
+
+// The device's own motor, standing in for game rumble when no controller is
+// connected. `low`/`high` are the guest's low/high-frequency motor strengths
+// (0..65535, as SDL_GetGamepadRumble takes them); 0,0 stops the motor.
+// iOS: a Core Haptics continuous player, intensity max(low, high)/65535.
+// Android: Vibrator.vibrate with an amplitude derived the same way. Desktop: no-op.
+void platform_ui_device_rumble(uint16_t low, uint16_t high);

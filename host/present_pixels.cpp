@@ -161,6 +161,34 @@ extern "C" struct HostFit host_present_fit(double dw, double dh, int gw, int gh)
     return fit;
 }
 
+extern "C" struct HostGameRect host_present_game_rect(int dw, int dh, int gw, int gh,
+                                                      int safe_top) {
+    const HostGameRect whole = {0, 0, dw, dh};
+    if (dh <= dw || gw <= 0 || gh <= 0 || dw <= 0)
+        return whole;
+    const int top = safe_top > 0 ? safe_top : 0;
+    const long h = lround(dw * gh / double(gw));
+    if (h > dh - top)
+        return whole;
+    return {0, top, dw, int(h)};
+}
+
+static std::atomic<int> g_present_safe_top{0};
+extern "C" void host_present_set_safe_top(int pixels) {
+    g_present_safe_top.store(pixels > 0 ? pixels : 0);
+}
+extern "C" int host_present_safe_top(void) {
+    return g_present_safe_top.load();
+}
+
+extern "C" void host_present_point_to_game(struct HostGameRect rect, int32_t x, int32_t y,
+                                           int32_t *out_x, int32_t *out_y) {
+    if (out_x)
+        *out_x = x - rect.x;
+    if (out_y)
+        *out_y = y - rect.y;
+}
+
 extern "C" struct HostWindowSize host_window_size_for(int gw, int gh, int uw, int uh,
                                                       double density) {
     HostWindowSize s = {gw, gh, gw, gh};

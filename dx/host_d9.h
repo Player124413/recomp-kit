@@ -21,10 +21,10 @@ enum { HOST_D9_USAGE_RENDERTARGET = 1, HOST_D9_USAGE_DEPTH = 2 };
 
 typedef struct HostD9TextureDesc {
     uint32_t id;
-    uint32_t kind;   // HOST_D9_TEX_*
+    uint32_t kind; // HOST_D9_TEX_*
     uint32_t width, height, levels;
-    uint32_t format; // D3DFORMAT
-    uint32_t usage;  // HOST_D9_USAGE_*
+    uint32_t format;  // D3DFORMAT
+    uint32_t usage;   // HOST_D9_USAGE_*
     uint32_t samples; // multisampled render target or depth buffer: sample count; 0 or 1 for none
 } HostD9TextureDesc;
 
@@ -66,52 +66,51 @@ typedef struct HostD9Draw {
     HostD9Target target;
     int32_t viewport[4]; // x, y, w, h
     float depth_range[2];
-    int32_t scissor[4];  // left, top, right, bottom; used when D3DRS_SCISSORTESTENABLE
+    int32_t scissor[4]; // left, top, right, bottom; used when D3DRS_SCISSORTESTENABLE
 
     const uint8_t *vs;
     uint32_t vs_size;
     const uint8_t *ps;
     uint32_t ps_size;
-    uint64_t vs_key, ps_key;       // d9sh::code_key of the two programs
-    const float *vconst; // 4 floats each
+    uint64_t vs_key, ps_key; // d9sh::code_key of the two programs
+    const float *vconst;     // 4 floats each
     uint32_t vconst_count;
     const float *pconst;
     uint32_t pconst_count;
 
     const uint8_t *decl; // D3DVERTEXELEMENT9 records, ending with the 0xff stream
     uint32_t decl_size;
-    uint32_t decl_id;    // stable key for `decl`
+    uint32_t decl_id; // stable key for `decl`
     HostD9Stream stream[8];
     const uint8_t *inline_vertices;
     uint32_t inline_bytes;
 
-    uint32_t index_buffer;         // 0: not indexed, unless inline_indices
+    uint32_t index_buffer; // 0: not indexed, unless inline_indices
     const uint8_t *inline_indices;
     uint32_t inline_index_bytes;
-    uint32_t index_size;           // 2 or 4
+    uint32_t index_size; // 2 or 4
 
-    uint32_t primitive;            // D3DPRIMITIVETYPE
+    uint32_t primitive; // D3DPRIMITIVETYPE
     uint32_t primitive_count;
-    uint32_t start;                // first vertex, or first index when indexed
+    uint32_t start; // first vertex, or first index when indexed
     int32_t base_vertex;
 
-    uint32_t sampler_texture[16];  // texture ids; 0: none
-    const uint32_t *sampler_state; // 16 x 14, indexed [stage * 14 + D3DSAMPLERSTATETYPE]
-    const uint32_t *render_state;  // 256, D3DRENDERSTATETYPE
+    uint32_t sampler_texture[16];    // texture ids; 0: none
+    const uint32_t *sampler_state;   // 16 x 14, indexed [stage * 14 + D3DSAMPLERSTATETYPE]
+    const uint32_t *render_state;    // 256, D3DRENDERSTATETYPE
     const uint8_t *render_state_set; // 256 flags: the game set it
-    uint32_t projected_mask;       // stages with D3DTTFF_PROJECTED
+    uint32_t projected_mask;         // stages with D3DTTFF_PROJECTED
     // Nonzero: the three state tables above are unchanged for as long as this
     // is, so a host may reuse its copy from an earlier draw with the same value.
     uint64_t state_version;
-    const char *label;             // what bound the shaders, for diagnostics; may be null
+    const char *label; // what bound the shaders, for diagnostics; may be null
 } HostD9Draw;
 
 void host_d9_draw(const HostD9Draw *draw);
 
 // D3DCLEAR_TARGET 1, _ZBUFFER 2, _STENCIL 4. Rects are D3DRECTs.
 void host_d9_clear(const HostD9Target *target, const int32_t viewport[4], uint32_t count,
-                   const int32_t *rects, uint32_t flags, uint32_t color, float z,
-                   uint32_t stencil);
+                   const int32_t *rects, uint32_t flags, uint32_t color, float z, uint32_t stencil);
 
 // StretchRect: rects are left, top, right, bottom. filter is D3DTEXTUREFILTERTYPE.
 void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface dst,

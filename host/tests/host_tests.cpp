@@ -1137,6 +1137,30 @@ static void test_bundled_general_midi() {
     CHECK_EQ(st.size, 32319396u);
 }
 
+// The game's controls layouts: a game repository's layouts/ in a developer
+// run, the resources' controls/ in a packaged one.
+static void test_controls_layouts_resource() {
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/controls-resource-XXXXXX", os_temp_dir());
+    CHECK(os_mkdtemp(dir) == 0);
+    const std::string root = dir;
+    os_mkdir((root + "/build").c_str());
+    FILE *f = fopen((root + "/game.toml").c_str(), "wb");
+    CHECK(f != nullptr);
+    if (f)
+        fclose(f);
+    host_layout_set_exe_path_for_test((root + "/build/app").c_str());
+    CHECK(host_resource("controls") == root + "/layouts");
+    remove((root + "/game.toml").c_str());
+    os_mkdir((root + "/build/resources").c_str());
+    host_layout_set_exe_path_for_test((root + "/build/app").c_str());
+    CHECK(host_resource("controls") == root + "/build/resources/controls");
+    host_layout_set_exe_path_for_test(nullptr);
+    os_rmdir((root + "/build/resources").c_str());
+    os_rmdir((root + "/build").c_str());
+    os_rmdir(root.c_str());
+}
+
 static void test_audio_maths() {
     CHECK_NEAR(host_audio_gain_from_millibels(0), 1.0, 1e-6);
     CHECK_NEAR(host_audio_gain_from_millibels(-10000), 0.0, 1e-6);
@@ -8624,6 +8648,135 @@ extern "C" int ddraw_add_mode(int w, int h, int bpp) {
         std::to_string(w) + "x" + std::to_string(h) + "x" + std::to_string(bpp);
     return 1;
 }
+// Task 18: where the game image goes. Today the presenter composes every
+// frame into the whole drawable (present_thread.cpp took `int w = drawable_w,
+// h = drawable_h` for the composite and `f->input.drawable_w = drawable_w`),
+// and the compositor places the guest image inside that. Landscape must keep
+// exactly that, whatever the game size or the safe area.
+static HostGameRect old_presenter_rect(int dw, int dh) {
+    int w = dw, h = dh; // verbatim: the composite and the compositor's drawable
+    return HostGameRect{0, 0, w, h};
+}
+static void test_game_rect_landscape_is_todays_placement() {
+    const int drawables[][2] = {{1920, 1080}, {2560, 1440}, {1334, 750},  // 16:9
+                                {1024, 768},  {2048, 1536}, {800, 600},   // 4:3
+                                {2560, 1080}, {3440, 1440}, {2532, 1170}, // 21:9 and wider
+                                {1000, 1000}};                            // square is landscape
+    const int games[][2] = {{640, 480}, {800, 600}, {3840, 2160}};
+    for (const auto &d : drawables)
+        for (const auto &g : games)
+            for (int safe_top : {0, 47, 141}) {
+                const HostGameRect now = host_present_game_rect(d[0], d[1], g[0], g[1], safe_top);
+                const HostGameRect old = old_presenter_rect(d[0], d[1]);
+                CHECK_EQ(now.x, old.x);
+                CHECK_EQ(now.y, old.y);
+                CHECK_EQ(now.w, old.w);
+                CHECK_EQ(now.h, old.h);
+            }
+}
+static void test_game_rect_portrait() {
+    // Full width, aspect kept, at the top of the safe area.
+    HostGameRect r = host_present_game_rect(1170, 2532, 640, 480, 141);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 141);
+    CHECK_EQ(r.w, 1170);
+    CHECK_EQ(r.h, 878); // lround(877.5)
+    r = host_present_game_rect(1170, 2532, 3840, 2160, 0);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(r.w, 1170);
+    CHECK_EQ(r.h, 658);
+    // Too tall to fit below the safe top: the landscape rule.
+    r = host_present_game_rect(1000, 1100, 480, 640, 0);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(r.w, 1000);
+    CHECK_EQ(r.h, 1100);
+    r = host_present_game_rect(1000, 1100, 640, 480, 400);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(r.h, 1100);
+    // No game mode yet: the whole drawable.
+    r = host_present_game_rect(1170, 2532, 0, 0, 141);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(r.h, 2532);
+    // A drawable point becomes a point in the game image.
+    int32_t x = 0, y = 0;
+    host_present_point_to_game(HostGameRect{0, 141, 1170, 878}, 585, 141 + 439, &x, &y);
+    CHECK_EQ(x, 585);
+    CHECK_EQ(y, 439);
+    host_present_point_to_game(HostGameRect{0, 0, 1920, 1080}, 7, 9, &x, &y);
+    CHECK_EQ(x, 7);
+    CHECK_EQ(y, 9);
+}
+// The presenter composes into the game rectangle and publishes a layout of its
+// size, so the gate maps a finger on the image to the guest pixel under it.
+static void test_portrait_presenter_maps_through_the_game_rect() {
+    host_gate_reset();
+    host_present_set_safe_top(141);
+    host_present_test_begin(false);
+    host_present_resize(1170, 2532);
+    host_present_tick_for_test(0);
+    auto target = host_present_acquire_target(640, 480, 0, 0);
+    HostGameRect r = host_present_current_game_rect();
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 141);
+    CHECK_EQ(r.w, 1170);
+    CHECK_EQ(r.h, 878);
+    CHECK_EQ(target.w, 1170);
+    CHECK_EQ(target.h, 878);
+    CHECK_NEAR(host_display_aspect(), 1170.0 / 878.0, 0.00001);
+    UiFrame ui{};
+    ui.guest_w = 640;
+    ui.guest_h = 480;
+    CompositorInput in{};
+    in.cls = HOST_SCREEN_GAMEPLAY;
+    in.ui = &ui;
+    in.guest_w = 640;
+    in.guest_h = 480;
+    in.world = target.world;
+    host_present_set_input(&in);
+    host_present_test_seal(1);
+    host_present_tick_for_test(0.01);
+    host_present_test_command_done(1);
+    host_present_test_presented(1, 0.02);
+    LayoutSnapshot layout;
+    CHECK(host_present_copy_layout(&layout));
+    CHECK_EQ(layout.drawable_w, 1170);
+    CHECK_EQ(layout.drawable_h, 878);
+    // A finger in the middle of the image, in drawable pixels, is the middle
+    // of the 640x480 frame. (585, 141 + 438) sits at guest row 239.45, which
+    // the gate floors; one pixel lower is row 240.
+    int32_t x = 0, y = 0;
+    host_present_point_to_game(r, 585, 141 + 439, &x, &y);
+    HitResult hit = host_gate_hit_test(nullptr, x, y);
+    CHECK_EQ(hit.kind, HitResult::HIT_SCENE);
+    CHECK_EQ(hit.gx, 320);
+    CHECK_EQ(hit.gy, 240);
+    // Rotating back to landscape: the whole drawable, as before.
+    host_present_resize(2532, 1170);
+    r = host_present_current_game_rect();
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(r.w, 2532);
+    CHECK_EQ(r.h, 1170);
+    CHECK_NEAR(host_display_aspect(), 2532.0 / 1170.0, 0.00001);
+    host_present_stop();
+    host_present_set_safe_top(0);
+    host_gate_reset();
+}
+
+// A phone held upright still tells the game about a landscape screen.
+static void test_landscape_screen_size() {
+    int w = 0, h = 0;
+    host_landscape_screen_size(390, 844, &w, &h);
+    CHECK_EQ(w, 844);
+    CHECK_EQ(h, 390);
+    host_landscape_screen_size(1920, 1080, &w, &h);
+    CHECK_EQ(w, 1920);
+    CHECK_EQ(h, 1080);
+    host_landscape_screen_size(1000, 1000, &w, &h);
+    CHECK_EQ(w, 1000);
+    CHECK_EQ(h, 1000);
+}
+
 static void test_display_settings_bridge() {
     display_offered_modes.clear();
     CHECK_EQ(host_display_offer_mode(1920, 1080, 16), 1);
@@ -9036,7 +9189,6 @@ static void test_native_overlay_pixels() {
     }
 }
 
-
 // ---- The Direct3D 9 GPU renderer --------------------------------------------
 // Shader model 1.1, assembled by hand: vs `dcl_position v0; mov oPos, v0;
 // mov oD0, c0`, ps `mov r0, v0`.
@@ -9075,10 +9227,11 @@ static void test_d3d9_gpu_renderer() {
     CHECK_EQ(p[1], 255);
     CHECK_EQ(p[2], 0);
 
-    std::vector<uint8_t> vs = d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u,
-                                        0xC00F0000u, 0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u,
-                                        0x0000FFFFu});
-    std::vector<uint8_t> ps = d9_words({0xFFFF0101u, 0x00000001u, 0x800F0000u, 0x90E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> vs =
+        d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u, 0xC00F0000u,
+                  0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> ps =
+        d9_words({0xFFFF0101u, 0x00000001u, 0x800F0000u, 0x90E40000u, 0x0000FFFFu});
     const uint8_t decl[16] = {0, 0, 0, 0, 2, 0, 0, 0, 0xff, 0, 0, 0, 17, 0, 0, 0};
     D9Pipeline pl;
     pl.rs[7] = 1; // ZENABLE
@@ -9122,7 +9275,7 @@ static void test_d3d9_gpu_renderer() {
     CHECK_EQ(p[0], 0);
 
     // Depth: a nearer triangle wins, a farther one does not.
-    pl.rs[22] = 1; // CULLMODE none
+    pl.rs[22] = 1;                            // CULLMODE none
     d.inline_vertices = (const uint8_t *)ccw; // z 0.25, nearer than 0.5
     host_d9_draw(&d);
     d9_pixel(RT, 3, 3, p);
@@ -9184,11 +9337,12 @@ static void test_d3d9_gpu_renderer() {
     shadow_pass.depth = {SHADOW, 0, 0};
     host_d9_clear(&shadow_pass, vp, 0, nullptr, 2, 0, 0.5f, 0);
     // vs: mov oPos, v0; mov oD0, c0; mov oT0, c1. ps 1.1: tex t0; mov r0, t0.
-    std::vector<uint8_t> vs_t = d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u,
-                                          0xC00F0000u, 0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u,
-                                          0x00000001u, 0xE00F0000u, 0xA0E40001u, 0x0000FFFFu});
-    std::vector<uint8_t> ps_t = d9_words({0xFFFF0101u, 0x00000042u, 0xB00F0000u, 0x00000001u, 0x800F0000u,
-                                          0xB0E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> vs_t =
+        d9_words({0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x00000001u, 0xC00F0000u,
+                  0x90E40000u, 0x00000001u, 0xD00F0000u, 0xA0E40000u, 0x00000001u, 0xE00F0000u,
+                  0xA0E40001u, 0x0000FFFFu});
+    std::vector<uint8_t> ps_t = d9_words({0xFFFF0101u, 0x00000042u, 0xB00F0000u, 0x00000001u,
+                                          0x800F0000u, 0xB0E40000u, 0x0000FFFFu});
     pl.rs[7] = 0;
     pl.rs[27] = 0;
     d.target = HostD9Target{};
@@ -9216,19 +9370,15 @@ static void test_d3d9_gpu_renderer() {
     // Shader model 3.0: outputs named by their dcl, and a rep loop on a defi
     // count. vs: dcl_position o0; dcl_color o1; mov o0, v0; mov o1, c0.
     // ps: defi i0 = 3; def c1 = 0.25; rep i0 { r0 += c1 }; oC0 = r0 (r0 starts at 0).
-    std::vector<uint8_t> vs3 = d9_words({0xFFFE0300u, 0x0200001Fu, 0x80000000u, 0x900F0000u,
-                                         0x0200001Fu, 0x80000000u, 0xE00F0000u,
-                                         0x0200001Fu, 0x8000000Au, 0xE00F0001u,
-                                         0x02000001u, 0xE00F0000u, 0x90E40000u,
-                                         0x02000001u, 0xE00F0001u, 0xA0E40000u, 0x0000FFFFu});
-    std::vector<uint8_t> ps3 = d9_words({0xFFFF0300u, 0x05000030u, 0xF00F0000u, 3u, 0u, 0u, 0u,
-                                         0x05000051u, 0xA00F0001u, 0x3E800000u, 0x3E800000u,
-                                         0x3E800000u, 0x3E800000u,
-                                         0x0200001Fu, 0x8000000Au, 0x900F0000u,
-                                         0x01000026u, 0xF0E40000u,
-                                         0x03000002u, 0x800F0000u, 0x80E40000u, 0xA0E40001u,
-                                         0x00000027u,
-                                         0x02000001u, 0x800F0800u, 0x80E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> vs3 =
+        d9_words({0xFFFE0300u, 0x0200001Fu, 0x80000000u, 0x900F0000u, 0x0200001Fu, 0x80000000u,
+                  0xE00F0000u, 0x0200001Fu, 0x8000000Au, 0xE00F0001u, 0x02000001u, 0xE00F0000u,
+                  0x90E40000u, 0x02000001u, 0xE00F0001u, 0xA0E40000u, 0x0000FFFFu});
+    std::vector<uint8_t> ps3 = d9_words(
+        {0xFFFF0300u, 0x05000030u, 0xF00F0000u, 3u,          0u,          0u,          0u,
+         0x05000051u, 0xA00F0001u, 0x3E800000u, 0x3E800000u, 0x3E800000u, 0x3E800000u, 0x0200001Fu,
+         0x8000000Au, 0x900F0000u, 0x01000026u, 0xF0E40000u, 0x03000002u, 0x800F0000u, 0x80E40000u,
+         0xA0E40001u, 0x00000027u, 0x02000001u, 0x800F0800u, 0x80E40000u, 0x0000FFFFu});
     d.vs = vs3.data();
     d.vs_size = (uint32_t)vs3.size();
     d.ps = ps3.data();
@@ -9307,6 +9457,14 @@ int main(int argc, char **argv) {
         printf("display: %d checks, %d failures\n", g_checks, g_failures);
         return g_failures ? 1 : 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--game-rect-only")) {
+        test_game_rect_landscape_is_todays_placement();
+        test_game_rect_portrait();
+        test_landscape_screen_size();
+        test_portrait_presenter_maps_through_the_game_rect();
+        printf("game rect: %d checks, %d failures\n", g_checks, g_failures);
+        return g_failures ? 1 : 0;
+    }
     if (argc > 1 && !strcmp(argv[1], "--presenter-only")) {
         test_stats_line_format();
         test_presentation_service();
@@ -9382,7 +9540,13 @@ int main(int argc, char **argv) {
     } plain[] = {
         {"game path", test_game_path},
         {"bundled General MIDI bank", test_bundled_general_midi},
+        {"controls layouts resource", test_controls_layouts_resource},
         {"display settings bridge", test_display_settings_bridge},
+        {"game rect: landscape is today's placement", test_game_rect_landscape_is_todays_placement},
+        {"game rect: portrait", test_game_rect_portrait},
+        {"landscape screen size on a phone", test_landscape_screen_size},
+        {"game rect: portrait presenter and gate",
+         test_portrait_presenter_maps_through_the_game_rect},
         {"presentation service", test_presentation_service},
         {"palette expansion", test_palette_expansion},
         {"5-6-5 expansion", test_rgb565_expansion},

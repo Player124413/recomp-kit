@@ -74,6 +74,27 @@ pop_test_binary(keypad_tests)
 add_test(NAME keypad_tests COMMAND keypad_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(keypad_tests PROPERTIES LABELS nogame)
 
+add_executable(controls_tests ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
+                              ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
+                              ${HOST}/controls/router.cpp ${HOST}/controls/vpad.cpp
+                              ${HOST}/controls/binding.cpp ${HOST}/controls/overlay_view.cpp
+                              ${HOST}/controls/raster.cpp ${HOST}/controls/overlay_paint.cpp
+                              ${HOST}/controls/pad_art.cpp
+                              ${HOST}/controls/haptics.cpp
+                              ${HOST}/controls/editor.cpp
+                              ${HOST}/controls/editor_actions.cpp
+                              ${HOST}/keypad_layout.cpp
+                              ${HOST}/keypad_modifiers.cpp ${HOST}/tests/controls_tests.cpp
+                              ${HOST}/tests/keypad_legacy_oracle.cpp ${POP_ROOT}/mods/font6x8.cpp)
+target_include_directories(controls_tests PRIVATE ${POP_ROOT})
+target_compile_options(controls_tests PRIVATE ${POP_WARN_WERROR})
+target_link_libraries(controls_tests PRIVATE recomp_platform)
+pop_link_sdl(controls_tests)
+pop_optimize(controls_tests 1)
+pop_test_binary(controls_tests)
+add_test(NAME controls_tests COMMAND controls_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(controls_tests PROPERTIES LABELS nogame)
+
 add_executable(launcher_tests ${HOST}/tests/launcher_tests.cpp ${POP_ROOT}/mods/font6x8.cpp)
 target_include_directories(launcher_tests PRIVATE ${POP_ROOT} ${POP_ROOT}/runtime ${POP_ROOT}/third_party/lua
                                                   ${CMAKE_BINARY_DIR}/generated)
@@ -136,9 +157,19 @@ endfunction()
 set(POP_AUDIO_SOURCES ${HOST}/audio/mixer.cpp ${HOST}/audio/sdl_sink.cpp ${HOST}/audio/midi_synth.cpp
                       ${HOST}/audio_math.cpp ${HOST}/audio_capture.cpp)
 set(POP_CORE_LIBS recomp_platform recomp_runtime recomp_snapshot recomp_dx recomp_mods lua host_common gpu_backend)
+# The on-screen controls the presenter draws (controls_host.cpp is the app's own).
+set(POP_CONTROLS_SOURCES ${HOST}/controls/json.cpp ${HOST}/controls/layout.cpp
+                         ${HOST}/controls/builtin_layouts.cpp ${HOST}/controls/layout_store.cpp
+                         ${HOST}/controls/router.cpp ${HOST}/controls/vpad.cpp
+                         ${HOST}/controls/binding.cpp ${HOST}/controls/overlay_view.cpp
+                         ${HOST}/controls/overlay.cpp ${HOST}/controls/raster.cpp
+                          ${HOST}/controls/overlay_paint.cpp ${HOST}/controls/pad_art.cpp
+                          ${HOST}/controls/haptics.cpp
+                          ${HOST}/controls/editor.cpp ${HOST}/controls/editor_actions.cpp
+                         ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp)
 set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${HOST}/compositor.cpp
-                        ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${HOST}/keypad_overlay.cpp
-                        ${HOST}/keypad_layout.cpp ${HOST}/keypad_modifiers.cpp ${HOST}/d3d_render.cpp
+                        ${HOST}/ui_layer.cpp ${HOST}/performance_overlay.cpp ${POP_CONTROLS_SOURCES}
+                        ${HOST}/d3d_render.cpp
                         ${HOST}/gpu2d.cpp
                         ${HOST}/indexed_frame.cpp)
 # The Direct3D 9 device's GPU renderer: the host entry points, and a backend
@@ -168,7 +199,7 @@ set(POP_LAUNCHER_SOURCES $<TARGET_OBJECTS:launcher_core> $<TARGET_OBJECTS:recomp
                          ${HOST}/launcher/launcher_config.cpp ${HOST}/launcher/launcher_sdl.cpp)
 if(IOS)
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_ios.mm)
-  list(APPEND FW_METAL "-framework UIKit" "-framework UniformTypeIdentifiers")
+  list(APPEND FW_METAL "-framework UIKit" "-framework UniformTypeIdentifiers" "-framework CoreHaptics")
 elseif(ANDROID)
   set(POP_PLATFORM_UI ${HOST}/sdl/platform_ui_desktop.cpp ${HOST}/launcher/launcher_platform_android.cpp)
 else()
@@ -201,6 +232,8 @@ if(TARGET recomp_gen)
 
   pop_host(recomp_app GEN UI_LAYER OPT 2
     SOURCES ${HOST}/sdl/main.cpp ${HOST}/sdl/keymap.cpp ${POP_PLATFORM_UI} ${POP_LAUNCHER_SOURCES}
+            ${HOST}/controls/controls_host.cpp ${HOST}/controls/gamepad_sdl.cpp
+            ${HOST}/controls/vpad_host_api.cpp
             ${HOST}/game_path.cpp ${HOST}/present.cpp
             ${HOST}/page_overlay.cpp
             ${POP_PRESENT_SOURCES}
@@ -278,6 +311,7 @@ pop_host(host_tests UI_LAYER
           ${POP_AUDIO_SOURCES}
           ${POP_ROOT}/dx/com.cpp ${POP_ROOT}/dx/host_api.cpp
           ${POP_ROOT}/dx/display_stubs.cpp ${POP_ROOT}/dx/dinput.cpp
+          ${POP_ROOT}/dx/dinput_joystick.cpp
           ${POP_ROOT}/dx/d3d11.cpp ${POP_ROOT}/dx/dxgi.cpp
           ${POP_ROOT}/dx/d3dcompiler.cpp ${POP_ROOT}/dx/d3dx10.cpp
           ${POP_ROOT}/dx/d3d9_shader.cpp ${POP_ROOT}/dx/d3d9_shadergen.cpp

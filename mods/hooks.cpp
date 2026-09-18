@@ -1062,8 +1062,8 @@ void mods_hooks_set_test_cpu_buffer(void *buf, uint32_t bytes) {
 
 // Run a guest function from inside a hook, on a scratch stack below the
 // hooked frame, and put every register back afterwards.
-PopModStatus mods_guest_call(const PopModApi *api, uint32_t addr, uint32_t ecx, const uint32_t *args,
-                             uint32_t nargs, uint32_t *out_eax) {
+PopModStatus mods_guest_call(const PopModApi *api, uint32_t addr, uint32_t ecx,
+                             const uint32_t *args, uint32_t nargs, uint32_t *out_eax) {
     (void)api;
     if (!t_stack.depth)
         return POP_E_STATE;

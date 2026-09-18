@@ -20,6 +20,7 @@
 #include "mods_internal.h"
 #include "builtin_mods.h"
 #include "../runtime/layout.h"
+#include "controls_settings.h"
 #include "options_menu.h"
 #include "sprite_view.h"
 #include "manifest_types.h"
@@ -742,7 +743,8 @@ bool mods_load_all() {
             if ((c.status = validate_abi(c.handle, &why)) != POP_OK) {
                 // validate_abi said what is wrong and gave the typed status
             } else {
-                auto init = (PopModStatus (*)(const PopModApi *))plugin_sym(c.handle, "pop_mod_init");
+                auto init =
+                    (PopModStatus (*)(const PopModApi *))plugin_sym(c.handle, "pop_mod_init");
                 if (!init) {
                     why = "no pop_mod_init export";
                 } else {
@@ -868,6 +870,9 @@ void shutdown_now() {
                 os_dlclose(contexts()[i].handle);
             contexts()[i].handle = nullptr;
         }
+    // The on-screen controls hold their last hidden-group change until a pump
+    // flushes it; there is no pump after this one.
+    mods_controls_flush();
     mods_settings_save();
     // The runtime's own registrations go last, so nothing is left believing it
     // has hooks in a registry that is about to be gone.

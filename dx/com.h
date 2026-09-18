@@ -192,8 +192,8 @@ enum ComKind : uint16_t {
     K_MF_CLOCK,
     K_MF_VIDEO_DISPLAY, // IMFVideoDisplayControl on the session's renderer
     K_MF_AUDIO_VOLUME,
-    K_D3D9,         // the IDirect3D9 factory object
-    K_D3D9DEVICE,   // one device created from it
+    K_D3D9,           // the IDirect3D9 factory object
+    K_D3D9DEVICE,     // one device created from it
     K_D3DXEFFECTPOOL, // the D3DX effect pool a game shares between effects
     K_D3DXEFFECT,     // one effect loaded from the executable's resources
     K_D3D9TEXTURE,    // a 2D or cube texture and its levels
@@ -202,6 +202,20 @@ enum ComKind : uint16_t {
     K_D3D9IB,         // an index buffer
     K_D3D9DECL,       // a vertex declaration
     K_D3D9QUERY,      // an occlusion or event query
+};
+
+// A DirectInput joystick axis's DIPROP_RANGE, DIPROP_DEADZONE and
+// DIPROP_SATURATION (dx/dinput_joystick.cpp). The zone and saturation are in
+// 0..10000 of the distance from centre, as DirectInput states them.
+struct JoyAxisRange {
+    int32_t min = -32768, max = 32767;
+    uint32_t deadzone = 0, saturation = 10000;
+};
+// One field of a custom joystick data format: the guest's offset for one
+// object in dinput_joystick.h's joy_objects() list.
+struct JoyFormatSlot {
+    uint32_t ofs = 0;
+    uint32_t object = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -308,7 +322,7 @@ struct ComObj {
     // --- K_DINPUT / K_DIDEVICE
     uint32_t di_version = 0;
     bool di_wide = false;  // created through DirectInputCreateW: DIDEVICEINSTANCEW layouts
-    uint32_t dev_type = 0; // DIDEVTYPE_MOUSE / _KEYBOARD
+    uint32_t dev_type = 0; // DIDEVTYPE_MOUSE / _KEYBOARD / _JOYSTICK
     uint32_t samples = 0;  // Direct3D 9 surfaces and devices: multisample count, 0 for none
     bool acquired = false;
     uint32_t di_coop = 0;
@@ -321,6 +335,11 @@ struct ComObj {
     int32_t last_x = 0, last_y = 0, last_z = 0;
     uint32_t sequence = 0;
     std::vector<uint32_t> events; // packed dwOfs/dwData pairs
+    // Joystick only. Ranges are per DIJOYSTATE axis slot (lX..lRz). An empty
+    // format means DIJOYSTATE or DIJOYSTATE2, by data_format_size.
+    JoyAxisRange joy_ranges[6];
+    std::vector<JoyFormatSlot> joy_format;
+    uint32_t last_sequence = 0; // the newest host pad edge already delivered
 
     // --- DirectShow streaming (K_MMSTREAM, K_MEDIASTREAM, K_AUDIODATA, K_STREAMSAMPLE)
     uint32_t dsh_owner = 0;        // media stream: its multimedia stream; sample: its media stream

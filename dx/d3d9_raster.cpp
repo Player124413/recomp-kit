@@ -23,8 +23,12 @@ namespace {
 
 struct V4 {
     float v[4] = {0, 0, 0, 0};
-    float &operator[](int i) { return v[i]; }
-    float operator[](int i) const { return v[i]; }
+    float &operator[](int i) {
+        return v[i];
+    }
+    float operator[](int i) const {
+        return v[i];
+    }
 };
 
 using namespace d9sh;
@@ -50,7 +54,8 @@ void rgb565(uint16_t c, uint8_t *o) {
     o[2] = (uint8_t)((c & 31) * 255 / 31);
 }
 
-void decode_dxt(const uint8_t *src, uint32_t w, uint32_t h, uint32_t fmt, std::vector<uint8_t> &out) {
+void decode_dxt(const uint8_t *src, uint32_t w, uint32_t h, uint32_t fmt,
+                std::vector<uint8_t> &out) {
     uint32_t bw = (w + 3) / 4, bh = (h + 3) / 4;
     uint32_t block = fmt == FMT_DXT1 ? 8 : 16;
     for (uint32_t by = 0; by < bh; ++by)
@@ -126,7 +131,8 @@ const Decoded *texture_rgba(uint32_t texture_id) {
     const uint8_t *src = s.data;
     // A surface too small for what it claims to hold is not read past its end.
     if (s.format == FMT_DXT1 || s.format == FMT_DXT3 || s.format == FMT_DXT5) {
-        size_t need = ((s.width + 3) / 4) * ((s.height + 3) / 4) * (s.format == FMT_DXT1 ? 8u : 16u);
+        size_t need =
+            ((s.width + 3) / 4) * ((s.height + 3) / 4) * (s.format == FMT_DXT1 ? 8u : 16u);
         if (s.size < need)
             return nullptr;
     } else if (s.size < (size_t)s.pitch * s.height) {
@@ -140,7 +146,8 @@ const Decoded *texture_rgba(uint32_t texture_id) {
             for (uint32_t x = 0; x < s.width; ++x) {
                 uint8_t *o = &d.rgba[((size_t)y * s.width + x) * 4];
                 switch (s.format) {
-                case 21: case 22: // A8R8G8B8, X8R8G8B8
+                case 21:
+                case 22: // A8R8G8B8, X8R8G8B8
                     o[0] = row[4 * x + 2];
                     o[1] = row[4 * x + 1];
                     o[2] = row[4 * x];
@@ -149,7 +156,8 @@ const Decoded *texture_rgba(uint32_t texture_id) {
                 case 23: // R5G6B5
                     rgb565((uint16_t)(row[2 * x] | row[2 * x + 1] << 8), o);
                     break;
-                case 24: case 25: { // X1R5G5B5, A1R5G5B5
+                case 24:
+                case 25: { // X1R5G5B5, A1R5G5B5
                     uint16_t c = (uint16_t)(row[2 * x] | row[2 * x + 1] << 8);
                     o[0] = (uint8_t)(((c >> 10) & 31) * 255 / 31);
                     o[1] = (uint8_t)(((c >> 5) & 31) * 255 / 31);
@@ -234,8 +242,8 @@ struct Machine {
     const Program *p = nullptr;
     const D9Pipeline *pl = nullptr;
     V4 r[32];
-    V4 in[16];     // vs: v registers; ps: v0/v1 colours
-    V4 tex[8];     // ps: t registers
+    V4 in[16]; // vs: v registers; ps: v0/v1 colours
+    V4 tex[8]; // ps: t registers
     V4 a0;
     V4 opos, ofog, od[2], ot[8], oc[4];
     bool killed = false;
@@ -260,8 +268,12 @@ struct Machine {
     V4 read(const Src &s) const {
         V4 raw;
         switch (s.type) {
-        case R_TEMP: raw = r[s.index & 31]; break;
-        case R_INPUT: raw = in[s.index & 15]; break;
+        case R_TEMP:
+            raw = r[s.index & 31];
+            break;
+        case R_INPUT:
+            raw = in[s.index & 15];
+            break;
         case R_CONST: {
             int32_t idx = (int32_t)s.index;
             if (s.rel)
@@ -269,8 +281,11 @@ struct Machine {
             raw = idx >= 0 ? constant((uint32_t)idx) : V4();
             break;
         }
-        case R_ADDR: raw = p->pixel ? tex[s.index & 7] : a0; break;
-        default: break;
+        case R_ADDR:
+            raw = p->pixel ? tex[s.index & 7] : a0;
+            break;
+        default:
+            break;
         }
         V4 v;
         for (int k = 0; k < 4; ++k)
@@ -278,17 +293,38 @@ struct Machine {
         for (int k = 0; k < 4; ++k) {
             float x = v[k];
             switch (s.mod) {
-            case 1: x = -x; break;                      // NEG
-            case 2: x = x - 0.5f; break;                // BIAS
-            case 3: x = -(x - 0.5f); break;             // BIASNEG
-            case 4: x = 2.0f * x - 1.0f; break;         // SIGN
-            case 5: x = -(2.0f * x - 1.0f); break;      // SIGNNEG
-            case 6: x = 1.0f - x; break;                // COMP
-            case 7: x = 2.0f * x; break;                // X2
-            case 8: x = -2.0f * x; break;               // X2NEG
-            case 11: x = std::fabs(x); break;           // ABS
-            case 12: x = -std::fabs(x); break;          // ABSNEG
-            default: break;
+            case 1:
+                x = -x;
+                break; // NEG
+            case 2:
+                x = x - 0.5f;
+                break; // BIAS
+            case 3:
+                x = -(x - 0.5f);
+                break; // BIASNEG
+            case 4:
+                x = 2.0f * x - 1.0f;
+                break; // SIGN
+            case 5:
+                x = -(2.0f * x - 1.0f);
+                break; // SIGNNEG
+            case 6:
+                x = 1.0f - x;
+                break; // COMP
+            case 7:
+                x = 2.0f * x;
+                break; // X2
+            case 8:
+                x = -2.0f * x;
+                break; // X2NEG
+            case 11:
+                x = std::fabs(x);
+                break; // ABS
+            case 12:
+                x = -std::fabs(x);
+                break; // ABSNEG
+            default:
+                break;
             }
             v[k] = x;
         }
@@ -304,13 +340,20 @@ struct Machine {
 
     V4 *target(const Dst &d) {
         switch (d.type) {
-        case R_TEMP: return &r[d.index & 31];
-        case R_ADDR: return p->pixel ? &tex[d.index & 7] : &a0;
-        case R_RASTOUT: return d.index == 0 ? &opos : &ofog;
-        case R_ATTROUT: return &od[d.index & 1];
-        case R_TEXCRDOUT: return &ot[d.index & 7];
-        case R_COLOROUT: return &oc[d.index & 3];
-        default: return nullptr;
+        case R_TEMP:
+            return &r[d.index & 31];
+        case R_ADDR:
+            return p->pixel ? &tex[d.index & 7] : &a0;
+        case R_RASTOUT:
+            return d.index == 0 ? &opos : &ofog;
+        case R_ATTROUT:
+            return &od[d.index & 1];
+        case R_TEXCRDOUT:
+            return &ot[d.index & 7];
+        case R_COLOROUT:
+            return &oc[d.index & 3];
+        default:
+            return nullptr;
         }
     }
 
@@ -338,42 +381,206 @@ struct Machine {
             const Src *s = in.src;
             V4 o;
             switch (in.op) {
-            case OP_NOP: continue;
-            case OP_MOV: o = read(s[0]); break;
-            case OP_ADD: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = a[k] + b[k]; break; }
-            case OP_SUB: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = a[k] - b[k]; break; }
-            case OP_MUL: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = a[k] * b[k]; break; }
-            case OP_MAD: { V4 a = read(s[0]), b = read(s[1]), c = read(s[2]); for (int k = 0; k < 4; ++k) o[k] = a[k] * b[k] + c[k]; break; }
-            case OP_MIN: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = std::min(a[k], b[k]); break; }
-            case OP_MAX: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = std::max(a[k], b[k]); break; }
-            case OP_SLT: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = a[k] < b[k] ? 1.0f : 0.0f; break; }
-            case OP_SGE: { V4 a = read(s[0]), b = read(s[1]); for (int k = 0; k < 4; ++k) o[k] = a[k] >= b[k] ? 1.0f : 0.0f; break; }
-            case OP_DP3: { V4 a = read(s[0]), b = read(s[1]); float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_DP4: { V4 a = read(s[0]), b = read(s[1]); float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_DP2ADD: { V4 a = read(s[0]), b = read(s[1]), c = read(s[2]); float d = a[0] * b[0] + a[1] * b[1] + c[0]; for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_RCP: { V4 a = read(s[0]); float d = a[0] != 0 ? 1.0f / a[0] : 3.4e38f; for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_MOVA: { V4 a = read(s[0]); for (int k = 0; k < 4; ++k) o[k] = std::floor(a[k] + 0.5f); break; }
-            case OP_RSQ: { V4 a = read(s[0]); float x = std::fabs(a[0]); float d = x > 0 ? 1.0f / std::sqrt(x) : 3.4e38f; for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_FRC: { V4 a = read(s[0]); for (int k = 0; k < 4; ++k) o[k] = a[k] - std::floor(a[k]); break; }
-            case OP_ABS: { V4 a = read(s[0]); for (int k = 0; k < 4; ++k) o[k] = std::fabs(a[k]); break; }
-            case OP_EXP: case OP_EXPP: { V4 a = read(s[0]); float d = std::exp(a[0]); for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_LOG: case OP_LOGP: { V4 a = read(s[0]); float x = std::fabs(a[0]); float d = x > 0 ? std::log2(x) : -3.4e38f; for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_POW: { V4 a = read(s[0]), b = read(s[1]); float d = std::pow(std::fabs(a[0]), b[0]); for (int k = 0; k < 4; ++k) o[k] = d; break; }
-            case OP_NRM: { V4 a = read(s[0]); float l = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); float inv = l > 0 ? 1.0f / l : 0.0f; for (int k = 0; k < 4; ++k) o[k] = a[k] * inv; break; }
-            case OP_CRS: { V4 a = read(s[0]), b = read(s[1]); o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; break; }
-            case OP_SGN: { V4 a = read(s[0]); for (int k = 0; k < 4; ++k) o[k] = a[k] > 0 ? 1.0f : a[k] < 0 ? -1.0f : 0.0f; break; }
-            case OP_LRP: { V4 f = read(s[0]), a = read(s[1]), b = read(s[2]); for (int k = 0; k < 4; ++k) o[k] = f[k] * a[k] + (1.0f - f[k]) * b[k]; break; }
-            case OP_CMP: { V4 c = read(s[0]), a = read(s[1]), b = read(s[2]); for (int k = 0; k < 4; ++k) o[k] = c[k] >= 0 ? a[k] : b[k]; break; }
-            case OP_CND: { V4 c = read(s[0]), a = read(s[1]), b = read(s[2]);
+            case OP_NOP:
+                continue;
+            case OP_MOV:
+                o = read(s[0]);
+                break;
+            case OP_ADD: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] + b[k];
+                break;
+            }
+            case OP_SUB: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] - b[k];
+                break;
+            }
+            case OP_MUL: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] * b[k];
+                break;
+            }
+            case OP_MAD: {
+                V4 a = read(s[0]), b = read(s[1]), c = read(s[2]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] * b[k] + c[k];
+                break;
+            }
+            case OP_MIN: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = std::min(a[k], b[k]);
+                break;
+            }
+            case OP_MAX: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = std::max(a[k], b[k]);
+                break;
+            }
+            case OP_SLT: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] < b[k] ? 1.0f : 0.0f;
+                break;
+            }
+            case OP_SGE: {
+                V4 a = read(s[0]), b = read(s[1]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] >= b[k] ? 1.0f : 0.0f;
+                break;
+            }
+            case OP_DP3: {
+                V4 a = read(s[0]), b = read(s[1]);
+                float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_DP4: {
+                V4 a = read(s[0]), b = read(s[1]);
+                float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_DP2ADD: {
+                V4 a = read(s[0]), b = read(s[1]), c = read(s[2]);
+                float d = a[0] * b[0] + a[1] * b[1] + c[0];
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_RCP: {
+                V4 a = read(s[0]);
+                float d = a[0] != 0 ? 1.0f / a[0] : 3.4e38f;
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_MOVA: {
+                V4 a = read(s[0]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = std::floor(a[k] + 0.5f);
+                break;
+            }
+            case OP_RSQ: {
+                V4 a = read(s[0]);
+                float x = std::fabs(a[0]);
+                float d = x > 0 ? 1.0f / std::sqrt(x) : 3.4e38f;
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_FRC: {
+                V4 a = read(s[0]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] - std::floor(a[k]);
+                break;
+            }
+            case OP_ABS: {
+                V4 a = read(s[0]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = std::fabs(a[k]);
+                break;
+            }
+            case OP_EXP:
+            case OP_EXPP: {
+                V4 a = read(s[0]);
+                float d = std::exp(a[0]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_LOG:
+            case OP_LOGP: {
+                V4 a = read(s[0]);
+                float x = std::fabs(a[0]);
+                float d = x > 0 ? std::log2(x) : -3.4e38f;
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_POW: {
+                V4 a = read(s[0]), b = read(s[1]);
+                float d = std::pow(std::fabs(a[0]), b[0]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
+            case OP_NRM: {
+                V4 a = read(s[0]);
+                float l = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+                float inv = l > 0 ? 1.0f / l : 0.0f;
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] * inv;
+                break;
+            }
+            case OP_CRS: {
+                V4 a = read(s[0]), b = read(s[1]);
+                o[0] = a[1] * b[2] - a[2] * b[1];
+                o[1] = a[2] * b[0] - a[0] * b[2];
+                o[2] = a[0] * b[1] - a[1] * b[0];
+                break;
+            }
+            case OP_SGN: {
+                V4 a = read(s[0]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = a[k] > 0 ? 1.0f : a[k] < 0 ? -1.0f : 0.0f;
+                break;
+            }
+            case OP_LRP: {
+                V4 f = read(s[0]), a = read(s[1]), b = read(s[2]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = f[k] * a[k] + (1.0f - f[k]) * b[k];
+                break;
+            }
+            case OP_CMP: {
+                V4 c = read(s[0]), a = read(s[1]), b = read(s[2]);
+                for (int k = 0; k < 4; ++k)
+                    o[k] = c[k] >= 0 ? a[k] : b[k];
+                break;
+            }
+            case OP_CND: {
+                V4 c = read(s[0]), a = read(s[1]), b = read(s[2]);
                 // SM 1.0-1.3 compare r0.a once; 1.4 compares each component.
                 bool per = p->major == 1 && p->minor == 4;
-                for (int k = 0; k < 4; ++k) o[k] = (per ? c[k] : c[3]) > 0.5f ? a[k] : b[k];
-                break; }
-            case OP_LIT: { V4 a = read(s[0]); o[0] = 1.0f; o[1] = std::max(a[0], 0.0f); float pw = std::min(std::max(a[3], -127.9961f), 127.9961f);
-                o[2] = (a[0] > 0 && a[1] > 0) ? std::pow(a[1], pw) : 0.0f; o[3] = 1.0f; break; }
-            case OP_DST: { V4 a = read(s[0]), b = read(s[1]); o[0] = 1.0f; o[1] = a[1] * b[1]; o[2] = a[2]; o[3] = b[3]; break; }
-            case OP_SINCOS: { V4 a = read(s[0]); o[0] = std::cos(a[0]); o[1] = std::sin(a[0]); break; }
-            case OP_M4X4: case OP_M4X3: case OP_M3X4: case OP_M3X3: case OP_M3X2: {
+                for (int k = 0; k < 4; ++k)
+                    o[k] = (per ? c[k] : c[3]) > 0.5f ? a[k] : b[k];
+                break;
+            }
+            case OP_LIT: {
+                V4 a = read(s[0]);
+                o[0] = 1.0f;
+                o[1] = std::max(a[0], 0.0f);
+                float pw = std::min(std::max(a[3], -127.9961f), 127.9961f);
+                o[2] = (a[0] > 0 && a[1] > 0) ? std::pow(a[1], pw) : 0.0f;
+                o[3] = 1.0f;
+                break;
+            }
+            case OP_DST: {
+                V4 a = read(s[0]), b = read(s[1]);
+                o[0] = 1.0f;
+                o[1] = a[1] * b[1];
+                o[2] = a[2];
+                o[3] = b[3];
+                break;
+            }
+            case OP_SINCOS: {
+                V4 a = read(s[0]);
+                o[0] = std::cos(a[0]);
+                o[1] = std::sin(a[0]);
+                break;
+            }
+            case OP_M4X4:
+            case OP_M4X3:
+            case OP_M3X4:
+            case OP_M3X3:
+            case OP_M3X2: {
                 int cols = (in.op == OP_M4X4 || in.op == OP_M4X3) ? 4 : 3;
                 int rows = in.op == OP_M4X4 || in.op == OP_M3X4 ? 4 : in.op == OP_M3X2 ? 2 : 3;
                 V4 a = read(s[0]);
@@ -382,7 +589,8 @@ struct Machine {
                     m.index += (uint32_t)row;
                     V4 line = read(m);
                     float d = 0;
-                    for (int k = 0; k < cols; ++k) d += a[k] * line[k];
+                    for (int k = 0; k < cols; ++k)
+                        d += a[k] * line[k];
                     o[row] = d;
                 }
                 break;
@@ -392,7 +600,8 @@ struct Machine {
                     o = read(s[0]);
                 } else {
                     o = tex[in.dst.index & 7];
-                    for (int k = 0; k < 4; ++k) o[k] = std::min(std::max(o[k], 0.0f), 1.0f);
+                    for (int k = 0; k < 4; ++k)
+                        o[k] = std::min(std::max(o[k], 0.0f), 1.0f);
                     o[3] = 1.0f;
                 }
                 break;
@@ -400,7 +609,8 @@ struct Machine {
                 V4 *t = target(in.dst);
                 if (t)
                     for (int k = 0; k < 3; ++k)
-                        if ((*t)[k] < 0) killed = true;
+                        if ((*t)[k] < 0)
+                            killed = true;
                 continue;
             }
             case OP_TEX:
@@ -412,7 +622,14 @@ struct Machine {
                     o = texture_op(in.dst.index, tex[in.dst.index & 7]);
                 }
                 break;
-            case OP_TEXDP3: { V4 a = read(s[0]); V4 t = tex[in.dst.index & 7]; float d = a[0] * t[0] + a[1] * t[1] + a[2] * t[2]; for (int k = 0; k < 4; ++k) o[k] = d; break; }
+            case OP_TEXDP3: {
+                V4 a = read(s[0]);
+                V4 t = tex[in.dst.index & 7];
+                float d = a[0] * t[0] + a[1] * t[1] + a[2] * t[2];
+                for (int k = 0; k < 4; ++k)
+                    o[k] = d;
+                break;
+            }
             default:
                 continue;
             }
@@ -438,7 +655,8 @@ std::vector<Elem> elements(const std::vector<uint8_t> &decl) {
             break;
         if (stream != 0)
             continue;
-        out.push_back(Elem{(uint16_t)(decl[i + 2] | decl[i + 3] << 8), decl[i + 4], decl[i + 6], decl[i + 7]});
+        out.push_back(Elem{(uint16_t)(decl[i + 2] | decl[i + 3] << 8), decl[i + 4], decl[i + 6],
+                           decl[i + 7]});
     }
     return out;
 }
@@ -453,25 +671,53 @@ V4 fetch(const uint8_t *vp, const Elem &e) {
         return x;
     };
     switch (e.type) {
-    case 0: v[0] = f(0); break;
-    case 1: v[0] = f(0); v[1] = f(1); break;
-    case 2: v[0] = f(0); v[1] = f(1); v[2] = f(2); break;
-    case 3: for (int k = 0; k < 4; ++k) v[k] = f(k); break;
-    case 4: // D3DCOLOR is BGRA in memory; the shader sees RGBA
-        v[0] = c[2] / 255.0f; v[1] = c[1] / 255.0f; v[2] = c[0] / 255.0f; v[3] = c[3] / 255.0f;
+    case 0:
+        v[0] = f(0);
         break;
-    case 5: for (int k = 0; k < 4; ++k) v[k] = c[k]; break;
-    case 8: for (int k = 0; k < 4; ++k) v[k] = c[k] / 255.0f; break;
-    case 6: v[0] = (int16_t)(c[0] | c[1] << 8); v[1] = (int16_t)(c[2] | c[3] << 8); break;
-    case 7: for (int k = 0; k < 4; ++k) v[k] = (int16_t)(c[2 * k] | c[2 * k + 1] << 8); break;
-    default: break;
+    case 1:
+        v[0] = f(0);
+        v[1] = f(1);
+        break;
+    case 2:
+        v[0] = f(0);
+        v[1] = f(1);
+        v[2] = f(2);
+        break;
+    case 3:
+        for (int k = 0; k < 4; ++k)
+            v[k] = f(k);
+        break;
+    case 4: // D3DCOLOR is BGRA in memory; the shader sees RGBA
+        v[0] = c[2] / 255.0f;
+        v[1] = c[1] / 255.0f;
+        v[2] = c[0] / 255.0f;
+        v[3] = c[3] / 255.0f;
+        break;
+    case 5:
+        for (int k = 0; k < 4; ++k)
+            v[k] = c[k];
+        break;
+    case 8:
+        for (int k = 0; k < 4; ++k)
+            v[k] = c[k] / 255.0f;
+        break;
+    case 6:
+        v[0] = (int16_t)(c[0] | c[1] << 8);
+        v[1] = (int16_t)(c[2] | c[3] << 8);
+        break;
+    case 7:
+        for (int k = 0; k < 4; ++k)
+            v[k] = (int16_t)(c[2 * k] | c[2 * k + 1] << 8);
+        break;
+    default:
+        break;
     }
     return v;
 }
 
 struct Out {
-    V4 pos;       // clip space
-    V4 attr[10];  // od0, od1, ot0..ot7
+    V4 pos;      // clip space
+    V4 attr[10]; // od0, od1, ot0..ot7
 };
 
 // ---------------------------------------------------------------------------
@@ -479,17 +725,28 @@ struct Out {
 // ---------------------------------------------------------------------------
 float blend_factor(uint32_t mode, const V4 &src, const float dst[4], int k) {
     switch (mode) {
-    case 1: return 0.0f;                                   // ZERO
-    case 2: return 1.0f;                                   // ONE
-    case 3: return src[k];                                 // SRCCOLOR
-    case 4: return 1.0f - src[k];                          // INVSRCCOLOR
-    case 5: return src[3];                                 // SRCALPHA
-    case 6: return 1.0f - src[3];                          // INVSRCALPHA
-    case 7: return dst[3];                                 // DESTALPHA
-    case 8: return 1.0f - dst[3];                          // INVDESTALPHA
-    case 9: return dst[k];                                 // DESTCOLOR
-    case 10: return 1.0f - dst[k];                         // INVDESTCOLOR
-    default: return 1.0f;
+    case 1:
+        return 0.0f; // ZERO
+    case 2:
+        return 1.0f; // ONE
+    case 3:
+        return src[k]; // SRCCOLOR
+    case 4:
+        return 1.0f - src[k]; // INVSRCCOLOR
+    case 5:
+        return src[3]; // SRCALPHA
+    case 6:
+        return 1.0f - src[3]; // INVSRCALPHA
+    case 7:
+        return dst[3]; // DESTALPHA
+    case 8:
+        return 1.0f - dst[3]; // INVDESTALPHA
+    case 9:
+        return dst[k]; // DESTCOLOR
+    case 10:
+        return 1.0f - dst[k]; // INVDESTCOLOR
+    default:
+        return 1.0f;
     }
 }
 
@@ -514,16 +771,19 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
         static uint32_t said = 0;
         if (++said <= 4)
             LOGW("d3d9 raster: a draw with no %s shader bound is skipped; the fixed-function "
-                 "pipeline is not rendered", pl.vs.empty() ? "vertex" : "pixel");
+                 "pipeline is not rendered",
+                 pl.vs.empty() ? "vertex" : "pixel");
         return;
     }
     const Program &vs = program_for(pl.vs.vec());
     const Program &ps = program_for(pl.ps.vec());
     if (!vs.ok || !ps.ok || vs.major >= 3 || ps.major >= 3) {
-        const std::string why =
-            (!vs.ok || !ps.ok) ? std::string(!vs.ok ? "vertex" : "pixel") + " shader: " + (!vs.ok ? vs.why : ps.why)
-                               : std::string("shader model 3 runs on the GPU renderer only");
-        log_once(("d3d9.raster.skip." + why).c_str(), "d3d9 raster: skipped a draw: %s", why.c_str());
+        const std::string why = (!vs.ok || !ps.ok)
+                                    ? std::string(!vs.ok ? "vertex" : "pixel") +
+                                          " shader: " + (!vs.ok ? vs.why : ps.why)
+                                    : std::string("shader model 3 runs on the GPU renderer only");
+        log_once(("d3d9.raster.skip." + why).c_str(), "d3d9 raster: skipped a draw: %s",
+                 why.c_str());
         return;
     }
     std::vector<Elem> elems = elements(declaration);
@@ -531,9 +791,15 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
     // Which vertex indices the primitives use.
     uint32_t nverts;
     switch (call.prim) {
-    case 4: nverts = call.prim_count * 3; break;          // triangle list
-    case 5: case 6: nverts = call.prim_count + 2; break;  // strip, fan
-    default: return;                                      // points and lines are not drawn
+    case 4:
+        nverts = call.prim_count * 3;
+        break; // triangle list
+    case 5:
+    case 6:
+        nverts = call.prim_count + 2;
+        break; // strip, fan
+    default:
+        return; // points and lines are not drawn
     }
     auto vertex_index = [&](uint32_t i) -> int64_t {
         if (!call.indices && !call.index_data)
@@ -549,8 +815,9 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
                 return -1;
             ip = gm_ptr(call.indices + (uint32_t)at);
         }
-        uint32_t idx = call.index_size == 2 ? (uint32_t)(ip[0] | ip[1] << 8)
-                                            : (uint32_t)(ip[0] | ip[1] << 8 | ip[2] << 16 | (uint32_t)ip[3] << 24);
+        uint32_t idx = call.index_size == 2
+                           ? (uint32_t)(ip[0] | ip[1] << 8)
+                           : (uint32_t)(ip[0] | ip[1] << 8 | ip[2] << 16 | (uint32_t)ip[3] << 24);
         return (int64_t)idx + call.base_vertex;
     };
 
@@ -576,7 +843,8 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
         if (vp)
             for (const DclIn &d : vs.inputs)
                 for (const Elem &e : elems)
-                    if (e.usage == d.usage && e.index == d.usage_index && e.offset + 4u <= call.stride)
+                    if (e.usage == d.usage && e.index == d.usage_index &&
+                        e.offset + 4u <= call.stride)
                         m.in[d.index & 15] = fetch(vp, e);
         m.run();
         Out o;
@@ -620,8 +888,10 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
         if (std::fabs(area) < 1e-8f)
             return;
         if (pl.rs_set[22]) { // D3DRS_CULLMODE: 2 culls clockwise, 3 counter-clockwise
-            if (pl.rs[22] == 2 && area > 0) return;
-            if (pl.rs[22] == 3 && area < 0) return;
+            if (pl.rs[22] == 2 && area > 0)
+                return;
+            if (pl.rs[22] == 3 && area < 0)
+                return;
         }
         int x0 = std::max(0, (int)std::floor(std::min({sx[0], sx[1], sx[2]})));
         int x1 = std::min((int)rt.width - 1, (int)std::ceil(std::max({sx[0], sx[1], sx[2]})));
@@ -645,7 +915,8 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
                     V4 val;
                     for (int j = 0; j < 4; ++j)
                         val[j] = (w0 * iw[0] * v[0]->attr[k][j] + w1 * iw[1] * v[1]->attr[k][j] +
-                                  w2 * iw[2] * v[2]->attr[k][j]) / q;
+                                  w2 * iw[2] * v[2]->attr[k][j]) /
+                                 q;
                     if (k < 2) {
                         for (int j = 0; j < 4; ++j)
                             val[j] = std::min(std::max(val[j], 0.0f), 1.0f);
@@ -682,13 +953,19 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
     for (uint32_t p = 0; p < call.prim_count; ++p) {
         uint32_t i0, i1, i2;
         if (call.prim == 4) {
-            i0 = 3 * p; i1 = 3 * p + 1; i2 = 3 * p + 2;
+            i0 = 3 * p;
+            i1 = 3 * p + 1;
+            i2 = 3 * p + 2;
         } else if (call.prim == 5) {
-            i0 = p; i1 = p + 1; i2 = p + 2;
+            i0 = p;
+            i1 = p + 1;
+            i2 = p + 2;
             if (p & 1)
                 std::swap(i0, i1);
         } else {
-            i0 = 0; i1 = p + 1; i2 = p + 2;
+            i0 = 0;
+            i1 = p + 1;
+            i2 = p + 2;
         }
         if (i2 >= nverts)
             break;

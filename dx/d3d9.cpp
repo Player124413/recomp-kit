@@ -33,11 +33,22 @@
 #include <initializer_list>
 
 #define IID_BYTES(a, b, c, d0, d1, d2, d3, d4, d5, d6, d7)                                         \
-    {(uint8_t)((a) & 0xff),         (uint8_t)(((a) >> 8) & 0xff),                                  \
-     (uint8_t)(((a) >> 16) & 0xff), (uint8_t)(((a) >> 24) & 0xff),                                 \
-     (uint8_t)((b) & 0xff),         (uint8_t)(((b) >> 8) & 0xff),                                  \
-     (uint8_t)((c) & 0xff),         (uint8_t)(((c) >> 8) & 0xff),                                  \
-     d0, d1, d2, d3, d4, d5, d6, d7}
+    {(uint8_t)((a) & 0xff),                                                                        \
+     (uint8_t)(((a) >> 8) & 0xff),                                                                 \
+     (uint8_t)(((a) >> 16) & 0xff),                                                                \
+     (uint8_t)(((a) >> 24) & 0xff),                                                                \
+     (uint8_t)((b) & 0xff),                                                                        \
+     (uint8_t)(((b) >> 8) & 0xff),                                                                 \
+     (uint8_t)((c) & 0xff),                                                                        \
+     (uint8_t)(((c) >> 8) & 0xff),                                                                 \
+     d0,                                                                                           \
+     d1,                                                                                           \
+     d2,                                                                                           \
+     d3,                                                                                           \
+     d4,                                                                                           \
+     d5,                                                                                           \
+     d6,                                                                                           \
+     d7}
 
 // {81BDCBCA-64D4-426d-AE8D-AD0147F4275C} and {D0223B96-BF7A-43fd-92BD-A43B0D82B9EB}
 static const uint8_t IID_IDirect3D9_[16] =
@@ -114,10 +125,10 @@ void D9_GetAdapterIdentifier(X86 *c) {
     // Driver[512], Description[512], DeviceName[32], then:
     wr32(out + 1056, 0x000a249b); // DriverVersion 6.14.10.9371 (low, high)
     wr32(out + 1060, 0x0006000e);
-    wr32(out + 1064, 0x10de);     // VendorId
-    wr32(out + 1068, 0x0091);     // DeviceId
-    wr32(out + 1076, 0xa1);       // Revision
-    wr32(out + 1096, 1);          // WHQLLevel: certified
+    wr32(out + 1064, 0x10de); // VendorId
+    wr32(out + 1068, 0x0091); // DeviceId
+    wr32(out + 1076, 0xa1);   // Revision
+    wr32(out + 1096, 1);      // WHQLLevel: certified
     com_ret(c, D3D_OK9);
 }
 
@@ -186,21 +197,31 @@ static void put_caps9(uint32_t p) {
         return;
     memset(gm_ptr(p), 0, 304);
     auto f = [&](uint32_t off, float v) { wrf32(p + off, v); };
-    wr32(p + 0, 1);             // DeviceType: D3DDEVTYPE_HAL
-    wr32(p + 8, 0x00020000u);   // Caps: READ_SCANLINE
-    wr32(p + 12, 0x00020000u);  // Caps2: FULLSCREENGAMMA
-    wr32(p + 16, 0x000003a0u);  // Caps3: ALPHA_FULLSCREEN_FLIP_OR_DISCARD, COPY_TO_VIDMEM, COPY_TO_SYSTEMMEM, LINEAR_TO_SRGB
-    wr32(p + 20, 0x8000000fu);  // PresentationIntervals: IMMEDIATE, ONE..FOUR
-    wr32(p + 28, 0x001bbef0u);  // DevCaps: HWTRANSFORMANDLIGHT, PUREDEVICE, HWRASTERIZATION, ...
-    wr32(p + 32, 0x0003ccf2u);  // PrimitiveMiscCaps: masks, cull modes, blend op, separate alpha, independent write masks
-    wr32(p + 36, 0x0f732191u);  // RasterCaps: dither, zbias, fog, anisotropy, scissor, slope-scale depth bias
-    wr32(p + 40, 0x000000ffu);  // ZCmpCaps: all
-    wr32(p + 44, 0x00003fffu);  // SrcBlendCaps: all, BLENDFACTOR
-    wr32(p + 48, 0x00003fffu);  // DestBlendCaps
-    wr32(p + 52, 0x000000ffu);  // AlphaCmpCaps
-    wr32(p + 56, 0x00084208u);  // ShadeCaps
-    wr32(p + 60, 0x0001ec45u);  // TextureCaps: PERSPECTIVE, ALPHA, CUBEMAP, MIPMAP, MIPCUBEMAP, PROJECTED, VOLUMEMAP, ...
-    wr32(p + 64, 0x03030700u);  // TextureFilterCaps: MIN point/linear/aniso, MIP point/linear, MAG point/linear
+    wr32(p + 0, 1);            // DeviceType: D3DDEVTYPE_HAL
+    wr32(p + 8, 0x00020000u);  // Caps: READ_SCANLINE
+    wr32(p + 12, 0x00020000u); // Caps2: FULLSCREENGAMMA
+    wr32(
+        p + 16,
+        0x000003a0u); // Caps3: ALPHA_FULLSCREEN_FLIP_OR_DISCARD, COPY_TO_VIDMEM, COPY_TO_SYSTEMMEM, LINEAR_TO_SRGB
+    wr32(p + 20, 0x8000000fu); // PresentationIntervals: IMMEDIATE, ONE..FOUR
+    wr32(p + 28, 0x001bbef0u); // DevCaps: HWTRANSFORMANDLIGHT, PUREDEVICE, HWRASTERIZATION, ...
+    wr32(
+        p + 32,
+        0x0003ccf2u); // PrimitiveMiscCaps: masks, cull modes, blend op, separate alpha, independent write masks
+    wr32(
+        p + 36,
+        0x0f732191u); // RasterCaps: dither, zbias, fog, anisotropy, scissor, slope-scale depth bias
+    wr32(p + 40, 0x000000ffu); // ZCmpCaps: all
+    wr32(p + 44, 0x00003fffu); // SrcBlendCaps: all, BLENDFACTOR
+    wr32(p + 48, 0x00003fffu); // DestBlendCaps
+    wr32(p + 52, 0x000000ffu); // AlphaCmpCaps
+    wr32(p + 56, 0x00084208u); // ShadeCaps
+    wr32(
+        p + 60,
+        0x0001ec45u); // TextureCaps: PERSPECTIVE, ALPHA, CUBEMAP, MIPMAP, MIPCUBEMAP, PROJECTED, VOLUMEMAP, ...
+    wr32(
+        p + 64,
+        0x03030700u); // TextureFilterCaps: MIN point/linear/aniso, MIP point/linear, MAG point/linear
     wr32(p + 68, 0x03030300u);  // CubeTextureFilterCaps
     wr32(p + 72, 0x03030300u);  // VolumeTextureFilterCaps
     wr32(p + 76, 0x0000003fu);  // TextureAddressCaps
@@ -235,7 +256,9 @@ static void put_caps9(uint32_t p) {
     wr32(p + 200, 256);         // MaxVertexShaderConst
     wr32(p + 204, 0xffff0300u); // PixelShaderVersion ps_3_0
     f(208, 3.4e38f);            // PixelShaderMaxValue
-    wr32(p + 212, 0x00000051u); // DevCaps2: STREAMOFFSET, CAN_STRETCHRECT_FROM_TEXTURES, VERTEXELEMENTSCANSHARESTREAMOFFSET
+    wr32(
+        p + 212,
+        0x00000051u); // DevCaps2: STREAMOFFSET, CAN_STRETCHRECT_FROM_TEXTURES, VERTEXELEMENTSCANSHARESTREAMOFFSET
     wr32(p + 232, 1);           // NumberOfAdaptersInGroup
     wr32(p + 236, 0x0000030fu); // DeclTypes
     wr32(p + 240, 4);           // NumSimultaneousRTs
@@ -323,9 +346,9 @@ static ComObj *device_depthbuffer(ComObj *dev);
 // ---------------------------------------------------------------------------
 #define D9_STUB(name, argc)                                                                        \
     void Dev_##name(X86 *c) {                                                                      \
-        log_once("d3d9.dev." #name, "d3d9: IDirect3DDevice9::" #name " is not implemented");        \
+        log_once("d3d9.dev." #name, "d3d9: IDirect3DDevice9::" #name " is not implemented");       \
         (void)argc;                                                                                \
-        com_ret(c, D3D_OK9);                                                                        \
+        com_ret(c, D3D_OK9);                                                                       \
     }
 
 D9_STUB(EvictManagedResources, 1)
@@ -446,8 +469,7 @@ void Dev_Reset(X86 *c) {
         device_depthbuffer(dev);
         pl.rs[7] = 1;
         pl.states_changed();
-    }
-    else
+    } else
         dev->zbuffer_obj = 0;
     LOGW("d3d9: Reset to %ux%u", dev->width, dev->height);
     com_ret(c, D3D_OK9);
@@ -516,8 +538,8 @@ void Dev_Clear(X86 *c) {
         float z;
         uint32_t zbits = arg(c, 5);
         memcpy(&z, &zbits, 4);
-        host_d9_clear(&target, vp, (uint32_t)(rs.size() / 4), rs.empty() ? nullptr : rs.data(), flags,
-                      color, z, arg(c, 6));
+        host_d9_clear(&target, vp, (uint32_t)(rs.size() / 4), rs.empty() ? nullptr : rs.data(),
+                      flags, color, z, arg(c, 6));
         gpu_target_drawn(dev, flags & 1u, flags & 6u);
         com_ret(c, D3D_OK9);
         return;
@@ -577,18 +599,17 @@ void Dev_Present(X86 *c) {
             if (v & 0x00ffffffu)
                 ++lit;
         }
-        LOGW("d3d9: present back buffer %u (%ux%u, %u bpp), %u of %u sampled pixels lit, target now %u",
+        LOGW("d3d9: present back buffer %u (%ux%u, %u bpp), %u of %u sampled pixels lit, target "
+             "now %u",
              bb->id, bb->width, bb->height, bb->bpp, lit, (n + 96) / 97, dev->render_target);
     }
     if (bb && bbytes && bb->bpp == 32) {
         ddraw_external_present_begin();
-        host_present(bbytes, (int)bb->width, (int)bb->height, 32, nullptr,
-                     (int)bb->pitch);
+        host_present(bbytes, (int)bb->width, (int)bb->height, 32, nullptr, (int)bb->pitch);
         ddraw_external_present_end();
     }
     com_ret(c, D3D_OK9);
 }
-
 
 // ---------------------------------------------------------------------------
 // Device resources
@@ -668,12 +689,30 @@ static void d3d9_resource_destroy(ComObj *o) {
 // their four characters.
 static uint32_t format_bytes(uint32_t fmt) {
     switch (fmt) {
-    case 27: case 28: case 41: case 50: case 52: // R3G3B2, A8, P8, L8, A4L4
+    case 27:
+    case 28:
+    case 41:
+    case 50:
+    case 52: // R3G3B2, A8, P8, L8, A4L4
         return 1;
-    case 23: case 24: case 25: case 26: case 29: case 30: case 40: case 51: case 60: case 61:
-    case 70: case 73: case 80: case 81: case 111:
+    case 23:
+    case 24:
+    case 25:
+    case 26:
+    case 29:
+    case 30:
+    case 40:
+    case 51:
+    case 60:
+    case 61:
+    case 70:
+    case 73:
+    case 80:
+    case 81:
+    case 111:
         return 2;
-    case 36: case 113: // A16B16G16R16, A16B16G16R16F
+    case 36:
+    case 113: // A16B16G16R16, A16B16G16R16F
         return 8;
     case 116: // A32B32G32R32F
         return 16;
@@ -685,9 +724,15 @@ static uint32_t format_bytes(uint32_t fmt) {
 // The DXT formats, stored as blocks of 4x4 pixels.
 static uint32_t dxt_block_bytes(uint32_t fmt) {
     switch (fmt) {
-    case 0x31545844u: return 8;  // DXT1
-    case 0x32545844u: case 0x33545844u: case 0x34545844u: case 0x35545844u: return 16;
-    default: return 0;
+    case 0x31545844u:
+        return 8; // DXT1
+    case 0x32545844u:
+    case 0x33545844u:
+    case 0x34545844u:
+    case 0x35545844u:
+        return 16;
+    default:
+        return 0;
     }
 }
 
@@ -760,8 +805,8 @@ static const uint32_t USAGE_RENDERTARGET = 1, USAGE_DEPTHSTENCIL = 2;
 
 struct GpuMirror {
     bool defined = false;
-    std::vector<uint8_t> cpu_dirty; // by slot
-    std::vector<uint8_t> gpu_newer; // by slot
+    std::vector<uint8_t> cpu_dirty;      // by slot
+    std::vector<uint8_t> gpu_newer;      // by slot
     uint32_t dirty_lo = 0, dirty_hi = 0; // buffers: the changed byte range
 };
 static std::unordered_map<uint32_t, GpuMirror> &gpu_mirrors() {
@@ -777,8 +822,8 @@ static bool gpu_on() {
     return host_d9_active() != 0;
 }
 static bool is_depth_format(uint32_t fmt) {
-    return (fmt >= 70 && fmt <= 82) || fmt == 0x5a544e49u /* INTZ */ || fmt == 0x34324644u /* DF24 */ ||
-           fmt == 0x36314644u /* DF16 */;
+    return (fmt >= 70 && fmt <= 82) || fmt == 0x5a544e49u /* INTZ */ ||
+           fmt == 0x34324644u /* DF24 */ || fmt == 0x36314644u /* DF16 */;
 }
 
 // A surface's place in its mirror: the container's id and the slot, or the
@@ -882,7 +927,8 @@ static void gpu_before_lock(ComObj *s) {
     uint32_t slot;
     uint32_t id = mirror_slot(s, &slot);
     auto it = gpu_mirrors().find(id);
-    if (it == gpu_mirrors().end() || slot >= it->second.gpu_newer.size() || !it->second.gpu_newer[slot])
+    if (it == gpu_mirrors().end() || slot >= it->second.gpu_newer.size() ||
+        !it->second.gpu_newer[slot])
         return;
     it->second.gpu_newer[slot] = 0;
     if (s->bpp == 32 && !s->blob.empty()) {
@@ -939,8 +985,8 @@ static void gpu_sync_buffer(ComObj *b) {
     }
     if (m.dirty_hi > m.dirty_lo && !b->blob.empty()) {
         uint32_t hi = std::min<uint32_t>(m.dirty_hi, (uint32_t)b->blob.size());
-        host_d9_buffer_upload(b->id, (uint32_t)b->blob.size(), m.dirty_lo, b->blob.data() + m.dirty_lo,
-                              hi - m.dirty_lo);
+        host_d9_buffer_upload(b->id, (uint32_t)b->blob.size(), m.dirty_lo,
+                              b->blob.data() + m.dirty_lo, hi - m.dirty_lo);
     }
     m.dirty_lo = m.dirty_hi = 0;
 }
@@ -1074,7 +1120,7 @@ void Dev_CreateCubeTexture(X86 *c) {
     tex->width = tex->height = edge;
     tex->bpp = format_bytes(fmt) * 8;
     tex->rmask = fmt;
-    tex->caps = 1; // a cube map
+    tex->caps = 1;                              // a cube map
     tex->pal_flags = arg(c, 2) ? arg(c, 2) : 1; // levels, reusing a field cubes do not use
     resource_usage()[tex->id] = arg(c, 3) & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL);
     uint32_t view = com_view(tex, IF_D3DCUBETEXTURE9);
@@ -1183,19 +1229,24 @@ void Dev_StretchRect(X86 *c) {
         return;
     }
     auto rect = [](uint32_t p, ComObj *s, int32_t r[4]) {
-        r[0] = 0; r[1] = 0; r[2] = (int32_t)s->width; r[3] = (int32_t)s->height;
+        r[0] = 0;
+        r[1] = 0;
+        r[2] = (int32_t)s->width;
+        r[3] = (int32_t)s->height;
         if (p)
             for (int i = 0; i < 4; ++i)
                 r[i] = (int32_t)rd32(p + 4u * (uint32_t)i);
-        r[0] = std::max(r[0], 0); r[1] = std::max(r[1], 0);
-        r[2] = std::min(r[2], (int32_t)s->width); r[3] = std::min(r[3], (int32_t)s->height);
+        r[0] = std::max(r[0], 0);
+        r[1] = std::max(r[1], 0);
+        r[2] = std::min(r[2], (int32_t)s->width);
+        r[3] = std::min(r[3], (int32_t)s->height);
     };
     ComObj *dev_ = com_get(dst->dev_d3d);
     static uint32_t g_stretches = 0;
     if (++g_stretches <= 24)
-    LOGW("d3d9: StretchRect %u (%ux%u, %u bpp) -> %u (%ux%u, %u bpp)%s", src->id, src->width,
-         src->height, src->bpp, dst->id, dst->width, dst->height, dst->bpp,
-         (dev_ && dst->id == dev_->palette_obj) ? ", onto the back buffer" : "");
+        LOGW("d3d9: StretchRect %u (%ux%u, %u bpp) -> %u (%ux%u, %u bpp)%s", src->id, src->width,
+             src->height, src->bpp, dst->id, dst->width, dst->height, dst->bpp,
+             (dev_ && dst->id == dev_->palette_obj) ? ", onto the back buffer" : "");
     int32_t sr[4], dr[4];
     rect(arg(c, 2), src, sr);
     rect(arg(c, 4), dst, dr);
@@ -1435,13 +1486,20 @@ static uint32_t g_draws = 0;
 
 static const char *prim_name(uint32_t type) {
     switch (type) {
-    case 1: return "point list";
-    case 2: return "line list";
-    case 3: return "line strip";
-    case 4: return "triangle list";
-    case 5: return "triangle strip";
-    case 6: return "triangle fan";
-    default: return "unknown primitive";
+    case 1:
+        return "point list";
+    case 2:
+        return "line list";
+    case 3:
+        return "line strip";
+    case 4:
+        return "triangle list";
+    case 5:
+        return "triangle strip";
+    case 6:
+        return "triangle fan";
+    default:
+        return "unknown primitive";
     }
 }
 
@@ -1454,12 +1512,19 @@ static bool draw_worth_reporting() {
 
 static uint32_t primitive_vertices(uint32_t prim, uint32_t count) {
     switch (prim) {
-    case 1: return count;          // points
-    case 2: return count * 2;      // lines
-    case 3: return count + 1;      // line strip
-    case 4: return count * 3;      // triangles
-    case 5: case 6: return count + 2;
-    default: return 0;
+    case 1:
+        return count; // points
+    case 2:
+        return count * 2; // lines
+    case 3:
+        return count + 1; // line strip
+    case 4:
+        return count * 3; // triangles
+    case 5:
+    case 6:
+        return count + 2;
+    default:
+        return 0;
     }
 }
 
@@ -1507,7 +1572,8 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
             vp[i] = (int32_t)pl.viewport[i];
         return;
     }
-    ComObj *rt = com_get(pl.color_target[0]) ? com_get(pl.color_target[0]) : com_get(dev->render_target);
+    ComObj *rt =
+        com_get(pl.color_target[0]) ? com_get(pl.color_target[0]) : com_get(dev->render_target);
     (void)t;
     vp[0] = vp[1] = 0;
     vp[2] = rt ? (int32_t)rt->width : (int32_t)dev->width;
@@ -1518,8 +1584,9 @@ static void target_viewport(ComObj *dev, const HostD9Target &t, int32_t vp[4]) {
 static void gpu_draw(ComObj *dev, HostD9Draw &d) {
     D9Pipeline &pl = d9_pipeline(dev->id);
     if (pl.vs.empty() || pl.ps.empty()) {
-        log_once("d3d9.gpu.ffp", "d3d9: a draw with no shaders bound is skipped; the fixed-function "
-                                 "pipeline is not rendered on the GPU yet");
+        log_once("d3d9.gpu.ffp",
+                 "d3d9: a draw with no shaders bound is skipped; the fixed-function "
+                 "pipeline is not rendered on the GPU yet");
         return;
     }
     d.target = gpu_target(dev);
@@ -1679,14 +1746,13 @@ static void describe_draw_inputs(X86 *c, uint32_t vertices, uint32_t stride, uin
         return;
     ComObj *decl = com_get(dev->current_viewport); // SetVertexDeclaration keeps it here
     if (decl && decl->kind == K_D3D9DECL) {
-        static const char *types[] = {"FLOAT1", "FLOAT2", "FLOAT3", "FLOAT4", "D3DCOLOR",
-                                      "UBYTE4", "SHORT2", "SHORT4", "UBYTE4N", "SHORT2N",
-                                      "SHORT4N", "USHORT2N", "USHORT4N", "UDEC3", "DEC3N",
+        static const char *types[] = {"FLOAT1",    "FLOAT2",   "FLOAT3",   "FLOAT4",  "D3DCOLOR",
+                                      "UBYTE4",    "SHORT2",   "SHORT4",   "UBYTE4N", "SHORT2N",
+                                      "SHORT4N",   "USHORT2N", "USHORT4N", "UDEC3",   "DEC3N",
                                       "FLOAT16_2", "FLOAT16_4"};
-        static const char *usages[] = {"POSITION", "BLENDWEIGHT", "BLENDINDICES", "NORMAL",
-                                       "PSIZE", "TEXCOORD", "TANGENT", "BINORMAL",
-                                       "TESSFACTOR", "POSITIONT", "COLOR", "FOG", "DEPTH",
-                                       "SAMPLE"};
+        static const char *usages[] = {
+            "POSITION", "BLENDWEIGHT", "BLENDINDICES", "NORMAL", "PSIZE", "TEXCOORD", "TANGENT",
+            "BINORMAL", "TESSFACTOR",  "POSITIONT",    "COLOR",  "FOG",   "DEPTH",    "SAMPLE"};
         char line[512];
         size_t used = 0;
         for (size_t i = 0; i + 8 <= decl->blob.size(); i += 8) {
@@ -1710,13 +1776,13 @@ static void describe_draw_inputs(X86 *c, uint32_t vertices, uint32_t stride, uin
         char line[256];
         size_t used = 0;
         for (uint32_t o = 0; o + 4 <= stride && o < 40; o += 4)
-            used += (size_t)snprintf(line + used, sizeof line - used, " %g",
-                                     (double)[&] {
-                                         float f;
-                                         uint32_t bits = rd32(base + o);
-                                         memcpy(&f, &bits, 4);
-                                         return f;
-                                     }());
+            used += (size_t)snprintf(
+                line + used, sizeof line - used, " %g", (double)[&] {
+                    float f;
+                    uint32_t bits = rd32(base + o);
+                    memcpy(&f, &bits, 4);
+                    return f;
+                }());
         LOGW("d3d9:   vertex %u:%s", v, line);
     }
     ComObj *tex = com_get(dev->texture_handle);
@@ -1763,8 +1829,7 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
     if (draw_worth_reporting())
         LOGW("d3d9: draw %u: %s, %u primitives, %u vertices of %u bytes inline at %08x, "
              "indices at %08x",
-             g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7),
-             arg(c, 5));
+             g_draws, prim_name(arg(c, 1)), arg(c, 4), arg(c, 3), arg(c, 8), arg(c, 7), arg(c, 5));
     if (ComObj *dev = this_device9(c); dev && gpu_on()) {
         HostD9Draw d{};
         d.primitive = arg(c, 1);
@@ -1800,8 +1865,8 @@ void Dev_DrawIndexedPrimitiveUP(X86 *c) {
 // ---------------------------------------------------------------------------
 #define RES_STUB(iface, name)                                                                      \
     void iface##_##name(X86 *c) {                                                                  \
-        log_once("d3d9." #iface "." #name, "d3d9: " #iface "::" #name " is not implemented");       \
-        com_ret(c, D3D_OK9);                                                                        \
+        log_once("d3d9." #iface "." #name, "d3d9: " #iface "::" #name " is not implemented");      \
+        com_ret(c, D3D_OK9);                                                                       \
     }
 
 RES_STUB(Res, SetPrivateData)
@@ -2123,12 +2188,13 @@ void Query_GetData(X86 *c) {
 }
 
 #define RESOURCE_HEAD                                                                              \
-    {"QueryInterface", 3, com_QueryInterface}, {"AddRef", 1, com_AddRef},                           \
-        {"Release", 1, com_Release}, {"GetDevice", 2, Res_GetDevice},                               \
-        {"SetPrivateData", 5, Res_SetPrivateData}, {"GetPrivateData", 4, Res_GetPrivateData},       \
-        {"FreePrivateData", 2, Res_FreePrivateData}, {"SetPriority", 2, Res_SetPriority},           \
-        {"GetPriority", 1, Res_GetPriority}, {"PreLoad", 1, Res_PreLoad},                           \
-        {"GetType", 1, Res_GetType}
+    {"QueryInterface", 3, com_QueryInterface}, {"AddRef", 1, com_AddRef},                          \
+        {"Release", 1, com_Release}, {"GetDevice", 2, Res_GetDevice},                              \
+        {"SetPrivateData", 5, Res_SetPrivateData}, {"GetPrivateData", 4, Res_GetPrivateData},      \
+        {"FreePrivateData", 2, Res_FreePrivateData}, {"SetPriority", 2, Res_SetPriority},          \
+        {"GetPriority", 1, Res_GetPriority}, {"PreLoad", 1, Res_PreLoad}, {                        \
+        "GetType", 1, Res_GetType                                                                  \
+    }
 
 static const ComMethod g_vb9[] = {
     RESOURCE_HEAD,
@@ -2244,7 +2310,8 @@ void Dev_GetViewport(X86 *c) {
         uint32_t whole[4] = {0, 0, rt ? rt->width : 640, rt ? rt->height : 480};
         for (int i = 0; i < 4; ++i)
             wr32(v + 4u * (uint32_t)i, p.viewport_set ? p.viewport[i] : whole[i]);
-        float z0 = p.viewport_set ? p.viewport_z[0] : 0.0f, z1 = p.viewport_set ? p.viewport_z[1] : 1.0f;
+        float z0 = p.viewport_set ? p.viewport_z[0] : 0.0f,
+              z1 = p.viewport_set ? p.viewport_z[1] : 1.0f;
         uint32_t b0, b1;
         memcpy(&b0, &z0, 4);
         memcpy(&b1, &z1, 4);
@@ -2260,7 +2327,8 @@ void Dev_SetTransform(X86 *c) {
     ComObj *dev = this_device9(c);
     uint32_t state = arg(c, 1), m = arg(c, 2);
     if (dev && m) {
-        uint32_t slot = state < 256 ? state : (state >= 256 && state < 260 ? state - 256 + 24 : 0xffffffffu);
+        uint32_t slot =
+            state < 256 ? state : (state >= 256 && state < 260 ? state - 256 + 24 : 0xffffffffu);
         if (slot < 32)
             for (int i = 0; i < 16; ++i) {
                 uint32_t b = rd32(m + 4u * (uint32_t)i);

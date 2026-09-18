@@ -45,7 +45,33 @@ def test_android_templates_render(tmp_path):
     app = root.find("application")
     assert app.get(android + "label") == "@string/app_name"
     assert app.get(android + "requestLegacyExternalStorage") == "false"
-    assert app.find("activity").get(android + "screenOrientation") == "landscape"
+    assert app.find("activity").get(android + "screenOrientation") == "fullUser"
+
+
+def test_android_assets_carry_the_games_control_layouts(tmp_path):
+    cfg = {"game": {"app_name": "StubRecomp", "bundle_id": "dev.recompkit.stub", "id": "stub"}}
+    game_dir = tmp_path / "game"
+    (game_dir / "layouts").mkdir(parents=True)
+    (game_dir / "layouts/pad.json").write_text("{}\n")
+    (game_dir / "layouts/pad.phone-portrait.json").write_text("{}\n")
+    (game_dir / "layouts/readme.txt").write_text("not a layout\n")
+    out = build.android_project(tmp_path, cfg, gen_dir=tmp_path / "gen")
+    controls = out / "app/src/main/assets/controls"
+    stale = controls / "gone.json"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("{}\n")
+    build.android_stage_layout_assets(out, game_dir)
+    assert sorted(p.name for p in controls.iterdir()) == ["pad.json", "pad.phone-portrait.json"]
+
+
+def test_android_assets_drop_controls_when_the_game_ships_none(tmp_path):
+    cfg = {"game": {"app_name": "StubRecomp", "bundle_id": "dev.recompkit.stub", "id": "stub"}}
+    out = build.android_project(tmp_path, cfg, gen_dir=tmp_path / "gen")
+    controls = out / "app/src/main/assets/controls"
+    controls.mkdir(parents=True)
+    (controls / "pad.json").write_text("{}\n")
+    build.android_stage_layout_assets(out, tmp_path / "game")
+    assert not controls.exists()
 
 
 @pytest.mark.parametrize("system", ["Darwin", "Linux", "Windows"])

@@ -18,14 +18,14 @@
 struct ComObj;
 
 struct D9DrawCall {
-    uint32_t prim = 0;         // D3DPRIMITIVETYPE
+    uint32_t prim = 0; // D3DPRIMITIVETYPE
     uint32_t prim_count = 0;
-    uint32_t vertices = 0;     // guest address of vertex 0 of the stream
+    uint32_t vertices = 0; // guest address of vertex 0 of the stream
     uint32_t stride = 0;
-    uint32_t indices = 0;      // guest address, 0 for a non-indexed draw
-    uint32_t index_size = 2;   // 2 or 4
-    int32_t base_vertex = 0;   // added to every index
-    uint32_t first = 0;        // first vertex (non-indexed) or first index
+    uint32_t indices = 0;    // guest address, 0 for a non-indexed draw
+    uint32_t index_size = 2; // 2 or 4
+    int32_t base_vertex = 0; // added to every index
+    uint32_t first = 0;      // first vertex (non-indexed) or first index
     // A buffer-backed draw reads host bytes instead of guest addresses.
     const uint8_t *vertex_data = nullptr;
     size_t vertex_bytes = 0;

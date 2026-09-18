@@ -1,16 +1,28 @@
 package dev.recompkit;
 
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.view.HapticFeedbackConstants;
 import android.view.WindowManager;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 
 import org.libsdl.app.SDLActivity;
 
@@ -38,9 +50,81 @@ public class RecompActivity extends SDLActivity {
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
+        // The manifest allows any orientation (phones rotate live to
+        // portrait for the touch controls; tablets stay landscape). SDL sets
+        // its own per-device-class orientation hint once it has a display to
+        // measure (platform_ui_create_window, host/sdl/platform_ui_desktop.cpp)
+        // and that hint is what actually holds a tablet in landscape once
+        // SDL's (resizable) window exists. Before that - between this
+        // activity starting and SDL's first window - there is no hint yet,
+        // so this is the fallback that keeps a tablet from ever showing a
+        // frame in portrait.
+        if (getResources().getConfiguration().smallestScreenWidthDp >= 600)
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
+        unpackControlLayouts();
         super.onCreate(savedInstanceState);
         sActivity = this;
         takeViewIntent(getIntent());
+    }
+
+    /**
+     * The game's on-screen control layouts, from the APK's assets to the app's
+     * external files folder, where the native side reads them as
+     * host_resource("controls"). A handful of small JSON files: copied when
+     * missing or when the packaged size differs (an asset stream reports its
+     * uncompressed length, so a size match means an unchanged layout), so an
+     * updated app replaces them and an unchanged one costs a directory
+     * listing. A layout this app no longer ships is deleted, so one the game
+     * dropped stops working after an upgrade; the player's own edited copies
+     * live in profile/controls and are never touched.
+     */
+    private void unpackControlLayouts() {
+        // No external storage mounted: there is no data folder to unpack into,
+        // and the native side stops on the same condition (host/sdl/main.cpp).
+        File base = getExternalFilesDir(null);
+        if (base == null)
+            return;
+        String[] names;
+        try {
+            names = getAssets().list("controls");
+        } catch (Exception e) {
+            return; // no assets/controls: the app ships no layouts
+        }
+        if (names == null)
+            names = new String[0];
+        File dir = new File(base, "controls");
+        if (names.length > 0 && !dir.isDirectory() && !dir.mkdirs())
+            return;
+        int copied = 0;
+        for (String name : names) {
+            File target = new File(dir, name);
+            try (InputStream in = getAssets().open("controls/" + name)) {
+                if (target.isFile() && target.length() == in.available())
+                    continue;
+                try (OutputStream out = new FileOutputStream(target)) {
+                    byte[] buffer = new byte[16 * 1024];
+                    for (int n; (n = in.read(buffer)) > 0; )
+                        out.write(buffer, 0, n);
+                }
+                ++copied;
+            } catch (Exception e) {
+                // A layout that cannot be unpacked leaves the kit's built-in
+                // one in its place; the game still starts.
+            }
+        }
+        HashSet<String> shipped = new HashSet<>(Arrays.asList(names));
+        File[] unpacked = dir.listFiles();
+        int removed = 0;
+        if (unpacked != null) {
+            for (File file : unpacked) {
+                if (file.isFile() && file.getName().endsWith(".json") && !shipped.contains(file.getName())
+                        && file.delete())
+                    ++removed;
+            }
+        }
+        if (copied > 0 || removed > 0)
+            android.util.Log.i("recomp", "unpacked " + copied + " and removed " + removed
+                    + " control layout(s) in " + dir);
     }
 
     @Override
@@ -221,5 +305,69 @@ public class RecompActivity extends SDLActivity {
             a.startActivity(intent);
         } catch (Exception ignored) {
         }
+    }
+
+    // -- Haptics: a light tick for on-screen control presses, and the device's
+    // own motor standing in for game rumble when no controller is connected
+    // (host/sdl/platform_ui_desktop.cpp calls these over JNI). ---------------
+
+    static Vibrator sVibrator;
+    // The amplitude bucket (0..15) currently driving the motor, or -1 while
+    // idle: a repeat call in the same bucket leaves the running effect alone
+    // instead of restarting it every frame the guest asks for the same rumble.
+    static int sRumbleBucket = -1;
+
+    private static Vibrator vibrator() {
+        if (sVibrator == null) {
+            final RecompActivity a = sActivity;
+            if (a == null)
+                return null;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager =
+                        (VibratorManager) a.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                sVibrator = manager != null ? manager.getDefaultVibrator() : null;
+            } else {
+                sVibrator = (Vibrator) a.getSystemService(Context.VIBRATOR_SERVICE);
+            }
+        }
+        return sVibrator;
+    }
+
+    /** A light tap tick for an on-screen control press. */
+    public static void hapticTap() {
+        final RecompActivity a = sActivity;
+        if (a == null)
+            return;
+        a.runOnUiThread(() -> a.getWindow().getDecorView()
+                .performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP));
+    }
+
+    /**
+     * The device's own motor, standing in for game rumble when no controller
+     * is connected. `low`/`high` are the guest's low/high-frequency motor
+     * strengths (0..65535, as SDL_GetGamepadRumble takes them); 0,0 stops it.
+     */
+    public static void deviceRumble(int low, int high) {
+        final RecompActivity a = sActivity;
+        final Vibrator vibrator = vibrator();
+        if (a == null || vibrator == null)
+            return;
+        final int strength = Math.max(low, high);
+        if (strength <= 0) {
+            sRumbleBucket = -1;
+            a.runOnUiThread(vibrator::cancel);
+            return;
+        }
+        final int amplitude = Math.max(1, strength * 255 / 65535);
+        final int bucket = amplitude / 16;
+        if (bucket == sRumbleBucket)
+            return;
+        sRumbleBucket = bucket;
+        a.runOnUiThread(() -> {
+            if (vibrator.hasAmplitudeControl())
+                vibrator.vibrate(VibrationEffect.createOneShot(60000, amplitude));
+            else
+                vibrator.vibrate(VibrationEffect.createOneShot(60000, VibrationEffect.DEFAULT_AMPLITUDE));
+        });
     }
 }

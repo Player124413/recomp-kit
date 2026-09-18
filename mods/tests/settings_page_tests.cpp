@@ -222,9 +222,9 @@ MOD_TEST_SUITE(page_toggles_on_its_reserved_key) {
     MOD_CHECK(mods_input_key(0x44, 0x79, true)); // F10, consumed
     mods_input_key(0x44, 0x79, false);
     MOD_CHECK(mods_page_visible());
-    // Three mod settings, three keypad rows and either all nine display
-    // rows or only the three host controls when no symbols are available.
-    MOD_CHECK_EQ(mods_page_line_count(), mods_symbols_count() ? 15u : 9u);
+    // Three mod settings, the controls' seven rows and either all nine
+    // display rows or only the three host controls when no symbols are available.
+    MOD_CHECK_EQ(mods_page_line_count(), mods_symbols_count() ? 19u : 13u);
     MOD_CHECK(mods_input_key(0x44, 0x79, true));
     mods_input_key(0x44, 0x79, false);
     MOD_CHECK(!mods_page_visible());
@@ -232,16 +232,16 @@ MOD_TEST_SUITE(page_toggles_on_its_reserved_key) {
 }
 
 MOD_TEST_SUITE(page_shows_only_the_rows_the_game_lists) {
-    // game.toml [settings] rows = ["window", "performance_overlay", "keypad"]
+    // game.toml [settings] rows = ["window", "performance_overlay", "controls"]
     mods_settings_rows_for_test(1u << DISPLAY_WINDOW | 1u << DISPLAY_OVERLAY |
-                                1u << DISPLAY_KEYPAD_BIT);
+                                1u << DISPLAY_CONTROLS_BIT);
     setup();
     mods_page_open(nullptr);
-    // Three mod settings, Display, Performance overlay and the keypad's three.
-    MOD_CHECK_EQ(mods_page_line_count(), 8u);
+    // Three mod settings, Display, Performance overlay and the controls' seven.
+    MOD_CHECK_EQ(mods_page_line_count(), 12u);
     MOD_CHECK(std::string(mods_page_line(0)).find("Display:") == 0);
     MOD_CHECK(std::string(mods_page_line(1)).find("Performance overlay:") == 0);
-    MOD_CHECK(std::string(mods_page_line(2)).find("Keypad left") == 0);
+    MOD_CHECK(std::string(mods_page_line(2)).find("Controls") == 0);
     // An unlisted row cannot be set and keeps its neutral value.
     MOD_CHECK_EQ(mods_display_set(DISPLAY_UI_SCALE, 3), POP_E_STATE);
     MOD_CHECK_EQ(mods_display_set(DISPLAY_RENDERING, 1), POP_E_STATE);
@@ -249,14 +249,14 @@ MOD_TEST_SUITE(page_shows_only_the_rows_the_game_lists) {
     MOD_CHECK_EQ(mods_display_classic(), 0);
     mods_page_close();
     teardown();
-    // Without the keypad.
+    // Without the controls rows.
     mods_settings_rows_for_test(1u << DISPLAY_WINDOW | 1u << DISPLAY_OVERLAY);
     setup();
     mods_page_open(nullptr);
     MOD_CHECK_EQ(mods_page_line_count(), 5u);
     mods_page_close();
     teardown();
-    mods_settings_rows_for_test((2u << DISPLAY_KEYPAD_BIT) - 1);
+    mods_settings_rows_for_test((2u << DISPLAY_CONTROLS_BIT) - 1);
 }
 
 MOD_TEST_SUITE(textures_row_says_what_the_pack_holds) {

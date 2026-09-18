@@ -32,11 +32,10 @@
 #include "../input.h"
 #include "../input_gate.h"
 #include "../input_touch.h"
-#include "../keypad_layout.h"
-#include "../keypad_modifiers.h"
-#include "../../mods/keypad_settings.h"
-
-#include <map>
+#include "../controls/controls_host.h"
+#include "../../mods/controls_settings.h"
+#include "../controls/gamepad_sdl.h"
+#include "../../mods/mods_internal.h"
 #include "../midi.h"
 #include "../present.h"
 #include "../../runtime/display_seam.h"
@@ -196,8 +195,23 @@ void window_sizes(int *bw, int *bh, int *dw, int *dh) {
     SDL_GetWindowSizeInPixels(g_window, dw, dh);
 }
 
-// Decode window points into drawable pixels only. Layout selection, capture,
-// drag ownership and guest motion are applied later under the guest baton.
+// The presenter's game rectangle for a drawable of dw x dh (present.h): in
+// landscape always the whole drawable, as it has always been; in portrait the
+// rectangle the presenter composes the game into, when it fits this drawable.
+HostGameRect game_rect_for(int dw, int dh) {
+    const HostGameRect whole = {0, 0, dw, dh};
+    if (dh <= dw)
+        return whole;
+    const HostGameRect r = host_present_current_game_rect();
+    if (r.w <= 0 || r.h <= 0 || r.x < 0 || r.y < 0 || r.x + r.w > dw || r.y + r.h > dh)
+        return whole;
+    return r;
+}
+
+// Decode window points into game-rectangle pixels only: drawable pixels, less
+// the rectangle's origin, with the rectangle's size as the extent (the whole
+// drawable in landscape). Layout selection, capture, drag ownership and guest
+// motion are applied later under the guest baton.
 void view_point_to_drawable(double px, double py, int32_t *out_x, int32_t *out_y, int *width,
                             int *height) {
     *out_x = 0;
@@ -208,17 +222,34 @@ void view_point_to_drawable(double px, double py, int32_t *out_x, int32_t *out_y
     window_sizes(&bw, &bh, &dw, &dh);
     if (bw <= 0 || bh <= 0)
         return;
-    *width = dw;
-    *height = dh;
+    const HostGameRect rect = game_rect_for(dw, dh);
+    int32_t x, y;
     if (!g_pointer_confinement.empty()) {
-        *out_x = host_confined_pointer_pixel(px, g_pointer_confinement.x, g_pointer_confinement.w,
-                                             *width);
-        *out_y = host_confined_pointer_pixel(py, g_pointer_confinement.y, g_pointer_confinement.h,
-                                             *height);
-        return;
+        x = host_confined_pointer_pixel(px, g_pointer_confinement.x, g_pointer_confinement.w, dw);
+        y = host_confined_pointer_pixel(py, g_pointer_confinement.y, g_pointer_confinement.h, dh);
+    } else {
+        x = (int32_t)floor(px / bw * dw);
+        y = (int32_t)floor(py / bh * dh);
     }
-    *out_x = (int32_t)floor(px / bw * dw);
-    *out_y = (int32_t)floor(py / bh * dh);
+    host_present_point_to_game(rect, x, y, out_x, out_y);
+    *width = rect.w;
+    *height = rect.h;
+}
+
+// The game rectangle in window points, for the paths that work in points.
+// `whole` says it is the entire window (landscape).
+struct PointRect {
+    double x, y, w, h;
+    bool whole;
+};
+PointRect game_rect_points() {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    const HostGameRect r = game_rect_for(dw, dh);
+    if (bw <= 0 || dw <= 0 || (r.x == 0 && r.y == 0 && r.w == dw && r.h == dh))
+        return {0, 0, double(bw), double(bh), true};
+    const double scale = double(dw) / bw;
+    return {r.x / scale, r.y / scale, r.w / scale, r.h / scale, false};
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +404,7 @@ bool pointer_capture_wanted() {
         return false;
     if (window_minimized_or_hidden())
         return false;
-    if (mods_page_visible())
+    if (mods_page_visible() || mods_controls_editing())
         return false;
     return true;
 }
@@ -449,7 +480,9 @@ void apply_motion(int32_t x, int32_t y, double drawable_dx, double drawable_dy) 
         int bw, bh, dw, dh;
         window_sizes(&bw, &bh, &dw, &dh);
         const double margin = 8 * (bw > 0 ? double(dw) / bw : 1.0);
-        if (host_pointer_at_resize_edge(px, py, dw, dh, margin))
+        // The pointer is in game-rectangle pixels.
+        const HostGameRect game = game_rect_for(dw, dh);
+        if (host_pointer_at_resize_edge(px, py, game.w, game.h, margin))
             apply_pointer_capture(false);
     }
     {
@@ -520,13 +553,22 @@ void system_strip_insets(double *top, double *bottom) {
 }
 
 void handle_mouse_move(const SDL_MouseMotionEvent &motion) {
+    // A real pointer move (not one the touch path or the binding itself
+    // synthesized, which both arrive as SDL_TOUCH_MOUSEID): feed the mapped
+    // binding's Cursor stick mode. A touch's own placement reaches it through
+    // the kTouchPlaceEvent handler below instead, in window points.
+    if (motion.which != SDL_TOUCH_MOUSEID)
+        controls::host_pointer_moved(motion.x, motion.y);
     PendingInput e;
     e.kind = PendingInput::MOTION;
     // A pointer resting against a system strip means the edge behind it.
     double strip_top = 0, strip_bottom = 0;
     system_strip_insets(&strip_top, &strip_bottom);
     static PointerStripLatch strip_latch;
-    const float y = (float)strip_latch.apply(motion.y, strip_top);
+    // Only a strip the game image reaches: in portrait the image starts below it.
+    const PointRect game = game_rect_points();
+    const double strip = game.whole ? strip_top : std::max(0.0, strip_top - game.y);
+    const float y = (float)strip_latch.apply(motion.y, strip);
     view_point_to_drawable(motion.x, y, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
     static const bool trace = recomp_env("TRACE_POINTER") != nullptr;
     static double last_trace = 0;
@@ -563,8 +605,9 @@ void apply_button(int button, bool down, int32_t x, int32_t y, bool inside, bool
         hit.gx = g_cursor_x;
         hit.gy = g_cursor_y;
     }
-    if (!host_pointer_captured() && host_pointer_can_capture(pointer_capture_wanted(), inside, down,
-                                                             g_escape_held, mods_page_visible()))
+    if (!host_pointer_captured() &&
+        host_pointer_can_capture(pointer_capture_wanted(), inside, down, g_escape_held,
+                                 mods_page_visible() || mods_controls_editing()))
         apply_pointer_capture(true);
     x = hit.gx;
     y = hit.gy;
@@ -816,6 +859,15 @@ void push_touch_action_now(const TouchAction &a) {
             e.key.key = SDL_GetKeyFromScancode((SDL_Scancode)a.scancode, SDL_KMOD_NONE, false);
             e.key.down = a.down;
             break;
+        case TouchAction::Wheel:
+            e.type = SDL_EVENT_MOUSE_WHEEL;
+            e.wheel.windowID = ours;
+            e.wheel.mouse_x = (float)a.x;
+            e.wheel.mouse_y = (float)a.y;
+            e.wheel.y = (float)a.wheel;
+            // handle_event() flips a FLIPPED wheel's sign; NORMAL passes a.wheel through as-is.
+            e.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
+            break;
         }
         SDL_PushEvent(&e);
     }
@@ -829,83 +881,62 @@ void push_touch_key(int scancode, bool down) {
     push_touch_action_now(a);
 }
 
-// Fingers that landed on the keypad hold a key until they lift; they never
-// reach the gesture mapper. Modifiers go through the latch machine.
-std::map<int64_t, int> g_keypad_fingers; // finger -> scancode (0: a gap or a tab)
-bool g_keypad_wanted = false;            // no hardware keyboard attached
-KeypadModifiers g_keypad_modifiers;
-
-KeypadView keypad_view() {
-    int bw, bh, dw, dh;
-    window_sizes(&bw, &bh, &dw, &dh);
-    KeypadView v;
-    v.wanted = g_keypad_wanted;
-    v.left = mods_keypad_value(KEYPAD_LEFT_ROW) != 0;
-    v.right = mods_keypad_value(KEYPAD_RIGHT_ROW) != 0;
-    v.size = mods_keypad_value(KEYPAD_SIZE_ROW);
-    v.lit = g_keypad_modifiers.lit();
-    v.scale = bw > 0 ? double(dw) / bw : 1.0;
-    return v;
-}
-void publish_keypad() {
-    host_present_set_keypad(keypad_view());
-}
-void push_modifier_events(const std::vector<KeypadKeyEvent> &events) {
-    for (const KeypadKeyEvent &e : events)
-        push_touch_key(e.scancode, e.down);
-}
-KeypadHit keypad_hit_at(const SDL_TouchFingerEvent &f) {
-    int bw, bh, dw, dh;
-    window_sizes(&bw, &bh, &dw, &dh);
-    return keypad_hit(keypad_view(), dw, dh, f.x * dw, f.y * dh);
-}
-// A keypad finger is gone (lifted or taken by the system): release what it held.
-void keypad_finger_gone(int64_t finger, bool cancelled) {
-    auto held = g_keypad_fingers.find(finger);
-    if (held == g_keypad_fingers.end())
+// The on-screen controls' hooks.
+void toggle_system_keyboard() {
+    if (!g_window)
         return;
-    const int sc = held->second;
-    g_keypad_fingers.erase(held);
-    std::vector<KeypadKeyEvent> events;
-    if (keypad_is_modifier(sc)) {
-        if (cancelled)
-            g_keypad_modifiers.cancel(sc, &events);
-        else
-            g_keypad_modifiers.release(sc, SDL_GetTicksNS(), &events);
-    } else if (sc) {
-        push_touch_key(sc, false);
-        if (!cancelled)
-            g_keypad_modifiers.key_lifted(SDL_GetTicksNS(), &events);
-    }
-    push_modifier_events(events);
-    publish_keypad();
+    if (SDL_TextInputActive(g_window))
+        SDL_StopTextInput(g_window);
+    else
+        SDL_StartTextInput(g_window);
 }
+void open_settings_page() {
+    (void)mods_page_open(nullptr);
+}
+
 // Focus loss or backgrounding: every finger is gone, every key and modifier up.
 void touch_release_all() {
     std::vector<TouchAction> actions;
     g_touch.cancel_all(&actions);
     push_touch_actions(actions);
-    for (const auto &held : g_keypad_fingers)
-        if (held.second && !keypad_is_modifier(held.second))
-            push_touch_key(held.second, false);
-    g_keypad_fingers.clear();
-    std::vector<KeypadKeyEvent> events;
-    g_keypad_modifiers.cancel_all(&events);
-    push_modifier_events(events);
-    publish_keypad();
+    controls::host_release_all();
+}
+
+// A finger's position in drawable pixels, where the controls are laid out.
+void finger_to_drawable(const SDL_TouchFingerEvent &f, double *px, double *py) {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    *px = f.x * dw;
+    *py = f.y * dh;
 }
 
 TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
     int w = 0, h = 0;
     if (g_window)
         SDL_GetWindowSize(g_window, &w, &h);
-    g_touch.set_bounds(w, h);
+    // The gesture mapper's edges are the game image's (portrait: the image's
+    // rectangle inside the window).
+    const PointRect game = game_rect_points();
+    if (game.whole) {
+        g_touch.set_bounds(w, h);
+        g_touch.set_origin(0, 0);
+    } else {
+        g_touch.set_bounds(game.w, game.h);
+        g_touch.set_origin(game.x, game.y);
+    }
     // The strips the system keeps (a status bar, a gesture zone) never deliver
     // a finger, so a finger "on" that edge arrives at the strip's inner side.
+    // Only the part of a strip that overlaps the game image counts.
     SDL_Rect safe{0, 0, w, h};
     if (g_window && SDL_GetWindowSafeArea(g_window, &safe)) {
-        const double l = safe.x, t = safe.y;
-        const double r = w - (safe.x + safe.w), b = h - (safe.y + safe.h);
+        double l = safe.x, t = safe.y;
+        double r = w - (safe.x + safe.w), b = h - (safe.y + safe.h);
+        if (!game.whole) {
+            l = safe.x - game.x;
+            t = safe.y - game.y;
+            r = (game.x + game.w) - (safe.x + safe.w);
+            b = (game.y + game.h) - (safe.y + safe.h);
+        }
         g_touch.set_edge_insets(l > 0 ? l : 0, t > 0 ? t : 0, r > 0 ? r : 0, b > 0 ? b : 0);
         static bool logged = false;
         if (!logged) {
@@ -917,10 +948,86 @@ TouchPoint touch_point(const SDL_TouchFingerEvent &f) {
     return {(int64_t)f.fingerID, f.x * w, f.y * h};
 }
 
+// A window point in drawable pixels, where the on-screen controls and the
+// editor are laid out (unlike view_point_to_drawable, which lands in the
+// game image's own coordinates).
+void window_point_to_drawable(double px, double py, double *dx, double *dy) {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    *dx = bw > 0 ? px / bw * dw : 0;
+    *dy = bh > 0 ? py / bh * dh : 0;
+}
+
+// While the layout editor is open it owns the keyboard, the mouse and the
+// wheel: nothing here reaches the game, so the simulation sees frozen input
+// for as long as the editor is up (the F10 page freezes it the same way, by
+// consuming keys). Fingers go to the editor through host_finger_*, which the
+// normal path already calls first. True: the event is spent.
+bool handle_editor_event(const SDL_Event &event) {
+    if (!controls::host_editing())
+        return false;
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION: {
+        double dx, dy;
+        window_point_to_drawable(event.motion.x, event.motion.y, &dx, &dy);
+        controls::host_editor_pointer(dx, dy, 0);
+        return true;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP: {
+        if (event.button.button != SDL_BUTTON_LEFT)
+            return true;
+        double dx, dy;
+        window_point_to_drawable(event.button.x, event.button.y, &dx, &dy);
+        controls::host_editor_pointer(dx, dy, event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? 1 : -1);
+        return true;
+    }
+    case SDL_EVENT_MOUSE_WHEEL:
+        controls::host_editor_wheel(
+            event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y);
+        return true;
+    case SDL_EVENT_TEXT_INPUT:
+        controls::host_editor_text(event.text.text);
+        return true;
+    case SDL_EVENT_KEY_UP:
+        // No key-up is ever swallowed, Escape's included: a key the player was
+        // holding when the editor opened has to be released to the game, and
+        // Escape also has host state behind it (g_escape_held, the pointer
+        // capture) that only its key-up clears. The editor takes key presses
+        // alone, so an Escape release with no press it knows about is the one
+        // the game and the host both still need.
+        return false;
+    case SDL_EVENT_KEY_DOWN:
+        if (event.key.scancode == SDL_SCANCODE_ESCAPE)
+            controls::host_editor_escape(); // Escape is Done
+        else if (event.key.scancode == SDL_SCANCODE_RETURN ||
+                 event.key.scancode == SDL_SCANCODE_KP_ENTER)
+            controls::host_editor_text_done();
+        return true;
+    default:
+        return false;
+    }
+}
+
+// SDL's text input follows the editor's rename prompt.
+void update_editor_text_input() {
+    static bool on = false;
+    const bool want = controls::host_editor_text_wanted();
+    if (want == on || !g_window)
+        return;
+    on = want;
+    if (want)
+        SDL_StartTextInput(g_window);
+    else
+        SDL_StopTextInput(g_window);
+}
+
 // One SDL event, translated into both of the input paths the game reads: the
 // DirectInput device state, and the Win32 message queue.
 void handle_event(const SDL_Event &event) {
     if (platform_ui_handle_lifecycle(event))
+        return;
+    if (handle_editor_event(event))
         return;
     const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
     switch (event.type) {
@@ -1012,7 +1119,11 @@ void handle_event(const SDL_Event &event) {
     case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
         // The green button or the View menu: the player chose fullscreen, so
         // it becomes the setting instead of being undone on the next frame.
-        if (!g_fullscreen_transition) {
+        // A touch platform's window is always fullscreen and has no
+        // "windowed" mode to save - platform_ui_pointer_capture_supported()
+        // is false there - so a rotation raising this same event (no player
+        // choice behind it) never rewrites the saved window-mode setting.
+        if (!g_fullscreen_transition && platform_ui_pointer_capture_supported()) {
             g_wanted_window_mode = 2;
             (void)mods_display_set(DISPLAY_WINDOW, 2);
         }
@@ -1023,7 +1134,8 @@ void handle_event(const SDL_Event &event) {
         update_platform_pointer_capture();
         break;
     case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-        if (!g_fullscreen_transition && g_wanted_window_mode == 2) {
+        if (!g_fullscreen_transition && g_wanted_window_mode == 2 &&
+            platform_ui_pointer_capture_supported()) {
             g_wanted_window_mode = 0;
             (void)mods_display_set(DISPLAY_WINDOW, 0);
         }
@@ -1035,21 +1147,20 @@ void handle_event(const SDL_Event &event) {
         break;
     case SDL_EVENT_USER:
         if (event.user.code == kTouchPlaceEvent) {
+            const double px = double((intptr_t)event.user.data1) / 16.0;
+            const double py = double((intptr_t)event.user.data2) / 16.0;
+            controls::host_pointer_moved(px, py);
             PendingInput e;
             e.kind = PendingInput::PLACE;
-            view_point_to_drawable(double((intptr_t)event.user.data1) / 16.0,
-                                   double((intptr_t)event.user.data2) / 16.0, &e.x, &e.y,
-                                   &e.drawable_w, &e.drawable_h);
+            view_point_to_drawable(px, py, &e.x, &e.y, &e.drawable_w, &e.drawable_h);
             queue_or_apply(e);
         }
         break;
     case SDL_EVENT_FINGER_CANCELED: {
         // The system took the finger (a gesture, a call): whatever it held lets go.
         const int64_t finger = (int64_t)event.tfinger.fingerID;
-        if (g_keypad_fingers.count(finger)) {
-            keypad_finger_gone(finger, true);
+        if (controls::host_finger_cancel(finger))
             break;
-        }
         std::vector<TouchAction> actions;
         g_touch.finger_cancel(finger, &actions);
         push_touch_actions(actions);
@@ -1061,37 +1172,22 @@ void handle_event(const SDL_Event &event) {
         std::vector<TouchAction> actions;
         const uint64_t now = SDL_GetTicksNS();
         const int64_t finger = (int64_t)event.tfinger.fingerID;
-        if (g_keypad_fingers.count(finger)) {
-            // A keypad finger: its key releases when it lifts; motion is ignored.
-            if (event.type == SDL_EVENT_FINGER_UP)
-                keypad_finger_gone(finger, false);
-            break;
-        }
+        // A finger the on-screen controls own never reaches the gesture mapper.
+        double px = 0, py = 0;
+        finger_to_drawable(event.tfinger, &px, &py);
         if (event.type == SDL_EVENT_FINGER_DOWN) {
-            const KeypadHit hit = keypad_hit_at(event.tfinger);
-            if (hit.kind == KeypadHit::Toggle) {
-                const KeypadRow row = hit.side == KEYPAD_LEFT ? KEYPAD_LEFT_ROW : KEYPAD_RIGHT_ROW;
-                mods_keypad_set(row, mods_keypad_value(row) ? 0 : 1);
-                g_keypad_fingers[finger] = 0; // the tab's finger presses nothing more
-                publish_keypad();
+            if (controls::host_finger_down(finger, px, py, now))
                 break;
-            }
-            if (hit.kind == KeypadHit::Key) {
-                g_keypad_fingers[finger] = hit.scancode;
-                std::vector<KeypadKeyEvent> events;
-                if (keypad_is_modifier(hit.scancode))
-                    g_keypad_modifiers.press(hit.scancode, now, &events);
-                else if (hit.scancode)
-                    push_touch_key(hit.scancode, true);
-                push_modifier_events(events);
-                publish_keypad();
-                break;
-            }
             g_touch.finger_down(touch_point(event.tfinger), now, &actions);
-        } else if (event.type == SDL_EVENT_FINGER_UP)
+        } else if (event.type == SDL_EVENT_FINGER_UP) {
+            if (controls::host_finger_up(finger, now))
+                break;
             g_touch.finger_up(touch_point(event.tfinger), now, &actions);
-        else
+        } else {
+            if (controls::host_finger_motion(finger, px, py, now))
+                break;
             g_touch.finger_motion(touch_point(event.tfinger), now, &actions);
+        }
         push_touch_actions(actions);
         static bool text_input = false;
         if (g_touch.text_input_wanted() != text_input) {
@@ -1103,6 +1199,13 @@ void handle_event(const SDL_Event &event) {
         }
         break;
     }
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        controls::gamepad_handle_event(event);
+        break;
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
     case SDL_EVENT_QUIT:
         // The guest closes itself: WM_CLOSE runs its own shutdown path, and
@@ -1153,6 +1256,25 @@ int service(double seconds) {
     return host_idle_wait_result(before, host_input_notify_count());
 }
 
+// The drawable, its scale and its safe area in drawable pixels, for the
+// on-screen controls.
+controls::Screen controls_screen() {
+    int bw, bh, dw, dh;
+    window_sizes(&bw, &bh, &dw, &dh);
+    controls::Screen s;
+    s.dw = dw;
+    s.dh = dh;
+    s.scale = bw > 0 ? double(dw) / bw : 1.0;
+    s.safe = {0, 0, dw, dh};
+    SDL_Rect safe;
+    if (g_window && SDL_GetWindowSafeArea(g_window, &safe))
+        s.safe = {int(lround(safe.x * s.scale)), int(lround(safe.y * s.scale)),
+                  int(lround(safe.w * s.scale)), int(lround(safe.h * s.scale))};
+    // Portrait pins the game image below the top strip.
+    host_present_set_safe_top(s.safe.y);
+    return s;
+}
+
 // The housekeeping every turn does once the events are in.
 void after_events() {
     {
@@ -1163,17 +1285,26 @@ void after_events() {
         g_touch.frames_presented(host_present_count());
         g_touch.tick(SDL_GetTicksNS(), &actions);
         push_touch_actions(actions);
-        // The keypad follows the hardware keyboard: attached, no keypad. It is
-        // republished every pump: the settings page can change its rows and the
-        // view is cheap to compare on the worker side.
+        // The controls follow the hardware keyboard (attached: key layouts
+        // hidden), a physical controller (connected: pad layouts hidden and
+        // its state fed to the pad) and the settings rows; the view is
+        // published only when it changed.
+        // The controls going away (a keyboard arriving, unless RECOMP_KEYPAD
+        // forces them) lets go of every finger, as the keypad did.
         static const bool force = recomp_env("KEYPAD") != nullptr;
-        const bool want = force || platform_ui_keypad_wanted();
-        if (want != g_keypad_wanted) {
-            g_keypad_wanted = want;
-            if (!want)
-                touch_release_all();
-        }
-        publish_keypad();
+        static bool wanted = false;
+        const bool absent = platform_ui_keypad_wanted();
+        if (wanted && !(absent || force))
+            touch_release_all();
+        wanted = absent || force;
+        const controls::Screen screen = controls_screen();
+        const HostGameRect game = game_rect_for(screen.dw, screen.dh);
+        controls::host_set_screen(screen, controls::Rect{game.x, game.y, game.w, game.h},
+                                  screen.dh - (screen.safe.y + screen.safe.h));
+        controls::gamepad_poll();
+        controls::host_set_wanted(absent, controls::gamepad_connected());
+        controls::host_pump(SDL_GetTicksNS());
+        update_editor_text_input();
     }
     // A shell-launched process does not always come forward on its own, and a
     // window that never gained focus receives no key events at all. Ask again,
@@ -1396,6 +1527,10 @@ void post_drawable_size() {
     static int last_w = 0, last_h = 0;
     if (dw <= 0 || dh <= 0 || (last_w == dw && last_h == dh))
         return;
+    // A flip between portrait and landscape (a phone rotating) moves every
+    // touch control out from under whatever fingers were holding it.
+    if (last_w > 0 && last_h > 0 && (last_w > last_h) != (dw > dh))
+        touch_release_all();
     last_w = dw;
     last_h = dh;
     host_present_resize(dw, dh);
@@ -1599,6 +1734,13 @@ int main(int argc, char **argv) {
         const char *profile = recomp_env("PROFILE_DIR");
         if (!profile || !*profile)
             os_setenv("RECOMP_PROFILE_DIR", (data_root + "/profile").c_str());
+        // No executable path can lead to this app's resources (the process is
+        // the system's app_process), so name the data root the activity
+        // unpacked the APK's assets into: host_resource("controls") is
+        // <data root>/controls. A switches.txt override still wins.
+        const char *resources = recomp_env("RESOURCES_DIR");
+        if (!resources || !*resources)
+            os_setenv("RECOMP_RESOURCES_DIR", data_root.c_str());
         game = game_path_resolve(nullptr, data_root.c_str());
         // Missing data is the launcher's to explain and import.
         if (!game.exe.empty())
@@ -1628,7 +1770,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[host] could not enter %s\n", host_layout().checkout_root.c_str());
 
     platform_ui_init_hints();
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_Init failed: %s\n", SDL_GetError());
         return 3;
     }
@@ -1732,6 +1874,16 @@ int main(int argc, char **argv) {
     // which wait on an event rather than polling. Installed here rather than
     // referenced from input.cpp, which links none of the shims.
     host_input_set_notify(dinput_host_input_changed);
+    // Before the first presented frame, where mods_page_init reads the
+    // layout names this registers.
+    {
+        controls::HostHooks hooks;
+        hooks.key = push_touch_key;
+        hooks.touch_actions = push_touch_actions;
+        hooks.system_keyboard = toggle_system_keyboard;
+        hooks.open_settings = open_settings_page;
+        controls::host_init(hooks);
+    }
 
     SDL_ShowWindow(g_window);
     SDL_RaiseWindow(g_window);
@@ -1818,7 +1970,7 @@ extern "C" int host_display_screen_size(int *w, int *h) {
     const int sw = g_screen_w.load(), sh = g_screen_h.load();
     if (!w || !h || sw <= 0 || sh <= 0)
         return 0;
-    *w = sw;
-    *h = sh;
+    // Never a portrait screen: the game's image goes above the controls.
+    host_landscape_screen_size(sw, sh, w, h);
     return 1;
 }

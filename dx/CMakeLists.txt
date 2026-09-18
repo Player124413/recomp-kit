@@ -1,8 +1,9 @@
 set(POP_DX_SOURCES
   com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp
-  d3dx10.cpp dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp qmixer.cpp mss32.cpp fmod.cpp soundlib.cpp
-  galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp mf.cpp weanetr.cpp d3d9.cpp d3d9_raster.cpp
-  d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp d3dx9.cpp)
+  d3dx10.cpp dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp xinput.cpp qmixer.cpp
+  mss32.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp
+  mf.cpp weanetr.cpp d3d9.cpp d3d9_raster.cpp d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp
+  d3dx9.cpp)
 
 add_library(recomp_dx OBJECT ${POP_DX_SOURCES})
 target_link_libraries(recomp_dx PUBLIC recomp_runtime)
@@ -41,6 +42,17 @@ pop_optimize(dx_tests 1)
 pop_test_binary(dx_tests)
 add_test(NAME dx_tests COMMAND dx_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(dx_tests PROPERTIES LABELS nogame)
+
+# The virtual pad through the DirectInput joystick and XInput. Its own binary
+# because it defines the host_pad_* callbacks strongly, which dx_tests must not.
+add_executable(pad_tests tests/pad_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(pad_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(pad_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(pad_tests 1)
+pop_test_binary(pad_tests)
+add_test(NAME pad_tests COMMAND pad_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(pad_tests PROPERTIES LABELS nogame)
 
 # No strong host callback anywhere: the weak defaults must carry the link.
 # page_overlay.cpp because every host links it beside boot.cpp; the dispatch

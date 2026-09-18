@@ -2,7 +2,7 @@
 // transaction a failed mod init rolls back.
 #include "mods_tests.h"
 #include "../mods_internal.h"
-#include "../keypad_settings.h"
+#include "../controls_settings.h"
 #include "../display_settings.h"
 #include "../../runtime/layout.h"
 #include "../../runtime/win32.h"
@@ -133,42 +133,209 @@ MOD_TEST_SUITE(settings_entries_are_ordered_and_labelled) {
     MOD_CHECK(!mods_settings_entry(2, &owner, &mod_id, &key, &label, &kind, &value, &min, &max));
 }
 
-MOD_TEST_SUITE(keypad_settings_round_trip) {
+MOD_TEST_SUITE(controls_settings_defaults) {
     fresh();
-    mods_keypad_reset();
-    mods_keypad_init(0);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 1);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 1);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 1);
-    MOD_CHECK_EQ(mods_keypad_set(KEYPAD_SIZE_ROW, 7), POP_OK); // clamped into the range
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
-    // Shown/hidden turns over either way; size stops at its ends.
-    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_RIGHT_ROW, +1), POP_OK);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 0);
-    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_RIGHT_ROW, +1), POP_OK);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 1);
-    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_SIZE_ROW, +1), POP_OK);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
-    MOD_CHECK_EQ(mods_keypad_nudge(KEYPAD_LEFT_ROW, -1), POP_OK);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
-    int64_t v = -1;
-    MOD_CHECK_EQ(mods_settings_get(MODS_OWNER_RUNTIME, "left", &v), POP_OK);
-    MOD_CHECK_EQ(v, 0);
-    MOD_CHECK(mods_keypad_line(KEYPAD_LEFT_ROW).find("hidden") != std::string::npos);
-    MOD_CHECK(mods_keypad_line(KEYPAD_SIZE_ROW).find("Large") != std::string::npos);
-    // The saved values come back on the next init, under the host.keypad/ keys.
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1); // "keys" is index 1
+    MOD_CHECK(mods_controls_layout_name() == "keys");
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_SIZE_ROW), 1);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_OPACITY_ROW), 100);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_HAPTICS_ROW), 1);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_PAD_WITH_CONTROLLER_ROW), 0);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_SNAP_ROW), 1);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u);
+    // Size clamps at its ends, like the old keypad size row.
+    MOD_CHECK_EQ(mods_controls_set(CONTROLS_SIZE_ROW, 7), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_SIZE_ROW), 2);
+    MOD_CHECK(mods_controls_line(CONTROLS_SIZE_ROW).find("Large") != std::string::npos);
+    mods_controls_reset();
     mods_settings_reset();
-    mods_keypad_reset();
+}
+
+// A profile that only ever knew the old host.keypad/* keys migrates into
+// host.controls/* the first time mods_controls_init runs; the keypad keys
+// stay on disk untouched (this only reads them through
+// mods_settings_stored_value, never declares them).
+MOD_TEST_SUITE(controls_settings_migration) {
+    fresh();
+    mods_controls_reset();
+    FILE *f = fopen(mods_settings_path(), "wb");
+    MOD_CHECK(f != nullptr);
+    if (f) {
+        MOD_CHECK(fputs("{\"host.keypad/left\": 0, \"host.keypad/right\": 1, "
+                        "\"host.keypad/size\": 2}\n",
+                        f) >= 0);
+        MOD_CHECK_EQ(fclose(f), 0);
+    }
     MOD_CHECK(mods_settings_load(mods_settings_path()));
-    mods_keypad_init(0);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_SIZE_ROW), 2);
-    // A game that starts hidden does so only without a saved value.
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("pad");
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1); // the index of "keys"
+    MOD_CHECK(mods_controls_layout_name() == "keys");
+    // The keypad's bits belong to whichever form first asks for them.
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 1u); // left 0, right 1
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 0u);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_SIZE_ROW), 2);
+    // Nothing under host.controls/ was written by the migration itself.
+    int64_t discard = 0;
+    MOD_CHECK(!mods_settings_stored_value("host.controls/layout", &discard));
+    // The keypad keys are untouched and still readable.
+    int64_t left = -1;
+    MOD_CHECK(mods_settings_stored_value("host.keypad/left", &left));
+    MOD_CHECK_EQ(left, 0);
+    mods_controls_reset();
     mods_settings_reset();
-    mods_keypad_reset();
-    mods_keypad_init(1);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_LEFT_ROW), 0);
-    MOD_CHECK_EQ(mods_keypad_value(KEYPAD_RIGHT_ROW), 0);
+}
+
+MOD_TEST_SUITE(controls_settings_hidden_choice) {
+    fresh();
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("pad+keys"); // the last name, index 2
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 2);
+    // Nudging past the last name reaches the Hidden choice.
+    MOD_CHECK_EQ(mods_controls_nudge(CONTROLS_LAYOUT_ROW, +1), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 3);
+    MOD_CHECK(mods_controls_layout_name().empty());
+    MOD_CHECK(mods_controls_line(CONTROLS_LAYOUT_ROW).find("hidden") != std::string::npos);
+    // It turns over, like the display rows.
+    MOD_CHECK_EQ(mods_controls_nudge(CONTROLS_LAYOUT_ROW, +1), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 0);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// The editor saved a layout under a new name: the row has to reach it, so
+// mods_controls_refresh_names moves the declared maximum, which
+// mods_settings_declare alone cannot do once the key exists.
+MOD_TEST_SUITE(controls_settings_refresh_names) {
+    fresh();
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("pad");
+    // Hidden is index 3; there is no index 4 yet.
+    MOD_CHECK_EQ(mods_controls_set(CONTROLS_LAYOUT_ROW, 4), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 3);
+
+    mods_controls_set_names({"pad", "keys", "pad+keys", "mine"});
+    mods_controls_refresh_names();
+    MOD_CHECK_EQ(mods_controls_set(CONTROLS_LAYOUT_ROW, 3), POP_OK);
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 3);
+    MOD_CHECK(mods_controls_layout_name() == "mine");
+    // The value survives the round trip through the settings store.
+    int64_t stored = 0;
+    MOD_CHECK_EQ(mods_settings_get(MODS_OWNER_RUNTIME, "layout", &stored), POP_OK);
+    MOD_CHECK_EQ((int)stored, 3);
+
+    // A shorter list clamps the row back into range.
+    mods_controls_set_names({"pad"});
+    mods_controls_refresh_names();
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 1);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// The hidden-group bits are per form factor: portrait "keys" is one board
+// where landscape is two halves, so hiding the portrait board must not come
+// back as a hidden left half after a rotation. The three lanes share one
+// stored value and survive a reload of the profile.
+MOD_TEST_SUITE(controls_settings_hidden_groups_per_form) {
+    fresh();
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    mods_controls_set_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT, 1u);
+    mods_controls_set_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE, 2u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 1u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE), 2u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u); // the rotation home
+    // The press itself writes nothing: the host flushes once per pump.
+    int64_t stored = 0;
+    MOD_CHECK(!mods_settings_stored_value("host.controls/hidden", &stored));
+    mods_controls_flush();
+    MOD_CHECK(mods_settings_stored_value("host.controls/hidden", &stored));
+    mods_controls_flush(); // nothing left to write
+
+    // A relaunch reads all three lanes back.
+    mods_controls_reset();
+    mods_settings_reset();
+    mods_overlay_set_profile_dir(PROFILE);
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 1u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE), 2u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// A profile from the build that kept one set of bits for every form: they
+// belong to the form the player hid the group in, which is the first one to
+// ask, and the other forms start clean.
+MOD_TEST_SUITE(controls_settings_hidden_groups_legacy_value) {
+    fresh();
+    mods_controls_reset();
+    FILE *f = fopen(mods_settings_path(), "wb");
+    MOD_CHECK(f != nullptr);
+    if (f) {
+        MOD_CHECK(fputs("{\"host.controls/layout\": 1, \"host.controls/hidden\": 1}\n", f) >= 0);
+        MOD_CHECK_EQ(fclose(f), 0);
+    }
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_PORTRAIT), 1u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_TABLET), 0u);
+    MOD_CHECK_EQ(mods_controls_hidden_groups(CONTROLS_FORM_PHONE_LANDSCAPE), 0u);
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// A layout index the name list no longer reaches (the player deleted their
+// copy) falls back to the game's default_layout, not to the Hidden slot,
+// which would have left a blank screen.
+MOD_TEST_SUITE(controls_settings_out_of_range_layout_falls_back) {
+    fresh();
+    mods_controls_reset();
+    FILE *f = fopen(mods_settings_path(), "wb");
+    MOD_CHECK(f != nullptr);
+    if (f) {
+        MOD_CHECK(fputs("{\"host.controls/layout\": 7}\n", f) >= 0);
+        MOD_CHECK_EQ(fclose(f), 0);
+    }
+    MOD_CHECK(mods_settings_load(mods_settings_path()));
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("pad+keys");
+    MOD_CHECK_EQ(mods_controls_value(CONTROLS_LAYOUT_ROW), 2);
+    MOD_CHECK(mods_controls_layout_name() == "pad+keys");
+    mods_controls_reset();
+    mods_settings_reset();
+}
+
+// The host sets the editing flag; the F10 page's gates read it.
+MOD_TEST_SUITE(controls_settings_editing_flag) {
+    mods_controls_reset();
+    MOD_CHECK(!mods_controls_editing());
+    mods_controls_set_editing(true);
+    MOD_CHECK(mods_controls_editing());
+    mods_controls_set_editing(false);
+    MOD_CHECK(!mods_controls_editing());
+}
+
+MOD_TEST_SUITE(controls_settings_edit_request) {
+    fresh();
+    mods_controls_reset();
+    mods_controls_set_names({"pad", "keys", "pad+keys"});
+    mods_controls_init("keys");
+    MOD_CHECK(!mods_controls_take_edit_request());
+    MOD_CHECK_EQ(mods_controls_nudge(CONTROLS_EDIT_ROW, +1), POP_OK);
+    MOD_CHECK(mods_controls_take_edit_request());
+    MOD_CHECK(!mods_controls_take_edit_request()); // cleared by the take
+    mods_controls_reset();
+    mods_settings_reset();
 }
 
 // Settings suites run before any suite loads a symbol map. Exercise the
@@ -198,7 +365,7 @@ MOD_TEST_SUITE(settings_page_without_symbols_shows_host_controls) {
         MOD_CHECK(mods_display_row_applies(row));
         MOD_CHECK(page_has_row(row));
     }
-    MOD_CHECK_EQ(mods_page_line_count(), 3u + KEYPAD_ROW_COUNT);
+    MOD_CHECK_EQ(mods_page_line_count(), 3u + CONTROLS_ROW_COUNT);
     // The first visible row still targets window mode after filtering.
     mods_input_key(0xcd, 0, true);
     mods_input_key(0xcd, 0, false);
@@ -206,7 +373,7 @@ MOD_TEST_SUITE(settings_page_without_symbols_shows_host_controls) {
     mods_page_close();
     mods_input_remove_all(MODS_OWNER_RUNTIME);
     mods_display_reset();
-    mods_keypad_reset();
+    mods_controls_reset();
     mods_settings_reset();
 }
 

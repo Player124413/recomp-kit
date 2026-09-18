@@ -16,13 +16,13 @@
 uint8_t *g_mem;
 
 static int g_checks = 0, g_failures = 0;
-#define CHECK(cond)                                                                                    \
-    do {                                                                                               \
-        ++g_checks;                                                                                    \
-        if (!(cond)) {                                                                                 \
-            ++g_failures;                                                                              \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                            \
-        }                                                                                              \
+#define CHECK(cond)                                                                                \
+    do {                                                                                           \
+        ++g_checks;                                                                                \
+        if (!(cond)) {                                                                             \
+            ++g_failures;                                                                          \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                        \
+        }                                                                                          \
     } while (0)
 
 const uint32_t CODE = 0x01000000, HELPER = 0x01001000, DATA = 0x02000000, STACK = 0x0e000000;
@@ -70,11 +70,11 @@ static void test_bank_routine() {
         0x56,                               // push esi
         0x8b, 0x74, 0x24, 0x08,             // mov esi, [esp+8]
         0x56,                               // push esi
-        0xe8, 0, 0, 0, 0,                   // call NATIVE
+        0xe8, 0,    0,    0,    0,          // call NATIVE
         0x89, 0x86, 0x88, 0x00, 0x00, 0x00, // mov [esi+0x88], eax
         0x83, 0xc6, 0x14,                   // add esi, 0x14
         0x56,                               // push esi
-        0xe8, 0, 0, 0, 0,                   // call HELPER
+        0xe8, 0,    0,    0,    0,          // call HELPER
         0x89, 0x46, 0x5c,                   // mov [esi+0x5c], eax
         0x8b, 0x46, 0x04,                   // mov eax, [esi+4]
         0x8b, 0x4e, 0x08,                   // mov ecx, [esi+8]
@@ -93,15 +93,15 @@ static void test_bank_routine() {
     put_call(CODE + 6, NATIVE);
     put_call(CODE + 21, HELPER);
     // The helper, also heap code: returns [arg] * 3 through LEA.
-    put(HELPER, {0x8b, 0x44, 0x24, 0x04,  // mov eax, [esp+4]
-                 0x8b, 0x00,              // mov eax, [eax]
-                 0x8d, 0x04, 0x40,        // lea eax, [eax+eax*2]
-                 0xc2, 0x00, 0x00});      // ret 0 (cdecl)
+    put(HELPER, {0x8b, 0x44, 0x24, 0x04, // mov eax, [esp+4]
+                 0x8b, 0x00,             // mov eax, [eax]
+                 0x8d, 0x04, 0x40,       // lea eax, [eax+eax*2]
+                 0xc2, 0x00, 0x00});     // ret 0 (cdecl)
     const uint32_t block = DATA + 0x100;
     memset(g_mem + block, 0, 0x200);
-    wr32(block + 0x14, 5);        // helper input
-    wr32(block + 0x14 + 4, 9);    // eax
-    wr32(block + 0x14 + 8, 4);    // ecx: 9 < 4 is false, so eax = 4
+    wr32(block + 0x14, 5);     // helper input
+    wr32(block + 0x14 + 4, 9); // eax
+    wr32(block + 0x14 + 8, 4); // ecx: 9 < 4 is false, so eax = 4
     X86 c = fresh();
     c.r[R_ESI] = 0x1234;
     const uint32_t esp = c.r[R_ESP];
@@ -155,7 +155,8 @@ static void test_refusals() {
     CHECK(interp_call(&c, CODE) == 1);
     CHECK(c.r[R_EAX] == 1);
     // A fault part way through returns zero to the caller with its stack intact.
-    put(CODE, {0x56, 0x56, 0x8b, 0x05, 0xff, 0xff, 0xff, 0xff, 0x5e, 0x5e, 0xc3}); // mov eax, [0xffffffff]
+    put(CODE, {0x56, 0x56, 0x8b, 0x05, 0xff, 0xff, 0xff, 0xff, 0x5e, 0x5e,
+               0xc3}); // mov eax, [0xffffffff]
     c = fresh();
     const uint32_t esp = c.r[R_ESP];
     wr32(esp - 4, RETURN);
@@ -175,7 +176,8 @@ static int run_hex(const char *hex) {
     for (uint32_t i = 0; i < 0x1000; ++i)
         g_mem[DATA + i] = (uint8_t)(i * 37 + 11);
     X86 c = fresh();
-    const uint32_t regs[8] = {0x12345678, 0x80000000, 0x7fffffff, DATA + 0x800, 0, 0xfffffffe, DATA + 0x400, 3};
+    const uint32_t regs[8] = {0x12345678, 0x80000000, 0x7fffffff,   DATA + 0x800,
+                              0,          0xfffffffe, DATA + 0x400, 3};
     for (int i = 0; i < 8; ++i)
         if (i != R_ESP)
             c.r[i] = regs[i];

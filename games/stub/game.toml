@@ -39,9 +39,12 @@ mouse_device_ptr = 0x00600300
 mouse_device_right = 0x00600340
 camera = 0x00600400
 
-[touch]
-# "auto" shows the on-screen keypad when no hardware keyboard is attached; "hidden" starts hidden.
-keypad = "auto"
+[controls]
+# The on-screen controls a fresh profile shows when no hardware keyboard is attached:
+# "pad", "keys", "pad+keys" or "hidden". pad: "mapped" (keys and mouse), "native"
+# (DirectInput joystick and XInput) or "off".
+default_layout = "pad"
+pad = "mapped"
 
 [bundle]
 exclude = []
