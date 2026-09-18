@@ -1,6 +1,13 @@
-# game.toml - a sample, not a game: sample.exe (src/sample.c, 32-bit, built
-# by tools/prepare.py) and Wine's own i386 msvcrt.dll from CrossOver 26.3,
-# translated as an auxiliary module. See README.md.
+# game.toml.in - tools/prepare.py renders game.toml from this, which is why
+# game.toml itself is ignored: the hashes below are of files on the machine
+# that staged them - sample.exe as this toolchain built it, and whichever Wine
+# build msvcrt.dll came out of. Nothing about one machine's copies belongs in
+# the repository, and a translation is only valid for the exact bytes it was
+# made from, which is what the hashes hold the loader to.
+#
+# A sample, not a game: sample.exe (src/sample.c, 32-bit) and, when
+# --wine-dlls names a Wine i386 directory, that Wine's own msvcrt.dll as an
+# auxiliary module. See README.md.
 #
 # The [hooks] and globals.toml addresses are sentinels in sample.exe's
 # zero-filled kit_sentinels array (.data); nothing reads or hooks them.
@@ -11,27 +18,12 @@ name = "Wine msvcrt sample"
 app_name = "WineMsvcrtSample"
 bundle_id = "dev.recompkit.sample.winemsvcrt"
 executable = "sample.exe"
-sha256 = "da17029bb44ef0789ee52a12a3f2c3fdc0642ccd57f7109351530eefd3911f9c"
+sha256 = "@SAMPLE_SHA256@"
 image_base = 0x00400000
 entry_point = 0x00401000
 guest_root = 'C:\Sample'
 developer_exe = "original/sample.exe"
-# Wine links its DLLs at 0x10000000, just past the kit's default arena.
-guest_size = 0x10100000
-
-# CrossOver 26.3.0 (Wine) lib/wine/i386-windows/msvcrt.dll, unmodified.
-[modules.aux.msvcrt]
-name = "msvcrt.dll"
-path = "original/msvcrt.dll"
-sha256 = "e3202fff5e8d88f4ca4a5cd0bca5764525ac906bbef34899a86f93512bdb6bf6"
-base = 0x10000000
-size = 0xa2000
-listings = "analysis/decompiled/msvcrt.dll"
-function_alignment = 4
-# A printf-format jump table (in 1003c7e0) names 1003ccde, a block Ghidra's
-# listing leaves out: MOV EAX,[EBX+0x40] after an unconditional JMP.
-entry_points = [0x1003ccde]
-
+@MSVCRT_MODULE@
 [translate]
 listings = "analysis/decompiled/sample.exe"
 globals = "globals.toml"

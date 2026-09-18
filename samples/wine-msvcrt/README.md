@@ -17,19 +17,32 @@ Nothing here is a game, and nothing here ships: the sample is a measurement.
 
 ## Running it
 
-Wine's `msvcrt.dll` is taken from a local CrossOver 26.3 installation and is
-not redistributed; `original/` and `analysis/` are ignored.
-
 ```sh
 tools/prepare.py --cc <llvm-mingw>/bin/i686-w64-mingw32-clang \
-    --wine-dlls /Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine/i386-windows \
     --ghidra-home <ghidra_12.1.3_PUBLIC> --java-home <jdk>
 # from the kit
-tools/build.py --game-dir <here> --regenerate --target headless \
-    --allow-table-gaps "msvcrt strftime jump tables name 1003ccde, a block Ghidra's listing omits" \
-    --allow-unmodelled "SSE2 in Wine msvcrt; reaching one is still fatal, and the point is how far startup gets"
+tools/build.py --game-dir <here> --regenerate --target headless
 RECOMP_EXE=<here>/original/sample.exe build/recomp/pop_headless
 ```
+
+That is the interpreter benchmark, and it needs no Wine. Add `--wine-dlls
+<wine>/lib/wine/i386-windows` to `prepare.py` for the second experiment; the
+build then wants two acceptances the DLL needs:
+
+```sh
+tools/build.py --game-dir <here> --regenerate --target headless \
+    --allow-table-gaps "msvcrt strftime jump tables name 1003ccde" \
+    --allow-unmodelled "UD2, FISTTP and the x87 environment pair remain"
+```
+
+Nothing of anyone's machine is tracked here. `prepare.py` renders `game.toml`
+from `game.toml.in` with the hashes of what it staged - `sample.exe` as the
+local toolchain built it, and whichever Wine build `msvcrt.dll` came from -
+and `original/`, `analysis/`, `build/` and `game.toml` are ignored. Any Wine
+serves: the hash is not a pin on one distribution but on the exact bytes the
+translation was made from, which is what the loader checks before it maps
+anything. Wine is LGPL and none of it is redistributed here. The runs below
+used CrossOver 26.3.0's `msvcrt.dll`.
 
 ## Result 1: the interpreter costs about 10x
 
