@@ -17,3 +17,10 @@ extern "C" void recomp_call(X86 *c, uint32_t target) {
             target);
     c->r[R_EAX] = 0;
 }
+
+// interp.cpp hands a tail call on to the table, so the stand-in needs the jump
+// entry too. Without the generated table there is nothing beyond the shims a
+// call already reaches, so the two behave alike here.
+extern "C" void recomp_jump(X86 *c, uint32_t target) {
+    recomp_call(c, target);
+}

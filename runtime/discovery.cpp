@@ -2,6 +2,7 @@
 #include "discovery.h"
 
 #include "win32.h"
+#include "loader.h"
 
 #include "../platform/os.h"
 
@@ -34,6 +35,21 @@ const char *path() {
 
 bool g_registered = false;
 
+// The next pass hands every recorded address to the translator as an entry
+// point, and the translator refuses one that is not in a code section. A call
+// through a pointer the guest never filled in arrives here as 0, a wild one as
+// whatever the slot held, and a run that has lost its way names whatever it
+// reads - data in the image included. Recording any of those would stop the
+// next pass dead, so ask the question the translator asks.
+bool in_code_section(uint32_t target) {
+    for (const SectionInfo &s : loader_sections()) {
+        uint32_t size = s.vsize ? s.vsize : s.raw_size;
+        if (target >= s.va && target < s.va + size)
+            return (s.characteristics & 0x20000000u) != 0; // IMAGE_SCN_MEM_EXECUTE
+    }
+    return false; // the PE headers, a gap, an auxiliary module, or no image yet
+}
+
 // The caller holds g_mutex.
 void write_locked();
 
@@ -41,6 +57,8 @@ void write_locked();
 
 extern "C" void discovery_note(const char *kind, uint32_t target, uint32_t from) {
     if (!path())
+        return;
+    if (!in_code_section(target))
         return;
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_registered) {

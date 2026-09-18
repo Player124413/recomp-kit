@@ -9,6 +9,7 @@
 #include "../mods_seam.h"
 #include "../intrinsics.h"
 #include "../loader.h"
+#include "../discovery.h"
 #include "../memory.h"
 #include "../win32.h"
 #include "../../platform/os.h"
@@ -807,6 +808,75 @@ static void test_loader() {
         remove_tree(bad_dir);
     }
     check(loader_load(nullptr), "reloaded the correct image");
+}
+
+// The recorded lines of a discovery file, without its comment header.
+static std::string file_text(const std::string &path) {
+    std::string out;
+    if (FILE *in = fopen(path.c_str(), "r")) {
+        char line[256];
+        while (fgets(line, sizeof line, in))
+            if (line[0] != '#')
+                out += line;
+        fclose(in);
+    }
+    return out;
+}
+
+// The recorder closes the loop between a run and the next translation, so what
+// it refuses matters as much as what it keeps: the next pass hands every
+// recorded address to the translator as an entry point, and one the translator
+// refuses ends discovery there.
+static void test_discovery_recorder() {
+    uint32_t code = 0, data = 0;
+    for (const SectionInfo &sec : loader_sections()) {
+        bool exec = (sec.characteristics & 0x20000000u) != 0;
+        if (exec && !code)
+            code = sec.va + 0x40;
+        if (!exec && !data)
+            data = sec.va + 0x40;
+    }
+    if (!check(code != 0, "the image has a code section"))
+        return;
+
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s/recomp-discovery-XXXXXX", os_temp_dir());
+    if (!check(os_mkdtemp(dir) == 0, "created a discovery directory"))
+        return;
+    std::string file = std::string(dir) + "/discovered.txt";
+    check(discovery_count() == 0, "nothing is recorded before RECOMP_DISCOVERY names a file");
+    discovery_note("call", code, 0x00401000);
+    check(discovery_count() == 0, "and nothing is recorded while it is unset");
+
+    os_setenv("RECOMP_DISCOVERY", file.c_str());
+    discovery_note("call", 0, 0x00401000);
+    check(discovery_count() == 0, "a call through a pointer the guest never filled in is not code");
+    discovery_note("call", IMAGE_BASE - 0x1000, 0x00401000);
+    discovery_note("jump", loader_image_limit() + 0x1000, 0x00401000);
+    check(discovery_count() == 0, "nor is an address outside the image");
+    if (data) { // the stub image need not have one
+        discovery_note("call", data, 0x00401000);
+        check(discovery_count() == 0, "nor one in a section the image cannot execute: %08x", data);
+    }
+
+    discovery_note("call", code, 0x00401000);
+    discovery_note("call", code, 0x00402000);
+    check(discovery_count() == 1,
+          "an address in a code section is one find however often it is reached");
+    // Each fresh address rewrites the file, so a run that dies in a signal
+    // still leaves its addresses behind; a later hit on one already recorded
+    // only updates the count, which reaches the file when the run ends.
+    char want[64];
+    snprintf(want, sizeof want, "%08x call 00401000 1", code);
+    check(file_text(file) == std::string(want) + "\n",
+          "a fresh address reaches the file at once, as \"%s\"", want);
+    discovery_write();
+    snprintf(want, sizeof want, "%08x call 00401000 2", code);
+    check(file_text(file) == std::string(want) + "\n",
+          "and the run's end records how often it was reached, as \"%s\": %s", want,
+          file_text(file).c_str());
+    os_unsetenv("RECOMP_DISCOVERY");
+    remove_tree(dir);
 }
 
 static void test_allocator() {
@@ -6189,6 +6259,7 @@ int main(int argc, char **argv) {
     }
 
     test_loader();
+    test_discovery_recorder();
     test_auxiliary_modules();
     test_import_return_trace();
     test_modules_and_wide();
