@@ -9189,7 +9189,6 @@ static void test_native_overlay_pixels() {
     }
 }
 
-
 // ---- The Direct3D 9 GPU renderer --------------------------------------------
 // Shader model 1.1, assembled by hand: vs `dcl_position v0; mov oPos, v0;
 // mov oD0, c0`, ps `mov r0, v0`.
