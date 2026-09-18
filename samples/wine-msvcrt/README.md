@@ -47,10 +47,12 @@ used CrossOver 26.3.0's `msvcrt.dll`.
 ## Result 1: the interpreter costs about 10x
 
 20,000,000 iterations of one integer kernel, run translated and then from a
-copy of its own bytes in the heap, in the same process. Every row below is
-five runs on an idle M-series Mac; translated code measured 27-29 ms in all of
-them, and native arm64 C compiled from the same source takes 58 ms, so
-translated code is native speed here.
+copy of its own bytes in the heap, in the same process, each the fastest of
+three calls. Every row below is five runs on an idle M-series Mac; translated
+code measured 27-29 ms in all of them, and native arm64 C compiled from the
+same source takes 58 ms, so translated code is native speed here. A busy
+machine moves every number - one later sitting read 56 ms and 590 ms for the
+same two paths - so the ratio within a run is what to read.
 
 | Interpreter | Interpreted | vs translated |
 |---|---:|---:|
@@ -188,22 +190,21 @@ the caller returns there and then. In pass 1 the sample prints
 what is missing, which is the argument for doing this in a loop until the file
 comes back empty, and for the interpreter filling the gap rather than a zero.
 
-## Open: a crash this sample found in translated code
+## A crash this sample found, and where it went
 
-Rewriting `experiment_interp` to call each path three times and keep the
-fastest (a `fastest(bench_fn, n, rounds, &result)` helper, which the compiler
-inlines into one loop with an indirect call) ends the host process with a
-stack overflow - `EXC_BAD_ACCESS` writing below the host stack, in
-`body_00401070`, entered again and again with `entry_ = 0x40106b`. The run
-gets as far as `VirtualAlloc`; a breakpoint on `recomp_unknown_call` is never
-hit, so the interpreter is not involved and this is translated code
-re-entering itself. It reproduces with the interpreter as committed and with
-the specialised one, and not at all with the sample as it stands, whose
-`experiment_interp` calls each path once.
+Measuring each path as the fastest of three calls - which the compiler inlines
+into one loop around an indirect call - used to end the host process with a
+stack overflow: `body_00401070` entered again and again with
+`entry_ = 0x40106b`, a breakpoint on `recomp_unknown_call` never reached, so
+translated code re-entering itself rather than anything to do with the
+interpreter. The shape is ordinary compiler output, which is why it was worth
+recording rather than working around.
 
-Worth chasing: the shape - an indirect call in a loop, returning into an
-address the translator recovered as an alternate entry - is ordinary
-compiler output, so a game will produce it.
+It is fixed. Checked at `ac86bba` - main with the NFS Most Wanted line and its
+MSVC bring-up, before any of this branch merged - where the same program runs
+to `sample.end` with `bench.match 1`, so the fix is theirs, not this branch's.
+The sample now measures that way permanently, which keeps the shape exercised
+rather than only remembered.
 
 ## Kit changes this sample needed
 

@@ -111,6 +111,30 @@ def test_checkpoints_live_in_the_establishing_function(absolute):
     assert "recomp_seh_frame_leave(c)" in text
 
 
+def test_a_handler_that_is_not_a_delphi_stub_still_translates(tmp_path, monkeypatch):
+    """MSVC writes the same frame prologue and pushes an ordinary function.
+
+    Only Delphi's handler is a five-byte JMP with a landing block behind it.
+    MSVC pushes __except_handler3, an ordinary function reached through a
+    scope table, and classifying that as a stub refused the whole image -
+    which is why no MSVC game could regenerate, Populous and Pharaoh included.
+    Discovery asks through seh_landings_opt, finds no landings behind a
+    handler of that shape, and carries on; the frame is still established.
+    """
+    handler, routine = BASE + 0x100, BASE + 0x200
+    # PUSH EBP; PUSH handler; PUSH FS:[0]; MOV FS:[0],ESP; ... ; RET
+    caller = bytes.fromhex("55") + b"\x68" + struct.pack("<I", handler)
+    caller += bytes.fromhex("64ff3500000000" "64892500000000")
+    caller += bytes.fromhex("5a59598915000000005dc3".replace(" ", ""))
+    # The handler: an ordinary function, not a JMP stub.
+    blocks = {BASE: caller, handler: bytes.fromhex("558bec33c05dc3"), routine: b"\xc3"}
+    img = synthetic_image(blocks, base=BASE, size=0x1000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    text = translate_entry_fixture(tmp_path, monkeypatch, img, {BASE: caller})
+    assert "fn_%08x" % BASE in text        # the image translated at all
+    assert "recomp_seh_frame_enter(c)" in emitted_body(text, BASE)
+
+
 def test_other_teb_writes_do_not_create_checkpoints():
     case, _, _ = seh_case()
     case.lines = [(off, text.replace("FS:[EAX]", "FS:[0x4]")) for off, text in case.lines]

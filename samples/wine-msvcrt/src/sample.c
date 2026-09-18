@@ -74,27 +74,48 @@ typedef int(__cdecl *atoi_fn)(const char *);
 typedef void(__cdecl *qsort_fn)(void *, size_t, size_t, int(__cdecl *)(const void *, const void *));
 typedef int(__cdecl *sprintf_fn)(char *, const char *, ...);
 
+/* The fastest of `rounds` calls. A median or a mean would measure whatever
+ * else the machine was doing; the minimum is the run that was left alone.
+ *
+ * The shape matters as well as the timing: the compiler inlines this into one
+ * loop around an indirect call, and translated code once re-entered its own
+ * caller through that until the host stack overflowed. That was fixed by the
+ * time this became how the sample measures, and this keeps it measured. */
+static DWORD fastest(bench_fn fn, unsigned n, int rounds, unsigned *result) {
+    /* bench() has no side effects, so a compiler that can see two rounds are
+     * the same call keeps the first answer and the rest measure nothing -
+     * which is what a 0 ms translated time was. Reading the count back
+     * through a volatile leaves it unable to prove that. */
+    static volatile unsigned count;
+    DWORD best = 0xffffffffu;
+    for (int k = 0; k < rounds; k++) {
+        count = n;
+        DWORD t0 = GetTickCount();
+        *result = fn(count);
+        DWORD took = GetTickCount() - t0;
+        if (took < best)
+            best = took;
+    }
+    return best;
+}
+
 static void experiment_interp(unsigned n) {
-    DWORD t0 = GetTickCount();
-    unsigned translated = bench(n);
-    DWORD t1 = GetTickCount();
+    unsigned translated = 0, interpreted = 0;
+    DWORD in_image = fastest(bench, n, 3, &translated);
 
     size_t size = (size_t)((char *)&bench_end - (char *)&bench);
     unsigned char *copy = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     unsigned char *src = (unsigned char *)&bench;
     for (size_t k = 0; k < size; k++)
         copy[k] = src[k];
-    bench_fn heap = (bench_fn)copy;
-    DWORD t2 = GetTickCount();
-    unsigned interpreted = heap(n);
-    DWORD t3 = GetTickCount();
+    DWORD in_heap = fastest((bench_fn)copy, n, 1, &interpreted);
 
     line("bench.iterations", n);
     line("bench.bytes", (unsigned)size);
     line("bench.translated.result", translated);
-    line("bench.translated.ms", t1 - t0);
+    line("bench.translated.ms", in_image);
     line("bench.interpreted.result", interpreted);
-    line("bench.interpreted.ms", t3 - t2);
+    line("bench.interpreted.ms", in_heap);
     line("bench.match", translated == interpreted);
 }
 
