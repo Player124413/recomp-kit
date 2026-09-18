@@ -413,6 +413,30 @@ SEGMENT_SELECTOR = {"CS": 0x1b, "DS": 0x23, "ES": 0x23, "SS": 0x23, "FS": 0x3b, 
 ST_RE = re.compile(r"^ST([0-7])$")
 MM_RE = re.compile(r"^MM([0-7])$")
 
+#: A vector instruction this translator does not model. CPUID advertises
+#: neither SSE nor SSE2, so a guest that checks (the CRT's own probe) never
+#: runs one; each becomes a recomp_unmodelled trap rather than a translation
+#: failure, which would lose the whole function. Anything naming an MMn or
+#: XMMn register counts, plus the extension instructions that name neither.
+VECTOR_REG_RE = re.compile(r"\b(?:X?MM[0-7]|xmmword)\b")
+VECTOR_MNEM = frozenset((
+    "STMXCSR", "LDMXCSR", "FXSAVE", "FXRSTOR", "SFENCE", "LFENCE", "MFENCE",
+    "PREFETCHNTA", "PREFETCHT0", "PREFETCHT1", "PREFETCHT2", "MOVNTI", "CLFLUSH",
+))
+
+
+def is_vector_insn(mnem, ops):
+    """True for an MMX/SSE/SSE2 instruction (see VECTOR_REG_RE).
+
+    EMMS is not one of them here: it names no register and only marks every
+    x87 register empty, which the x87 model can do. Codecs call a lone
+    `emms; ret` helper unconditionally, whatever CPUID said, so trapping it
+    stopped a game that never used MMX arithmetic at all.
+    """
+    if mnem == "EMMS":
+        return False
+    return mnem in VECTOR_MNEM or any(VECTOR_REG_RE.search(o) for o in ops)
+
 
 XMM_RE = re.compile(r"^XMM([0-7])$")
 
@@ -873,6 +897,21 @@ class Image(object):
         if not self.is_exec(stub + 5):
             raise TranslateError("SEH landing %08x is not in code" % (stub + 5))
         return [stub + 5], None
+
+    def seh_landings_opt(self, stub):
+        """seh_landings for a stub this pass may not be able to classify.
+
+        The frame idiom - three PUSHes and the chain MOV - is the same in
+        every compiler that establishes a TEB exception record, so a frame
+        site can name a handler that is not a Delphi stub at all: MSVC's is
+        an ordinary function reached through a scope table. There is no
+        landing block to discover behind one, so discovery skips it; the
+        frame itself is still modelled, because seh_frame_sites keeps it.
+        """
+        try:
+            return self.seh_landings(stub)
+        except TranslateError:
+            return None
 
     def seh_constructor_helper(self, va):
         """Return the handler stored by Delphi's returning constructor helper.
@@ -1820,6 +1859,13 @@ class Translator(object):
         if t is not None and t not in fn.pushed_continuations:
             return [fn.index[t]] if t in fn.index else []
         nxt = i + 1 if (i + 1 < len(fn.insns) and fn.contiguous[i]) else None
+        if m == "INT3":
+            # MSVC pads between functions with INT3, and a listing cut at a
+            # call that never returns runs that padding into the next
+            # function. Nothing falls out of the padding: the byte after it
+            # belongs to whatever comes next, and is not this block's
+            # successor. The instruction itself still traps at run time.
+            return []
         if m == "RET":
             return [fn.index[t] for t in sorted(fn.pushed_continuations)]
         if m in JCC:
@@ -2408,7 +2454,11 @@ class Translator(object):
             body = self.emit(fn, i, live_out[i])
             for line in body:
                 out.append("    " + line)
-            if not fn.contiguous[i] and ins.mnem not in TERMINATORS and not self.never_returns(ins):
+            # An INT3 the listing ran into is MSVC's padding between
+            # functions: the byte after it belongs to whatever comes next, so
+            # this body ends here rather than falling through into it.
+            if (not fn.contiguous[i] and ins.mnem not in TERMINATORS
+                    and ins.mnem != "INT3" and not self.never_returns(ins)):
                 t = fn.fallthrough[i]
                 self.stats["_listing_gap"] += 1
                 self.notes.append(
@@ -2418,7 +2468,8 @@ class Translator(object):
         # A function whose last listed instruction is not a terminator falls
         # through into the next function.
         last = fn.insns[-1]
-        if last.mnem not in TERMINATORS and not self.never_returns(last):
+        if (last.mnem not in TERMINATORS and last.mnem != "INT3"
+                and not self.never_returns(last)):
             t = fn.fallthrough[-1] or fn.end
             self.stats["_fallthrough_exit"] += 1
             out.append("    " + " ".join(self.goto_target(fn, t, last)))
@@ -2680,6 +2731,10 @@ class Translator(object):
             return ["c->r[4] = c->r[5]; c->r[5] = rd32(c->r[4]); c->r[4] += 4;"]
         if m == "SAHF":
             return ["x86_sahf(c);"]
+        if m == "LAHF":
+            # AH = SF:ZF:0:AF:0:PF:1:CF
+            return ["c->r[0] = (c->r[0] & 0xffff00ffu) | "
+                    "(((x86_get_eflags(c) & 0xd5u) | 0x02u) << 8);"]
         if m == "XLAT":
             return ["xlat(c);"]
         if m == "BSWAP":
@@ -3017,6 +3072,10 @@ class Translator(object):
         if m.startswith("F"):
             return self.emit_x87(fn, ins, m, ops)
 
+        if is_vector_insn(m, ins.ops or ()):
+            # Not one of the forms modelled above: a trap says so if a guest
+            # that skipped the CPUID check ever reaches it.
+            return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
         raise TranslateError("unhandled mnemonic %s" % m)
 
     # ---- control-flow helpers -------------------------------------------
@@ -3445,8 +3504,10 @@ class Translator(object):
             return ["x87_frstor(c, %s);" % addr_expr(ops[0])]
         if m in ("FINIT", "FNINIT"):
             return ["x87_finit(c);"]
-        if m in ("FNSTENV", "FLDENV"):
-            raise TranslateError("unsupported x87 environment op %s" % m)
+        if m in ("FNSTENV", "FSTENV"):
+            return ["x87_fnstenv(c, %s);" % addr_expr(ops[0])]
+        if m == "FLDENV":
+            return ["x87_fldenv(c, %s);" % addr_expr(ops[0])]
 
         raise TranslateError("unhandled x87 mnemonic %s" % m)
 
@@ -3944,7 +4005,10 @@ def main():
                         if op.kind == "imm" and t < op.imm < bounds[1]:
                             continuations.add(op.imm)
                 for stub in stubs:
-                    landings, _ = image.seh_landings(stub)
+                    got = image.seh_landings_opt(stub)
+                    if got is None:
+                        continue
+                    landings, _ = got
                     continuations.update(a for a in landings if t < a < bounds[1])
                 pending = continuations - stubs - attempted
                 if not pending:
@@ -4115,7 +4179,10 @@ def main():
             # reaching a finally cleanup. Seed those in-span landings into the
             # same owner too, retaining their callable alternate entries.
             for stub in sorted(stubs):
-                landings, _ = image.seh_landings(stub)
+                got = image.seh_landings_opt(stub)
+                if got is None:
+                    continue
+                landings, _ = got
                 for landing in landings:
                     if fn.addr <= landing < span_end:
                         changed |= adopt(landing, in_span=True)
@@ -4126,7 +4193,10 @@ def main():
                                 changed = True
 
         for stub in seh_frame_sites(fn, image).values():
-            landings, table_range = image.seh_landings(stub)
+            got = image.seh_landings_opt(stub)
+            if got is None:
+                continue
+            landings, table_range = got
             if table_range or landings != [stub + 5]:
                 continue
             landing = image.instruction_at(stub + 5)
@@ -4182,7 +4252,10 @@ def main():
     for addr in sorted(EXTRA_ENTRY_POINTS):
         if not image.is_exec(addr):
             raise TranslateError("[translate] entry_points: %08x is not in a code section" % addr)
-        if not resolve(addr, set(owner), why="config"):
+        # Its whole body: fragments recovered elsewhere must not cut a named
+        # function short. Entries are seeded in address order, so a thunk
+        # named with its target validates against an entry that exists.
+        if not resolve(addr, set(), why="config"):
             # Saying nothing here is how a declared entry point goes missing:
             # the run that needed it still calls an address the translation
             # does not carry, and the only symptom is a null call much later.
@@ -4220,10 +4293,16 @@ def main():
                 if stub in seh_stubs:
                     continue
                 seh_stubs.add(stub)
-                landings, table_range = image.seh_landings(stub)
+                # The handler is a function whatever its shape: MSVC's is an
+                # ordinary routine the prologue pushes. Adopt it first, then
+                # look for a Delphi landing block behind it.
+                changed |= resolve(stub, set(owner), why="immediate")
+                got = image.seh_landings_opt(stub)
+                if got is None:
+                    continue
+                landings, table_range = got
                 if table_range:
                     tr.table_ranges.add(table_range)
-                changed |= resolve(stub, set(owner), why="immediate")
                 for landing in landings:
                     changed |= resolve(landing, set(owner), why="seh")
         for fn in list(parsed):
@@ -4587,7 +4666,10 @@ def main():
                             targets.add(op.imm)
         for stub in seh_frame_sites(fn, image).values():
             targets.add(stub)
-            landings, table_range = image.seh_landings(stub)
+            got = image.seh_landings_opt(stub)
+            if got is None:
+                continue
+            landings, table_range = got
             targets.update(landings)
             seh_stubs.add(stub)
             if table_range:

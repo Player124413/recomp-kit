@@ -224,8 +224,13 @@ if(TARGET recomp_gen)
     LIBS ${POP_CORE_LIBS}
     FRAMEWORKS ${FW_FOUNDATION} ${FW_METAL})
   pop_link_sdl(pop_smoke)
+  # Each target is optional on its own: a game can ship core mods without a
+  # smoke probe, and depending on one that does not exist fails generation.
   if(TARGET core_mods)
-    add_dependencies(pop_smoke core_mods smoke_probe)
+    add_dependencies(pop_smoke core_mods)
+  endif()
+  if(TARGET smoke_probe)
+    add_dependencies(pop_smoke smoke_probe)
   endif()
 
   endif()

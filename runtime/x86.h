@@ -336,6 +336,7 @@ void recomp_int(X86 *c, uint32_t vec);
  * image, because a listing routinely decodes the data past a function's last
  * instruction as code. Reaching one is fatal and says where. */
 void recomp_unmodelled(X86 *c, uint32_t addr);
+void recomp_breakpoint(X86 *c, uint32_t addr);
 
 /* ------------------------------------------------------ hook dispatch -- */
 
@@ -1297,6 +1298,30 @@ static inline void x87_finit(X86 *c) {
  * with the opcode, FDP, FDS), which this model does not track and writes as
  * zero, then ST(0) through ST(7) as 80-bit values in stack order.  FNSAVE
  * then reinitialises the FPU, which is why the CRT pairs it with FRSTOR. */
+/* FNSTENV m28: the control, status and tag words, then the exception
+ * pointers this model does not track, written as zero. Every exception is
+ * masked afterwards, as on hardware; the register stack is untouched. */
+static inline void x87_fnstenv(X86 *c, uint32_t a) {
+    wr32(a, c->fpu_cw);
+    wr32(a + 4, fstsw(c));
+    wr32(a + 8, c->fpu_tag);
+    wr32(a + 12, 0);
+    wr32(a + 16, 0);
+    wr32(a + 20, 0);
+    wr32(a + 24, 0);
+    x87_set_cw(c, (uint16_t)(c->fpu_cw | 0x3fu));
+}
+
+/* FLDENV m28: control word, status word with TOP, tag word. The registers
+ * stay in their physical slots, so ST(i) follows the restored TOP. */
+static inline void x87_fldenv(X86 *c, uint32_t a) {
+    uint16_t sw = rd16(a + 4);
+    x87_set_cw(c, rd16(a));
+    c->fpu_top = (sw >> 11) & 7u;
+    c->fpu_sw = (uint16_t)(sw & (uint16_t)~0x3800u);
+    c->fpu_tag = rd16(a + 8);
+}
+
 static inline void x87_fnsave(X86 *c, uint32_t a) {
     unsigned i;
     wr32(a, c->fpu_cw);
