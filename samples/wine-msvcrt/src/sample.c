@@ -17,8 +17,7 @@
  * (32-bit MOV, LEA, ADD/SUB/CMP/AND/OR/XOR, TEST, IMUL, INC/DEC, PUSH/POP,
  * JMP, Jcc, RET) and position independent, so it can run from a heap copy.
  * bench_end marks where its bytes stop. */
-__attribute__((section(".bench"), noinline, used))
-unsigned __cdecl bench(unsigned n) {
+__attribute__((section(".bench"), noinline, used)) unsigned __cdecl bench(unsigned n) {
     unsigned h = 2166136261u, x = 1, i;
     for (i = 0; i < n; i++) {
         x = x * 1103515245u + 12345u;
@@ -30,8 +29,7 @@ unsigned __cdecl bench(unsigned n) {
     }
     return h;
 }
-__attribute__((section(".bench"), noinline, used))
-void __cdecl bench_end(void) {}
+__attribute__((section(".bench"), noinline, used)) void __cdecl bench_end(void) {}
 
 static HANDLE out;
 
@@ -104,7 +102,8 @@ static void experiment_interp(unsigned n) {
     DWORD in_image = fastest(bench, n, 3, &translated);
 
     size_t size = (size_t)((char *)&bench_end - (char *)&bench);
-    unsigned char *copy = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    unsigned char *copy =
+        VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     unsigned char *src = (unsigned char *)&bench;
     for (size_t k = 0; k < size; k++)
         copy[k] = src[k];
