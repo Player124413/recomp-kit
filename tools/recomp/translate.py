@@ -434,9 +434,14 @@ MM_RE = re.compile(r"^MM([0-7])$")
 #: A vector instruction this translator does not model. CPUID advertises
 #: neither SSE nor SSE2, so a guest that checks (the CRT's own probe) never
 #: runs one; each becomes a recomp_unmodelled trap rather than a translation
-#: failure, which would lose the whole function. Anything naming an MMn or
-#: XMMn register counts, plus the extension instructions that name neither.
-VECTOR_REG_RE = re.compile(r"\b(?:X?MM[0-7]|xmmword)\b")
+#: failure, which would lose the whole function. Anything naming an MMn,
+#: XMMn or YMMn register counts, plus the extension instructions that name
+#: none. AVX is included for the same reason: CPUID advertises it no more than
+#: SSE, and a runtime's AVX path (Delphi's Move has one) is never taken.
+VECTOR_REG_RE = re.compile(r"\b(?:[XY]?MM[0-7]|[xy]mmword)\b")
+#: AVX names registers and an operand size this translator does not parse,
+#: so it has to be recognised before the operands are.
+AVX_OPERAND_RE = re.compile(r"\b(?:YMM[0-7]|ymmword)\b")
 VECTOR_MNEM = frozenset((
     "STMXCSR", "LDMXCSR", "FXSAVE", "FXRSTOR", "SFENCE", "LFENCE", "MFENCE",
     "PREFETCHNTA", "PREFETCHT0", "PREFETCHT1", "PREFETCHT2", "MOVNTI", "CLFLUSH",
@@ -824,6 +829,21 @@ class Image(object):
         self.end = self.base + self.size
         rel = pe.OPTIONAL_HEADER.DATA_DIRECTORY[5]      # IMAGE_DIRECTORY_BASERELOC
         self.reloc_dir = (rel.VirtualAddress, rel.Size)
+        #: Import address table slots by address, as the imported name.
+        #: noreturn_callees_from reads it to see that a function ending in
+        #: RaiseException - MSVC's _CxxThrowException - does not return, and
+        #: so that what a compiler put after a throw, such as a switch table,
+        #: is not decoded as code.
+        self.iat_names = {}
+        try:
+            pe.parse_data_directories(directories=[
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+            for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []):
+                for imp in entry.imports:
+                    if imp.name:
+                        self.iat_names[imp.address] = imp.name.decode("ascii", "replace")
+        except Exception:                 # a malformed table only loses names
+            pass
         pe.close()
         # Section map: executable ranges are where code can live, initialized
         # data is where a pointer to it can be stored.  .reloc is the
@@ -2623,6 +2643,11 @@ class Translator(object):
                              "INSB", "INSW", "INSD", "OUTSB", "OUTSW", "OUTSD"))
 
     def _emit(self, fn, i, ins, m, nxt, live):
+        if any(AVX_OPERAND_RE.search(o) for o in ins.ops or ()):
+            # Never modelled, and its operands do not parse: trap it here,
+            # before parsing refuses the whole function over a path CPUID
+            # keeps the guest from taking.
+            return ["recomp_unmodelled(c, %s); return;" % hexlit(ins.addr)]
         if m in self.STRING_MNEM and not names_an_xmm(ins):
             # Ghidra prints the implicit ES:EDI / ESI operands; they carry no
             # information the mnemonic does not already imply.
