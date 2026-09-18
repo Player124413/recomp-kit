@@ -7,11 +7,15 @@
 //                              gives Unicorn, and prints the final state
 #include "interp.h"
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 uint8_t *g_mem;
 // This test links the interpreter alone, so it owns the definitions the
@@ -200,6 +204,58 @@ static void test_refusals() {
     CHECK(c.r[R_EAX] == 0 && c.r[R_ESP] == esp && c.eip == RETURN);
 }
 
+// A routine that never reaches its RET has to stop on the step budget. Every
+// check here would hang, not fail, if the budget were taken back out, so the
+// suite is run under a watchdog: see main().
+static void test_step_budget() {
+    // jmp $ - the shape a data file's garbage decodes into. The decoder
+    // accepts it (the JMP is the routine's last instruction and nothing
+    // branches past it), so only the budget ends the run.
+    put(CODE, {0xeb, 0xfe});
+    X86 c = fresh();
+    const uint32_t esp = c.r[R_ESP];
+    wr32(esp - 4, RETURN);
+    wr32(esp - 8, 0xaabbccdd);
+    c.r[R_ESP] = esp - 4;
+    c.r[R_EAX] = 5;
+    CHECK(interp_call(&c, CODE) == 1); // ran, then faulted: not a refusal
+    CHECK(c.r[R_EAX] == 0 && c.r[R_ESP] == esp && c.eip == RETURN);
+    CHECK(rd32(esp - 8) == 0xaabbccdd); // the loop wrote nothing
+    CHECK(strstr(interp_last_error(), "no RET within 1048576 instructions") != nullptr);
+    CHECK(strstr(interp_last_error(), "01000000") != nullptr); // the guest address
+
+    // A loop that pushes stops the same way, and the fault path puts ESP back
+    // where the caller's return address left it however far the loop walked
+    // it down. push imm32; jmp $.
+    put(CODE, {0x68, 0x44, 0x33, 0x22, 0x11, 0xeb, 0xfe});
+    c = fresh();
+    wr32(esp - 4, RETURN);
+    c.r[R_ESP] = esp - 4;
+    CHECK(interp_call(&c, CODE) == 1);
+    CHECK(c.r[R_ESP] == esp && c.eip == RETURN);
+    CHECK(strstr(interp_last_error(), "no RET within") != nullptr);
+
+    // A conditional loop on a register the caller never set counts the same.
+    // dec eax; test eax,eax; jnz <start>; ret
+    put(CODE, {0x48, 0x85, 0xc0, 0x75, 0xfb, 0xc3});
+    c = fresh();
+    wr32(c.r[R_ESP] - 4, RETURN);
+    c.r[R_ESP] -= 4;
+    c.r[R_EAX] = 0; // 0 -> -1 -> ... : 2^32 iterations, well past the budget
+    CHECK(interp_call(&c, CODE) == 1);
+    CHECK(strstr(interp_last_error(), "no RET within") != nullptr);
+
+    // The budget is per interp_call, so the next call gets a whole one: a
+    // routine that stopped once must not poison the routines after it.
+    put(CODE, {0x40, 0xc3}); // inc eax; ret
+    c = fresh();
+    wr32(c.r[R_ESP] - 4, RETURN);
+    c.r[R_ESP] -= 4;
+    c.r[R_EAX] = 7;
+    CHECK(interp_call(&c, CODE) == 1);
+    CHECK(c.r[R_EAX] == 8 && c.eip == RETURN);
+}
+
 // The state test_interp_unicorn.py mirrors: registers from a fixed table,
 // ESI and EBX pointing into a data page filled with a pattern.
 static int run_hex(const char *hex) {
@@ -231,15 +287,32 @@ static int run_hex(const char *hex) {
     return 0;
 }
 
+#ifndef _WIN32
+extern "C" void watchdog(int) {
+    const char msg[] = "FAIL interp_tests hung: a routine ran without a step budget\n";
+    ssize_t ignored = write(2, msg, sizeof msg - 1);
+    (void)ignored;
+    _exit(1);
+}
+#endif
+
 int main(int argc, char **argv) {
     g_mem = (uint8_t *)calloc(GUEST_SIZE, 1);
     if (!g_mem)
         return 1;
     if (argc == 3 && !strcmp(argv[1], "--run"))
         return run_hex(argv[2]);
+    // Without the interpreter's step budget the checks in test_step_budget do
+    // not fail, they never come back; the watchdog turns that into a failure.
+    // The whole suite inside the budget is a fraction of a second.
+#ifndef _WIN32
+    signal(SIGALRM, watchdog);
+    alarm(30);
+#endif
     test_bank_routine();
     test_tail_call_out();
     test_refusals();
+    test_step_budget();
     printf("interp: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

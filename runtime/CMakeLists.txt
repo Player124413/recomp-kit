@@ -47,7 +47,10 @@ target_include_directories(interp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(interp_tests PRIVATE ${POP_WARN_HOST})
 pop_test_binary(interp_tests)
 add_test(NAME interp_tests COMMAND interp_tests WORKING_DIRECTORY ${POP_ROOT})
-set_tests_properties(interp_tests PROPERTIES LABELS nogame)
+# TIMEOUT because these checks assert that a guest routine cannot run
+# forever: a regression in them is a hang, not a failure, and a hung run
+# reports nothing at all. The suite takes under a second.
+set_tests_properties(interp_tests PROPERTIES LABELS nogame TIMEOUT 120)
 endif()
 
 # Linked by the hosts, the fixture and the mod tests, not by the unit tests.
@@ -72,7 +75,10 @@ target_compile_options(runtime_tests PRIVATE ${POP_WARN_HOST})
 pop_optimize(runtime_tests 1)
 pop_test_binary(runtime_tests)
 add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
-set_tests_properties(runtime_tests PROPERTIES LABELS game ENVIRONMENT RECOMP_PYTHON=${Python3_EXECUTABLE})
+# TIMEOUT for the reason interp_tests has one: this suite also runs guest
+# code through the interpreter. It takes two seconds when that returns.
+set_tests_properties(runtime_tests PROPERTIES LABELS game TIMEOUT 600
+                     ENVIRONMENT RECOMP_PYTHON=${Python3_EXECUTABLE})
 add_executable(gdi_tests tests/gdi_tests.cpp tests/stub_recomp_call.cpp)
 target_link_libraries(gdi_tests PRIVATE recomp_platform recomp_runtime)
 target_compile_options(gdi_tests PRIVATE ${POP_WARN_HOST})
