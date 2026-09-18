@@ -4103,6 +4103,15 @@ def main():
             if target in getattr(fn, "pushed_continuations", ()):
                 continue  # This is the body's own RET continuation, not another entry.
             prefix = prefix_before(fn, target)
+            # Retiring the body is only right when something names the
+            # address that displaces it. An unnamed candidate - a bare scan
+            # guess sitting on an interior instruction boundary - is this
+            # body's interior, not a function start, and destroying a body
+            # that already validated to make room for it loses real code.
+            # resolve() records such an address as an alias instead.
+            if (prefix is None and entry_strength.get(target, 0) == 0
+                    and target not in relocated and target not in pointer_callees):
+                continue
             for i, ins in enumerate(fn.insns):
                 if owner.get(ins.addr) is fn:
                     del owner[ins.addr]
@@ -4302,11 +4311,34 @@ def main():
         provenance[t] = why if why != "branch" else (
             "branch" if inherited == "config" else inherited)
         if validate and not accepts(new_fn):
-            # Decoded into something this compiler never emits, so the address
-            # is data.  Dropping it leaves any jump to it aborting at runtime
-            # with the address printed, which beats emitting nonsense.
-            rejected.add(t)
-            return False
+            # A candidate that nothing names - a bare scan guess whose shape
+            # merely resembles a thunk - can sit on an interior instruction
+            # boundary of a real function and truncate it into a fragment.
+            # Retry without those, but only when every boundary that could
+            # have cut this body is unnamed: a callee of a relocated pointer,
+            # or anything already owned, keeps its claim and the fragment
+            # stays rejected.
+            retry_fn = None
+            retry = image.recover(t, recovery_stops, bounds=bounds) if boundaries else []
+            if retry:
+                candidate = Function(t, name, retry[-1].addr + 1 - t, retry)
+                candidate.measure(image)
+                # Only a boundary inside the body can have cut it, and only
+                # one nothing names may be overruled: a callee of a relocated
+                # pointer, or anything already owned, keeps its claim.
+                inside = [a for a in boundaries if t < a < candidate.end]
+                if inside and all(entry_strength.get(a, 0) == 0 and a not in owner
+                                  and a not in pointer_callees and a not in relocated
+                                  for a in inside):
+                    retry_fn = candidate
+            if retry_fn is not None and accepts(retry_fn):
+                new_fn = retry_fn
+            else:
+                # Decoded into something this compiler never emits, so the
+                # address is data.  Dropping it leaves any jump to it aborting
+                # at runtime with the address printed, which beats nonsense.
+                rejected.add(t)
+                return False
         parsed.append(new_fn)
         bodies[t] = new_fn
         recovered.append(new_fn)
