@@ -61,7 +61,28 @@ struct Ins {
     uint16_t ret_pop = 0;
 };
 
+// How far the decoder reads before it gives up looking for the last RET.
+// Bytes, not steps: it bounds build(), which always advances by at least the
+// opcode byte, and says nothing about how long the decoded code runs for.
 const uint32_t kMaxRoutine = 1u << 20;
+
+// How many instructions one interp_call executes before it faults. The
+// interpreter stands in for routines the translator could not emit, which are
+// small by nature: the parameter fillers Need for Speed: Most Wanted keeps in
+// its audio banks are tens of instructions, and the longest of them walks a
+// table of a few hundred entries - low thousands of steps. A million is three
+// orders of magnitude above that, so no routine that means to return can
+// reach it, and a routine that does - `eb fe`, the shape a data file's
+// garbage decodes into, or a loop whose counter the guest never initialised -
+// stops in about a millisecond with a Fault instead of wedging the process.
+//
+// Not higher, because the budget also bounds what a runaway routine writes
+// on its way out. A loop that PUSHes walks ESP down four bytes a step, and
+// the fault path puts ESP back but cannot put the memory back: a million
+// steps is 4 MB, which stays inside the guest's 8 MB stack, where sixteen
+// million would run 64 MB down through STACK_LIMIT and into the heap arena,
+// quietly corrupting whatever the game had allocated there.
+const uint32_t kMaxSteps = 1u << 20;
 
 bool readable(uint32_t a, uint32_t n) {
     return a < GUEST_SIZE && n <= GUEST_SIZE - a;
@@ -651,16 +672,32 @@ bool condition(const X86 *c, const Flags &f, uint8_t cc) {
     return (cc & 1) ? !v : v;
 }
 
+// What is left of the outermost interp_call's step budget. A CALL inside a
+// heap routine goes back through recomp_call and can land in the interpreter
+// again, so the budget is shared across that nesting rather than renewed by
+// it: two heap routines that call each other in a cycle are bounded too.
+thread_local uint32_t g_steps_left = 0;
+thread_local unsigned g_depth = 0;
+
 // Runs from the routine's first instruction to its RET.
 void run(X86 *c, const Routine &r) {
     // build() ends a routine at a RET or at a JMP nothing branches past, and
     // every branch target is an instruction of this routine, so the stream
-    // can be walked as a pointer with no bound to test per instruction.
+    // can be walked as a pointer with no *index* bound to test per
+    // instruction. How many instructions it walks is a separate question:
+    // that is what the step budget below answers, since a routine whose
+    // branches all land inside it can still never reach its RET.
     const Ins *const code = r.code.data();
     const Ins *ip = code;
     Flags f;
     for (;;) {
         const Ins &in = *ip;
+        if (g_steps_left == 0) {
+            snprintf(g_error, sizeof g_error, "no RET within %u instructions (at %08x)", kMaxSteps,
+                     in.addr);
+            throw Fault{};
+        }
+        --g_steps_left;
         const Ins *next = ip + 1;
         switch (in.op) {
         case NOP:
@@ -787,6 +824,13 @@ extern "C" int interp_call(X86 *c, uint32_t target) {
     if (!r)
         return 0;
     const uint32_t entry_esp = c->r[R_ESP];
+    if (g_depth++ == 0)
+        g_steps_left = kMaxSteps;
+    struct Leave {
+        ~Leave() {
+            --g_depth;
+        }
+    } leave;
     try {
         run(c, *r);
     } catch (const Fault &) {

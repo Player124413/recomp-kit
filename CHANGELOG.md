@@ -1336,6 +1336,12 @@
 - A GPU surface read refused around a background/foreground transition is retried
   for up to a second instead of aborting the game; the Metal device reports the first
   failed command buffer's error.
+- A routine a game builds in its heap and calls can no longer hang the game.
+  The interpreter that runs such code gives each call a budget of instructions
+  and stops a routine that never reaches its RET - code that jumps to itself, a
+  loop over a counter the guest left as garbage - the way it stops one that
+  reads outside guest memory: the call returns zero and the log says which
+  routine and where.
 
 - Build with CMake presets for macOS, Linux and Windows through the unchanged
   `tools/build.py` and `tools/test.py`; the xcrun shell scripts are gone.

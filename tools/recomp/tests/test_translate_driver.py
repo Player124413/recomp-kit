@@ -809,6 +809,46 @@ def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
     return "\n".join(p.read_text() for p in out.glob("chunk_*.c"))
 
 
+def test_a_branch_reached_tail_may_fall_into_a_known_entry(tmp_path, monkeypatch):
+    """An exception landing pad keeps the unlisted tail its own JMP names.
+
+    Populous: The Beginning is a Watcom image whose dispatcher __trandisp2
+    ends on `JMP dword ptr [EBX]` at 00567f11 and enters landing pads a
+    relocation names - 00565cc0, 00565cd1, 00565d2e. 00565cc0's tail jumps
+    to 00567f18, two x87 instructions the listing never covered, which fall
+    into a shared RET at 00567f1c that a relocation names as well.
+
+    A speculative body is bounded at its listed span, so the landing pad
+    cannot sweep its own jump target, and that target's recovery stops at
+    the RET's candidate boundary with nothing to terminate it. Refused, the
+    landing pad has a dangling target and the pruning pass withdraws it; the
+    dispatcher's indirect jump then has no block to enter and the image
+    aborts before its first frame. A block a branch named is not a pointer
+    guess, so it may end on a fall-out into an entry already carried.
+    """
+    import struct
+    listed, pad, next_fn, tail, shared, slot = (0x00601000, 0x00601020, 0x00601200,
+                                                0x00601300, 0x00601304, 0x00601800)
+    blocks = {listed: b"\xc3",
+              # MOV EAX,0x2a; JMP tail - out of this span, so bounded
+              # recovery of the pad leaves the target to discovery.
+              pad: b"\xb8\x2a\x00\x00\x00\xe9" + struct.pack("<i", tail - pad - 10),
+              next_fn: b"\xc3",
+              tail: b"\x40\x40\x40\x40",           # INC EAX, falling into the RET
+              shared: b"\xc3",
+              slot: struct.pack("<II", pad, shared)}
+    # INT3 between them, the way a compiler pads: nothing sweeps the filler.
+    placed = dict([(0x00600000, b"\xcc" * 0x2000)] + sorted(blocks.items()))
+    img = synthetic_image(placed, base=0x00600000)
+    img.relocated_pointers = lambda: {pad: slot, shared: slot + 4}
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {a: blocks[a] for a in (listed, next_fn)})
+    assert "void fn_%08x(" % pad in text          # the landing pad survives
+    assert "void fn_%08x(" % tail in text         # with the tail it jumps to
+    assert "void fn_%08x(" % shared in text
+    assert "recomp_unknown_call(c, %s)" % T.hexlit(tail) not in text
+
+
 def test_short_string_does_not_hide_relocated_stub(tmp_path, monkeypatch):
     """A one-character literal and its adjacent method have equal evidence."""
     import struct

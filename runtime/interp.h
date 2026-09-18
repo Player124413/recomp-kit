@@ -13,6 +13,11 @@
 // Jcc, on 32-bit registers and memory, plus 8-bit immediates stored to
 // memory. A CALL goes back through recomp_call, so the routine can call the
 // executable's translated functions and other heap routines.
+//
+// Execution is bounded: a routine that never reaches its RET - code that
+// jumps to itself, a loop over a counter the guest left as garbage - stops
+// after a fixed number of instructions on the same path an illegal memory
+// access takes, so a bad routine costs milliseconds rather than the process.
 #pragma once
 #include "x86.h"
 

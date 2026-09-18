@@ -295,3 +295,29 @@ def test_constructor_helper_checkpoint_belongs_to_its_caller(tmp_path, monkeypat
     assert "recomp_seh_frame_leave(c)" in body  # POP FS:[0] retires the 16-byte record
     symbols = json.loads((out / "symbols.json").read_text())["functions"]
     assert any(f["addr"] == "%08x" % (stub + 5) and f["provenance"] == "seh" for f in symbols)
+
+
+def test_a_handler_that_is_no_delphi_stub_yields_no_landings():
+    """Only Delphi's handler is a five-byte JMP; classification is optional.
+
+    Every compiler writes the same prologue - PUSH handler, PUSH FS:[0],
+    MOV FS:[0],ESP - so a frame site can name an ordinary routine. These are
+    the first bytes of Populous's Watcom handler at 0055ba5c (MOV ECX,[ESP+4];
+    TEST dword ptr [ECX+4],6; MOV EAX,1), which raised and refused the whole
+    image before seh_landings_opt existed. There is no landing block behind
+    one, and none is invented: the frame itself is still modelled, because
+    seh_frame_sites keeps the site.
+    """
+    handler, delphi, outside = BASE + 0x100, BASE + 0x200, BASE + 0x300
+    blocks = {handler: bytes.fromhex("8b4c2404f7410406000000b801000000"),
+              # A real stub: JMP rel32 into code, with no table behind it.
+              delphi: b"\xe9" + struct.pack("<i", handler - delphi - 5) + b"\x90\xc3",
+              # A stub shape whose target is not code at all stays a defect.
+              outside: b"\xe9" + struct.pack("<i", 0x40000000) + b"\xc3"}
+    img = synthetic_image(blocks, base=BASE, size=0x1000)
+    assert img.seh_landings_opt(handler) is None
+    assert img.seh_landings(delphi) == ([delphi + 5], None)
+    with pytest.raises(T.TranslateError):
+        img.seh_landings(handler)
+    with pytest.raises(T.TranslateError):
+        img.seh_landings(outside)

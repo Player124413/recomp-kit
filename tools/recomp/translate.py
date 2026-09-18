@@ -3968,13 +3968,17 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     chunks = []
 
-    def accepts(fn):
+    def accepts(fn, reached=False):
         """Can the emitter translate every instruction of this block?
 
         A candidate address that is really data decodes into instructions this
         compiler never emits - `POP ES`, `DAS`, `LJMP` - and the emitter says
         so.  Using it as the filter means the vocabulary check can never drift
-        from what the translator actually supports."""
+        from what the translator actually supports.
+
+        `reached` says an instruction of a body this translation already
+        carries names this block, which is what lets it end on a fall-out
+        into another such entry; see the loop below."""
         if fn.addr not in protected_entries:
             if image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00":
                 # ADD byte ptr [EAX],AL is data at a speculative function start.
@@ -3983,9 +3987,30 @@ def main():
                 return False
             # A speculative path may not fall out of its recovered body.
             # In particular, meeting another candidate is not an implicit
-            # tail call: only an actual JMP/RET/noreturn CALL terminates it.
-            if any(ins.mnem not in TERMINATORS and not tr.never_returns(ins)
-                   and fn.fallthrough[i] not in fn.addrs for i, ins in enumerate(fn.insns)):
+            # tail call: only an actual JMP/RET/noreturn CALL terminates it,
+            # because padding in front of a function decodes just as well.
+            #
+            # A block a branch reached is not that guess: the branch is the
+            # program saying these bytes execute, and the entry it falls into
+            # is one the emitter can dispatch to, so the edge costs nothing.
+            # Watcom's exception dispatcher needs exactly this. Populous
+            # lands at 00565cc0, whose tail jumps to the unlisted 00567f18
+            # (FXCH; FSTP) two bytes before a shared RET that a relocation
+            # also names, 00567f1c. Refusing 00567f18 leaves 00565cc0 with a
+            # dangling target, the pruner withdraws the landing pad, and the
+            # dispatcher's JMP at 00567f11 has no block to enter. `resolve`'s
+            # retry cannot serve that case: it overrules only a boundary that
+            # nothing names, and 00567f1c has a relocation, so it keeps its
+            # claim - and it should, the cut there is right. What was wrong
+            # was calling the edge into it a fall-out.
+            for i, ins in enumerate(fn.insns):
+                if ins.mnem in TERMINATORS or tr.never_returns(ins):
+                    continue
+                fall = fn.fallthrough[i]
+                if fall in fn.addrs:
+                    continue
+                if reached and fall is not None and fall in all_addrs and fall in owner:
+                    continue
                 return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
@@ -4310,7 +4335,18 @@ def main():
         # Config names only its explicit entries, not every branch they reach.
         provenance[t] = why if why != "branch" else (
             "branch" if inherited == "config" else inherited)
-        if validate and not accepts(new_fn):
+        # A branch reached this block if an instruction of a body the
+        # translation already carries names it, which is what lets it end on
+        # a fall-out into another entry; see `accepts`.
+        reached = home is not None
+        if validate and not accepts(new_fn, reached=reached):
+            # Two different things can have refused the body, so there are two
+            # ways back, on separate axes: which boundaries may cut a body, and
+            # which fall-outs are acceptable. `reached` above answers the
+            # second - the edge into a named entry is not a guess - and it
+            # cannot answer the first, because a boundary that a relocation or
+            # an owner names rightly keeps its claim and rightly cuts there.
+            #
             # A candidate that nothing names - a bare scan guess whose shape
             # merely resembles a thunk - can sit on an interior instruction
             # boundary of a real function and truncate it into a fragment.
@@ -4331,7 +4367,9 @@ def main():
                                   and a not in pointer_callees and a not in relocated
                                   for a in inside):
                     retry_fn = candidate
-            if retry_fn is not None and accepts(retry_fn):
+            # The wider body is judged by the same rule as the first one: a
+            # block a branch reached may still end in another entry.
+            if retry_fn is not None and accepts(retry_fn, reached=reached):
                 new_fn = retry_fn
             else:
                 # Decoded into something this compiler never emits, so the
