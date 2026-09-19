@@ -265,7 +265,10 @@ void recomp_div_error(X86 *c, uint32_t addr) {
 // and looped on the same node with no call into the runtime at all, until the
 // watchdog ended the run three minutes later.
 void recomp_null_access(uint32_t addr, int write) {
-    // Off by default, and deliberately. Windows would fault here and the
+    // Reached only in a build made with -DRECOMP_NULL_CHECKS=1; see x86.h for
+    // why the check is not in every build.
+    //
+    // Off by default even then, and deliberately. Windows would fault here and the
     // guest's own handlers would see it, but this port reaches these reads
     // with pointers Windows would have filled in: the nulls are ours, from
     // a shim that answered 0 or an object nothing built, and raising on them

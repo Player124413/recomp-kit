@@ -80,6 +80,21 @@ extern uint8_t *g_mem;
  * modelled this for calls all along; these are the other two ways to reach
  * the page. */
 #define GUEST_NULL_LIMIT 0x10000u
+/* Compiled in only when the build asks for it. The check is one compare
+ * against a constant, but it sits in rd8/rd16/rd32 and their writers, which
+ * are the hottest code in the system, and a guest that dereferences null is
+ * broken whether or not we are looking. Leaving it in every build spends that
+ * on every access of every game to catch a bug in one of them - and it
+ * perturbs timing, which is how it was noticed: the game this found a spin in
+ * has an intermittent race whose odds moved when the check went in.
+ *
+ * -DRECOMP_NULL_CHECKS=1 builds it; RECOMP_NULL_FAULTS=1 then arms it. */
+#if defined(RECOMP_NULL_CHECKS) && RECOMP_NULL_CHECKS
+#define RECOMP_NULL_GUARD(a, write) \
+    do { if (RECOMP_UNLIKELY((a) < GUEST_NULL_LIMIT)) recomp_null_access((a), (write)); } while (0)
+#else
+#define RECOMP_NULL_GUARD(a, write) ((void)0)
+#endif
 /* Raises the access violation Windows would for an address in that page.
  * `write` picks the parameter the dispatcher reports. Declared here because
  * the accessors below are what call it. */
@@ -87,20 +102,17 @@ void recomp_null_access(uint32_t addr, int write);
 
 /* Little-endian host (ARM64) matches the guest, so memcpy is a plain load. */
 RECOMP_HOT_INLINE uint8_t rd8(uint32_t a) {
-    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
-        recomp_null_access(a, 0);
+    RECOMP_NULL_GUARD(a, 0);
     return g_mem[a];
 }
 RECOMP_HOT_INLINE uint16_t rd16(uint32_t a) {
-    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
-        recomp_null_access(a, 0);
+    RECOMP_NULL_GUARD(a, 0);
     uint16_t v;
     memcpy(&v, g_mem + a, 2);
     return v;
 }
 RECOMP_HOT_INLINE uint32_t rd32(uint32_t a) {
-    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
-        recomp_null_access(a, 0);
+    RECOMP_NULL_GUARD(a, 0);
     uint32_t v;
     memcpy(&v, g_mem + a, 4);
     return v;
@@ -154,20 +166,17 @@ static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
 }
 
 RECOMP_HOT_INLINE void wr8(uint32_t a, uint8_t v) {
-    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
-        recomp_null_access(a, 1);
+    RECOMP_NULL_GUARD(a, 1);
     g_mem[a] = v;
     recomp_watch(a, 1, v);
 }
 RECOMP_HOT_INLINE void wr16(uint32_t a, uint16_t v) {
-    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
-        recomp_null_access(a, 1);
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 2);
     recomp_watch(a, 2, v);
 }
 RECOMP_HOT_INLINE void wr32(uint32_t a, uint32_t v) {
-    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
-        recomp_null_access(a, 1);
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 4);
     recomp_watch(a, 4, v);
 }
