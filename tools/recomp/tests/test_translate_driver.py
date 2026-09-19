@@ -882,9 +882,13 @@ def translate_entry_fixture(tmp_path, monkeypatch, img, listings_at):
     rows = ["address\tname\tsize"]
     img.md.detail = True
     for addr, raw in listings_at.items():
-        insns = [img.to_insn(ci) for ci in img.md.disasm(raw, addr)]
+        # A listing is one run of bytes, or (address, bytes) runs with the
+        # gaps between them that Ghidra left unlisted.
+        runs = raw if isinstance(raw, list) else [(addr, raw)]
+        insns = [img.to_insn(ci) for at, run in runs for ci in img.md.disasm(run, at)]
         (listings / ("%08x.asm" % addr)).write_text("\n".join(i.raw for i in insns) + "\n")
-        rows.append("%08x\tfixture_%08x\t%d" % (addr, addr, len(raw)))
+        size = runs[-1][0] + len(runs[-1][1]) - addr
+        rows.append("%08x\tfixture_%08x\t%d" % (addr, addr, size))
     img.md.detail = False
     table, binary, curated, out = (tmp_path / name for name in
                                   ("functions.tsv", "image", "globals.toml", "gen"))
@@ -1615,3 +1619,47 @@ def test_an_instruction_patch_replaces_the_text_and_keeps_the_address():
     assert (fn.insns[0].mnem, fn.insns[0].ops) == ("CMP", ["DL", "0x1"])
     assert 0x00401000 in T.PATCHES_APPLIED
     assert fn.insns[1].mnem == "JNZ"
+
+
+def test_a_wide_literal_behind_a_halt_is_not_code(tmp_path, monkeypatch):
+    """Siege of Avalon 1.19's single-instance check, fn_00c79198, reduced.
+
+    The function pushes L"DigitalTomeSiegeOfAvalon" as an argument, leaves a
+    finally block with PUSH continuation; POP EAX; JMP EAX, and ends on a
+    call to _Halt0. The literal is kept in .text right behind that call, and
+    Ghidra listed its bytes as instructions - 16-bit addressing among them,
+    which the emitter refuses. Two things kept those bytes alive: the pushed
+    pointer to the literal was taken for a pushed continuation and an
+    alternate entry, and the computed jump made every instruction a possible
+    successor. A pointer that names a literal is an argument, the jump goes
+    only where a continuation was pushed, and nothing follows _Halt0."""
+    import struct
+    halt, fn = 0x00401000, 0x00401100
+    cont, site = fn + 0x20, fn + 0x40
+    lit = site + 7
+    head = (b"\x55\x8b\xec"                                  # PUSH EBP; MOV EBP,ESP
+            + b"\x68" + struct.pack("<I", lit) + b"\x59"      # PUSH lit; POP ECX
+            + b"\x68" + struct.pack("<I", cont)               # PUSH cont
+            + b"\x58\xff\xe0")                                # POP EAX; JMP EAX
+    tail = (b"\xe8" + struct.pack("<i", halt - (site + 5)) + b"\x00\x00"
+            + "DigitalTomeSiegeOfAvalon\0".encode("utf-16-le"))
+    blocks = {
+        halt: b"\xeb\xfe",                                      # _Halt0 never returns
+        fn: head,
+        cont: b"\x5d\xe9" + struct.pack("<i", site - (cont + 6)),  # POP EBP; JMP site
+        site: tail,
+    }
+    img = synthetic_image(blocks)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    img.plausible_immediate_target = lambda addr: False
+    text = translate_entry_fixture(tmp_path, monkeypatch, img,
+                                   {halt: blocks[halt], fn: [(fn, head), (site, tail)]})
+    assert "CALL_FN(%08x)" % halt in text
+    assert "L_%08x:" % cont in text, "the pushed continuation is still a label"
+    assert "L_%08x" % lit not in text
+    assert "void fn_%08x(" % lit not in text
+    assert "BX" not in text
+    import re
+    placed = set(re.findall(r"^(L_[0-9a-f]{8}): ;", text, re.M))
+    assert set(re.findall(r"goto (L_[0-9a-f]{8});", text)) <= placed
+

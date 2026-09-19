@@ -1730,6 +1730,14 @@ class Translator(object):
         #: the fall-through instead of a jump onto the padding that follows.
         self.noreturn_callees = set()
         self.seh_helpers = set()
+        #: Does a pointer to this address name data rather than code? The
+        #: driver installs its judgement before the first translation pass
+        #: (see main); until then nothing is taken for a literal.
+        self.points_at_a_literal = lambda target: None
+        #: pushed addresses live_continuations refused as literals
+        self.literal_continuations = set()
+        #: instructions dead_after_noreturn kept out of any body
+        self.dead_after_noreturn_addrs = set()
 
     def seh_escaping_returns(self, fn):
         """Return paths with an established chain record but no matching unlink.
@@ -1824,6 +1832,23 @@ class Translator(object):
                 if target in fn.addrs:
                     targets.add(target)
         return targets
+
+    def live_continuations(self, fn):
+        """Pushed continuations, less the pushed pointers that name a literal.
+
+        A PUSH imm32 into this body is taken for a continuation because the
+        body can leave by RET or POP reg; JMP reg. But Delphi keeps string
+        literals in .text, and a pointer to one pushed as an argument is not a
+        place anything returns to: Siege of Avalon pushes the mutex name
+        L"DigitalTomeSiegeOfAvalon", which sits in the same listed body.
+        """
+        out = set()
+        for t in self.pushed_continuations(fn):
+            if self.points_at_a_literal(t):
+                self.literal_continuations.add(t)
+            else:
+                out.add(t)
+        return out
 
     def push_ret_target(self, fn, i):
         """An adjacent PUSH imm32 / RET is a jump, including Delphi epilogues.
@@ -2003,6 +2028,70 @@ class Translator(object):
             tgts = self.jumptables.get((fn.addr, ins.addr)) or fn.addrs
             return [fn.index[t] for t in tgts if t in fn.index]
         return [nxt] if nxt is not None else []
+
+    @staticmethod
+    def popped_jump(fn, i):
+        """POP reg; JMP reg: Delphi leaving a finally block for a continuation
+        it pushed, or a return through a popped return address."""
+        ins = fn.insns[i]
+        return (ins.mnem == "JMP" and bool(ins.ops) and ins.ops[0] in REG32
+                and i > 0 and fn.contiguous[i - 1] and fn.insns[i - 1].mnem == "POP"
+                and fn.insns[i - 1].ops == ins.ops)
+
+    def dead_after_noreturn(self, fn, entries):
+        """Instructions after a call that never returns that nothing reaches.
+
+        Ghidra does not know _Halt0 or ExitProcess never return and lists on
+        through the bytes behind the call, and Delphi keeps string literals
+        there: Siege of Avalon's single-instance check ends CALL _Halt0 and is
+        followed by L"DigitalTomeSiegeOfAvalon", whose 16-bit addressing the
+        emitter refuses. Only such a tail is dropped - a run behind a call
+        that never returns, reached from no entry, pushed continuation or
+        branch. A computed jump other than POP reg; JMP reg may land anywhere
+        (RTL fill routines compute addresses into unrolled code), so a body
+        holding one keeps everything. POP reg; JMP reg goes where a
+        continuation was pushed, or out of the function.
+        """
+        if not any(self.never_returns(ins) for ins in fn.insns):
+            return set()
+        live = self.reached(fn, {fn.addr} | set(entries))
+        dead, after_noreturn = set(), False
+        for i, ins in enumerate(fn.insns):
+            if i in live:
+                after_noreturn = self.never_returns(ins)
+            elif after_noreturn:
+                dead.add(i)
+        return dead
+
+    def reached(self, fn, roots):
+        """Indices control flow reaches from `roots` and the pushed
+        continuations; every index if the body has a computed jump that is
+        not POP reg; JMP reg. A call that never returns ends a path."""
+        if any(ins.mnem == "JMP" and self.branch_target(ins) is None
+               and not self.jumptables.get((fn.addr, ins.addr))
+               and not self.popped_jump(fn, i) for i, ins in enumerate(fn.insns)):
+            return set(range(len(fn.insns)))
+        roots = set(roots) | set(fn.pushed_continuations)
+        work = [fn.index[a] for a in roots if a in fn.index]
+        live = set()
+        while work:
+            i = work.pop()
+            if i in live:
+                continue
+            live.add(i)
+            if self.never_returns(fn.insns[i]):
+                continue
+            if self.popped_jump(fn, i):
+                work.extend(fn.index[t] for t in fn.pushed_continuations)
+                continue
+            if fn.insns[i].mnem not in TERMINATORS and not fn.contiguous[i]:
+                # A listing gap: emission jumps to the fall-through address.
+                t = fn.fallthrough[i]
+                if t in fn.index:
+                    work.append(fn.index[t])
+                continue
+            work.extend(j for j in self.successors(fn, i) if j is not None)
+        return live
 
     @staticmethod
     def branch_target(ins):
@@ -2466,7 +2555,7 @@ class Translator(object):
         is strict and a target that is still not an instruction boundary is an
         error."""
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
-        fn.pushed_continuations = self.pushed_continuations(fn)
+        fn.pushed_continuations = self.live_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn, self.image)
         fn.seh_restores = seh_restore_sites(fn)
         self.strict = strict
@@ -2496,7 +2585,7 @@ class Translator(object):
         # an earlier, shorter version has to be dropped rather than emitted as
         # a goto to a label that was never placed.
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
-        fn.pushed_continuations = self.pushed_continuations(fn)
+        fn.pushed_continuations = self.live_continuations(fn)
         dropped = [e for e in entries if e not in fn.index]
         if dropped:
             self.stale_entries.update(dropped)
@@ -2507,14 +2596,19 @@ class Translator(object):
             live_out = [ALL_FLAGS] * len(fn.insns)
         else:
             live_out = self.liveness(fn)
+        dead = self.dead_after_noreturn(fn, entries)
+        fn.dead_addrs = {fn.insns[i].addr for i in dead}
+        self.dead_after_noreturn_addrs.update(fn.dead_addrs)
 
         labels = set(fn.pushed_continuations)
         # RTL fill/move routines compute addresses within unrolled code rather
         # than loading a table. Only bodies with such jumps need every label.
         if any(ins.mnem == "JMP" and self.branch_target(ins) is None
                and not self.jumptables.get((fn.addr, ins.addr)) for ins in fn.insns):
-            labels.update(fn.addrs)
+            labels.update(fn.insns[i].addr for i in range(len(fn.insns)) if i not in dead)
         for i, ins in enumerate(fn.insns):
+            if i in dead:
+                continue
             t = self.push_ret_target(fn, i)
             if t is not None and t in fn.index:
                 labels.add(t)
@@ -2531,8 +2625,9 @@ class Translator(object):
                 t = fn.fallthrough[i]
                 if t in fn.index:
                     labels.add(t)
-        if fn.insns[-1].mnem not in TERMINATORS:
-            t = fn.fallthrough[-1] or fn.end
+        last = max(i for i in range(len(fn.insns)) if i not in dead)
+        if fn.insns[last].mnem not in TERMINATORS:
+            t = fn.fallthrough[last] or fn.end
             if t in fn.index:
                 labels.add(t)
 
@@ -2571,6 +2666,8 @@ class Translator(object):
                 out.append("    goto L_%08x;" % fn.addr)
         prologue = len(out)          # everything emitted so far is dispatch
         for i, ins in enumerate(fn.insns):
+            if i in dead:
+                continue
             if ins.addr in labels:
                 out.append("L_%08x: ;" % ins.addr)
             body = self.emit(fn, i, live_out[i])
@@ -2589,10 +2686,11 @@ class Translator(object):
                     out.append("    " + line)
         # A function whose last listed instruction is not a terminator falls
         # through into the next function.
-        last = fn.insns[-1]
+        last_i = max(i for i in range(len(fn.insns)) if i not in dead)
+        last = fn.insns[last_i]
         if (last.mnem not in TERMINATORS and last.mnem != "INT3"
                 and not self.never_returns(last)):
-            t = fn.fallthrough[-1] or fn.end
+            t = fn.fallthrough[last_i] or fn.end
             self.stats["_fallthrough_exit"] += 1
             out.append("    " + " ".join(self.goto_target(fn, t, last)))
         # Invariant: the first thing fn_ADDR does is reach ADDR.  Checked
@@ -3419,7 +3517,7 @@ class Translator(object):
             # holes in the listing retain the existing runtime dispatch.
             L.append("if (t_ >= %s && t_ < %s) {" % (hexlit(fn.insns[0].addr), hexlit(fn.end)))
             L.append("switch (t_) {")
-            for t in sorted(fn.addrs):
+            for t in sorted(fn.addrs - getattr(fn, "dead_addrs", set())):
                 L.append("case %s: goto L_%08x;" % (hexlit(t), t))
             L.extend(["default: break;", "}", "}"])
             self.stats["_jmp_indirect_tail"] += 1
@@ -4988,6 +5086,79 @@ def main():
                 extra[t] = owner[t]
                 all_addrs.add(t)
 
+    def emitter_refuses(fn):
+        """The vocabulary check alone, without `accepts`'s fall-out rule.
+
+        An alternate is an entry into a body that continues past it, so a
+        block decoded from one falls into the rest of that body by design and
+        the fall-out rule would condemn every real alternate. What is still
+        decisive is the emitter refusing the instructions themselves."""
+        notes, stats, strict = len(tr.notes), dict(tr.stats), tr.strict
+        try:
+            tr.prepare(fn)
+            tr.translate(fn)
+            return False
+        except TranslateError:
+            return True
+        except Exception:                       # noqa: BLE001
+            return True
+        finally:
+            del tr.notes[notes:]
+            tr.stats.clear()
+            tr.stats.update(stats)
+            tr.strict = strict
+
+    def judge_literal(t):
+        """Is the pointer at `t` naming data rather than a function?"""
+        if image.is_utf16_constant(t) or image.starts_with_utf16_run(t):
+            return "a UTF-16 literal"
+        if image.starts_with_ascii_run(t):
+            return "a narrow string literal"
+        # What the decoder itself refuses: bytes that do not decode at all,
+        # and the instructions no userland function opens with. This does NOT
+        # catch 16-bit addressing - ADD byte ptr [BX + DI],CH decodes cleanly
+        # and becomes an Insn without complaint, and it is the emitter below
+        # that refuses the operand.
+        bad = image.undecodable_run(t)
+        if bad:
+            return bad
+        # No limit: recover() discards a recovery its limit truncated, so a
+        # small one would report every alternate inside a long function as
+        # undecodable and drop it. And nothing decoded is no opinion, not a
+        # verdict - only positive evidence drops an entry.
+        block = image.recover(t, set())
+        if not block:
+            return None
+        fn = Function(t, "alternate_%08x" % t, block[-1].addr + 1 - t, block)
+        fn.measure(image)
+        if emitter_refuses(fn):
+            return "instructions this compiler never emits"
+        for ins in block:
+            if ins.mnem not in ("CALL", "JMP") and not ins.mnem.startswith("J"):
+                continue
+            target = tr.branch_target(ins)
+            if target is not None and not (image.base <= target < image.end):
+                return "a direct transfer to %08x, outside the image" % target
+        return None
+
+    # Decided once per address, and before the first translation pass: a
+    # failure there is final, so an answer that arrives later - as it did when
+    # only the drop below asked - cannot take back what the literal's bytes
+    # already did to the body that holds them. The first pass asks it too,
+    # through Translator.live_continuations, and so does the span pass.
+    literal_verdicts = {}
+
+    def points_at_a_literal(t):
+        if t not in literal_verdicts:
+            # Judging translates a trial block, which can ask again; an
+            # address still being judged has no verdict yet, and no verdict
+            # is no opinion.
+            literal_verdicts[t] = None
+            literal_verdicts[t] = judge_literal(t)
+        return literal_verdicts[t]
+
+    tr.points_at_a_literal = points_at_a_literal
+
     # A pushed continuation is a block entry too. Delphi leaves a finally
     # block with PUSH continuation; ...; POP reg; JMP reg, and that jump
     # dispatches on a variable - not necessarily from the body that decoded
@@ -5014,9 +5185,58 @@ def main():
             except TranslateError:
                 continue
             t = op.imm if op.kind == "imm" else None
-            if t is not None and t not in all_addrs and t in owner:
+            if (t is not None and t not in all_addrs and t in owner
+                    and not points_at_a_literal(t)):
                 extra[t] = owner[t]
                 all_addrs.add(t)
+
+    # An alternate entry named only by a stored pointer is not control flow.
+    #
+    # A relocated dword, or an instruction immediate that happens to hold an
+    # address, says the program keeps a pointer there. It does not say the
+    # pointer is to code, and Delphi keeps string literals and interface GUIDs
+    # in .text among its code, so a .text pointer is as often a literal as a
+    # callback. The withdraw pass below judges standalone guesses; an
+    # alternate absorbed into a listed body never faced it at all, whatever
+    # its provenance, so a pointer into the middle of a literal stayed an
+    # entry point and kept the bytes behind it alive as code.
+    #
+    # Real control flow still wins, as starts_with_utf16_run says it must: a
+    # direct call or jump, a jump table, an __initterm entry, a configured
+    # entry and an SEH landing all name code, and none is dropped here. Only
+    # an address with pointer evidence and nothing else is asked to look like
+    # code as well as be pointed at.
+    def flows_into(home, t):
+        """Does the body reach `t` without being entered there?
+
+        Then the bytes at `t` are code whatever they look like: the body runs
+        through them. Siege of Avalon's literal is not reached - it sits behind
+        a call to _Halt0 - and a listing that runs straight into text-like
+        bytes is."""
+        home.index = {ins.addr: k for k, ins in enumerate(home.insns)}
+        home.pushed_continuations = tr.live_continuations(home)
+        others = {a for a, f in extra.items() if f is home and a != t}
+        return home.index.get(t) in tr.reached(home, {home.addr} | others)
+
+    pointer_only = {"reloc", "immediate"}
+    literals = []
+    grown_literals = []
+    for t in sorted(extra):
+        marks = set(hook_evidence.get(t, ()))
+        if not marks or not marks <= pointer_only:
+            continue
+        if (provenance.get(t, "branch") in STRUCTURAL_PROVENANCE
+                or t in listed_functions or t in protected_entries):
+            continue
+        why_data = points_at_a_literal(t)
+        if why_data and not flows_into(extra[t], t):
+            literals.append((t, extra[t].addr, why_data))
+            del extra[t]
+    tr.stats["_alternate_literals_dropped"] = len(literals)
+    if literals and not args.quiet:
+        print("  dropped %d alternate entr%s a pointer named and nothing else: %s"
+              % (len(literals), "y" if len(literals) == 1 else "ies",
+                 ", ".join("%08x (in %08x, %s)" % row for row in literals[:12])))
 
     entries_by_fn = defaultdict(set)
     for t, fn in extra.items():
@@ -5100,95 +5320,6 @@ def main():
         for t in [t for t, f in extra.items() if f.addr in drop]:
             del extra[t]
 
-    # An alternate entry named only by a stored pointer is not control flow.
-    #
-    # A relocated dword, or an instruction immediate that happens to hold an
-    # address, says the program keeps a pointer there. It does not say the
-    # pointer is to code, and Delphi keeps string literals and interface GUIDs
-    # in .text among its code, so a .text pointer is as often a literal as a
-    # callback. The withdraw pass above judges standalone guesses; an
-    # alternate absorbed into a listed body never faced it at all, whatever
-    # its provenance, so a pointer into the middle of a literal stayed an
-    # entry point and kept the bytes behind it alive as code.
-    #
-    # Real control flow still wins, as starts_with_utf16_run says it must: a
-    # direct call or jump, a jump table, an __initterm entry, a configured
-    # entry and an SEH landing all name code, and none is dropped here. Only
-    # an address with pointer evidence and nothing else is asked to look like
-    # code as well as be pointed at.
-    def emitter_refuses(fn):
-        """The vocabulary check alone, without `accepts`'s fall-out rule.
-
-        An alternate is an entry into a body that continues past it, so a
-        block decoded from one falls into the rest of that body by design and
-        the fall-out rule would condemn every real alternate. What is still
-        decisive is the emitter refusing the instructions themselves."""
-        notes, stats = len(tr.notes), dict(tr.stats)
-        try:
-            tr.prepare(fn)
-            tr.translate(fn)
-            return False
-        except TranslateError:
-            return True
-        except Exception:                       # noqa: BLE001
-            return True
-        finally:
-            del tr.notes[notes:]
-            tr.stats.clear()
-            tr.stats.update(stats)
-
-    def points_at_a_literal(t):
-        """Is the pointer at `t` naming data rather than a function?"""
-        if image.is_utf16_constant(t) or image.starts_with_utf16_run(t):
-            return "a UTF-16 literal"
-        if image.starts_with_ascii_run(t):
-            return "a narrow string literal"
-        # What the decoder itself refuses: bytes that do not decode at all,
-        # and the instructions no userland function opens with. This does NOT
-        # catch 16-bit addressing - ADD byte ptr [BX + DI],CH decodes cleanly
-        # and becomes an Insn without complaint, and it is the emitter below
-        # that refuses the operand.
-        bad = image.undecodable_run(t)
-        if bad:
-            return bad
-        # No limit: recover() discards a recovery its limit truncated, so a
-        # small one would report every alternate inside a long function as
-        # undecodable and drop it. And nothing decoded is no opinion, not a
-        # verdict - only positive evidence drops an entry.
-        block = image.recover(t, set())
-        if not block:
-            return None
-        fn = Function(t, "alternate_%08x" % t, block[-1].addr + 1 - t, block)
-        fn.measure(image)
-        if emitter_refuses(fn):
-            return "instructions this compiler never emits"
-        for ins in block:
-            if ins.mnem not in ("CALL", "JMP") and not ins.mnem.startswith("J"):
-                continue
-            target = tr.branch_target(ins)
-            if target is not None and not (image.base <= target < image.end):
-                return "a direct transfer to %08x, outside the image" % target
-        return None
-
-    pointer_only = {"reloc", "immediate"}
-    literals = []
-    grown_literals = []
-    for t in sorted(extra):
-        marks = set(hook_evidence.get(t, ()))
-        if not marks or not marks <= pointer_only:
-            continue
-        if (provenance.get(t, "branch") in STRUCTURAL_PROVENANCE
-                or t in listed_functions or t in protected_entries):
-            continue
-        why_data = points_at_a_literal(t)
-        if why_data:
-            literals.append((t, extra[t].addr, why_data))
-            del extra[t]
-    tr.stats["_alternate_literals_dropped"] = len(literals)
-    if literals and not args.quiet:
-        print("  dropped %d alternate entr%s a pointer named and nothing else: %s"
-              % (len(literals), "y" if len(literals) == 1 else "ies",
-                 ", ".join("%08x (in %08x, %s)" % row for row in literals[:12])))
 
     # A speculative owner stays prunable even when it covers a real cleanup.
     # Its removal must not erase a dispatch still required by protected code.
@@ -5344,6 +5475,17 @@ def main():
         pending.update(required_targets(home))
     tr.stats["_span_recovered_after_pruning"] = len(span_recovered)
     tr.stats["_span_continuations_into_data"] = len(grown_literals)
+    tr.stats["_literal_judgements"] = len(literal_verdicts)
+    tr.stats["_literal_verdicts"] = sum(1 for v in literal_verdicts.values() if v)
+    tr.stats["_literal_continuations"] = len(tr.literal_continuations)
+    tr.stats["_dead_after_noreturn"] = len(tr.dead_after_noreturn_addrs)
+    if not args.quiet:
+        print("  literal judgements: %d addresses asked, %d data; %d pushed continuation%s "
+              "refused; %d instruction%s behind calls that never return dropped"
+              % (len(literal_verdicts), tr.stats["_literal_verdicts"],
+                 len(tr.literal_continuations), "" if len(tr.literal_continuations) == 1 else "s",
+                 tr.stats["_dead_after_noreturn"],
+                 "" if tr.stats["_dead_after_noreturn"] == 1 else "s"))
     if grown_literals and not args.quiet:
         print("  refused %d span continuation%s into data: %s"
               % (len(grown_literals), "" if len(grown_literals) == 1 else "s",
