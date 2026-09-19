@@ -74,6 +74,58 @@ def synthetic_image(code_at, base=0x00400000, size=0x2000):
     return img
 
 
+def _walker_image(slots):
+    """A __initterm-shaped walker, a caller naming a range, and that range."""
+    import struct
+    base, walker, caller, table = 0x00400000, 0x00401000, 0x00401100, 0x00402000
+    lo, hi = table, table + 4 * len(slots)
+    code = {
+        # CALL dword ptr [EDX]; ADD EAX,4; RET - the shape, in registers the
+        # matcher used not to know.
+        walker: b"\xff\x12\x83\xc0\x04\xc3",
+        # PUSH hi; PUSH lo; CALL walker; RET
+        caller: (b"\x68" + struct.pack("<I", hi) + b"\x68" + struct.pack("<I", lo)
+                 + b"\xe8" + struct.pack("<i", walker - (caller + 15)) + b"\xc3"),
+        table: b"".join(struct.pack("<I", v) for v in slots),
+    }
+    # Big enough that the table is inside the image: the default 0x2000 ends
+    # exactly at `table`, and every slot would read out of bounds - which a
+    # test looking for a refusal would have passed for the wrong reason.
+    img = synthetic_image(code, size=0x4000)
+    img.data_ranges = [(table, table + 0x100, ".data")]
+    fns = []
+    for at in (walker, caller):
+        insns = img.recover(at, set())
+        fn = T.Function(at, "fn_%08x" % at, insns[-1].addr + 1 - at, insns)
+        fn.measure(img)
+        fns.append(fn)
+    return img, fns
+
+
+def test_initterm_takes_a_table_of_function_pointers():
+    """The walker is found by its shape, whatever registers it happens to use."""
+    img, fns = _walker_image([0x00401000, 0, 0x00401005])
+    ranges, entries = img.initterm_tables(fns)
+    assert len(ranges) == 1
+    assert entries == {0x00401000, 0x00401005}
+
+
+def test_initterm_refuses_a_range_of_text():
+    """The strict table test is what makes the loose walker test safe.
+
+    Populous has two functions of exactly this shape that are not __initterm
+    at all: one is handed "%s: %d bytes allocated f..." from eight call sites.
+    Matching the walk by shape reaches them, and only a table that holds
+    function pointers and nulls and nothing else keeps a format string out of
+    the entry points.
+    """
+    import struct
+    text = b"%s: %d bytes allocated free\0"
+    img, fns = _walker_image(struct.unpack("<7I", text[:28]))
+    ranges, entries = img.initterm_tables(fns)
+    assert ranges == [] and entries == set()
+
+
 @pytest.mark.parametrize("code,expected", [
     (b"\xeb\xfe", True),                       # closed unconditional loop
     (b"\xc3", False),                          # ordinary return
