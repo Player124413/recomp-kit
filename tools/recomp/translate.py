@@ -1071,6 +1071,24 @@ class Image(object):
             at = ci.address + ci.size
         return None
 
+    def starts_with_ascii_run(self, va, least=8):
+        """A NUL-terminated run of printable bytes long enough to be a name.
+
+        The narrow-string counterpart of starts_with_utf16_run. GetProcAddress
+        is handed these by the dozen and the program keeps them in .text
+        beside its code, so a pointer to one is an argument, not an entry
+        point. The length floor is what keeps ordinary instruction bytes out:
+        most opcodes fall in the printable range, but eight of them in a row
+        followed by a NUL is text, not code.
+        """
+        off = va - self.base
+        if off < 0 or off >= len(self.data):
+            return False
+        end = off
+        while end < len(self.data) and 0x20 <= self.data[end] < 0x7F:
+            end += 1
+        return end - off >= least and end < len(self.data) and self.data[end] == 0
+
     def is_utf16_constant(self, va):
         """Recognize a complete Delphi UnicodeString constant, including short text.
 
@@ -5123,6 +5141,8 @@ def main():
         """Is the pointer at `t` naming data rather than a function?"""
         if image.is_utf16_constant(t) or image.starts_with_utf16_run(t):
             return "a UTF-16 literal"
+        if image.starts_with_ascii_run(t):
+            return "a narrow string literal"
         # What the decoder itself refuses: bytes that do not decode at all,
         # and the instructions no userland function opens with. This does NOT
         # catch 16-bit addressing - ADD byte ptr [BX + DI],CH decodes cleanly

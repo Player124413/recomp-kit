@@ -145,6 +145,21 @@ def test_undecodable_run_names_only_what_the_decoder_itself_refuses(what, code, 
         assert got and expected in got, "%s should be refused, got %r" % (what, got)
 
 
+@pytest.mark.parametrize("what,blob,expected", [
+    ("an API name", b"GetLongPathNameW\0", True),
+    ("text too short to be a name", b"Get\0", False),
+    # 0xff, not a zero-filled tail: the run has to END, and end at a NUL.
+    ("printable bytes that run into binary", b"GetLongPathNameW\xff", False),
+    # PUSH EBP; MOV EBP,ESP; SUB ESP,0x28; PUSH ESI - ordinary code, and
+    # several of those bytes are printable, which is why the run has a floor.
+    ("ordinary code", b"\x55\x8b\xec\x83\xec\x28\x56\x00", False),
+])
+def test_a_narrow_literal_reads_as_data(what, blob, expected):
+    """GetProcAddress names live in .text; a pointer to one is an argument."""
+    at = 0x00401000
+    assert synthetic_image({at: blob}).starts_with_ascii_run(at) is expected, what
+
+
 def test_a_wide_literal_reads_as_data_not_as_a_function_start():
     """The shape the rule relies on: Delphi keeps literals in .text."""
     at = 0x00401000
