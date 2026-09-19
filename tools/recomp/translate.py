@@ -1135,10 +1135,27 @@ class Image(object):
         """
         walkers = set()
         for fn in functions:
-            text = {ins.mnem + " " + ",".join(ins.ops) for ins in fn.insns}
-            if all(sig in text for sig in self.INITTERM_BODY) and \
-                    any(i.mnem == "MOV" and i.ops[1:] == ["dword ptr [ESI]"]
-                        for i in fn.insns):
+            # The shape, not one compiler's register allocation. __initterm
+            # walks an array of function pointers and calls each non-null one,
+            # which is an indirect CALL and a step of four however the
+            # registers fell out. Populous's CRT keeps the cursor in ESI and
+            # calls EAX; Need for Speed Most Wanted's keeps it on the stack
+            # and calls through EDX, and matching the first spelling alone
+            # left every one of its static initializers undiscovered - their
+            # objects reached the game unconstructed, with null vtables.
+            indirect_call = step = False
+            for ins in fn.insns:
+                if ins.mnem == "CALL" and ins.ops:
+                    op = ins.ops[0]
+                    try:
+                        through_register = parse_operand(op).kind == "reg"
+                    except TranslateError:
+                        through_register = False
+                    if op.startswith("dword ptr [") or through_register:
+                        indirect_call = True
+                if ins.mnem == "ADD" and ins.ops[1:] == ["0x4"]:
+                    step = True
+            if indirect_call and step:
                 walkers.add(fn.addr)
         if not walkers:
             return [], set()
@@ -1164,11 +1181,16 @@ class Image(object):
                     continue
                 if not any(a <= lo and hi <= b for a, b, _ in self.data_ranges):
                     continue
+                # The looser walker test buys a stricter table test: an
+                # initializer array holds function pointers and nulls and
+                # nothing else, so one slot that is neither disqualifies the
+                # range rather than being quietly skipped.
+                slots = [self.rd32(va) for va in range(lo, hi, 4)]
+                named = [t for t in slots if t]
+                if not named or not all(self.is_exec(t) for t in named):
+                    continue
                 ranges.append((lo, hi, ins.addr))
-                for va in range(lo, hi, 4):
-                    target = self.rd32(va)
-                    if target and self.is_exec(target):
-                        entries.add(target)
+                entries.update(named)
         return ranges, entries
 
     def code_pointers(self, covered, interior_bytes=None, exclude=()):
