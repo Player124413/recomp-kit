@@ -148,6 +148,22 @@ int recomp_module_call(X86 *c, uint32_t target) {
 // Consumes the return address the caller pushed and continues after the call,
 // which is what the callee's RET would have done. Without this a call that the
 // runtime cannot deliver leaves a dword on the guest stack and every later
+// Where an exception record's parameters go: just below the guest stack
+// pointer, which the dispatcher copies into its own record before any handler
+// runs. A fault can arrive with a stack pointer that is null, tiny or wild -
+// that is often WHY it faulted - and ESP - 16 then wraps to the top of the
+// address space, so writing there would take the host out instead of the
+// guest. Returns false when there is nowhere safe to put them.
+static bool exception_info_block(const X86 *c, uint32_t *info) {
+    if (!c || c->r[R_ESP] < GUEST_NULL_LIMIT + 16)
+        return false;
+    const uint32_t at = c->r[R_ESP] - 16;
+    if (at + 8 > GUEST_SIZE)
+        return false;
+    *info = at;
+    return true;
+}
+
 // frame is displaced by four bytes.
 static void return_as_if_ret(X86 *c) {
     c->eip = rd32(c->r[R_ESP]);
@@ -175,7 +191,11 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
     // at run time, and code inside the image that discovery missed. The
     // second kind is a translator gap, so the run keeps going and reports it
     // (see discovery.h) instead of returning a zero into whatever asked.
-    if (interp_call(c, target))
+    // Not for a target in the first 64 KB: Windows maps nothing there, so a
+    // call through a null pointer faults at the call, and there are no
+    // instructions at it to interpret. Reading them would be the very
+    // dereference this page exists to refuse.
+    if (target >= GUEST_NULL_LIMIT && interp_call(c, target))
         return;
     if (target == GUEST_RETURN_SENTINEL) {
         recomp_callback_return(c);
@@ -197,7 +217,8 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
         // EXCEPTION_ACCESS_VIOLATION's two parameters: an execute fault (8) at
         // the target. They sit below the stack pointer, which the dispatcher
         // copies into its own record before any handler runs.
-        const uint32_t info = c->r[R_ESP] - 16;
+        uint32_t info = 0;
+        if (exception_info_block(c, &info)) {
         wr32(info, 8);
         wr32(info + 4, target);
         log_once("null-call",
@@ -205,6 +226,7 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
                  "would, for the guest's handlers",
                  target, ret);
         recomp_seh_raise(c, 0xc0000005u, 0, 2, info);
+        }
     }
     char key[64];
     snprintf(key, sizeof key, "unknown-call:%08x", target);
@@ -233,6 +255,58 @@ void recomp_unknown_call(X86 *c, uint32_t target) {
 // are left untouched.
 void recomp_div_error(X86 *c, uint32_t addr) {
     LOGW("divide error at %08x (EAX=%08x EDX=%08x)", addr, c->r[R_EAX], c->r[R_EDX]);
+}
+
+// A read or a write through a pointer in the first 64 KB. Windows maps
+// nothing there, so the program's own handlers see an access violation and a
+// try/except around the dereference carries on; a flat arena hands back a
+// zero instead and lets the guest run on with it. NFS Most Wanted walked an
+// std::map whose node was null, read _Isnil out of guest 0x15, got that zero
+// and looped on the same node with no call into the runtime at all, until the
+// watchdog ended the run three minutes later.
+void recomp_null_access(uint32_t addr, int write) {
+    // Off by default, and deliberately. Windows would fault here and the
+    // guest's own handlers would see it, but this port reaches these reads
+    // with pointers Windows would have filled in: the nulls are ours, from
+    // a shim that answered 0 or an object nothing built, and raising on them
+    // ends the run at the first one instead of at the one that matters.
+    // RECOMP_NULL_FAULTS=1 turns the page back into the hole it is on
+    // Windows, which is how the std::map spin in NFS Most Wanted was found -
+    // a null node whose _Isnil read back as zero, walked forever.
+    static const bool fault = recomp_env("NULL_FAULTS") != nullptr;
+    if (!fault)
+        return;
+    X86 *c = guest_current_context();
+    uint32_t info = 0;
+    // A fault raised at an instruction we are already raising for means the
+    // handler returned us onto it to fault again. Tracking the EIP rather
+    // than a flag keeps this honest across the raise's longjmp: an unrelated
+    // fault elsewhere still gets its exception, and only a genuine loop on
+    // one instruction is refused.
+    static thread_local uint32_t raising_at = 0;
+    if (c && c->eip != raising_at && exception_info_block(c, &info)) {
+        // EXCEPTION_ACCESS_VIOLATION's two parameters: the kind of access,
+        // 0 for a read and 1 for a write, then the address.
+        raising_at = c->eip;
+        wr32(info, write ? 1u : 0u);
+        wr32(info + 4, addr);
+        char key[64];
+        snprintf(key, sizeof key, "null-%s:%08x", write ? "write" : "read", addr);
+        // The EIP is the last one the translated code stored, which is a
+        // call or a branch rather than this instruction: generated bodies do
+        // not sync it per access. It names the neighbourhood, not the fault.
+        log_once(key,
+                 "%s of %08x (near EIP=%08x): raising an access violation, as Windows "
+                 "would, for the guest's handlers",
+                 write ? "write" : "read", addr, c->eip);
+        recomp_seh_raise(c, 0xc0000005u, 0, 2, info);
+        raising_at = 0;   // it returned, so nothing handled it
+    }
+    // Returning would put the guest straight back on the same instruction to
+    // fault again, which is the spin this exists to end.
+    LOGW("unhandled null %s of %08x%s", write ? "write" : "read", addr,
+         c ? "" : " with no guest context");
+    abort();
 }
 
 // An SSE/SSE2 instruction the translator left as a trap (MMX is translated).

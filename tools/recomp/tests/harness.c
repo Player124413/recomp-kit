@@ -29,6 +29,14 @@ static unsigned harness_checks_run;
 static int last_div_error_count;
 static uint64_t fake_tsc;
 
+/* An instruction case runs with no guest handlers, so a dereference through
+ * the never-mapped first 64 KB has nowhere to raise to. Say which access it
+ * was and stop, rather than reading the arena as if the page were real. */
+void recomp_null_access(uint32_t addr, int write) {
+    fprintf(stderr, "null %s of %08x\n", write ? "write" : "read", addr);
+    abort();
+}
+
 void recomp_shim_call(X86 *c, uint32_t target) {
     (void)c;
     last_shim = target;

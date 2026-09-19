@@ -26,6 +26,14 @@ uint32_t g_dirty_count;
 uint32_t g_watch_base, g_watch_len; // the memory watch, never armed here
 extern "C" void recomp_watch_hit(uint32_t, uint32_t, uint64_t) {}
 
+// The interpreter tests link neither cpu.cpp nor a guest with handlers, so a
+// null dereference has nowhere to raise to: report it and stop, which is what
+// the real one does when the guest has no handler either.
+extern "C" void recomp_null_access(uint32_t addr, int write) {
+    fprintf(stderr, "null %s of %08x\n", write ? "write" : "read", addr);
+    abort();
+}
+
 static int g_checks = 0, g_failures = 0;
 #define CHECK(cond)                                                                                \
     do {                                                                                           \

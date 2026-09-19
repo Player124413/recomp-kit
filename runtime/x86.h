@@ -32,8 +32,10 @@ extern "C" {
  * memory access, so these insist. */
 #if defined(__GNUC__) || defined(__clang__)
 #define RECOMP_HOT_INLINE static inline __attribute__((always_inline))
+#define RECOMP_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
 #define RECOMP_HOT_INLINE static inline
+#define RECOMP_UNLIKELY(x) (x)
 #endif
 
 /* ---------------------------------------------------------------- memory */
@@ -69,17 +71,36 @@ extern uint8_t *g_mem;
 #define GUEST_SHIM_END 0x10000000u
 #define GUEST_SHIM_STRIDE 16u
 #define GUEST_RETURN_SENTINEL 0x0fdfff00u
+/* Windows maps nothing in the first 64 KB, so a read or a write through a
+ * null pointer faults and the program's own handlers see it. A flat arena
+ * hands back a zero instead, which turns a null dereference into ordinary
+ * data: Need for Speed Most Wanted walked an std::map whose node pointer was
+ * null, read _Isnil from guest 0x15, got zero from the arena and looped on
+ * the same node until the watchdog ended the run. recomp_unknown_call has
+ * modelled this for calls all along; these are the other two ways to reach
+ * the page. */
+#define GUEST_NULL_LIMIT 0x10000u
+/* Raises the access violation Windows would for an address in that page.
+ * `write` picks the parameter the dispatcher reports. Declared here because
+ * the accessors below are what call it. */
+void recomp_null_access(uint32_t addr, int write);
 
 /* Little-endian host (ARM64) matches the guest, so memcpy is a plain load. */
 RECOMP_HOT_INLINE uint8_t rd8(uint32_t a) {
+    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
+        recomp_null_access(a, 0);
     return g_mem[a];
 }
 RECOMP_HOT_INLINE uint16_t rd16(uint32_t a) {
+    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
+        recomp_null_access(a, 0);
     uint16_t v;
     memcpy(&v, g_mem + a, 2);
     return v;
 }
 RECOMP_HOT_INLINE uint32_t rd32(uint32_t a) {
+    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
+        recomp_null_access(a, 0);
     uint32_t v;
     memcpy(&v, g_mem + a, 4);
     return v;
@@ -133,14 +154,20 @@ static inline void recomp_watch(uint32_t a, uint32_t n, uint64_t v) {
 }
 
 RECOMP_HOT_INLINE void wr8(uint32_t a, uint8_t v) {
+    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
+        recomp_null_access(a, 1);
     g_mem[a] = v;
     recomp_watch(a, 1, v);
 }
 RECOMP_HOT_INLINE void wr16(uint32_t a, uint16_t v) {
+    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
+        recomp_null_access(a, 1);
     memcpy(g_mem + a, &v, 2);
     recomp_watch(a, 2, v);
 }
 RECOMP_HOT_INLINE void wr32(uint32_t a, uint32_t v) {
+    if (RECOMP_UNLIKELY(a < GUEST_NULL_LIMIT))
+        recomp_null_access(a, 1);
     memcpy(g_mem + a, &v, 4);
     recomp_watch(a, 4, v);
 }
