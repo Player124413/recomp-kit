@@ -4811,6 +4811,15 @@ static void test_kernel32_wide() {
               rd16(fd) == 2000 && rd16(fd + 2) == 1 && rd16(fd + 4) == 0 && rd16(fd + 6) == 2 &&
               rd16(fd + 8) == 3 && rd16(fd + 10) == 4 && rd16(fd + 12) == 6 && rd16(fd + 14) == 123,
           "FileTimeToSystemTime UTC fields and milliseconds");
+    // And back again: the pair has to round-trip, or a game that converts a
+    // time to do arithmetic on it and converts the answer back drifts.
+    check(call_import(&c, "KERNEL32.dll", "SystemTimeToFileTime", {fd, s + 16}) == 1 &&
+              rd32(s + 16) == rd32(s) && rd32(s + 20) == rd32(s + 4),
+          "SystemTimeToFileTime inverts it, milliseconds included");
+    wr16(fd + 2, 13); // a month that does not exist
+    check(call_import(&c, "KERNEL32.dll", "SystemTimeToFileTime", {fd, s + 16}) == 0,
+          "SystemTimeToFileTime refuses a month outside 1..12");
+    wr16(fd + 2, 1);
     check(call_import(&c, "KERNEL32.dll", "GetDateFormatW", {0x409, 0, fd, 0, s + 128, 64}) == 11 &&
               gm_wstr(s + 128) == "2000-01-02",
           "GetDateFormatW fixed ISO picture");

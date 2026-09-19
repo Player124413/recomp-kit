@@ -1551,6 +1551,46 @@ void k_GetSystemTime(X86 *c) {
     set_eax(c, 0);
 }
 
+// (lpSystemTime, lpFileTime). The inverse of FileTimeToSystemTime, and the
+// one the CRT reaches for when a game asks what time it is in a form it can
+// do arithmetic on. It was declared with its argument count and no body, so
+// the stack stayed straight and the output buffer kept whatever it held.
+//
+// The date arithmetic is exact rather than a trip through mktime: mktime
+// reads the host's timezone, and a FILETIME is UTC by definition. Windows
+// ignores wDayOfWeek on the way in, so this does too.
+void k_SystemTimeToFileTime(X86 *c) {
+    const uint32_t in = arg(c, 0), out = arg(c, 1);
+    if (!in || !out || !gm_valid(in, 16) || !gm_valid(out, 8)) {
+        set_last_error(87 /* ERROR_INVALID_PARAMETER */);
+        set_eax(c, 0);
+        return;
+    }
+    const int year = rd16(in), month = rd16(in + 2), day = rd16(in + 6);
+    const int hour = rd16(in + 8), minute = rd16(in + 10), second = rd16(in + 12);
+    const int millis = rd16(in + 14);
+    // 1601 is where a FILETIME starts; below it there is nothing to express.
+    if (year < 1601 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 ||
+        minute > 59 || second > 59 || millis > 999) {
+        set_last_error(87);
+        set_eax(c, 0);
+        return;
+    }
+    // Days from the civil date, counting from 1970-01-01. The era trick puts
+    // the leap day at the end of a 400-year cycle so no special cases remain.
+    const int shifted = year - (month <= 2);
+    const int era = (shifted >= 0 ? shifted : shifted - 399) / 400;
+    const unsigned yoe = (unsigned)(shifted - era * 400);
+    const unsigned doy = (unsigned)((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1);
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const int64_t days = (int64_t)era * 146097 + (int64_t)doe - 719468;
+    const int64_t seconds = days * 86400 + hour * 3600 + minute * 60 + second;
+    const uint64_t ft = filetime((time_t)seconds) + (uint64_t)millis * 10000ull;
+    wr32(out, (uint32_t)ft);
+    wr32(out + 4, (uint32_t)(ft >> 32));
+    set_eax(c, 1);
+}
+
 void k_GetTimeZoneInformation(X86 *c) {
     uint32_t p = arg(c, 0);
     if (p)
@@ -4837,7 +4877,7 @@ const ImportShim g_kernel32_shims[] = {
     // distance; a logging-only entry with the right count is what a guest
     // survives, and the log says which of these it wanted.
     {"KERNEL32.dll", "SetFileTime", 4, nullptr},
-    {"KERNEL32.dll", "SystemTimeToFileTime", 2, nullptr},
+    {"KERNEL32.dll", "SystemTimeToFileTime", 2, k_SystemTimeToFileTime},
     {"KERNEL32.dll", "SystemTimeToTzSpecificLocalTime", 3, nullptr},
     {"KERNEL32.dll", "TzSpecificLocalTimeToSystemTime", 3, nullptr},
     {"KERNEL32.dll", "MoveFileW", 2, nullptr},
