@@ -34,8 +34,8 @@ set -- \
   --enable-pic \
   --enable-decoder=bink,binkaudio_rdft,binkaudio_dct,smacker,smackaud \
   --enable-decoder=wmv1,wmv2,wmv3,vc1,wmav1,wmav2,wmapro,mp3,mp3float \
-  --enable-decoder=msmpeg4v1,msmpeg4v2,msmpeg4v3 \
-  --enable-demuxer=bink,smacker,asf,mp3 --enable-parser=vc1,mpegaudio \
+  --enable-decoder=msmpeg4v1,msmpeg4v2,msmpeg4v3,indeo5,vorbis,adpcm_ima_wav,pcm_s16le,pcm_u8 \
+  --enable-demuxer=bink,smacker,asf,mp3,avi,ogg --enable-parser=vc1,mpegaudio \
   --enable-protocol=file \
   --disable-autodetect --disable-xlib --disable-libxcb --disable-sdl2 \
   --disable-iconv --disable-zlib --disable-bzlib --disable-lzma \

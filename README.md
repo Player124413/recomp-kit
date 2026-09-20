@@ -78,8 +78,9 @@ upstream notices. See [NOTICE](NOTICE) for licenses.
 
 On macOS, iOS, Android and Linux, `RECOMP_VIDEO` defaults to `ON`: the first build fetches the
 SHA-256-pinned FFmpeg 7.1.1 release and builds shared `avformat`, `avcodec`
-and `avutil` libraries with only Bink/Smacker video and audio decoders,
-Bink/Smacker demuxers and file input. The macOS app carries the three dylibs in
+and `avutil` libraries with a limited decoder/demuxer set, including Bink,
+WMV, Indeo 5 AVI and Ogg/Vorbis. The exact enabled components are recorded in
+the FFmpeg notice. The macOS app carries the three dylibs in
 `Contents/Frameworks`, using `@rpath` install names and an executable rpath
 of `@executable_path/../Frameworks`; each dylib is signed ad hoc before the
 app. Apple system libraries/frameworks are allowed; no Homebrew libraries

@@ -73,8 +73,8 @@ when CMake's `RECOMP_VIDEO` option is `ON` (the default). It uses the Xcode
 Command Line Tools' compiler and make plus the existing Python/CMake/Ninja
 environment; no Homebrew FFmpeg or assembler is needed. Intel macOS builds
 pass `--disable-x86asm`. Source is pinned by SHA-256, automatic external
-library detection is disabled, and only Bink/Smacker decoders and demuxers
-and the file protocol are enabled. The exact command and LGPL license are
+library detection is disabled, and only the selected legacy media decoders,
+demuxers and the file protocol are enabled. The exact command and LGPL license are
 in [third_party/ffmpeg/NOTICE.md](third_party/ffmpeg/NOTICE.md).
 
 To disable video for an already configured game tree, run from the kit

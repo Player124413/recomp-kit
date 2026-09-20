@@ -3,7 +3,7 @@ file(GLOB POP_LUA_SOURCES CONFIGURE_DEPENDS ${POP_ROOT}/third_party/lua/*.c)
 add_library(lua STATIC ${POP_LUA_SOURCES})
 set_target_properties(lua PROPERTIES
   C_STANDARD 99 C_EXTENSIONS OFF
-  ARCHIVE_OUTPUT_DIRECTORY ${POP_OUT} OUTPUT_NAME lua)
+  ARCHIVE_OUTPUT_DIRECTORY ${POP_ARCHIVE_DIR} OUTPUT_NAME lua)
 target_include_directories(lua PUBLIC ${POP_ROOT}/third_party/lua)
 target_compile_options(lua PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_compile_definitions(lua PRIVATE
