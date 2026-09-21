@@ -120,7 +120,18 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     ici.ppEnabledExtensionNames = inst_ext.data();
     ici.enabledLayerCount = uint32_t(layers.size());
     ici.ppEnabledLayerNames = layers.data();
-    if (VkResult r = vkCreateInstance(&ici, nullptr, &d->instance_); r != VK_SUCCESS) {
+    VkResult r = vkCreateInstance(&ici, nullptr, &d->instance_);
+    if (r == VK_ERROR_INCOMPATIBLE_DRIVER) {
+        for (uint32_t ver : {VK_API_VERSION_1_2, VK_API_VERSION_1_1, VK_API_VERSION_1_0}) {
+            if (app.apiVersion > ver) {
+                app.apiVersion = ver;
+                r = vkCreateInstance(&ici, nullptr, &d->instance_);
+                if (r == VK_SUCCESS)
+                    break;
+            }
+        }
+    }
+    if (r != VK_SUCCESS) {
         fprintf(stderr, "gpu/vulkan: vkCreateInstance failed (VkResult %d, loader %u.%u)\n", int(r),
                 VK_API_VERSION_MAJOR(loader_version), VK_API_VERSION_MINOR(loader_version));
         return nullptr;
@@ -133,7 +144,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     vkEnumeratePhysicalDevices(d->instance_, &count, devices.data());
     VkPhysicalDevice chosen = VK_NULL_HANDLE;
     uint32_t family = 0;
-    for (int pass = 0; pass < 2 && !chosen; ++pass) {
+    for (int pass = 0; pass < 3 && !chosen; ++pass) {
         for (VkPhysicalDevice pd : devices) {
             VkPhysicalDeviceProperties pp;
             vkGetPhysicalDeviceProperties(pd, &pp);
@@ -143,19 +154,28 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
             vkGetPhysicalDeviceQueueFamilyProperties(pd, &qn, nullptr);
             std::vector<VkQueueFamilyProperties> q(qn);
             vkGetPhysicalDeviceQueueFamilyProperties(pd, &qn, q.data());
-            for (uint32_t i = 0; i < qn; ++i)
-                if ((q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
-                    (q[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
-                    chosen = pd;
-                    family = i;
-                    break;
+            for (uint32_t i = 0; i < qn; ++i) {
+                if (pass < 2) {
+                    if ((q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
+                        (q[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+                        chosen = pd;
+                        family = i;
+                        break;
+                    }
+                } else {
+                    if (q[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                        chosen = pd;
+                        family = i;
+                        break;
+                    }
                 }
+            }
             if (chosen)
                 break;
         }
     }
     if (!chosen) {
-        fprintf(stderr, "gpu/vulkan: no physical device with a graphics+compute queue\n");
+        fprintf(stderr, "gpu/vulkan: no physical device with a graphics queue\n");
         return nullptr;
     }
     d->physical_ = chosen;
@@ -178,22 +198,28 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         dev_ext.push_back("VK_KHR_swapchain");
     if (has_dev("VK_KHR_portability_subset"))
         dev_ext.push_back("VK_KHR_portability_subset");
+
+    bool has_dynamic_rendering = false;
     d->core13_ = d->props_.apiVersion >= VK_API_VERSION_1_3 && app.apiVersion >= VK_API_VERSION_1_3;
-    if (!d->core13_) {
-        if (!has_dev("VK_KHR_dynamic_rendering")) {
-            fprintf(stderr, "gpu/vulkan: device lacks dynamic rendering\n");
-            return nullptr;
-        }
+    if (d->core13_) {
+        has_dynamic_rendering = true;
+    } else if (has_dev("VK_KHR_dynamic_rendering")) {
+        has_dynamic_rendering = true;
         dev_ext.push_back("VK_KHR_dynamic_rendering");
     }
 
     VkPhysicalDeviceSubgroupProperties sub{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
     VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
     p2.pNext = &sub;
-    vkGetPhysicalDeviceProperties2(chosen, &p2);
-    d->subgroup_size_ = sub.subgroupSize ? sub.subgroupSize : 32;
-    d->subgroup_arithmetic_ = (sub.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
-                              (sub.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT);
+    if (vkGetPhysicalDeviceProperties2) {
+        vkGetPhysicalDeviceProperties2(chosen, &p2);
+        d->subgroup_size_ = sub.subgroupSize ? sub.subgroupSize : 32;
+        d->subgroup_arithmetic_ = (sub.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                                  (sub.supportedOperations & VK_SUBGROUP_FEATURE_ARITHMETIC_BIT);
+    } else {
+        d->subgroup_size_ = 32;
+        d->subgroup_arithmetic_ = false;
+    }
     VkPhysicalDeviceFeatures base{};
     vkGetPhysicalDeviceFeatures(chosen, &base);
     d->anisotropy_ = base.samplerAnisotropy;
@@ -215,16 +241,19 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         VkPhysicalDeviceFeatures2 have2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
         have2.pNext = &have13;
-        vkGetPhysicalDeviceFeatures2(chosen, &have2);
+        if (vkGetPhysicalDeviceFeatures2)
+            vkGetPhysicalDeviceFeatures2(chosen, &have2);
         f13.dynamicRendering = VK_TRUE;
         if (have13.subgroupSizeControl && have13.computeFullSubgroups) {
             f13.subgroupSizeControl = f13.computeFullSubgroups = VK_TRUE;
             d->full_subgroups_ = true;
         }
         f2.pNext = &f13;
-    } else {
+    } else if (has_dynamic_rendering) {
         fdr.dynamicRendering = VK_TRUE;
         f2.pNext = &fdr;
+    } else {
+        f2.pNext = nullptr;
     }
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -237,9 +266,16 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = uint32_t(dev_ext.size());
     dci.ppEnabledExtensionNames = dev_ext.data();
-    if (vkCreateDevice(chosen, &dci, nullptr, &d->device_) != VK_SUCCESS) {
-        fprintf(stderr, "gpu/vulkan: vkCreateDevice failed\n");
-        return nullptr;
+    VkResult dev_res = vkCreateDevice(chosen, &dci, nullptr, &d->device_);
+    if (dev_res != VK_SUCCESS) {
+        fprintf(stderr, "gpu/vulkan: vkCreateDevice with features2 failed (%d), retrying standard\n", int(dev_res));
+        dci.pNext = nullptr;
+        dci.pEnabledFeatures = &f2.features;
+        dev_res = vkCreateDevice(chosen, &dci, nullptr, &d->device_);
+        if (dev_res != VK_SUCCESS) {
+            fprintf(stderr, "gpu/vulkan: vkCreateDevice failed: %d\n", int(dev_res));
+            return nullptr;
+        }
     }
     volkLoadDevice(d->device_);
     // A 1.1/1.2 device (CrossOver's winevulkan, older drivers) offers dynamic

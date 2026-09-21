@@ -134,6 +134,8 @@ bool vulkan_load() {
         }
 #endif
         if (volkInitialize() == VK_SUCCESS) {
+            if (g_path.empty())
+                g_path = "libvulkan.so";
             g_loaded = true;
             return;
         }
