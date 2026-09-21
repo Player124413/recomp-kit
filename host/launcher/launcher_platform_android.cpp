@@ -8,6 +8,7 @@
 #include "../../runtime/layout.h"
 
 #include <jni.h>
+#include <unistd.h>
 
 #include <map>
 #include <mutex>
@@ -224,8 +225,8 @@ class AndroidPlatform final : public Platform {
         const char *internal = SDL_GetAndroidInternalStoragePath();
         std::string ddir = internal && *internal ? std::string(internal) + "/driver" : external_ + "/driver";
         remove_tree(ddir);
-        unlink((external_ + "/profile/vulkan_driver.txt").c_str());
-        unlink((external_ + "/cache-driver.zip").c_str());
+        os_unlink((external_ + "/profile/vulkan_driver.txt").c_str());
+        os_unlink((external_ + "/cache-driver.zip").c_str());
         return true;
     }
     void pick_saves(PickDone done) override {
