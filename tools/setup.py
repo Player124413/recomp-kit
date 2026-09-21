@@ -107,14 +107,25 @@ def export_listings(ghidra, java_home, annotations, cfg):
     output.mkdir(parents=True, exist_ok=True)
     command = [
         ghidra / "support/analyzeHeadless", project, cfg["game"]["app_name"],
-        "-import", cfg["developer_exe_path"], "-noanalysis", "-deleteProject",
+        "-import", cfg["developer_exe_path"], "-deleteProject",
         "-scriptPath", ROOT / "tools",
     ]
     if annotations is not None:
-        command += ["-postScript", "ImportAnnotations.java", annotations]
+        command += ["-noanalysis", "-postScript", "ImportAnnotations.java", annotations]
     command += ["-postScript", "ExportProgram.java", output]
     run(command, env=env)
     index = listings / "functions.tsv"
+    if not index.is_file() and output.is_dir():
+        for child in output.iterdir():
+            if child.is_dir() and child.name.lower() == listings.name.lower():
+                index = child / "functions.tsv"
+                if not listings.exists():
+                    try:
+                        listings.symlink_to(child.name)
+                    except OSError:
+                        pass
+                listings = child
+                break
     if not index.is_file() or len(index.read_text().splitlines()) < 2:
         raise ValueError("Ghidra did not export a function index; inspect its error output")
     (output / "inputs.json").write_text(json.dumps({

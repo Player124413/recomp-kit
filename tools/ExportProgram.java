@@ -5,6 +5,8 @@ import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressIterator;
 import java.io.PrintWriter;
 import java.nio.file.*;
 
@@ -12,6 +14,21 @@ public class ExportProgram extends GhidraScript {
     public void run() throws Exception {
         Path out = Path.of(getScriptArgs()[0], currentProgram.getName());
         Files.createDirectories(out.resolve("functions"));
+
+        // If no functions were discovered, create functions from entry points
+        if (currentProgram.getFunctionManager().getFunctionCount() == 0) {
+            println("No functions in database. Creating functions from entry points...");
+            AddressIterator entryPoints = currentProgram.getSymbolTable().getExternalEntryPointIterator();
+            while (entryPoints.hasNext()) {
+                Address ep = entryPoints.next();
+                try {
+                    disassemble(ep);
+                    createFunction(ep, null);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
         DecompInterface decompiler = new DecompInterface();
         if (!decompiler.openProgram(currentProgram)) throw new Exception(decompiler.getLastMessage());
         int total = 0, completed = 0;
