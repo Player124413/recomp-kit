@@ -28,36 +28,35 @@ default_layout = "pad"
 pad = "mapped"
 
 [controls.mapped]
-# Движение персонажа (Стрелки: Вверх, Вниз, Влево, Вправо)
-left_stick = "arrows"
-dpad = "arrows"
+# Движение персонажа (W, S, A, D - Forward, Backward, Strafe Left, Strafe Right):
+left_stick = "wasd"
+dpad = "wasd"
+
+# Свободный обзор камеры (курсор мыши):
 right_stick = "cursor"
 cursor_speed = 900
 
-# Действия и атака:
-# Cross (✕) = ЛКМ (Основной удар / Использовать предмет / Взять зелье)
+# Действия и атака (в соответствии с настройками игры):
+# ATTACK: Left Mouse or Enter (Левая кнопка мыши / Enter)
 cross = "mouse_left"
-# Circle (○) = ПКМ (Супер-удар, тратит шкалу героя)
-circle = "mouse_right"
-# Square (□) = Enter / Return (Прыжок)
-square = "key:Return"
-# Triangle (△) = Space / Пробел (Защита / Блок)
+r1 = "mouse_left"
+r2 = "key:Return"
+
+# JUMP: Right Mouse or Ctrl (Правая кнопка мыши / Ctrl)
+square = "mouse_right"
+l1 = "key:LCtrl"
+l2 = "mouse_right"
+
+# SPACE: Сенсорная кнопка / Пробел (Space)
+circle = "key:Space"
 triangle = "key:Space"
 
-# Дополнительные кнопки (плечевые триггеры):
-# L1 / L2 = LCtrl (Альтернативный основной удар / предмет)
-l1 = "key:LCtrl"
-l2 = "key:LCtrl"
-# R1 = Return (Прыжок)
-r1 = "key:Return"
-# R2 = LShift (Прыжок / Бег)
-r2 = "key:LShift"
-
-# Интерфейс и меню:
-# Start = Esc (Пауза и выход в меню)
+# Меню и интерфейс:
+# Пауза и меню (Escape)
 start = "key:Escape"
-# Select = Tab (Посмотреть карту / Статистику уровня: монеты, плакаты)
+# Карта / Статистика уровня (Tab)
 select = "key:Tab"
+
 l3 = "none"
 r3 = "none"
 ps = "action:settings"
