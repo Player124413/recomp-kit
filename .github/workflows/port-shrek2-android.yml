@@ -1,0 +1,191 @@
+name: Port Shrek 2 to Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_files_url:
+        description: "Direct URL to ZIP archive with PC game files (optional if already placed in games/shrek2/original)"
+        required: false
+        type: string
+        default: ""
+      build_mode:
+        description: "Build mode: 'full' (translate & compile APK) or 'stub' (quick test APK build without game assets)"
+        required: true
+        type: choice
+        options:
+          - full
+          - stub
+        default: "full"
+      skip_ghidra:
+        description: "Skip Ghidra analysis (enable if analysis is already committed to games/shrek2/analysis)"
+        required: false
+        type: boolean
+        default: false
+      allow_unmodelled:
+        description: "Translator: allow unmodelled instructions reason (passed to --allow-unmodelled)"
+        required: false
+        type: string
+        default: "unmodelled instructions in game code"
+      allow_table_gaps:
+        description: "Translator: allow table gaps (passed to --allow-table-gaps if jump tables have gaps)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shrek2-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android-port:
+    name: Build Shrek 2 Android APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21 (JDK for Ghidra 12.1.3 and Android Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config libvulkan-dev glslc unzip curl wget
+
+      - name: Install Python dependencies (CMake, Ninja, translator tooling)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-dev.txt
+
+      - name: Install Android NDK & SDK components
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;27.2.12479018" \
+            "platforms;android-36" \
+            "build-tools;37.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Cache Ghidra 12.1.3
+        id: cache-ghidra
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        uses: actions/cache@v4
+        with:
+          path: /opt/ghidra_12.1.3_PUBLIC
+          key: ghidra-12.1.3-public
+
+      - name: Download & Install Ghidra 12.1.3
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra && steps.cache-ghidra.outputs.cache-hit != 'true' }}
+        run: |
+          echo "Downloading Ghidra 12.1.3..."
+          curl -fL --retry 3 -o "$RUNNER_TEMP/ghidra.zip" \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip"
+          unzip -q "$RUNNER_TEMP/ghidra.zip" -d /opt
+          rm "$RUNNER_TEMP/ghidra.zip"
+          echo "Ghidra extracted to /opt/ghidra_12.1.3_PUBLIC"
+
+      - name: Set Ghidra environment
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        run: |
+          echo "GHIDRA_HOME=/opt/ghidra_12.1.3_PUBLIC" >> "$GITHUB_ENV"
+
+      - name: Prepare game files
+        id: prep-game
+        run: |
+          mkdir -p games/shrek2/original
+
+          if [ -n "${{ inputs.game_files_url }}" ]; then
+            echo "Downloading game archive from URL..."
+            curl -fL --retry 3 -o "$RUNNER_TEMP/game.zip" "${{ inputs.game_files_url }}"
+            unzip -q -o "$RUNNER_TEMP/game.zip" -d games/shrek2/original/
+            rm "$RUNNER_TEMP/game.zip"
+          fi
+
+          python3 tools/prepare_shrek2.py \
+            --game-dir games/shrek2 \
+            --install games/shrek2/original
+
+      - name: Export assembly listings with Ghidra
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        run: |
+          if [ ! -f "games/shrek2/analysis/Game.exe/functions.tsv" ]; then
+            echo "Running Ghidra headless export via tools/setup.py..."
+            python3 tools/setup.py \
+              --game-dir games/shrek2 \
+              --install games/shrek2/original \
+              --ghidra-home "$GHIDRA_HOME" \
+              --java-home "$JAVA_HOME"
+          else
+            echo "Analysis already exists in games/shrek2/analysis/Game.exe/functions.tsv. Skipping Ghidra export."
+          fi
+
+      - name: Recompile and Build Android APK (Full Mode)
+        if: ${{ inputs.build_mode == 'full' }}
+        run: |
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/shrek2 --target android --no-install --regenerate"
+          if [ -n "${{ inputs.allow_unmodelled }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-unmodelled '${{ inputs.allow_unmodelled }}'"
+          fi
+          if [ -n "${{ inputs.allow_table_gaps }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-table-gaps '${{ inputs.allow_table_gaps }}'"
+          fi
+          echo "Running: $BUILD_CMD"
+          eval $BUILD_CMD
+
+      - name: Build Android APK (Stub Test Mode)
+        if: ${{ inputs.build_mode == 'stub' }}
+        run: |
+          echo "Building Android APK in stub mode..."
+          python3 tools/build.py --game-dir $(pwd)/games/shrek2 --target android --stub --no-install
+
+      - name: Locate APK
+        run: |
+          APK_PATH=$(find build -name "*app-debug.apk" -type f | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            APK_PATH=$(find build -name "*.apk" -type f | head -n 1)
+          fi
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "Error: No APK file generated!"
+            find build -type f || true
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
+          ls -lh "$APK_PATH"
+          echo "APK_FILE=$APK_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shrek2Recomp-Android-debug-apk
+          path: ${{ env.APK_FILE }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build Summary
+        run: |
+          echo "### 🎮 Shrek 2 Android Port Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **APK Artifact:** \`Shrek2Recomp-Android-debug-apk\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Name:** Shrek 2: The Game (Recomp)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package ID:** \`dev.recompkit.shrek2\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architecture:** \`arm64-v8a\` (Android 10+ / API 29+)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Instructions for playing on Android:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the APK artifact and install it on your Android phone or tablet." >> $GITHUB_STEP_SUMMARY
+          echo "2. Transfer the game data folders (\`System\`, \`Maps\`, \`Textures\`, \`Sounds\`, \`Music\`, \`Animations\`, etc.) to your Android device, or zip them into a \`.zip\` archive." >> $GITHUB_STEP_SUMMARY
+          echo "3. Open the installed Shrek 2 app. Use the built-in file picker in the launcher to select the game archive/directory." >> $GITHUB_STEP_SUMMARY
+          echo "4. The game will verify the files and launch with native on-screen touch controls!" >> $GITHUB_STEP_SUMMARY

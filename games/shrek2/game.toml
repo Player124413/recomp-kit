@@ -1,0 +1,71 @@
+# games/shrek2/game.toml - Shrek 2: The Game (PC 2004) port configuration
+
+[game]
+id = "shrek2"
+name = "Shrek 2: The Game"
+app_name = "Shrek2Recomp"
+bundle_id = "dev.recompkit.shrek2"
+executable = "Game.exe"
+# Replace with the SHA-256 hash of your decrypted / No-CD Game.exe
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+image_base = 0x00400000
+entry_point = 0x00401000
+guest_root = 'C:\Shrek2'
+developer_exe = "original/Game.exe"
+windows_version = "5.1"
+guest_size = 0x20000000
+
+[translate]
+function_alignment = 16
+listings = "analysis/Game.exe"
+globals = "globals.toml"
+volatile_reads = []
+entry_points = []
+resumable_stacks = false
+
+[controls]
+default_layout = "pad"
+pad = "mapped"
+
+[controls.mapped]
+left_stick = "wasd"
+right_stick = "cursor"
+dpad = "arrows"
+cursor_speed = 900
+cross = "mouse_left"
+circle = "mouse_right"
+square = "key:Space"
+triangle = "key:Tab"
+l1 = "key:PageUp"
+r1 = "key:PageDown"
+l2 = "key:LCtrl"
+r2 = "key:LShift"
+start = "key:Escape"
+select = "key:F10"
+l3 = "none"
+r3 = "none"
+ps = "action:settings"
+
+[launcher]
+title = "Shrek 2: The Game"
+install_names = ["Shrek 2", "Shrek 2 The Game", "Shrek2"]
+min_free_mb = 1200
+
+[setup]
+required_dirs = ["System"]
+
+[mods]
+builtin = "none"
+
+[bundle]
+exclude = [
+    "*.pdb",
+    "*.ilk",
+    "*.exp",
+    "*.lib",
+    "DirectX*",
+    "Help*",
+    "Manual*",
+    "*.pdf",
+    "*.txt"
+]
