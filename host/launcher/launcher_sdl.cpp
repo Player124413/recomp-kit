@@ -38,8 +38,14 @@ struct Presenter {
             return SDL_GetWindowSurface(window) != nullptr;
         }
         chain = device->create_swapchain(surface, width, height);
-        if (!chain)
-            return false;
+        if (!chain) {
+            fprintf(stderr,
+                    "[launcher] swapchain creation failed; falling back to software surface\n");
+            device = nullptr;
+            w = width;
+            h = height;
+            return SDL_GetWindowSurface(window) != nullptr;
+        }
         format = device->swapchain_format(chain);
         w = width;
         h = height;

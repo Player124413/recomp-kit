@@ -106,8 +106,8 @@ class VulkanDevice final : public Device {
     void unregister_view_format(VkImageView view);
     VkFormat get_view_format(VkImageView view) const;
     VkRenderPass get_or_create_render_pass(uint32_t color_count, const VkFormat *color_formats,
-                                          VkFormat depth_format, VkFormat stencil_format,
-                                          VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+                                           VkFormat depth_format, VkFormat stencil_format,
+                                           VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
     VkFramebuffer get_or_create_framebuffer(VkRenderPass rp, uint32_t width, uint32_t height,
                                             uint32_t layers, uint32_t view_count,
                                             const VkImageView *views);

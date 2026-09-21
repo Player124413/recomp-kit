@@ -312,8 +312,9 @@ VkPipeline VulkanDevice::variant_for(Cmd &c) {
     ri.depthAttachmentFormat = c.pass_depth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_UNDEFINED;
     VkGraphicsPipelineCreateInfo gci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     if (emulates_dynamic_rendering()) {
-        gci.renderPass = get_or_create_render_pass(ri.colorAttachmentCount, ri.pColorAttachmentFormats,
-                                                   ri.depthAttachmentFormat, VK_FORMAT_UNDEFINED);
+        gci.renderPass =
+            get_or_create_render_pass(ri.colorAttachmentCount, ri.pColorAttachmentFormats,
+                                      ri.depthAttachmentFormat, VK_FORMAT_UNDEFINED);
         gci.subpass = 0;
     } else {
         gci.pNext = &ri;

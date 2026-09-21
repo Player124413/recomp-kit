@@ -1724,6 +1724,8 @@ int main(int argc, char **argv) {
     // SDL's Java glue has initialized the app-specific external files path
     // before SDL_main. Resolve it before host_layout caches a profile path.
     const char *external = SDL_GetAndroidExternalStoragePath();
+    const char *internal = SDL_GetAndroidInternalStoragePath();
+    platform_ui_setup_log_files(external, internal);
     GamePath game;
     if (!external || !*external) {
         game_error =
@@ -1820,6 +1822,7 @@ int main(int argc, char **argv) {
                                          surface_flag, &g_window_mode);
     if (!g_window) {
         fprintf(stderr, RECOMP_APP_NAME ": SDL_CreateWindow failed: %s\n", SDL_GetError());
+        platform_ui_show_fatal_error("Ошибка создания окна", SDL_GetError());
         return 3;
     }
     note_screen_size();
@@ -1827,6 +1830,7 @@ int main(int argc, char **argv) {
     if (!g_surface) {
         fprintf(stderr, RECOMP_APP_NAME ": no %s surface for the window: %s\n",
                 gpu::default_backend_name(), SDL_GetError());
+        platform_ui_show_fatal_error("Ошибка создания поверхности", SDL_GetError());
         return 3;
     }
     fprintf(stderr, "GPU backend: %s\n", gpu::default_backend_name());
@@ -1929,6 +1933,7 @@ int main(int argc, char **argv) {
     if (!boot_load(options)) {
         host_present_stop();
         fprintf(stderr, RECOMP_APP_NAME ": %s\n", loader_error());
+        platform_ui_show_fatal_error("Ошибка загрузки игры", loader_error());
         return 2;
     }
     printf(RECOMP_APP_NAME ": %s, entry %08x\n", loader_exe_path().c_str(), loader_entry_point());

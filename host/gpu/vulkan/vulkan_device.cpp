@@ -61,7 +61,8 @@ const char *vulkan_last_error() {
     return g_vulkan_last_error.c_str();
 }
 
-static void VKAPI_PTR emulated_vkCmdBeginRendering(VkCommandBuffer cb, const VkRenderingInfo *info) {
+static void VKAPI_PTR emulated_vkCmdBeginRendering(VkCommandBuffer cb,
+                                                   const VkRenderingInfo *info) {
     if (g_active_vulkan_device)
         g_active_vulkan_device->emulated_begin_rendering(cb, info);
 }
@@ -75,7 +76,8 @@ static void VKAPI_PTR emulated_vkCmdEndRendering(VkCommandBuffer cb) {
 std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     g_vulkan_last_error.clear();
     if (!vulkan_load()) {
-        g_vulkan_last_error = "vulkan_load() failed: could not open Vulkan library or custom driver";
+        g_vulkan_last_error =
+            "vulkan_load() failed: could not open Vulkan library or custom driver";
         return nullptr;
     }
     std::unique_ptr<VulkanDevice> d(new VulkanDevice());
@@ -103,10 +105,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         inst_ext.push_back("VK_KHR_portability_enumeration");
         inst_flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
-    for (const char *s :
-         {"VK_KHR_surface", "VK_KHR_android_surface", "VK_EXT_metal_surface", "VK_KHR_win32_surface",
-          "VK_KHR_xlib_surface", "VK_KHR_xcb_surface", "VK_KHR_wayland_surface",
-          "VK_KHR_get_physical_device_properties2"})
+    for (const char *s : {"VK_KHR_surface", "VK_KHR_android_surface", "VK_EXT_metal_surface",
+                          "VK_KHR_win32_surface", "VK_KHR_xlib_surface", "VK_KHR_xcb_surface",
+                          "VK_KHR_wayland_surface", "VK_KHR_get_physical_device_properties2"})
         if (has_inst(s))
             inst_ext.push_back(s);
     std::vector<const char *> layers;
@@ -287,13 +288,16 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
     dci.ppEnabledExtensionNames = dev_ext.data();
     VkResult dev_res = vkCreateDevice(chosen, &dci, nullptr, &d->device_);
     if (dev_res != VK_SUCCESS) {
-        fprintf(stderr, "gpu/vulkan: vkCreateDevice with features2 failed (%d), retrying standard\n", int(dev_res));
+        fprintf(stderr,
+                "gpu/vulkan: vkCreateDevice with features2 failed (%d), retrying standard\n",
+                int(dev_res));
         dci.pNext = nullptr;
         dci.pEnabledFeatures = &f2.features;
         dev_res = vkCreateDevice(chosen, &dci, nullptr, &d->device_);
         if (dev_res != VK_SUCCESS) {
             char buf[256];
-            snprintf(buf, sizeof(buf), "vkCreateDevice failed with %d (%s)", int(dev_res), d->props_.deviceName);
+            snprintf(buf, sizeof(buf), "vkCreateDevice failed with %d (%s)", int(dev_res),
+                     d->props_.deviceName);
             g_vulkan_last_error = buf;
             fprintf(stderr, "gpu/vulkan: %s\n", buf);
             return nullptr;
@@ -1299,8 +1303,9 @@ VkRenderPass VulkanDevice::get_or_create_render_pass(const RenderPassKey &key) {
         dad.loadOp = key.depth_op;
         dad.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         dad.stencilLoadOp = key.stencil_op;
-        dad.stencilStoreOp = (key.stencil != VK_FORMAT_UNDEFINED) ? VK_ATTACHMENT_STORE_OP_STORE
-                                                                  : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        dad.stencilStoreOp = (key.stencil != VK_FORMAT_UNDEFINED)
+                                 ? VK_ATTACHMENT_STORE_OP_STORE
+                                 : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         dad.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
         dad.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
         depth_ref.attachment = uint32_t(atts.size());
@@ -1324,10 +1329,11 @@ VkRenderPass VulkanDevice::get_or_create_render_pass(const RenderPassKey &key) {
     dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.srcAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     rpci.attachmentCount = uint32_t(atts.size());
@@ -1349,8 +1355,7 @@ VkRenderPass VulkanDevice::get_or_create_render_pass(const RenderPassKey &key) {
 
 VkRenderPass VulkanDevice::get_or_create_render_pass(uint32_t color_count,
                                                      const VkFormat *color_formats,
-                                                     VkFormat depth_format,
-                                                     VkFormat stencil_format,
+                                                     VkFormat depth_format, VkFormat stencil_format,
                                                      VkSampleCountFlagBits samples) {
     RenderPassKey key{};
     for (uint32_t i = 0; i < color_count; ++i) {

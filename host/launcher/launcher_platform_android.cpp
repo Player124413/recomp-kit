@@ -223,11 +223,20 @@ class AndroidPlatform final : public Platform {
     }
     bool remove_driver() override {
         const char *internal = SDL_GetAndroidInternalStoragePath();
-        std::string ddir = internal && *internal ? std::string(internal) + "/driver" : external_ + "/driver";
+        std::string ddir =
+            internal && *internal ? std::string(internal) + "/driver" : external_ + "/driver";
         remove_tree(ddir);
         os_unlink((external_ + "/profile/vulkan_driver.txt").c_str());
         os_unlink((external_ + "/cache-driver.zip").c_str());
         return true;
+    }
+    void copy_log() override {
+        JNIEnv *e = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+        if (!e || !g_activity)
+            return;
+        jmethodID m = e->GetStaticMethodID(g_activity, "copyLogToClipboard", "()V");
+        if (m)
+            e->CallStaticVoidMethod(g_activity, m);
     }
     void pick_saves(PickDone done) override {
         // import_profile reads a path: copy the document into the cache first.

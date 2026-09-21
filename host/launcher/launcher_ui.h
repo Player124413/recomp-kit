@@ -58,6 +58,7 @@ class Platform {
     virtual bool remove_driver() {
         return false;
     }
+    virtual void copy_log() {}
     // A source over what was picked. The default opens a path as a folder or a ZIP.
     virtual std::unique_ptr<Source> open(const Picked &p, std::string *error);
     // Folders that may hold the game.
@@ -109,6 +110,7 @@ enum Action : int {
     kUseCandidate = 100, // + index
     kImportDriver = 200,
     kRemoveDriver,
+    kCopyLog,
 };
 
 struct Button {

@@ -449,3 +449,7 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
           g_rumble_player = player;
     });
 }
+
+void platform_ui_setup_log_files(const char *, const char *) {}
+void platform_ui_copy_log_to_clipboard() {}
+void platform_ui_show_fatal_error(const char *, const char *) {}

@@ -60,7 +60,8 @@ bool vulkan_load() {
                 char buf[512] = {};
                 if (fgets(buf, sizeof(buf) - 1, f)) {
                     size_t len = strlen(buf);
-                    while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n' || buf[len - 1] == ' '))
+                    while (len > 0 &&
+                           (buf[len - 1] == '\r' || buf[len - 1] == '\n' || buf[len - 1] == ' '))
                         buf[--len] = '\0';
                     if (len > 0 && try_path(buf)) {
                         fprintf(stderr, "gpu/vulkan: loaded custom driver from profile: %s\n", buf);
@@ -84,7 +85,8 @@ bool vulkan_load() {
                 char buf[256] = {};
                 if (fgets(buf, sizeof(buf) - 1, f)) {
                     size_t len = strlen(buf);
-                    while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n' || buf[len - 1] == ' '))
+                    while (len > 0 &&
+                           (buf[len - 1] == '\r' || buf[len - 1] == '\n' || buf[len - 1] == ' '))
                         buf[--len] = '\0';
                     if (len > 0)
                         active_so = buf;

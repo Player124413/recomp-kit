@@ -9,6 +9,7 @@
 #include "../present.h"
 #include <android/log.h>
 #include <jni.h>
+#include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
@@ -23,6 +24,9 @@ namespace {
 // own reference the same way; this file needs its own because the two never
 // share a translation unit.
 jclass g_haptics_activity = nullptr;
+std::mutex g_log_mutex;
+FILE *g_log_ext_file = nullptr;
+FILE *g_log_intl_file = nullptr;
 
 JNIEnv *haptics_env() {
     return static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
@@ -58,7 +62,7 @@ jclass haptics_activity_class(JNIEnv *env) {
 }
 
 // An app has no console: the host's stdout and stderr go to logcat (tag
-// "recomp"), a line at a time.
+// "recomp"), a line at a time, and into recomp_log.txt files in app storage.
 void redirect_stdio_to_logcat() {
     static bool done = false;
     int fds[2];
@@ -74,14 +78,29 @@ void redirect_stdio_to_logcat() {
         std::string line;
         char buf[1024];
         ssize_t n;
-        while ((n = read(fd, buf, sizeof buf)) > 0)
+        while ((n = read(fd, buf, sizeof buf)) > 0) {
             for (ssize_t i = 0; i < n; ++i) {
                 if (buf[i] == '\n') {
                     __android_log_write(ANDROID_LOG_INFO, "recomp", line.c_str());
+                    {
+                        std::lock_guard<std::mutex> lock(g_log_mutex);
+                        if (g_log_ext_file) {
+                            fputs(line.c_str(), g_log_ext_file);
+                            fputc('\n', g_log_ext_file);
+                            fflush(g_log_ext_file);
+                        }
+                        if (g_log_intl_file) {
+                            fputs(line.c_str(), g_log_intl_file);
+                            fputc('\n', g_log_intl_file);
+                            fflush(g_log_intl_file);
+                        }
+                    }
                     line.clear();
-                } else
+                } else {
                     line.push_back(buf[i]);
+                }
             }
+        }
     }).detach();
 }
 } // namespace
@@ -266,5 +285,72 @@ void platform_ui_device_rumble(uint16_t low, uint16_t high) {
     (void)low;
     (void)high;
     // Desktop: no-op.
+#endif
+}
+
+void platform_ui_setup_log_files(const char *external_path, const char *internal_path) {
+#ifdef __ANDROID__
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    if (external_path && *external_path) {
+        if (g_log_ext_file)
+            fclose(g_log_ext_file);
+        std::string p = std::string(external_path) + "/recomp_log.txt";
+        g_log_ext_file = fopen(p.c_str(), "w");
+        if (g_log_ext_file) {
+            fprintf(g_log_ext_file, "=== recomp-kit log (external) ===\n");
+            fflush(g_log_ext_file);
+        }
+    }
+    if (internal_path && *internal_path) {
+        if (g_log_intl_file)
+            fclose(g_log_intl_file);
+        std::string p = std::string(internal_path) + "/recomp_log.txt";
+        g_log_intl_file = fopen(p.c_str(), "w");
+        if (g_log_intl_file) {
+            fprintf(g_log_intl_file, "=== recomp-kit log (internal) ===\n");
+            fflush(g_log_intl_file);
+        }
+    }
+#else
+    (void)external_path;
+    (void)internal_path;
+#endif
+}
+
+void platform_ui_copy_log_to_clipboard() {
+#ifdef __ANDROID__
+    static bool logged_method = false, logged_call = false;
+    JNIEnv *env = haptics_env();
+    jclass cls = env ? haptics_activity_class(env) : nullptr;
+    if (!cls)
+        return;
+    jmethodID m = env->GetStaticMethodID(cls, "copyLogToClipboard", "()V");
+    if (jni_failed(env, "[log] GetStaticMethodID(copyLogToClipboard) failed", &logged_method) || !m)
+        return;
+    env->CallStaticVoidMethod(cls, m);
+    jni_failed(env, "[log] CallStaticVoidMethod(copyLogToClipboard) failed", &logged_call);
+#endif
+}
+
+void platform_ui_show_fatal_error(const char *title, const char *message) {
+#ifdef __ANDROID__
+    static bool logged_method = false, logged_call = false;
+    JNIEnv *env = haptics_env();
+    jclass cls = env ? haptics_activity_class(env) : nullptr;
+    if (!cls)
+        return;
+    jmethodID m =
+        env->GetStaticMethodID(cls, "showFatalError", "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (jni_failed(env, "[error] GetStaticMethodID(showFatalError) failed", &logged_method) || !m)
+        return;
+    jstring jt = env->NewStringUTF(title ? title : "Ошибка");
+    jstring jm = env->NewStringUTF(message ? message : "");
+    env->CallStaticVoidMethod(cls, m, jt, jm);
+    env->DeleteLocalRef(jt);
+    env->DeleteLocalRef(jm);
+    jni_failed(env, "[error] CallStaticVoidMethod(showFatalError) failed", &logged_call);
+#else
+    (void)title;
+    (void)message;
 #endif
 }

@@ -234,6 +234,8 @@ void Launcher::rebuild() {
         }
         if (!unplayable_.empty() && info_.can_pick_driver)
             add(kImportDriver, "Install Vulkan driver (ZIP)...");
+        if (!unplayable_.empty())
+            add(kCopyLog, "Copy logs to clipboard");
         add(kManage, "Manage...");
         if (!spec_.store_url.empty() && status_.state == State::NotFound)
             add(kStore, "Where to get the game");
@@ -247,6 +249,7 @@ void Launcher::rebuild() {
             if (info_.has_custom_driver)
                 add(kRemoveDriver, "Reset to system Vulkan driver");
         }
+        add(kCopyLog, "Copy logs to clipboard");
         if (!info_.import_root.empty() && status_.root == info_.import_root)
             add(kDeleteData,
                 confirm_delete_ ? "Delete game data - press again" : "Delete game data");
@@ -260,6 +263,7 @@ void Launcher::rebuild() {
         add(kCancel, "Cancel");
         break;
     case Screen::Message:
+        add(kCopyLog, "Copy logs to clipboard");
         add(kOk, "OK");
         break;
     }
@@ -566,7 +570,8 @@ void Launcher::activate(int id) {
                         fclose(vf);
                     }
                     self->info_.has_custom_driver = true;
-                    self->show("Vulkan driver installed: " + lib_name + ".\nPlease restart the game to use it.");
+                    self->show("Vulkan driver installed: " + lib_name +
+                               ".\nPlease restart the game to use it.");
                 } else {
                     self->show("Could not install driver: " + err);
                 }
@@ -581,6 +586,10 @@ void Launcher::activate(int id) {
         }
         break;
     }
+    case kCopyLog:
+        platform_.copy_log();
+        show("Logs copied to clipboard. You can paste them in chat.");
+        break;
     case kDeleteData:
         if (!confirm_delete_) {
             confirm_delete_ = true;

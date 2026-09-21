@@ -63,3 +63,12 @@ void platform_ui_haptic_tap();
 // iOS: a Core Haptics continuous player, intensity max(low, high)/65535.
 // Android: Vibrator.vibrate with an amplitude derived the same way. Desktop: no-op.
 void platform_ui_device_rumble(uint16_t low, uint16_t high);
+
+// Configure log file destinations (e.g. recomp_log.txt in external/internal files).
+void platform_ui_setup_log_files(const char *external_path, const char *internal_path);
+
+// Copy collected logs to the system clipboard on mobile platforms.
+void platform_ui_copy_log_to_clipboard();
+
+// Surface a fatal error to the user with an option to copy logs.
+void platform_ui_show_fatal_error(const char *title, const char *message);

@@ -422,6 +422,7 @@ void fault_handler(const char *name) {
     }
     sig_write("[host] no run report from a signal handler: printing one is not "
               "signal-safe and could hang instead of exiting\n");
+    os_sleep_us(100 * 1000); // give the logging thread a moment to flush stderr to disk
     os_exit_immediately(same_text(name, "an abort from the runtime") ? 6 : 5);
 }
 

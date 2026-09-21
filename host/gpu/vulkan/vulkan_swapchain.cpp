@@ -25,8 +25,12 @@ static VkPresentModeKHR choose_present_mode(VulkanDevice &d, VkSurfaceKHR surfac
                 return true;
         return false;
     };
+#ifdef __ANDROID__
+    VkPresentModeKHR want = VK_PRESENT_MODE_FIFO_KHR;
+#else
     VkPresentModeKHR want =
         has(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+#endif
     if (const char *e = recomp_env("VULKAN_PRESENT_MODE"); e && *e) {
         if (strcmp(e, "fifo") == 0)
             want = VK_PRESENT_MODE_FIFO_KHR;
@@ -70,39 +74,70 @@ static bool build_swapchain(VulkanDevice &d, VulkanDevice::Chain &c, int width, 
             space = f.colorSpace;
             break;
         }
-    // The caller's size, within the surface's bounds: X11 pins min and max to
-    // the window so this is the window; MoltenVK and Wayland let the swapchain
-    // set the drawable size, which is what a resize on a fixed layer needs.
-    VkExtent2D extent = {uint32_t(std::max(1, width)), uint32_t(std::max(1, height))};
-    if (width <= 0 || height <= 0)
-        extent = caps.currentExtent.width == UINT32_MAX ? VkExtent2D{1, 1} : caps.currentExtent;
-    extent.width = std::clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
-    extent.height =
-        std::clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+
+    VkExtent2D extent;
+    if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.width > 0 &&
+        caps.currentExtent.height > 0) {
+        extent = caps.currentExtent;
+    } else {
+        extent = {uint32_t(std::max(1, width)), uint32_t(std::max(1, height))};
+        extent.width =
+            std::clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
+        extent.height =
+            std::clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
+    }
+
+    uint32_t min_images = caps.minImageCount + 1;
+    if (caps.maxImageCount > 0 && min_images > caps.maxImageCount)
+        min_images = caps.maxImageCount;
+    if (min_images < caps.minImageCount)
+        min_images = caps.minImageCount;
+
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+        usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+        usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+    VkSurfaceTransformFlagBitsKHR pre_transform = caps.currentTransform;
+    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+
+    VkCompositeAlphaFlagBitsKHR composite = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
+        composite = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    } else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+        composite = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    } else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR) {
+        composite = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+    } else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) {
+        composite = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
+    }
+
     VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     sci.surface = c.surface;
-    sci.minImageCount = std::max(3u, caps.minImageCount);
-    if (caps.maxImageCount)
-        sci.minImageCount = std::min(sci.minImageCount, caps.maxImageCount);
+    sci.minImageCount = min_images;
     sci.imageFormat = c.format;
     sci.imageColorSpace = space;
     sci.imageExtent = extent;
     sci.imageArrayLayers = 1;
-    sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    sci.imageUsage = usage;
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    sci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-    sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    // FIFO is vsync and caps the frame rate at the display's refresh; the
-    // presenter paces frames itself, so MAILBOX (uncapped, no tearing) is the
-    // first choice and FIFO the fallback every driver has. RECOMP_VULKAN_PRESENT_MODE
-    // = fifo | mailbox | immediate overrides, for diagnosis.
+    sci.preTransform = pre_transform;
+    sci.compositeAlpha = composite;
     sci.presentMode = choose_present_mode(d, c.surface);
     sci.clipped = VK_TRUE;
     sci.oldSwapchain = c.swapchain;
-    VkSwapchainKHR fresh;
-    if (vkCreateSwapchainKHR(d.device_, &sci, nullptr, &fresh) != VK_SUCCESS)
+    VkSwapchainKHR fresh = VK_NULL_HANDLE;
+    VkResult res = vkCreateSwapchainKHR(d.device_, &sci, nullptr, &fresh);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr,
+                "gpu/vulkan: vkCreateSwapchainKHR failed: %d (extent %ux%u, format %d, alpha %d, "
+                "transform %d, usage 0x%x, mode %d, minImages %u)\n",
+                int(res), extent.width, extent.height, int(c.format), int(composite),
+                int(pre_transform), unsigned(usage), int(sci.presentMode), min_images);
         return false;
+    }
     if (c.swapchain)
         vkDestroySwapchainKHR(d.device_, c.swapchain, nullptr);
     c.swapchain = fresh;
@@ -150,7 +185,14 @@ Swapchain VulkanDevice::create_swapchain(void *native_surface, int width, int he
     }
     VkBool32 supported = VK_FALSE;
     vkGetPhysicalDeviceSurfaceSupportKHR(physical_, queue_family_, c->surface, &supported);
-    if (!supported || !build_swapchain(*this, *c, width, height)) {
+    if (!supported) {
+        fprintf(stderr, "gpu/vulkan: queue family %u does not support surface presentation\n",
+                queue_family_);
+        vkDestroySurfaceKHR(instance_, c->surface, nullptr);
+        return {};
+    }
+    if (!build_swapchain(*this, *c, width, height)) {
+        fprintf(stderr, "gpu/vulkan: build_swapchain failed for window %p\n", native_surface);
         vkDestroySurfaceKHR(instance_, c->surface, nullptr);
         return {};
     }

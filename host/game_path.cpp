@@ -87,7 +87,8 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
     if (!candidate.empty()) {
         const size_t slash = candidate.rfind('/');
         const std::string parent = slash == std::string::npos ? "" : candidate.substr(0, slash);
-        const std::string name = slash == std::string::npos ? candidate : candidate.substr(slash + 1);
+        const std::string name =
+            slash == std::string::npos ? candidate : candidate.substr(slash + 1);
         const std::string sub = (parent.empty() ? "System" : parent + "/System") + "/" + name;
         if (os_stat(sub.c_str(), &st) == 0) {
             g.exe = sub;

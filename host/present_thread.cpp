@@ -1067,7 +1067,11 @@ void host_present_start(void *native_surface, int w, int h) {
     fprintf(stderr, "presenter: %dx%d drawable, at most %zu display submissions in flight\n",
             int(s->drawable_w), int(s->drawable_h), s->flight_limit);
     if (!s->chain || w <= 0 || h <= 0) {
-        fprintf(stderr, "presenter: requires an attached, sized surface on the renderer device\n");
+        fprintf(stderr,
+                "presenter: requires an attached, sized surface on the renderer device "
+                "(chain=%llu, surface=%p, w=%d, h=%d)\n",
+                (unsigned long long)s->chain.id, native_surface, w, h);
+        fflush(stderr);
         abort();
     }
     s->frame_period = s->device->refresh_period(s->chain);

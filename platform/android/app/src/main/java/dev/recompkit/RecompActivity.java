@@ -533,4 +533,64 @@ public class RecompActivity extends SDLActivity {
                 vibrator.vibrate(VibrationEffect.createOneShot(60000, VibrationEffect.DEFAULT_AMPLITUDE));
         });
     }
+
+    /** Copy the contents of recomp_log.txt to the Android clipboard. */
+    public static void copyLogToClipboard() {
+        final RecompActivity a = sActivity;
+        if (a == null)
+            return;
+        a.runOnUiThread(() -> {
+            try {
+                File external = a.getExternalFilesDir(null);
+                File logFile = external != null ? new File(external, "recomp_log.txt") : null;
+                if (logFile == null || !logFile.isFile()) {
+                    logFile = new File(a.getFilesDir(), "recomp_log.txt");
+                }
+                String content = "";
+                if (logFile != null && logFile.isFile()) {
+                    byte[] data = java.nio.file.Files.readAllBytes(logFile.toPath());
+                    content = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+                }
+                if (content.isEmpty()) {
+                    content = "Лог пуст или файл лога еще не создан.";
+                }
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) a.getSystemService(Context.CLIPBOARD_SERVICE);
+                android.content.ClipData clip =
+                        android.content.ClipData.newPlainText("recomp_log", content);
+                if (cm != null) {
+                    cm.setPrimaryClip(clip);
+                    android.widget.Toast.makeText(a,
+                            "Лог скопирован в буфер обмена (" + content.length() + " симв.)",
+                            android.widget.Toast.LENGTH_LONG).show();
+                }
+            } catch (Exception e) {
+                android.util.Log.e("recomp", "Failed to copy log", e);
+            }
+        });
+    }
+
+    /** Show a modal fatal error dialog with a button to copy full log to clipboard. */
+    public static void showFatalError(final String title, final String message) {
+        final RecompActivity a = sActivity;
+        if (a == null)
+            return;
+        a.runOnUiThread(() -> {
+            try {
+                new android.app.AlertDialog.Builder(a)
+                        .setTitle(title != null && !title.isEmpty() ? title : "Ошибка запуска")
+                        .setMessage(message != null ? message : "")
+                        .setPositiveButton("Скопировать лог", (dialog, which) -> {
+                            copyLogToClipboard();
+                        })
+                        .setNegativeButton("Закрыть", (dialog, which) -> {
+                            a.finish();
+                        })
+                        .setCancelable(false)
+                        .show();
+            } catch (Exception e) {
+                android.util.Log.e("recomp", "Cannot show fatal error alert dialog", e);
+            }
+        });
+    }
 }
