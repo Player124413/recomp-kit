@@ -65,7 +65,7 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential pkg-config libvulkan-dev glslc unzip curl wget
+          sudo apt-get install -y -qq build-essential pkg-config libvulkan-dev glslc unzip p7zip-full curl wget
 
       - name: Install Python dependencies (CMake, Ninja, translator tooling)
         run: |
@@ -110,10 +110,19 @@ jobs:
 
           if [ -n "${{ inputs.game_files_url }}" ]; then
             echo "Downloading game archive from URL..."
-            curl -fL --retry 3 -o "$RUNNER_TEMP/game.zip" "${{ inputs.game_files_url }}"
-            unzip -q -o "$RUNNER_TEMP/game.zip" -d games/shrek2/original/
-            rm "$RUNNER_TEMP/game.zip"
+            curl -fL --retry 3 -o "$RUNNER_TEMP/game_archive" "${{ inputs.game_files_url }}"
+            7z x -y "$RUNNER_TEMP/game_archive" -ogames/shrek2/original/ || unzip -q -o "$RUNNER_TEMP/game_archive" -d games/shrek2/original/
+            rm "$RUNNER_TEMP/game_archive"
           fi
+
+          # If the user committed or placed archive files inside original/, extract them
+          for arch in games/shrek2/original/*.zip games/shrek2/original/*.rar games/shrek2/original/*.7z; do
+            if [ -f "$arch" ]; then
+              echo "Extracting archive in original/: $arch"
+              7z x -y "$arch" -ogames/shrek2/original/ || unzip -q -o "$arch" -d games/shrek2/original/
+              rm -f "$arch"
+            fi
+          done
 
           python3 tools/prepare_shrek2.py \
             --game-dir games/shrek2 \

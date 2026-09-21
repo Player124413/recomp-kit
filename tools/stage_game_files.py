@@ -53,7 +53,18 @@ def stage(source, dest, executable, exclude, keep=()):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
         copied += 1
-    digest = hashlib.sha256((source / executable).read_bytes()).hexdigest()
+    exe_file = source / executable
+    if not exe_file.is_file():
+        if (source / "System" / executable).is_file():
+            exe_file = source / "System" / executable
+        elif (source / "system" / executable).is_file():
+            exe_file = source / "system" / executable
+        else:
+            for cand in source.rglob("*"):
+                if cand.is_file() and cand.name.lower() == Path(executable).name.lower():
+                    exe_file = cand
+                    break
+    digest = hashlib.sha256(exe_file.read_bytes()).hexdigest()
     stamp = dest / ".stamp"
     if not stamp.is_file() or stamp.read_text().strip() != digest:
         stamp.write_text(digest + "\n")

@@ -75,7 +75,11 @@ export function planImport(game, entries) {
     }
   }
   if (!exe) return { error: "noExecutable" };
-  const base = exe.path.includes("/") ? exe.path.slice(0, exe.path.lastIndexOf("/")) : "";
+  let base = exe.path.includes("/") ? exe.path.slice(0, exe.path.lastIndexOf("/")) : "";
+  const lastBase = base.includes("/") ? base.slice(base.lastIndexOf("/") + 1) : base;
+  if ((game.requiredDirs || []).some((d) => d.toLowerCase() === lastBase.toLowerCase())) {
+    base = base.includes("/") ? base.slice(0, base.lastIndexOf("/")) : "";
+  }
   const prefix = base ? base + "/" : "";
   const files = [];
   const tops = new Set();
@@ -86,7 +90,7 @@ export function planImport(game, entries) {
     if (!relative || excluded(relative, game.exclude || [])) continue;
     if (e.isDir || relative.includes("/")) tops.add(relative.split("/")[0].toLowerCase());
     if (e.isDir) continue;
-    if (relative.toLowerCase() === exeName) exeRelative = relative;
+    if (e === exe) exeRelative = relative;
     files.push({ entry: e, relative, size: e.size, mtime: e.mtime || 0 });
   }
   const missing = (game.requiredDirs || []).filter((d) => !tops.has(d.toLowerCase()));
@@ -431,7 +435,8 @@ export async function gameStatus(game, store) {
   const stamp = ((await store.readText(STAMP)) || "").trim();
   const manifest = JSON.parse((await store.readText(MANIFEST)) || '{"files":{}}');
   const names = Object.keys(manifest.files);
-  if (!names.some((n) => n.toLowerCase() === game.executable.toLowerCase())) return { state: "notFound" };
+  const exeName = game.executable.toLowerCase();
+  if (!names.some((n) => n.toLowerCase() === exeName || n.toLowerCase().endsWith("/" + exeName))) return { state: "notFound" };
   const tops = new Set(names.filter((n) => n.includes("/")).map((n) => n.split("/")[0].toLowerCase()));
   const missing = (game.requiredDirs || []).filter((d) => !tops.has(d.toLowerCase()));
   if (stamp !== game.sha256) return { state: stamp ? "wrongVersion" : "incomplete", missing };

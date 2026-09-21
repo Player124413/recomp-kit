@@ -46,11 +46,18 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
     // A mobile host owns its data location. Missing files must not fall back
     // to a developer path baked into a build made on another machine.
     if (data_root) {
-        const std::string candidate = std::string(data_root) + "/game/" RECOMP_EXECUTABLE;
+        std::string candidate = std::string(data_root) + "/game/" RECOMP_EXECUTABLE;
         OsStat st;
         if (*data_root && os_stat(candidate.c_str(), &st) == 0 && st.is_regular) {
             g.exe = candidate;
             g.source = GamePathSource::DataRoot;
+            return g;
+        }
+        candidate = std::string(data_root) + "/game/System/" RECOMP_EXECUTABLE;
+        if (*data_root && os_stat(candidate.c_str(), &st) == 0 && st.is_regular) {
+            g.exe = candidate;
+            g.source = GamePathSource::DataRoot;
+            return g;
         }
         return g;
     }
@@ -76,6 +83,17 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
         g.exe = candidate;
         g.source = GamePathSource::Checkout;
         return g;
+    }
+    if (!candidate.empty()) {
+        const size_t slash = candidate.rfind('/');
+        const std::string parent = slash == std::string::npos ? "" : candidate.substr(0, slash);
+        const std::string name = slash == std::string::npos ? candidate : candidate.substr(slash + 1);
+        const std::string sub = (parent.empty() ? "System" : parent + "/System") + "/" + name;
+        if (os_stat(sub.c_str(), &st) == 0) {
+            g.exe = sub;
+            g.source = GamePathSource::Checkout;
+            return g;
+        }
     }
     if (FILE *f = fopen(saved_file().c_str(), "rb")) {
         char line[4096] = {0};

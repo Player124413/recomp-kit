@@ -130,8 +130,16 @@ std::string find_root(const Spec &spec, const std::string &picked) {
     const std::string path = normalize(picked);
     if (path.empty())
         return "";
-    if (is_file(path))
-        return same_name(base_of(path), spec.executable) ? parent_of(path) : "";
+    if (is_file(path)) {
+        if (!same_name(base_of(path), spec.executable))
+            return "";
+        std::string parent = parent_of(path);
+        for (const std::string &req : spec.required_dirs) {
+            if (same_name(base_of(parent), req))
+                return parent_of(parent);
+        }
+        return parent;
+    }
     if (!is_dir(path))
         return "";
     // Breadth first, so the shallowest copy wins: an install often carries
@@ -141,8 +149,13 @@ std::string find_root(const Spec &spec, const std::string &picked) {
         std::vector<std::string> next;
         for (const std::string &dir : level) {
             const std::string name = find_name(dir, spec.executable);
-            if (!name.empty() && is_file(join(dir, name)))
+            if (!name.empty() && is_file(join(dir, name))) {
+                for (const std::string &req : spec.required_dirs) {
+                    if (same_name(base_of(dir), req))
+                        return parent_of(dir);
+                }
                 return dir;
+            }
             if (depth < 2)
                 for (const std::string &child : children(dir))
                     if (child[0] != '.' && is_dir(join(dir, child)))
@@ -170,7 +183,19 @@ const char *state_name(State s) {
 Status check(const Spec &spec, const std::string &root_in, const std::string &cache_file) {
     Status s;
     const std::string root = normalize(root_in);
-    const std::string exe_name = root.empty() ? "" : find_name(root, spec.executable);
+    std::string exe_name = root.empty() ? "" : find_name(root, spec.executable);
+    if (exe_name.empty() || !is_file(join(root, exe_name))) {
+        for (const std::string &dir : spec.required_dirs) {
+            const std::string dir_name = find_name(root, dir);
+            if (!dir_name.empty() && is_dir(join(root, dir_name))) {
+                const std::string sub_exe = find_name(join(root, dir_name), spec.executable);
+                if (!sub_exe.empty() && is_file(join(join(root, dir_name), sub_exe))) {
+                    exe_name = dir_name + "/" + sub_exe;
+                    break;
+                }
+            }
+        }
+    }
     if (exe_name.empty() || !is_file(join(root, exe_name)))
         return s;
     s.root = root;
@@ -639,7 +664,13 @@ ImportOutcome import_game(const Spec &spec, Source &source, const std::string &d
         out.error = "no " + spec.executable + " in the chosen files";
         return out;
     }
-    const std::string base = parent_of(exe->relative);
+    std::string base = parent_of(exe->relative);
+    for (const std::string &req : spec.required_dirs) {
+        if (same_name(base_of(base), req)) {
+            base = parent_of(base);
+            break;
+        }
+    }
     const std::string prefix = base.empty() ? "" : base + "/";
     // The source's entry, and its path under dest.
     struct File {
@@ -662,7 +693,7 @@ ImportOutcome import_game(const Spec &spec, Source &source, const std::string &d
         if (e.is_dir)
             dirs.push_back(relative);
         else {
-            if (same_name(relative, spec.executable))
+            if (&e == exe || (exe_relative.empty() && same_name(relative, spec.executable)))
                 exe_relative = relative;
             files.push_back({e, relative});
         }
@@ -960,8 +991,20 @@ std::vector<std::string> detect_under(const Spec &spec, const std::vector<std::s
         if (!is_dir(base))
             continue;
         // The base itself may be the game (a registry or Steam path).
-        const std::string exe = find_name(base, spec.executable);
-        if (!exe.empty() && is_file(join(base, exe))) {
+        std::string exe = find_name(base, spec.executable);
+        if (exe.empty()) {
+            for (const std::string &req : spec.required_dirs) {
+                const std::string rname = find_name(base, req);
+                if (!rname.empty() && is_dir(join(base, rname))) {
+                    const std::string sub_exe = find_name(join(base, rname), spec.executable);
+                    if (!sub_exe.empty() && is_file(join(join(base, rname), sub_exe))) {
+                        exe = sub_exe;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!exe.empty()) {
             add(base);
             continue;
         }
@@ -980,8 +1023,20 @@ std::vector<std::string> detect_under(const Spec &spec, const std::vector<std::s
             if (named)
                 add(find_root(spec, dir));
             else {
-                const std::string e = find_name(dir, spec.executable);
-                if (!e.empty() && is_file(join(dir, e)))
+                std::string e = find_name(dir, spec.executable);
+                if (e.empty()) {
+                    for (const std::string &req : spec.required_dirs) {
+                        const std::string rname = find_name(dir, req);
+                        if (!rname.empty() && is_dir(join(dir, rname))) {
+                            const std::string sub_e = find_name(join(dir, rname), spec.executable);
+                            if (!sub_e.empty() && is_file(join(join(dir, rname), sub_e))) {
+                                e = sub_e;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!e.empty())
                     add(dir);
             }
         }

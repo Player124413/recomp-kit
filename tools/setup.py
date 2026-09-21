@@ -40,14 +40,40 @@ def validate_game(directory, executable, sha256, required_dirs=()):
         elif (directory / "system" / executable).is_file():
             image = directory / "system" / executable
         else:
-            raise ValueError(f"{executable} was not found in {directory}")
+            # Case-insensitive and nested search
+            found = None
+            for p in directory.rglob("*"):
+                if p.is_file() and p.name.lower() == executable.lower():
+                    found = p
+                    break
+            if found:
+                image = found
+                if found.parent.name.lower() == "system" and found.parent.parent.is_dir():
+                    candidate_root = found.parent.parent
+                    cand_names = {e.name.lower() for e in candidate_root.iterdir() if e.is_dir()}
+                    if any(r.lower() in cand_names for r in required_dirs):
+                        directory = candidate_root
+            else:
+                raise ValueError(f"{executable} was not found in {directory}")
     digest = hashlib.sha256(image.read_bytes()).hexdigest()
     if digest != sha256:
         raise ValueError(f"Unsupported {executable}: SHA-256 {digest}; expected {sha256}")
-    names = {entry.name.lower() for entry in directory.iterdir() if entry.is_dir()}
+    names = {entry.name.lower(): entry.name for entry in directory.iterdir() if entry.is_dir()}
     for required in required_dirs:
         if required.lower() not in names:
+            if directory.name.lower() == required.lower() and directory.parent.is_dir():
+                parent_names = {e.name.lower(): e.name for e in directory.parent.iterdir() if e.is_dir()}
+                if required.lower() in parent_names:
+                    directory = directory.parent
+                    names = parent_names
+                    continue
             raise ValueError(f"Game installation is missing {required}/")
+        actual_name = names[required.lower()]
+        if actual_name != required and not (directory / required).exists():
+            try:
+                (directory / required).symlink_to(directory / actual_name)
+            except OSError:
+                pass
     return directory
 
 

@@ -7,7 +7,9 @@ Usage:
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
+import shutil
 import struct
 import sys
 
@@ -15,6 +17,11 @@ try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib
+
+
+UE2_STANDARD_DIRS = [
+    "System", "Maps", "Textures", "Sounds", "Music", "Animations", "StaticMeshes", "KarmaData"
+]
 
 
 def parse_pe32(data: bytes):
@@ -62,21 +69,122 @@ def parse_pe32(data: bytes):
     }
 
 
+def find_system_folder(install_dir: Path):
+    """Locate the System folder anywhere under install_dir, case-insensitively."""
+    # Check immediate children first
+    for item in install_dir.iterdir():
+        if item.is_dir() and item.name.lower() == "system":
+            return item
+
+    # If install_dir itself looks like the System directory (has Core.dll or Engine.dll)
+    if any((install_dir / dll).is_file() for dll in ("Core.dll", "core.dll", "Engine.dll", "engine.dll")):
+        return install_dir
+
+    # Search recursively for a directory named 'system'
+    for root, dirs, _ in os.walk(str(install_dir)):
+        for d in dirs:
+            if d.lower() == "system":
+                cand = Path(root) / d
+                if any((cand / f).is_file() for f in ("Game.exe", "game.exe", "Shrek2.exe", "shrek2.exe", "Core.dll", "core.dll")):
+                    return cand
+    return None
+
+
+def flatten_tree_if_nested(install_dir: Path):
+    """If the game was unpacked into a subfolder (e.g. 'Shrek 2/System'), move files to install_dir."""
+    system_dir = find_system_folder(install_dir)
+    if not system_dir:
+        return
+
+    # If system_dir is inside a subfolder, e.g. install_dir / "Shrek 2" / "System"
+    real_game_root = system_dir.parent if system_dir != install_dir else install_dir
+    if real_game_root != install_dir and real_game_root.is_relative_to(install_dir):
+        print(f"Flattening nested game folder '{real_game_root.name}' into '{install_dir}'...")
+        for item in list(real_game_root.iterdir()):
+            target = install_dir / item.name
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            shutil.move(str(item), str(install_dir))
+        # Remove parent directories up to install_dir if empty
+        curr = real_game_root
+        while curr != install_dir:
+            try:
+                curr.rmdir()
+            except OSError:
+                break
+            curr = curr.parent
+
+    # Special case: if install_dir itself contains the contents of System (Core.dll, Game.exe, etc.)
+    # without a System folder, wrap them inside install_dir / System
+    if not (install_dir / "System").is_dir() and not (install_dir / "system").is_dir():
+        if any((install_dir / dll).is_file() for dll in ("Core.dll", "core.dll", "Engine.dll", "engine.dll")):
+            print(f"Detected System folder contents directly in {install_dir}. Creating System/ directory...")
+            sys_dest = install_dir / "System"
+            sys_dest.mkdir(parents=True, exist_ok=True)
+            for item in list(install_dir.iterdir()):
+                if item != sys_dest and item.name != ".git":
+                    shutil.move(str(item), str(sys_dest))
+
+
+def normalize_casing_symlinks(install_dir: Path):
+    """Create symlinks for standard UE2 folders and files to handle case-sensitive filesystems."""
+    existing_dirs = {p.name.lower(): p for p in install_dir.iterdir() if p.is_dir()}
+    for std_name in UE2_STANDARD_DIRS:
+        std_lower = std_name.lower()
+        if std_lower in existing_dirs:
+            actual = existing_dirs[std_lower]
+            target_link = install_dir / std_name
+            if actual.name != std_name and not target_link.exists():
+                try:
+                    target_link.symlink_to(actual.name)
+                    print(f"Created symlink: {std_name} -> {actual.name}")
+                except OSError:
+                    pass
+
+    # Ensure System folder is reachable
+    sys_dir = None
+    for cand_name in ("System", "system", "SYSTEM"):
+        if (install_dir / cand_name).is_dir():
+            sys_dir = install_dir / cand_name
+            break
+
+    if sys_dir:
+        # Case symlinks inside System
+        existing_files = {p.name.lower(): p for p in sys_dir.iterdir() if p.is_file()}
+        for target in ("Game.exe", "Core.dll", "Engine.dll", "Window.dll", "D3DDrv.dll", "DefOpenAL.dll"):
+            t_lower = target.lower()
+            if t_lower in existing_files:
+                actual = existing_files[t_lower]
+                target_path = sys_dir / target
+                if actual.name != target and not target_path.exists():
+                    try:
+                        target_path.symlink_to(actual.name)
+                        print(f"Created symlink in System: {target} -> {actual.name}")
+                    except OSError:
+                        pass
+
+
 def find_executable(install_dir: Path):
     """Find Game.exe or Shrek2.exe in install directory or System/ subdirectory."""
+    # Preferred order: System/Game.exe, then root Game.exe
     candidates = [
-        install_dir / "Game.exe",
         install_dir / "System" / "Game.exe",
-        install_dir / "Shrek2.exe",
         install_dir / "System" / "Shrek2.exe",
-        install_dir / "game.exe",
+        install_dir / "system" / "Game.exe",
         install_dir / "system" / "game.exe",
+        install_dir / "Game.exe",
+        install_dir / "game.exe",
+        install_dir / "Shrek2.exe",
+        install_dir / "shrek2.exe",
     ]
     for c in candidates:
         if c.is_file():
             return c
 
-    # Case-insensitive search
+    # Case-insensitive recursive search
     for path in install_dir.rglob("*"):
         if path.is_file() and path.name.lower() in ("game.exe", "shrek2.exe"):
             return path
@@ -137,30 +245,21 @@ def main():
         print(f"Please put your PC Shrek 2 game files in '{install_dir}'.")
         return 0
 
-    # If the archive unpacked into a single nested folder (e.g. 'Shrek 2/'), flatten it
-    import shutil
-    entries = [p for p in install_dir.iterdir() if p.name != ".git"]
-    if len(entries) == 1 and entries[0].is_dir() and not (install_dir / "System").is_dir():
-        child = entries[0]
-        print(f"Flattening nested directory {child.name} into {install_dir}...")
-        for item in list(child.iterdir()):
-            target = install_dir / item.name
-            if target.exists():
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            shutil.move(str(item), str(install_dir))
-        try:
-            child.rmdir()
-        except OSError:
-            pass
+    # Step 1: Flatten nested directories (e.g. archive extracted as 'Shrek 2/System/...')
+    flatten_tree_if_nested(install_dir)
 
+    # Step 2: Normalize casing with symlinks for Linux case sensitivity
+    normalize_casing_symlinks(install_dir)
+
+    # Step 3: Locate game executable
     exe_path = find_executable(install_dir)
     if not exe_path:
-        print(f"Notice: No Game.exe or Shrek2.exe found under '{install_dir}'.")
-        print("Please copy the game files (specifically System/Game.exe) into the directory.")
-        return 0
+        print(f"\n[!] Error: No Game.exe or Shrek2.exe found under '{install_dir}'.")
+        print("    Directory contents:")
+        for item in sorted(install_dir.iterdir()):
+            print(f"      - {item.name}{'/' if item.is_dir() else ''}")
+        print("    Please provide the game files containing System/Game.exe.")
+        return 1
 
     print(f"Found game executable: {exe_path}")
     exe_bytes = exe_path.read_bytes()
@@ -172,8 +271,8 @@ def main():
         print("Warning: Could not parse 32-bit PE header. Make sure the file is a valid 32-bit Windows executable.")
         return 1
 
-    print(f"PE Image Base:   0x{pe['image_base']:08x}")
-    print(f"PE Entry Point:  0x{pe['entry_point']:08x}")
+    print(f"PE Image Base:    0x{pe['image_base']:08x}")
+    print(f"PE Entry Point:   0x{pe['entry_point']:08x}")
     print(f"PE Size of Image: 0x{pe['size_of_image']:08x}")
 
     drm_warnings = check_drm(pe["sections"])
@@ -186,27 +285,29 @@ def main():
     else:
         print("Executable appears to be clean (no DRM wrapper detected).")
 
-    # If the executable was found in a subdirectory (e.g. System/Game.exe) and
-    # install_dir is game_dir / 'original', make sure original/Game.exe can be reached.
-    target_link = game_dir / "original" / exe_path.name
-    if exe_path != target_link and not target_link.is_file():
-        try:
-            target_link.parent.mkdir(parents=True, exist_ok=True)
-            if not target_link.exists():
-                target_link.symlink_to(exe_path)
-        except OSError:
-            import shutil
-            shutil.copy2(exe_path, target_link)
+    # Step 4: Ensure executable is available in both canonical System/Game.exe and original/Game.exe
+    canonical_name = "Game.exe"
+    original_root = game_dir / "original"
+    system_dir = original_root / "System"
+    system_dir.mkdir(parents=True, exist_ok=True)
 
-    # If original/System exists but target_link is in original, also link/copy to System
-    system_exe = game_dir / "original" / "System" / exe_path.name
-    if (game_dir / "original" / "System").is_dir() and not system_exe.is_file():
+    system_exe = system_dir / canonical_name
+    root_exe = original_root / canonical_name
+
+    # If exe_path is not already system_exe, ensure system_exe exists
+    if exe_path != system_exe and not system_exe.is_file():
         try:
-            if not system_exe.exists():
-                system_exe.symlink_to(exe_path)
+            system_exe.symlink_to(os.path.relpath(exe_path, system_dir))
         except OSError:
-            import shutil
             shutil.copy2(exe_path, system_exe)
+
+    # Ensure root_exe exists (either symlink or copy to system_exe or exe_path)
+    if exe_path != root_exe and not root_exe.is_file():
+        try:
+            rel = os.path.relpath(system_exe if system_exe.is_file() else exe_path, original_root)
+            root_exe.symlink_to(rel)
+        except OSError:
+            shutil.copy2(system_exe if system_exe.is_file() else exe_path, root_exe)
 
     # Ensure guest_size is at least 512MB for UE2 games with modules
     guest_size = max(0x20000000, pe["image_base"] + pe["size_of_image"] + 0x10000000)
@@ -215,7 +316,7 @@ def main():
 
     update_game_toml(
         toml_path,
-        exe_name=exe_path.name,
+        exe_name=canonical_name,
         sha256=sha256,
         image_base=pe["image_base"],
         entry_point=pe["entry_point"],
@@ -224,20 +325,24 @@ def main():
     print(f"Successfully updated {toml_path} with executable metadata!")
 
     # Check for Unreal Engine 2 auxiliary modules
-    system_dir = exe_path.parent if exe_path.parent.name.lower() == "system" else exe_path.parent / "System"
     if system_dir.is_dir():
         print("\nScanning for Unreal Engine 2 modules in System/:")
         ue2_dlls = ["Core.dll", "Engine.dll", "Window.dll", "D3DDrv.dll", "DefOpenAL.dll", "Fire.dll", "KWGame.dll", "SHGame.dll"]
         found_dlls = []
         for dll_name in ue2_dlls:
             dll_file = system_dir / dll_name
+            if not dll_file.is_file():
+                for f in system_dir.iterdir():
+                    if f.is_file() and f.name.lower() == dll_name.lower():
+                        dll_file = f
+                        break
             if dll_file.is_file():
                 dbytes = dll_file.read_bytes()
                 dhash = hashlib.sha256(dbytes).hexdigest()
                 dpe = parse_pe32(dbytes)
                 base = f"0x{dpe['image_base']:08x}" if dpe else "unknown"
                 size = f"0x{dpe['size_of_image']:08x}" if dpe else "unknown"
-                print(f"  - Found {dll_name}: base={base}, size={size}, sha256={dhash[:16]}...")
+                print(f"  - Found {dll_file.name}: base={base}, size={size}, sha256={dhash[:16]}...")
                 found_dlls.append(dll_name)
         print(f"Total UE2 engine modules found: {len(found_dlls)}")
 
