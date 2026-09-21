@@ -83,10 +83,11 @@ jobs:
             grep -q "^#define CONFIG_${component} 1$" build/cmake/windows-cross-stub/ffmpeg-prefix/src/ffmpeg-build/config_components.h
           done
           mkdir -p "$RUNNER_TEMP/media-check"
-          cp build/windows/recomp/dx_tests.exe "$RUNNER_TEMP/media-check/"
+          media_bin=build/windows-stub/recomp
+          cp "$media_bin/dx_tests.exe" "$RUNNER_TEMP/media-check/"
           for dll in avformat-61.dll avcodec-61.dll avutil-59.dll; do
-            test -s "build/windows/recomp/$dll"
-            cp "build/windows/recomp/$dll" "$RUNNER_TEMP/media-check/"
+            test -s "$media_bin/$dll"
+            cp "$media_bin/$dll" "$RUNNER_TEMP/media-check/"
           done
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 -ar 44100 -ac 2 \
             -c:a libvorbis "$RUNNER_TEMP/media-check/tone.ogg"

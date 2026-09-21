@@ -238,7 +238,8 @@ through MoltenVK with `RECOMP_GPU_BACKEND=vulkan`) and WebGPU (the
 web), all from one shader generator. Windows builds cross-compile on macOS or
 Linux with llvm-mingw: set `LLVM_MINGW_ROOT` and pass
 `--preset windows-cross` (or `windows-cross-stub`) to `tools/build.py`; the
-executable lands in `build/windows/recomp/`. These presets enable FFmpeg movies
+executable lands in `build/windows/recomp/` (`build/windows-stub/recomp/` for
+the stub). These presets enable FFmpeg movies
 and file-backed music, building the three shared media DLLs with llvm-mingw and
 copying them beside the executable. The build host needs a POSIX shell and GNU
 make; MSYS2 is only required when building on Windows itself. Translated app
