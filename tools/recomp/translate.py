@@ -125,7 +125,7 @@ def configure(cfg):
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
     BINARY = str(cfg["developer_exe_path"])
     CURATED = os.path.join(str(cfg["dir"]), cfg["translate"].get("globals", "globals.toml"))
-    ANIMATION_COUNTER = cfg["translate"]["animation_counter"]
+    ANIMATION_COUNTER = cfg["translate"].get("animation_counter", 0)
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
     global RESUMABLE_STACKS
