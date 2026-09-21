@@ -1777,8 +1777,11 @@ int main(int argc, char **argv) {
 
     g_gpu = gpu::create_default_device();
     if (!g_gpu) {
-        fprintf(stderr, RECOMP_APP_NAME ": no GPU device is available (%s)\n",
-                gpu::default_backend_name());
+        const char *diag = gpu::default_backend_last_error();
+        fprintf(stderr, RECOMP_APP_NAME ": no GPU device is available (%s): %s\n",
+                gpu::default_backend_name(), diag ? diag : "");
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s: no GPU device is available: %s",
+                     RECOMP_APP_NAME, diag ? diag : "");
         // The launcher still runs, drawn in software: the game can be
         // imported, and the player is told why it cannot start here.
         int mode = 0;
@@ -1789,10 +1792,12 @@ int main(int argc, char **argv) {
             auto platform = launcher::make_platform(g_window);
             launcher::RunOptions options;
             options.known = game.exe;
+            std::string reason_str = (diag && *diag) ? ("\n\nПричина: " + std::string(diag)) : "";
             options.unplayable =
                 std::string("This device has no usable ") + gpu::default_backend_name() +
                 " graphics, which the game needs" +
-                (strcmp(gpu::default_backend_name(), "vulkan") == 0 ? " (Vulkan 1.1)." : ".");
+                (strcmp(gpu::default_backend_name(), "vulkan") == 0 ? " (Vulkan 1.1)." : ".") +
+                reason_str;
             if (const char *keys = recomp_env("LAUNCHER_KEYS"))
                 options.keys = keys;
             if (const char *dump = recomp_env("LAUNCHER_DUMP")) {

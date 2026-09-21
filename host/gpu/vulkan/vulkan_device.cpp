@@ -55,6 +55,11 @@ void VulkanDevice::fail(const char *what) {
 }
 
 static VulkanDevice *g_active_vulkan_device = nullptr;
+static std::string g_vulkan_last_error;
+
+const char *vulkan_last_error() {
+    return g_vulkan_last_error.c_str();
+}
 
 static void VKAPI_PTR emulated_vkCmdBeginRendering(VkCommandBuffer cb, const VkRenderingInfo *info) {
     if (g_active_vulkan_device)
@@ -68,8 +73,11 @@ static void VKAPI_PTR emulated_vkCmdEndRendering(VkCommandBuffer cb) {
 // ---------------------------------------------------------------- creation
 
 std::unique_ptr<VulkanDevice> VulkanDevice::create() {
-    if (!vulkan_load())
+    g_vulkan_last_error.clear();
+    if (!vulkan_load()) {
+        g_vulkan_last_error = "vulkan_load() failed: could not open Vulkan library or custom driver";
         return nullptr;
+    }
     std::unique_ptr<VulkanDevice> d(new VulkanDevice());
 
     uint32_t loader_version = VK_API_VERSION_1_0;
@@ -132,14 +140,22 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         }
     }
     if (r != VK_SUCCESS) {
-        fprintf(stderr, "gpu/vulkan: vkCreateInstance failed (VkResult %d, loader %u.%u)\n", int(r),
-                VK_API_VERSION_MAJOR(loader_version), VK_API_VERSION_MINOR(loader_version));
+        char buf[256];
+        snprintf(buf, sizeof(buf), "vkCreateInstance failed with %d (loader %u.%u)", int(r),
+                 VK_API_VERSION_MAJOR(loader_version), VK_API_VERSION_MINOR(loader_version));
+        g_vulkan_last_error = buf;
+        fprintf(stderr, "gpu/vulkan: %s\n", buf);
         return nullptr;
     }
     volkLoadInstanceOnly(d->instance_);
 
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(d->instance_, &count, nullptr);
+    if (count == 0) {
+        g_vulkan_last_error = "vkEnumeratePhysicalDevices found 0 GPUs";
+        fprintf(stderr, "gpu/vulkan: %s\n", g_vulkan_last_error.c_str());
+        return nullptr;
+    }
     std::vector<VkPhysicalDevice> devices(count);
     vkEnumeratePhysicalDevices(d->instance_, &count, devices.data());
     VkPhysicalDevice chosen = VK_NULL_HANDLE;
@@ -175,7 +191,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         }
     }
     if (!chosen) {
-        fprintf(stderr, "gpu/vulkan: no physical device with a graphics queue\n");
+        char buf[256];
+        snprintf(buf, sizeof(buf), "no GPU with a graphics queue found among %u devices", count);
+        g_vulkan_last_error = buf;
+        fprintf(stderr, "gpu/vulkan: %s\n", buf);
         return nullptr;
     }
     d->physical_ = chosen;
@@ -273,7 +292,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         dci.pEnabledFeatures = &f2.features;
         dev_res = vkCreateDevice(chosen, &dci, nullptr, &d->device_);
         if (dev_res != VK_SUCCESS) {
-            fprintf(stderr, "gpu/vulkan: vkCreateDevice failed: %d\n", int(dev_res));
+            char buf[256];
+            snprintf(buf, sizeof(buf), "vkCreateDevice failed with %d (%s)", int(dev_res), d->props_.deviceName);
+            g_vulkan_last_error = buf;
+            fprintf(stderr, "gpu/vulkan: %s\n", buf);
             return nullptr;
         }
     }

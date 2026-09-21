@@ -379,5 +379,6 @@ class VulkanDevice final : public Device {
 
 VkFormat vk_format(Format f);
 Format format_of(VkFormat f);
+const char *vulkan_last_error();
 
 } // namespace gpu

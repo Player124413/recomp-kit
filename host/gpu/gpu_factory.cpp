@@ -33,6 +33,7 @@ void *vulkan_test_native_surface(int w, int h);
 void *vulkan_native_surface_for_window(void *sdl_window);
 const char *vulkan_loader_path_impl();
 bool vulkan_available();
+const char *vulkan_last_error();
 #ifdef __APPLE__
 std::unique_ptr<Device> metal_create_device();
 void *metal_test_native_surface(int w, int h);
@@ -70,6 +71,10 @@ std::unique_ptr<Device> create_default_device() {
 
 const char *default_backend_name() {
     return chosen_backend();
+}
+
+const char *default_backend_last_error() {
+    return vulkan_last_error();
 }
 
 void *test_native_surface(int w, int h) {

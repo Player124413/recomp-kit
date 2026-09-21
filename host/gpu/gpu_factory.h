@@ -10,6 +10,7 @@ namespace gpu {
 std::unique_ptr<Device> create_default_device();
 // The backend create_default_device() would build: "metal", "vulkan" or "none".
 const char *default_backend_name();
+const char *default_backend_last_error();
 
 // A native surface create_swapchain() accepts, for tests that need one without
 // a window: a CAMetalLayer for Metal, a hidden SDL window for Vulkan, nullptr
