@@ -81,6 +81,7 @@ mouse_vtable = 0x00000000
 mouse_device_ptr = 0x00000000
 mouse_device_right = 0x00000000
 camera = 0x00000000
+sprites = []
 
 [mods]
 builtin = "none"

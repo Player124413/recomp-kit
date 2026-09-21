@@ -103,6 +103,7 @@ def render_header(cfg):
         "mouse_device_ptr": 0,
         "mouse_device_right": 0,
         "camera": 0,
+        "sprites": [],
     }
     hooks.update(cfg.get("hooks", {}))
     for key, value in sorted(hooks.items()):
