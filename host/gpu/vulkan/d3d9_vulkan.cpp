@@ -1311,6 +1311,7 @@ class VkRenderer final : public D9Backend {
         VkImageView v = VK_NULL_HANDLE;
         if (vkCreateImageView(vk_, &vci, nullptr, &v) != VK_SUCCESS)
             return VK_NULL_HANDLE;
+        dev_->register_view_format(v, fmt);
         return v;
     }
     VkImageView make_view(const Tex &t, VkImageViewType type, uint32_t level, uint32_t levels,
@@ -1461,9 +1462,13 @@ class VkRenderer final : public D9Backend {
         VkImage image = t.image, msaa = t.msaa;
         VkDeviceMemory mem = t.memory, msaa_mem = t.msaa_memory;
         VkDevice vk = vk_;
-        bury(after, [vk, views, image, msaa, mem, msaa_mem] {
-            for (VkImageView v : views)
+        VulkanDevice *d = dev_;
+        bury(after, [vk, d, views, image, msaa, mem, msaa_mem] {
+            for (VkImageView v : views) {
+                if (d)
+                    d->unregister_view_format(v);
                 vkDestroyImageView(vk, v, nullptr);
+            }
             if (image)
                 vkDestroyImage(vk, image, nullptr);
             if (msaa)
@@ -2121,7 +2126,14 @@ class VkRenderer final : public D9Backend {
             pr.stencilAttachmentFormat = depth_format_;
         }
         VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        gp.pNext = &pr;
+        if (dev_->emulates_dynamic_rendering()) {
+            gp.renderPass = dev_->get_or_create_render_pass(
+                pr.colorAttachmentCount, pr.pColorAttachmentFormats, pr.depthAttachmentFormat,
+                pr.stencilAttachmentFormat, ms.rasterizationSamples);
+            gp.subpass = 0;
+        } else {
+            gp.pNext = &pr;
+        }
         gp.stageCount = 2;
         gp.pStages = stages;
         gp.pVertexInputState = &vi;
@@ -2530,7 +2542,10 @@ class VkRenderer final : public D9Backend {
         for (auto &kv : fitted_depth_) {
             Fitted f = kv.second;
             VkDevice vk = vk_;
-            bury(serial_ + 1, [vk, f] {
+            VulkanDevice *d = dev_;
+            bury(serial_ + 1, [vk, d, f] {
+                if (d)
+                    d->unregister_view_format(f.view);
                 vkDestroyImageView(vk, f.view, nullptr);
                 vkDestroyImage(vk, f.image, nullptr);
                 vkFreeMemory(vk, f.memory, nullptr);

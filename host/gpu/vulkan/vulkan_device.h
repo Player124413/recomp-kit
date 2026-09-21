@@ -99,6 +99,20 @@ class VulkanDevice final : public Device {
     bool native_core13() const {
         return core13_;
     }
+    bool emulates_dynamic_rendering() const {
+        return emulate_dynamic_rendering_;
+    }
+    void register_view_format(VkImageView view, VkFormat format);
+    void unregister_view_format(VkImageView view);
+    VkFormat get_view_format(VkImageView view) const;
+    VkRenderPass get_or_create_render_pass(uint32_t color_count, const VkFormat *color_formats,
+                                          VkFormat depth_format, VkFormat stencil_format,
+                                          VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+    VkFramebuffer get_or_create_framebuffer(VkRenderPass rp, uint32_t width, uint32_t height,
+                                            uint32_t layers, uint32_t view_count,
+                                            const VkImageView *views);
+    void emulated_begin_rendering(VkCommandBuffer cb, const VkRenderingInfo *ri);
+    void setup_renderpass_fallback();
     // Submits `cb` on the device's queue, behind the transfers the device has
     // pending, so it runs before any command buffer committed after it.
     bool submit_native(VkCommandBuffer cb, VkFence fence);
@@ -314,6 +328,53 @@ class VulkanDevice final : public Device {
     VkSampler dummy_sampler_ = VK_NULL_HANDLE;
 
     std::unordered_map<uint64_t, std::unique_ptr<Chain>> swapchains_;
+
+    bool emulate_dynamic_rendering_ = false;
+    std::mutex fallback_mutex_;
+    std::unordered_map<VkImageView, VkFormat> view_formats_;
+    struct RenderPassKey {
+        std::vector<VkFormat> colors;
+        std::vector<VkAttachmentLoadOp> color_ops;
+        VkFormat depth = VK_FORMAT_UNDEFINED;
+        VkAttachmentLoadOp depth_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        VkFormat stencil = VK_FORMAT_UNDEFINED;
+        VkAttachmentLoadOp stencil_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+        bool operator<(const RenderPassKey &o) const {
+            if (colors != o.colors)
+                return colors < o.colors;
+            if (color_ops != o.color_ops)
+                return color_ops < o.color_ops;
+            if (depth != o.depth)
+                return depth < o.depth;
+            if (depth_op != o.depth_op)
+                return depth_op < o.depth_op;
+            if (stencil != o.stencil)
+                return stencil < o.stencil;
+            if (stencil_op != o.stencil_op)
+                return stencil_op < o.stencil_op;
+            return samples < o.samples;
+        }
+    };
+    std::map<RenderPassKey, VkRenderPass> render_passes_;
+    struct FbKey {
+        VkRenderPass rp = VK_NULL_HANDLE;
+        uint32_t width = 0, height = 0, layers = 1;
+        std::vector<VkImageView> views;
+        bool operator<(const FbKey &o) const {
+            if (rp != o.rp)
+                return rp < o.rp;
+            if (width != o.width)
+                return width < o.width;
+            if (height != o.height)
+                return height < o.height;
+            if (layers != o.layers)
+                return layers < o.layers;
+            return views < o.views;
+        }
+    };
+    std::map<FbKey, VkFramebuffer> framebuffers_;
+    VkRenderPass get_or_create_render_pass(const RenderPassKey &key);
 };
 
 VkFormat vk_format(Format f);

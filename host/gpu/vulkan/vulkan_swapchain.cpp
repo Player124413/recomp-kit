@@ -48,8 +48,10 @@ static VkPresentModeKHR choose_present_mode(VulkanDevice &d, VkSurfaceKHR surfac
 
 static bool build_swapchain(VulkanDevice &d, VulkanDevice::Chain &c, int width, int height) {
     vkDeviceWaitIdle(d.device_);
-    for (VkImageView v : c.views)
+    for (VkImageView v : c.views) {
+        d.unregister_view_format(v);
         vkDestroyImageView(d.device_, v, nullptr);
+    }
     c.views.clear();
     c.images.clear();
     VkSurfaceCapabilitiesKHR caps;
@@ -118,6 +120,7 @@ static bool build_swapchain(VulkanDevice &d, VulkanDevice::Chain &c, int width, 
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VkImageView view = VK_NULL_HANDLE;
         vkCreateImageView(d.device_, &vci, nullptr, &view);
+        d.register_view_format(view, c.format);
         c.views.push_back(view);
     }
     VkSemaphoreCreateInfo semci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -311,8 +314,10 @@ void VulkanDevice::destroy(Swapchain s) {
     for (auto &[tid, idx] : c.acquired)
         textures_.erase(tid);
     vkDeviceWaitIdle(device_);
-    for (VkImageView v : c.views)
+    for (VkImageView v : c.views) {
+        unregister_view_format(v);
         vkDestroyImageView(device_, v, nullptr);
+    }
     for (VkSemaphore sem : c.acquire_semaphores)
         vkDestroySemaphore(device_, sem, nullptr);
     for (VkSemaphore sem : c.finished_semaphores)

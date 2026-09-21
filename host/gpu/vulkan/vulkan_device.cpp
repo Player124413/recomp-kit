@@ -54,6 +54,17 @@ void VulkanDevice::fail(const char *what) {
     failed_ = true;
 }
 
+static VulkanDevice *g_active_vulkan_device = nullptr;
+
+static void VKAPI_PTR emulated_vkCmdBeginRendering(VkCommandBuffer cb, const VkRenderingInfo *info) {
+    if (g_active_vulkan_device)
+        g_active_vulkan_device->emulated_begin_rendering(cb, info);
+}
+
+static void VKAPI_PTR emulated_vkCmdEndRendering(VkCommandBuffer cb) {
+    vkCmdEndRenderPass(cb);
+}
+
 // ---------------------------------------------------------------- creation
 
 std::unique_ptr<VulkanDevice> VulkanDevice::create() {
@@ -85,8 +96,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         inst_flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
     for (const char *s :
-         {"VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_win32_surface", "VK_KHR_xlib_surface",
-          "VK_KHR_xcb_surface", "VK_KHR_wayland_surface", "VK_KHR_get_physical_device_properties2"})
+         {"VK_KHR_surface", "VK_KHR_android_surface", "VK_EXT_metal_surface", "VK_KHR_win32_surface",
+          "VK_KHR_xlib_surface", "VK_KHR_xcb_surface", "VK_KHR_wayland_surface",
+          "VK_KHR_get_physical_device_properties2"})
         if (has_inst(s))
             inst_ext.push_back(s);
     std::vector<const char *> layers;
@@ -237,9 +249,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::create() {
         vkCmdBeginRendering = vkCmdBeginRenderingKHR;
         vkCmdEndRendering = vkCmdEndRenderingKHR;
     }
+    g_active_vulkan_device = d.get();
     if (!vkCmdBeginRendering) {
-        fprintf(stderr, "gpu/vulkan: no dynamic rendering entry points\n");
-        return nullptr;
+        d->setup_renderpass_fallback();
+        fprintf(stderr, "gpu/vulkan: dynamic rendering not available; using RenderPass fallback\n");
     }
     vkGetDeviceQueue(d->device_, family, 0, &d->queue_);
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -333,6 +346,16 @@ VulkanDevice::~VulkanDevice() {
     if (transfer_fence_)
         vkDestroyFence(device_, transfer_fence_, nullptr);
     vkDestroyCommandPool(device_, transfer_pool_, nullptr);
+    for (auto &kv : framebuffers_)
+        if (kv.second)
+            vkDestroyFramebuffer(device_, kv.second, nullptr);
+    framebuffers_.clear();
+    for (auto &kv : render_passes_)
+        if (kv.second)
+            vkDestroyRenderPass(device_, kv.second, nullptr);
+    render_passes_.clear();
+    if (g_active_vulkan_device == this)
+        g_active_vulkan_device = nullptr;
     vkDestroyDevice(device_, nullptr);
     vkDestroyInstance(instance_, nullptr);
 }
@@ -511,6 +534,7 @@ Texture VulkanDevice::create_texture(const TextureDesc &desc) {
                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
         pending_dirty_ = true;
     }
+    register_view_format(t.view, vci.format);
     std::lock_guard lock(mutex_);
     uint64_t id = next_id_++;
     textures_[id] = t;
@@ -520,8 +544,10 @@ Texture VulkanDevice::create_texture(const TextureDesc &desc) {
 void VulkanDevice::destroy_tex(Tex &t) {
     if (t.external)
         return;
-    if (t.view)
+    if (t.view) {
+        unregister_view_format(t.view);
         vkDestroyImageView(device_, t.view, nullptr);
+    }
     if (t.image)
         vkDestroyImage(device_, t.image, nullptr);
     if (t.memory)
@@ -726,6 +752,7 @@ Texture VulkanDevice::import_image(VkImage image, VkImageView view, const Textur
     t.desc = desc;
     t.layout = VK_IMAGE_LAYOUT_GENERAL;
     t.external = true;
+    register_view_format(view, vk_format(desc.format));
     std::lock_guard lock(mutex_);
     uint64_t id = next_id_++;
     textures_[id] = t;
@@ -1134,6 +1161,248 @@ void VulkanDevice::trace_tick() {
             t.wait_ms, t.acquires, t.acquire_ms, t.submit_ms);
     t = TraceSecond{};
     t.started = now;
+}
+
+// ------------------------------------------------ dynamic rendering emulation
+
+void VulkanDevice::setup_renderpass_fallback() {
+    emulate_dynamic_rendering_ = true;
+    vkCmdBeginRendering = emulated_vkCmdBeginRendering;
+    vkCmdEndRendering = emulated_vkCmdEndRendering;
+}
+
+void VulkanDevice::register_view_format(VkImageView view, VkFormat format) {
+    if (!view)
+        return;
+    std::lock_guard lock(fallback_mutex_);
+    view_formats_[view] = format;
+}
+
+void VulkanDevice::unregister_view_format(VkImageView view) {
+    if (!view)
+        return;
+    std::lock_guard lock(fallback_mutex_);
+    view_formats_.erase(view);
+    for (auto it = framebuffers_.begin(); it != framebuffers_.end();) {
+        bool uses = false;
+        for (VkImageView v : it->first.views) {
+            if (v == view) {
+                uses = true;
+                break;
+            }
+        }
+        if (uses) {
+            if (it->second)
+                vkDestroyFramebuffer(device_, it->second, nullptr);
+            it = framebuffers_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+VkFormat VulkanDevice::get_view_format(VkImageView view) const {
+    std::lock_guard lock(const_cast<std::mutex &>(fallback_mutex_));
+    auto it = view_formats_.find(view);
+    if (it != view_formats_.end())
+        return it->second;
+    return VK_FORMAT_B8G8R8A8_UNORM;
+}
+
+VkRenderPass VulkanDevice::get_or_create_render_pass(const RenderPassKey &key) {
+    std::lock_guard lock(fallback_mutex_);
+    auto it = render_passes_.find(key);
+    if (it != render_passes_.end())
+        return it->second;
+
+    std::vector<VkAttachmentDescription> atts;
+    std::vector<VkAttachmentReference> color_refs;
+
+    for (size_t i = 0; i < key.colors.size(); ++i) {
+        VkAttachmentDescription ad{};
+        ad.format = key.colors[i];
+        ad.samples = key.samples;
+        ad.loadOp = (i < key.color_ops.size()) ? key.color_ops[i] : VK_ATTACHMENT_LOAD_OP_LOAD;
+        ad.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        ad.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        ad.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        ad.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ad.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        uint32_t idx = uint32_t(atts.size());
+        atts.push_back(ad);
+        color_refs.push_back({idx, VK_IMAGE_LAYOUT_GENERAL});
+    }
+
+    VkAttachmentReference depth_ref{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED};
+    if (key.depth != VK_FORMAT_UNDEFINED || key.stencil != VK_FORMAT_UNDEFINED) {
+        VkAttachmentDescription dad{};
+        dad.format = (key.depth != VK_FORMAT_UNDEFINED) ? key.depth : key.stencil;
+        dad.samples = key.samples;
+        dad.loadOp = key.depth_op;
+        dad.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        dad.stencilLoadOp = key.stencil_op;
+        dad.stencilStoreOp = (key.stencil != VK_FORMAT_UNDEFINED) ? VK_ATTACHMENT_STORE_OP_STORE
+                                                                  : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        dad.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        dad.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        depth_ref.attachment = uint32_t(atts.size());
+        depth_ref.layout = VK_IMAGE_LAYOUT_GENERAL;
+        atts.push_back(dad);
+    }
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = uint32_t(color_refs.size());
+    subpass.pColorAttachments = color_refs.empty() ? nullptr : color_refs.data();
+    if (depth_ref.attachment != VK_ATTACHMENT_UNUSED)
+        subpass.pDepthStencilAttachment = &depth_ref;
+
+    VkSubpassDependency dep{};
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep.dstSubpass = 0;
+    dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rpci.attachmentCount = uint32_t(atts.size());
+    rpci.pAttachments = atts.data();
+    rpci.subpassCount = 1;
+    rpci.pSubpasses = &subpass;
+    rpci.dependencyCount = 1;
+    rpci.pDependencies = &dep;
+
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VkResult res = vkCreateRenderPass(device_, &rpci, nullptr, &rp);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "gpu/vulkan: vkCreateRenderPass failed: %d\n", int(res));
+        return VK_NULL_HANDLE;
+    }
+    render_passes_[key] = rp;
+    return rp;
+}
+
+VkRenderPass VulkanDevice::get_or_create_render_pass(uint32_t color_count,
+                                                     const VkFormat *color_formats,
+                                                     VkFormat depth_format,
+                                                     VkFormat stencil_format,
+                                                     VkSampleCountFlagBits samples) {
+    RenderPassKey key{};
+    for (uint32_t i = 0; i < color_count; ++i) {
+        key.colors.push_back(color_formats ? color_formats[i] : VK_FORMAT_UNDEFINED);
+        key.color_ops.push_back(VK_ATTACHMENT_LOAD_OP_LOAD);
+    }
+    key.depth = depth_format;
+    key.depth_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+    key.stencil = stencil_format;
+    key.stencil_op = VK_ATTACHMENT_LOAD_OP_LOAD;
+    key.samples = samples;
+    return get_or_create_render_pass(key);
+}
+
+VkFramebuffer VulkanDevice::get_or_create_framebuffer(VkRenderPass rp, uint32_t width,
+                                                      uint32_t height, uint32_t layers,
+                                                      uint32_t view_count,
+                                                      const VkImageView *views) {
+    FbKey key{};
+    key.rp = rp;
+    key.width = width;
+    key.height = height;
+    key.layers = layers ? layers : 1;
+    for (uint32_t i = 0; i < view_count; ++i)
+        key.views.push_back(views[i]);
+
+    std::lock_guard lock(fallback_mutex_);
+    auto it = framebuffers_.find(key);
+    if (it != framebuffers_.end())
+        return it->second;
+
+    VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fci.renderPass = rp;
+    fci.attachmentCount = view_count;
+    fci.pAttachments = views;
+    fci.width = width;
+    fci.height = height;
+    fci.layers = layers ? layers : 1;
+
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    VkResult res = vkCreateFramebuffer(device_, &fci, nullptr, &fb);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "gpu/vulkan: vkCreateFramebuffer failed: %d\n", int(res));
+        return VK_NULL_HANDLE;
+    }
+    framebuffers_[key] = fb;
+    return fb;
+}
+
+void VulkanDevice::emulated_begin_rendering(VkCommandBuffer cb, const VkRenderingInfo *info) {
+    if (!info)
+        return;
+
+    RenderPassKey rpk{};
+    rpk.samples = VK_SAMPLE_COUNT_1_BIT;
+    std::vector<VkImageView> fb_views;
+    std::vector<VkClearValue> clear_vals;
+
+    for (uint32_t i = 0; i < info->colorAttachmentCount; ++i) {
+        const auto &ca = info->pColorAttachments[i];
+        VkFormat fmt = ca.imageView ? get_view_format(ca.imageView) : VK_FORMAT_UNDEFINED;
+        rpk.colors.push_back(fmt);
+        rpk.color_ops.push_back(ca.loadOp);
+        if (ca.imageView) {
+            fb_views.push_back(ca.imageView);
+            clear_vals.push_back(ca.clearValue);
+        }
+    }
+
+    if (info->pDepthAttachment && info->pDepthAttachment->imageView) {
+        rpk.depth = get_view_format(info->pDepthAttachment->imageView);
+        rpk.depth_op = info->pDepthAttachment->loadOp;
+    }
+    if (info->pStencilAttachment && info->pStencilAttachment->imageView) {
+        rpk.stencil = get_view_format(info->pStencilAttachment->imageView);
+        rpk.stencil_op = info->pStencilAttachment->loadOp;
+    }
+
+    VkImageView depth_view = VK_NULL_HANDLE;
+    if (info->pDepthAttachment && info->pDepthAttachment->imageView)
+        depth_view = info->pDepthAttachment->imageView;
+    else if (info->pStencilAttachment && info->pStencilAttachment->imageView)
+        depth_view = info->pStencilAttachment->imageView;
+
+    if (depth_view) {
+        fb_views.push_back(depth_view);
+        VkClearValue dcv{};
+        if (info->pDepthAttachment)
+            dcv.depthStencil.depth = info->pDepthAttachment->clearValue.depthStencil.depth;
+        if (info->pStencilAttachment)
+            dcv.depthStencil.stencil = info->pStencilAttachment->clearValue.depthStencil.stencil;
+        clear_vals.push_back(dcv);
+    }
+
+    VkRenderPass rp = get_or_create_render_pass(rpk);
+    uint32_t width = info->renderArea.extent.width;
+    uint32_t height = info->renderArea.extent.height;
+    uint32_t layers = info->layerCount ? info->layerCount : 1;
+
+    VkFramebuffer fb = get_or_create_framebuffer(rp, width, height, layers,
+                                                 uint32_t(fb_views.size()), fb_views.data());
+
+    VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpbi.renderPass = rp;
+    rpbi.framebuffer = fb;
+    rpbi.renderArea = info->renderArea;
+    rpbi.clearValueCount = uint32_t(clear_vals.size());
+    rpbi.pClearValues = clear_vals.data();
+
+    vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 }
 
 std::unique_ptr<Device> vulkan_create_device() {

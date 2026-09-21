@@ -40,6 +40,12 @@ bool vulkan_load() {
             return;
         }
 #endif
+#ifdef __ANDROID__
+        if (try_path("libvulkan.so")) {
+            g_loaded = true;
+            return;
+        }
+#endif
         if (volkInitialize() == VK_SUCCESS) {
             g_loaded = true;
             return;
