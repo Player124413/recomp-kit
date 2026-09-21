@@ -62,6 +62,7 @@ public class RecompActivity extends SDLActivity {
         if (getResources().getConfiguration().smallestScreenWidthDp >= 600)
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
         unpackControlLayouts();
+        unpackDriver();
         File resources = getExternalFilesDir(null);
         if (resources != null) {
             try {
@@ -133,6 +134,123 @@ public class RecompActivity extends SDLActivity {
         if (copied > 0 || removed > 0)
             android.util.Log.i("recomp", "unpacked " + copied + " and removed " + removed
                     + " control layout(s) in " + dir);
+    }
+
+    /**
+     * Unpack custom Turnip / Vulkan driver if provided as an asset or dropped into external storage.
+     */
+    private void unpackDriver() {
+        File internalDriverDir = new File(getFilesDir(), "driver");
+        File externalFiles = getExternalFilesDir(null);
+
+        // 1. Check if user dropped turnip.zip, driver.zip, etc. into the app's external files directory
+        if (externalFiles != null) {
+            String[] zipNames = new String[] {"turnip.zip", "driver.zip", "Turnip.zip", "Driver.zip"};
+            for (String zipName : zipNames) {
+                File externalZip = new File(externalFiles, zipName);
+                if (externalZip.isFile() && externalZip.length() > 0) {
+                    try {
+                        android.util.Log.i("recomp", "Extracting custom driver from " + externalZip);
+                        extractZip(externalZip, internalDriverDir);
+                        externalZip.delete();
+                        markActiveDriver(internalDriverDir);
+                        return;
+                    } catch (Exception e) {
+                        android.util.Log.e("recomp", "Failed to extract driver from " + externalZip, e);
+                    }
+                }
+            }
+        }
+
+        // 2. Check if APK assets bundle a driver ZIP or shared libraries in assets/driver/
+        try {
+            String[] driverAssets = getAssets().list("driver");
+            if (driverAssets != null && driverAssets.length > 0) {
+                File activeFile = new File(internalDriverDir, "active_driver.txt");
+                if (!activeFile.isFile()) {
+                    for (String asset : driverAssets) {
+                        if (asset.endsWith(".zip")) {
+                            File tempZip = new File(getCacheDir(), "bundled_driver.zip");
+                            try (InputStream in = getAssets().open("driver/" + asset);
+                                 OutputStream out = new FileOutputStream(tempZip)) {
+                                byte[] buffer = new byte[32 * 1024];
+                                for (int n; (n = in.read(buffer)) > 0; )
+                                    out.write(buffer, 0, n);
+                            }
+                            extractZip(tempZip, internalDriverDir);
+                            tempZip.delete();
+                            markActiveDriver(internalDriverDir);
+                            break;
+                        } else if (asset.endsWith(".so")) {
+                            if (!internalDriverDir.isDirectory() && !internalDriverDir.mkdirs())
+                                break;
+                            File targetSo = new File(internalDriverDir, asset);
+                            try (InputStream in = getAssets().open("driver/" + asset);
+                                 OutputStream out = new FileOutputStream(targetSo)) {
+                                byte[] buffer = new byte[32 * 1024];
+                                for (int n; (n = in.read(buffer)) > 0; )
+                                    out.write(buffer, 0, n);
+                            }
+                            targetSo.setExecutable(true, false);
+                        }
+                    }
+                    markActiveDriver(internalDriverDir);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void extractZip(File zipFile, File targetDir) throws java.io.IOException {
+        if (!targetDir.isDirectory() && !targetDir.mkdirs())
+            throw new java.io.IOException("Cannot create " + targetDir);
+        try (java.util.zip.ZipInputStream zis =
+                     new java.util.zip.ZipInputStream(new java.io.FileInputStream(zipFile))) {
+            java.util.zip.ZipEntry entry;
+            byte[] buffer = new byte[32 * 1024];
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory())
+                    continue;
+                String name = new File(entry.getName()).getName();
+                File outFile = new File(targetDir, name);
+                try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                    int len;
+                    while ((len = zis.read(buffer)) > 0)
+                        fos.write(buffer, 0, len);
+                }
+                if (name.endsWith(".so"))
+                    outFile.setExecutable(true, false);
+                zis.closeEntry();
+            }
+        }
+    }
+
+    private static void markActiveDriver(File driverDir) {
+        if (!driverDir.isDirectory())
+            return;
+        File[] files = driverDir.listFiles();
+        if (files == null)
+            return;
+        File best = null;
+        for (File f : files) {
+            String name = f.getName().toLowerCase();
+            if (name.equals("libvulkan_freedreno.so")) {
+                best = f;
+                break;
+            } else if (name.equals("vulkan.adreno.so")) {
+                if (best == null || !best.getName().toLowerCase().equals("libvulkan_freedreno.so"))
+                    best = f;
+            } else if (name.endsWith(".so") && best == null) {
+                best = f;
+            }
+        }
+        if (best != null) {
+            try (FileOutputStream fos = new FileOutputStream(new File(driverDir, "active_driver.txt"))) {
+                fos.write(best.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Exception ignored) {
+            }
+            android.util.Log.i("recomp", "Marked active driver: " + best.getAbsolutePath());
+        }
     }
 
     /** Refresh only the app-owned core resources before native startup.

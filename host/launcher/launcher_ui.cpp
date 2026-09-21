@@ -232,6 +232,8 @@ void Launcher::rebuild() {
                 if (found_[i] != status_.root)
                     add(kUseCandidate + int(i), "Import " + shorten(display(found_[i]), 40));
         }
+        if (!unplayable_.empty() && info_.can_pick_driver)
+            add(kImportDriver, "Install Vulkan driver (ZIP)...");
         add(kManage, "Manage...");
         if (!spec_.store_url.empty() && status_.state == State::NotFound)
             add(kStore, "Where to get the game");
@@ -240,6 +242,11 @@ void Launcher::rebuild() {
     case Screen::Manage:
         add(kExportSaves, "Export saves...");
         add(kImportSaves, "Import saves...");
+        if (info_.can_pick_driver) {
+            add(kImportDriver, "Install Vulkan driver (ZIP)...");
+            if (info_.has_custom_driver)
+                add(kRemoveDriver, "Reset to system Vulkan driver");
+        }
         if (!info_.import_root.empty() && status_.root == info_.import_root)
             add(kDeleteData,
                 confirm_delete_ ? "Delete game data - press again" : "Delete game data");
@@ -531,6 +538,47 @@ void Launcher::activate(int id) {
                     self->show("Could not import saves: " + err);
             });
         });
+        break;
+    }
+    case kImportDriver: {
+        auto weak = std::weak_ptr<Shared>(shared_);
+        Launcher *self = this;
+        platform_.pick_driver([weak, self](std::vector<Picked> p, std::string error) {
+            auto shared = weak.lock();
+            if (!shared)
+                return;
+            std::lock_guard<std::mutex> lock(shared->m);
+            shared->posted.push_back([self, p, error]() {
+                if (p.empty()) {
+                    if (!error.empty())
+                        self->show("The picker failed: " + error);
+                    return;
+                }
+                std::string err;
+                std::string lib_name;
+                std::string target_dir = self->info_.driver_dir;
+                if (target_dir.empty())
+                    target_dir = self->info_.profile_dir + "/driver";
+                if (import_driver(p[0].path, target_dir, &lib_name, &err)) {
+                    FILE *vf = fopen((self->info_.profile_dir + "/vulkan_driver.txt").c_str(), "w");
+                    if (vf) {
+                        fputs((target_dir + "/" + lib_name).c_str(), vf);
+                        fclose(vf);
+                    }
+                    self->info_.has_custom_driver = true;
+                    self->show("Vulkan driver installed: " + lib_name + ".\nPlease restart the game to use it.");
+                } else {
+                    self->show("Could not install driver: " + err);
+                }
+            });
+        });
+        break;
+    }
+    case kRemoveDriver: {
+        if (platform_.remove_driver()) {
+            info_.has_custom_driver = false;
+            show("Custom driver removed. System Vulkan driver will be used on restart.");
+        }
         break;
     }
     case kDeleteData:

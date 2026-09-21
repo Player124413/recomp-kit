@@ -136,6 +136,8 @@ bool export_profile(const std::string &profile_dir, const std::string &zip_path,
                     const std::vector<std::string> &skip, std::string *error);
 bool import_profile(const std::string &zip_path, const std::string &profile_dir,
                     std::string *error);
+bool import_driver(const std::string &zip_path, const std::string &dest_dir,
+                   std::string *installed_lib, std::string *error);
 
 // ---------------------------------------------------------------------------
 // Detection: folders on this machine that may hold the game (desktop).

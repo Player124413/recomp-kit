@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: ""
+      turnip_driver_url:
+        description: "Optional URL to Turnip Vulkan driver ZIP (e.g. Mesa Turnip / AdrenoTools zip for Adreno GPUs). If provided, it is bundled into the APK."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -142,6 +147,14 @@ jobs:
             echo "Analysis already exists in games/shrek2/analysis/Game.exe/functions.tsv. Skipping Ghidra export."
           fi
 
+      - name: Download & Bundle Turnip Vulkan Driver (if provided)
+        if: ${{ inputs.turnip_driver_url != '' }}
+        run: |
+          echo "Downloading Turnip Vulkan driver from ${{ inputs.turnip_driver_url }}..."
+          mkdir -p platform/android/app/src/main/assets/driver
+          curl -fL --retry 3 -o platform/android/app/src/main/assets/driver/driver.zip "${{ inputs.turnip_driver_url }}"
+          echo "Turnip driver bundled into APK assets/driver/driver.zip"
+
       - name: Recompile and Build Android APK (Full Mode)
         if: ${{ inputs.build_mode == 'full' }}
         run: |
@@ -198,3 +211,7 @@ jobs:
           echo "2. Transfer the game data folders (\`System\`, \`Maps\`, \`Textures\`, \`Sounds\`, \`Music\`, \`Animations\`, etc.) to your Android device, or zip them into a \`.zip\` archive." >> $GITHUB_STEP_SUMMARY
           echo "3. Open the installed Shrek 2 app. Use the built-in file picker in the launcher to select the game archive/directory." >> $GITHUB_STEP_SUMMARY
           echo "4. The game will verify the files and launch with native on-screen touch controls!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Turnip Vulkan Driver Support (Adreno GPUs):" >> $GITHUB_STEP_SUMMARY
+          echo "- You can load a Turnip driver ZIP directly on your phone: open the app launcher, tap **Manage...** -> **Install Vulkan driver (ZIP)...**, and pick your driver ZIP." >> $GITHUB_STEP_SUMMARY
+          echo "- Or simply copy \`turnip.zip\` / \`driver.zip\` into the app's files folder (\`Android/data/dev.recompkit.shrek2/files/\`)." >> $GITHUB_STEP_SUMMARY

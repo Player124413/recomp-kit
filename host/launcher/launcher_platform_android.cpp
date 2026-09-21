@@ -23,6 +23,11 @@ jclass g_activity = nullptr;
 std::mutex g_mutex;
 std::map<int, PickDone> g_pending;
 
+static bool is_file(const std::string &p) {
+    OsStat st{};
+    return os_stat(p.c_str(), &st) == 0 && !st.is_dir;
+}
+
 JNIEnv *env() {
     return static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
 }
@@ -170,9 +175,19 @@ class AndroidPlatform final : public Platform {
         i.can_pick_folder = true;
         i.can_pick_zip = true;
         i.can_open_folder = false;
+        i.can_pick_driver = true;
         i.touch = true;
         i.import_root = external_ + "/game";
         i.profile_dir = host_layout().profile_dir;
+        const char *internal = SDL_GetAndroidInternalStoragePath();
+        if (internal && *internal) {
+            i.driver_dir = std::string(internal) + "/driver";
+            i.has_custom_driver = is_file(i.driver_dir + "/active_driver.txt") ||
+                                  is_file(i.driver_dir + "/libvulkan_freedreno.so");
+        } else {
+            i.driver_dir = external_ + "/driver";
+            i.has_custom_driver = is_file(i.driver_dir + "/active_driver.txt");
+        }
         i.drop_hint = "Or copy the game folder from a computer over USB into " + external_ +
                       " (any folder name), then open the app again.";
         return i;
@@ -182,6 +197,36 @@ class AndroidPlatform final : public Platform {
     }
     void pick_zip(PickDone done) override {
         pick(kPickZip, "", wrap(std::move(done), false));
+    }
+    void pick_driver(PickDone done) override {
+        const std::string cache = external_ + "/cache-driver.zip";
+        pick(kPickZip, "", [done, cache](std::vector<Picked> picked, std::string error) {
+            if (picked.empty()) {
+                done(picked, error);
+                return;
+            }
+            const int in = open_fd(picked[0].uri, "r");
+            const int out = os_fd_open(cache.c_str(), OS_O_WRONLY | OS_O_CREAT | OS_O_TRUNC);
+            const bool ok = in >= 0 && out >= 0 && copy_fd(in, out);
+            if (in >= 0)
+                os_fd_close(in);
+            if (out >= 0)
+                os_fd_close(out);
+            if (!ok) {
+                done({}, "cannot read " + picked[0].name);
+                return;
+            }
+            picked[0].path = cache;
+            done(picked, "");
+        });
+    }
+    bool remove_driver() override {
+        const char *internal = SDL_GetAndroidInternalStoragePath();
+        std::string ddir = internal && *internal ? std::string(internal) + "/driver" : external_ + "/driver";
+        remove_tree(ddir);
+        unlink((external_ + "/profile/vulkan_driver.txt").c_str());
+        unlink((external_ + "/cache-driver.zip").c_str());
+        return true;
     }
     void pick_saves(PickDone done) override {
         // import_profile reads a path: copy the document into the cache first.

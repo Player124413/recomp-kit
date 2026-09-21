@@ -31,9 +31,12 @@ struct PlatformInfo {
     bool can_pick_folder = true;
     bool can_pick_zip = true;
     bool can_open_folder = false;
+    bool can_pick_driver = false;
+    bool has_custom_driver = false;
     bool touch = false;
     std::string import_root;  // where an import goes (<...>/game)
     std::string profile_dir;  // saves and settings
+    std::string driver_dir;   // custom driver directory
     std::string folders_file; // remembered installs (desktop)
     std::string cache_file;   // verified digests of installs played in place
     std::string drop_hint;    // how else files can arrive ("copy it into ... with Finder")
@@ -49,6 +52,12 @@ class Platform {
     // Where exported saves go (a path to write), and a ZIP of saves to read.
     virtual void pick_export(const std::string &suggested_name, PickDone done) = 0;
     virtual void pick_saves(PickDone done) = 0;
+    virtual void pick_driver(PickDone done) {
+        pick_zip(std::move(done));
+    }
+    virtual bool remove_driver() {
+        return false;
+    }
     // A source over what was picked. The default opens a path as a folder or a ZIP.
     virtual std::unique_ptr<Source> open(const Picked &p, std::string *error);
     // Folders that may hold the game.
@@ -98,6 +107,8 @@ enum Action : int {
     kOk,
     kQuit,
     kUseCandidate = 100, // + index
+    kImportDriver = 200,
+    kRemoveDriver,
 };
 
 struct Button {

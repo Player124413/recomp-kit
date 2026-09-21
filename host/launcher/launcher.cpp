@@ -10,6 +10,9 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace launcher {
 
@@ -966,6 +969,102 @@ bool import_profile(const std::string &zip_path, const std::string &profile_dir,
             !write_text(target, data))
             return false;
     }
+    return true;
+}
+
+bool import_driver(const std::string &zip_path, const std::string &dest_dir,
+                   std::string *installed_lib, std::string *error) {
+    auto zip = zip_source(zip_path, error);
+    if (!zip)
+        return false;
+    std::vector<Entry> entries;
+    if (!zip->list(&entries, error))
+        return false;
+    const std::string root = normalize(dest_dir);
+    mkdirs(root);
+
+    std::vector<std::string> so_files;
+    std::string meta_json;
+
+    for (const Entry &e : entries) {
+        if (e.is_dir || junk(e.relative))
+            continue;
+        std::string filename = base_of(e.relative);
+        std::string target = join(root, filename);
+        std::string data;
+        if (!zip->read(
+                e,
+                [&](const uint8_t *p, size_t n) {
+                    data.append(reinterpret_cast<const char *>(p), n);
+                    return true;
+                },
+                error) ||
+            !write_text(target, data))
+            return false;
+#ifndef _WIN32
+        ::chmod(target.c_str(), 0755);
+#endif
+        if (filename == "meta.json") {
+            meta_json = data;
+        } else if (filename.size() > 3 && filename.substr(filename.size() - 3) == ".so") {
+            so_files.push_back(filename);
+        }
+    }
+
+    std::string chosen;
+    if (!meta_json.empty()) {
+        auto pos = meta_json.find("\"libraryName\"");
+        if (pos != std::string::npos) {
+            auto colon = meta_json.find(':', pos);
+            if (colon != std::string::npos) {
+                auto q1 = meta_json.find('"', colon);
+                if (q1 != std::string::npos) {
+                    auto q2 = meta_json.find('"', q1 + 1);
+                    if (q2 != std::string::npos) {
+                        std::string lib = meta_json.substr(q1 + 1, q2 - q1 - 1);
+                        if (!lib.empty() && is_file(join(root, lib)))
+                            chosen = lib;
+                    }
+                }
+            }
+        }
+    }
+    if (chosen.empty()) {
+        for (const auto &f : so_files) {
+            if (f == "libvulkan_freedreno.so") {
+                chosen = f;
+                break;
+            }
+        }
+    }
+    if (chosen.empty()) {
+        for (const auto &f : so_files) {
+            if (f == "vulkan.adreno.so") {
+                chosen = f;
+                break;
+            }
+        }
+    }
+    if (chosen.empty()) {
+        for (const auto &f : so_files) {
+            if (f == "libvulkan.so" || f == "turnip.so") {
+                chosen = f;
+                break;
+            }
+        }
+    }
+    if (chosen.empty() && !so_files.empty())
+        chosen = so_files[0];
+
+    if (chosen.empty()) {
+        if (error)
+            *error = "Archive has no Vulkan shared library (.so)";
+        return false;
+    }
+
+    write_text(join(root, "active_driver.txt"), chosen);
+    if (installed_lib)
+        *installed_lib = chosen;
     return true;
 }
 
