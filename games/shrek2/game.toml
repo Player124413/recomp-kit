@@ -28,20 +28,36 @@ default_layout = "pad"
 pad = "mapped"
 
 [controls.mapped]
-left_stick = "wasd"
-right_stick = "cursor"
+# Движение персонажа (Стрелки: Вверх, Вниз, Влево, Вправо)
+left_stick = "arrows"
 dpad = "arrows"
+right_stick = "cursor"
 cursor_speed = 900
+
+# Действия и атака:
+# Cross (✕) = ЛКМ (Основной удар / Использовать предмет / Взять зелье)
 cross = "mouse_left"
+# Circle (○) = ПКМ (Супер-удар, тратит шкалу героя)
 circle = "mouse_right"
-square = "key:Space"
-triangle = "key:Tab"
-l1 = "key:PageUp"
-r1 = "key:PageDown"
+# Square (□) = Enter / Return (Прыжок)
+square = "key:Return"
+# Triangle (△) = Space / Пробел (Защита / Блок)
+triangle = "key:Space"
+
+# Дополнительные кнопки (плечевые триггеры):
+# L1 / L2 = LCtrl (Альтернативный основной удар / предмет)
+l1 = "key:LCtrl"
 l2 = "key:LCtrl"
+# R1 = Return (Прыжок)
+r1 = "key:Return"
+# R2 = LShift (Прыжок / Бег)
 r2 = "key:LShift"
+
+# Интерфейс и меню:
+# Start = Esc (Пауза и выход в меню)
 start = "key:Escape"
-select = "key:F10"
+# Select = Tab (Посмотреть карту / Статистику уровня: монеты, плакаты)
+select = "key:Tab"
 l3 = "none"
 r3 = "none"
 ps = "action:settings"
