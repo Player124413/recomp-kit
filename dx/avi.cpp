@@ -7,6 +7,7 @@
 #include "../runtime/win32.h"
 #include "../platform/os.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>

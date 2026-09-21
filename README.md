@@ -102,7 +102,7 @@ the executable, whose rpath includes `$ORIGIN`. The package also carries
 `resources/ffmpeg-NOTICE.md`. FFmpeg builds from source using the existing
 compiler and make; no distribution FFmpeg package is needed.
 
-On Windows, CMake looks for MSYS2's `make` on `PATH` (or takes
+On a native Windows host, CMake looks for MSYS2's `make` on `PATH` (or takes
 `-DRECOMP_FFMPEG_MAKE=C:/msys64/usr/bin/make.exe`) and the `bash` beside it;
 video defaults to ON when both are there. With the presets' clang, which
 targets the MSVC ABI, FFmpeg is built by its own MSVC toolchain
@@ -238,7 +238,11 @@ through MoltenVK with `RECOMP_GPU_BACKEND=vulkan`) and WebGPU (the
 web), all from one shader generator. Windows builds cross-compile on macOS or
 Linux with llvm-mingw: set `LLVM_MINGW_ROOT` and pass
 `--preset windows-cross` (or `windows-cross-stub`) to `tools/build.py`; the
-executable lands in `build/windows/recomp/`.
+executable lands in `build/windows/recomp/`. These presets enable FFmpeg movies
+and file-backed music, building the three shared media DLLs with llvm-mingw and
+copying them beside the executable. The build host needs a POSIX shell and GNU
+make; MSYS2 is only required when building on Windows itself. Translated app
+packages, including the DLLs and their notice, land in `build/windows/package/`.
 
 ## Check a change
 

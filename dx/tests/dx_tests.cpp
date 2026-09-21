@@ -18,6 +18,7 @@
 #include "../../runtime/display_seam.h"
 #include "../riff.h"
 #include "../video_frame.h"
+#include "../mf_media.h"
 #include "../ddraw.h"
 #include "../../runtime/memory.h"
 #include "../../runtime/win32.h"
@@ -12497,6 +12498,40 @@ static void test_avi_asset(const char *path) {
     heap_free(output);
 }
 
+// Optional audio probe uses the same decoder as file-backed CD music. A
+// generated Ogg tone works in CI; private tracks can be checked locally.
+static void test_audio_asset(const char *path) {
+    mf::Media media;
+    std::string why;
+    bool opened = media.open(path, &why);
+    CHECK(opened);
+    if (!opened) {
+        printf("Audio open failed: %s\n", why.c_str());
+        return;
+    }
+    CHECK(media.has_audio());
+    CHECK(media.audio_rate() > 0);
+    CHECK(media.audio_channels() > 0);
+    CHECK(media.duration() > 0);
+    if (!media.has_audio() || media.audio_rate() <= 0 || media.audio_channels() <= 0)
+        return;
+    size_t samples = 0;
+    int peak = 0;
+    for (int block = 0; block < 4; ++block) {
+        media.fill_audio(size_t(media.audio_rate()) * media.audio_channels());
+        auto pcm = media.take_audio();
+        samples += pcm.size();
+        for (int16_t sample : pcm)
+            peak = std::max(peak, std::abs(int(sample)));
+        if (media.finished())
+            break;
+    }
+    CHECK(samples > 0);
+    CHECK(peak > 0);
+    printf("Audio decoded: %zu samples, %d Hz, %d channels, peak=%d\n", samples, media.audio_rate(),
+           media.audio_channels(), peak);
+}
+
 int main() {
     // Unbuffered, not line buffered: Windows treats _IOLBF as full buffering
     // and a fail-fast abort drops everything queued, including the name of
@@ -12515,6 +12550,10 @@ int main() {
 
     if (const char *path = getenv("RECOMP_TEST_AVI")) {
         test_avi_asset(path);
+        return g_failures ? 1 : 0;
+    }
+    if (const char *path = getenv("RECOMP_TEST_AUDIO")) {
+        test_audio_asset(path);
         return g_failures ? 1 : 0;
     }
 

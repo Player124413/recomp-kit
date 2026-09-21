@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Windows cross-builds enable FFmpeg movie and file-backed music decoding,
+  use the POSIX host's shell/make with llvm-mingw tools, and bundle the media DLLs.
+  CI cross-builds the Windows app and decodes a generated Ogg track under Wine.
 - Ports can request an output render size independently of the logical
   display canvas, keeping UI/input coordinates stable at high resolutions.
   A changed request applies to the next frame without resizing leased targets.
