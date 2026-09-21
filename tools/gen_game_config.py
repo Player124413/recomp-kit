@@ -92,14 +92,33 @@ def render_header(cfg):
     lines.append("#define RECOMP_LAUNCHER_MIN_FREE_MB %du" % launcher["min_free_mb"])
     lines.append("#define RECOMP_REQUIRED_DIRS %s" % c_string_list(cfg["setup"]["required_dirs"]))
     lines.append("#define RECOMP_BUNDLE_EXCLUDE %s" % c_string_list(cfg["bundle"]["exclude"]))
-    for key, value in sorted(cfg.get("hooks", {}).items()):
+    hooks = {
+        "frame_clock_begin": 0,
+        "frame_clock_wait": 0,
+        "frame_clock_wait_clamp": 0,
+        "frame_clock_clamp_deadline": 0,
+        "frame_clock_wait_deadline": 0,
+        "cursor_surface_ptrs": [0],
+        "mouse_vtable": 0,
+        "mouse_device_ptr": 0,
+        "mouse_device_right": 0,
+        "camera": 0,
+    }
+    hooks.update(cfg.get("hooks", {}))
+    for key, value in sorted(hooks.items()):
         macro = "RECOMP_HOOK_" + key.upper()
         if isinstance(value, list):
             lines.append("#define %s_COUNT %d" % (macro, len(value)))
             lines.append("#define %s {%s}" % (macro, ", ".join(c_hex(v) for v in value)))
         else:
             lines.append("#define %s %s" % (macro, c_hex(value)))
-    for key, entry in sorted(cfg.get("globals", {}).items()):
+    globals_map = {
+        "simulation_turn": {"addr": 0, "size": 4},
+        "command_frame": {"addr": 0, "size": 4},
+        "entity_base": {"addr": 0, "size": 0, "stride": 0, "count": 0},
+    }
+    globals_map.update(cfg.get("globals", {}))
+    for key, entry in sorted(globals_map.items()):
         macro = "RECOMP_GLOBAL_" + key.upper()
         lines.append("#define %s_ADDR %s" % (macro, c_hex(entry["addr"])))
         for field in ("size", "stride", "count"):

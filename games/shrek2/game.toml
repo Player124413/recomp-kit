@@ -70,6 +70,18 @@ min_free_mb = 1200
 [setup]
 required_dirs = ["System"]
 
+[hooks]
+frame_clock_begin = 0x00000000
+frame_clock_wait = 0x00000000
+frame_clock_wait_clamp = 0x00000000
+frame_clock_clamp_deadline = 0x00000000
+frame_clock_wait_deadline = 0x00000000
+cursor_surface_ptrs = [0x00000000]
+mouse_vtable = 0x00000000
+mouse_device_ptr = 0x00000000
+mouse_device_right = 0x00000000
+camera = 0x00000000
+
 [mods]
 builtin = "none"
 

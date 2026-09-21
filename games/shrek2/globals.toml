@@ -1,2 +1,14 @@
 # games/shrek2/globals.toml - Curated global symbols for Shrek 2: The Game
-[globals]
+[globals.simulation_turn]
+addr = 0x00700000
+size = 4
+
+[globals.command_frame]
+addr = 0x00700010
+size = 4
+
+[globals.entity_base]
+addr = 0x00701000
+size = 179
+stride = 179
+count = 2000
