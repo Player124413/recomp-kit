@@ -35,7 +35,12 @@ def validate_game(directory, executable, sha256, required_dirs=()):
     directory = directory.expanduser().resolve()
     image = directory / executable
     if not image.is_file():
-        raise ValueError(f"{executable} was not found in {directory}")
+        if (directory / "System" / executable).is_file():
+            image = directory / "System" / executable
+        elif (directory / "system" / executable).is_file():
+            image = directory / "system" / executable
+        else:
+            raise ValueError(f"{executable} was not found in {directory}")
     digest = hashlib.sha256(image.read_bytes()).hexdigest()
     if digest != sha256:
         raise ValueError(f"Unsupported {executable}: SHA-256 {digest}; expected {sha256}")
@@ -49,6 +54,10 @@ def validate_game(directory, executable, sha256, required_dirs=()):
 def link_game(directory, destination):
     """Reuse the same installation link; refuse to replace another installation or directory."""
     directory = directory.expanduser().resolve()
+    if not destination.is_symlink():
+        dest_res = destination.resolve()
+        if dest_res == directory or dest_res.is_relative_to(directory):
+            return
     if destination.exists() or destination.is_symlink():
         if destination.resolve() != directory:
             raise ValueError(f"{destination} already points elsewhere; move it aside explicitly")
@@ -131,7 +140,10 @@ def main():
                                   setup.get("required_dirs", ()))
         if not args.link_only and not args.ghidra_home:
             raise ValueError("Set --ghidra-home or GHIDRA_HOME; see the game's CONTRIBUTING.md")
-        link_game(directory, cfg["developer_exe_path"].parent)
+        destination = cfg["developer_exe_path"]
+        for _ in Path(cfg["game"]["executable"]).parts:
+            destination = destination.parent
+        link_game(directory, destination)
         if not args.link_only:
             annotations = None
             if setup.get("annotations_url"):

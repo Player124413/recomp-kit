@@ -137,6 +137,25 @@ def main():
         print(f"Please put your PC Shrek 2 game files in '{install_dir}'.")
         return 0
 
+    # If the archive unpacked into a single nested folder (e.g. 'Shrek 2/'), flatten it
+    import shutil
+    entries = [p for p in install_dir.iterdir() if p.name != ".git"]
+    if len(entries) == 1 and entries[0].is_dir() and not (install_dir / "System").is_dir():
+        child = entries[0]
+        print(f"Flattening nested directory {child.name} into {install_dir}...")
+        for item in list(child.iterdir()):
+            target = install_dir / item.name
+            if target.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            shutil.move(str(item), str(install_dir))
+        try:
+            child.rmdir()
+        except OSError:
+            pass
+
     exe_path = find_executable(install_dir)
     if not exe_path:
         print(f"Notice: No Game.exe or Shrek2.exe found under '{install_dir}'.")
@@ -176,7 +195,18 @@ def main():
             if not target_link.exists():
                 target_link.symlink_to(exe_path)
         except OSError:
-            pass
+            import shutil
+            shutil.copy2(exe_path, target_link)
+
+    # If original/System exists but target_link is in original, also link/copy to System
+    system_exe = game_dir / "original" / "System" / exe_path.name
+    if (game_dir / "original" / "System").is_dir() and not system_exe.is_file():
+        try:
+            if not system_exe.exists():
+                system_exe.symlink_to(exe_path)
+        except OSError:
+            import shutil
+            shutil.copy2(exe_path, system_exe)
 
     # Ensure guest_size is at least 512MB for UE2 games with modules
     guest_size = max(0x20000000, pe["image_base"] + pe["size_of_image"] + 0x10000000)
