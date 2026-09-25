@@ -1,0 +1,323 @@
+name: Port Shrek 2 to PC (Windows & Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_files_url:
+        description: "Direct URL to ZIP archive with PC game files (optional if already placed in games/shrek2/original)"
+        required: false
+        type: string
+        default: ""
+      target_platform:
+        description: "Target platform to build"
+        required: true
+        type: choice
+        options:
+          - windows
+          - linux
+          - both
+        default: "windows"
+      build_mode:
+        description: "Build mode: 'full' (translate & compile game) or 'stub' (quick test build)"
+        required: true
+        type: choice
+        options:
+          - full
+          - stub
+        default: "full"
+      bundle_game_files:
+        description: "Bundle game files directly into the package (creates standalone portable game)"
+        required: false
+        type: boolean
+        default: true
+      skip_ghidra:
+        description: "Skip Ghidra analysis (enable if analysis is already committed to games/shrek2/analysis)"
+        required: false
+        type: boolean
+        default: false
+      allow_unmodelled:
+        description: "Translator: allow unmodelled instructions reason (passed to --allow-unmodelled)"
+        required: false
+        type: string
+        default: "unmodelled instructions in game code"
+      allow_table_gaps:
+        description: "Translator: allow table gaps (passed to --allow-table-gaps if jump tables have gaps)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shrek2-pc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-pc-port:
+    name: Build Shrek 2 PC (${{ inputs.target_platform }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21 (JDK for Ghidra 12.1.3)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config libvulkan-dev glslc ffmpeg wine64 wine xvfb p7zip-full curl wget unzip zip
+
+      - name: Install Python dependencies (CMake, Ninja, translator tooling)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-dev.txt
+
+      - name: Install llvm-mingw toolchain (Windows cross-compilation)
+        if: ${{ inputs.target_platform == 'windows' || inputs.target_platform == 'both' }}
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" \
+            https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-ubuntu-22.04-x86_64.tar.xz
+          echo "2258c745e3155870c80793f3e8c80b28fbde11b9ff73c4c78783635b3440b092  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Ghidra 12.1.3
+        id: cache-ghidra
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        uses: actions/cache@v4
+        with:
+          path: /opt/ghidra_12.1.3_PUBLIC
+          key: ghidra-12.1.3-public
+
+      - name: Download & Install Ghidra 12.1.3
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra && steps.cache-ghidra.outputs.cache-hit != 'true' }}
+        run: |
+          echo "Downloading Ghidra 12.1.3..."
+          curl -fL --retry 3 -o "$RUNNER_TEMP/ghidra.zip" \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip"
+          unzip -q "$RUNNER_TEMP/ghidra.zip" -d /opt
+          rm "$RUNNER_TEMP/ghidra.zip"
+          echo "Ghidra extracted to /opt/ghidra_12.1.3_PUBLIC"
+
+      - name: Set Ghidra environment
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        run: |
+          echo "GHIDRA_HOME=/opt/ghidra_12.1.3_PUBLIC" >> "$GITHUB_ENV"
+
+      - name: Prepare game files
+        id: prep-game
+        run: |
+          mkdir -p games/shrek2/original
+
+          if [ -n "${{ inputs.game_files_url }}" ]; then
+            echo "Downloading game archive from URL..."
+            curl -fL --retry 3 -o "$RUNNER_TEMP/game_archive" "${{ inputs.game_files_url }}"
+            7z x -y "$RUNNER_TEMP/game_archive" -ogames/shrek2/original/ || unzip -q -o "$RUNNER_TEMP/game_archive" -d games/shrek2/original/
+            rm "$RUNNER_TEMP/game_archive"
+          fi
+
+          # If the user committed or placed archive files inside original/, extract them
+          for arch in games/shrek2/original/*.zip games/shrek2/original/*.rar games/shrek2/original/*.7z; do
+            if [ -f "$arch" ]; then
+              echo "Extracting archive in original/: $arch"
+              7z x -y "$arch" -ogames/shrek2/original/ || unzip -q -o "$arch" -d games/shrek2/original/
+              rm -f "$arch"
+            fi
+          done
+
+          python3 tools/prepare_shrek2.py \
+            --game-dir games/shrek2 \
+            --install games/shrek2/original
+
+      - name: Export assembly listings with Ghidra
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        run: |
+          if [ ! -f "games/shrek2/analysis/Game.exe/functions.tsv" ]; then
+            echo "Running Ghidra headless export via tools/setup.py..."
+            python3 tools/setup.py \
+              --game-dir games/shrek2 \
+              --install games/shrek2/original \
+              --ghidra-home "$GHIDRA_HOME" \
+              --java-home "$JAVA_HOME"
+          else
+            echo "Analysis already exists in games/shrek2/analysis/Game.exe/functions.tsv. Skipping Ghidra export."
+          fi
+
+      # --------------------------- WINDOWS BUILD ---------------------------
+      - name: Recompile & Build Windows App (Full Mode)
+        if: ${{ (inputs.target_platform == 'windows' || inputs.target_platform == 'both') && inputs.build_mode == 'full' }}
+        run: |
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/shrek2 --preset windows-cross --target app --regenerate"
+          if [ -n "${{ inputs.allow_unmodelled }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-unmodelled '${{ inputs.allow_unmodelled }}'"
+          fi
+          if [ -n "${{ inputs.allow_table_gaps }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-table-gaps '${{ inputs.allow_table_gaps }}'"
+          fi
+          echo "Running: $BUILD_CMD"
+          eval $BUILD_CMD
+
+      - name: Build Windows App (Stub Mode)
+        if: ${{ (inputs.target_platform == 'windows' || inputs.target_platform == 'both') && inputs.build_mode == 'stub' }}
+        run: |
+          echo "Building Windows App in stub mode..."
+          python3 tools/build.py --game-dir $(pwd)/games/shrek2 --preset windows-cross --target app --stub
+
+      - name: Package Windows Release Bundle
+        if: ${{ inputs.target_platform == 'windows' || inputs.target_platform == 'both' }}
+        run: |
+          WIN_PKG="build/windows/package/Shrek2Recomp"
+          if [ ! -d "$WIN_PKG" ]; then
+            echo "Error: Windows package folder $WIN_PKG not found!"
+            find build -type f || true
+            exit 1
+          fi
+
+          # Bundle game assets if requested and available
+          if [ "${{ inputs.bundle_game_files }}" = "true" ] && [ -d "games/shrek2/original" ]; then
+            echo "Bundling game assets into Windows package..."
+            # Copy all game folders (System, Maps, Textures, Sounds, Music, Animations, etc.)
+            for d in games/shrek2/original/*/; do
+              if [ -d "$d" ]; then
+                dname=$(basename "$d")
+                echo "Copying folder $dname into package..."
+                cp -r "$d" "$WIN_PKG/"
+              fi
+            done
+            # Also copy loose files from original (excluding duplicate Game.exe if Shrek2Recomp.exe is primary)
+            for f in games/shrek2/original/*; do
+              if [ -f "$f" ]; then
+                fname=$(basename "$f")
+                if [ "$fname" != "Game.exe" ]; then
+                  cp "$f" "$WIN_PKG/"
+                fi
+              fi
+            done
+          fi
+
+          # Create convenient launcher script
+          cat << 'EOF' > "$WIN_PKG/Play-Shrek2.bat"
+@echo off
+cd /d "%~dp0"
+start "" "Shrek2Recomp.exe"
+EOF
+
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          (cd build/windows/package && zip -r -9 "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip" Shrek2Recomp)
+          echo "Created Windows archive: $RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip"
+          ls -lh "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip"
+
+      - name: Upload Windows Artifact
+        if: ${{ inputs.target_platform == 'windows' || inputs.target_platform == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shrek2Recomp-PC-Windows
+          path: ${{ runner.temp }}/artifacts/Shrek2Recomp-PC-Windows.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      # ---------------------------- LINUX BUILD ----------------------------
+      - name: Recompile & Build Linux App (Full Mode)
+        if: ${{ (inputs.target_platform == 'linux' || inputs.target_platform == 'both') && inputs.build_mode == 'full' }}
+        run: |
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/shrek2 --preset linux --target app --regenerate"
+          if [ -n "${{ inputs.allow_unmodelled }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-unmodelled '${{ inputs.allow_unmodelled }}'"
+          fi
+          if [ -n "${{ inputs.allow_table_gaps }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-table-gaps '${{ inputs.allow_table_gaps }}'"
+          fi
+          echo "Running: $BUILD_CMD"
+          eval $BUILD_CMD
+
+      - name: Build Linux App (Stub Mode)
+        if: ${{ (inputs.target_platform == 'linux' || inputs.target_platform == 'both') && inputs.build_mode == 'stub' }}
+        run: |
+          echo "Building Linux App in stub mode..."
+          python3 tools/build.py --game-dir $(pwd)/games/shrek2 --preset linux --target app --stub
+
+      - name: Package Linux Release Bundle
+        if: ${{ inputs.target_platform == 'linux' || inputs.target_platform == 'both' }}
+        run: |
+          LINUX_PKG="build/package/Shrek2Recomp"
+          if [ ! -d "$LINUX_PKG" ]; then
+            echo "Error: Linux package folder $LINUX_PKG not found!"
+            find build -type f || true
+            exit 1
+          fi
+
+          if [ "${{ inputs.bundle_game_files }}" = "true" ] && [ -d "games/shrek2/original" ]; then
+            echo "Bundling game assets into Linux package..."
+            for d in games/shrek2/original/*/; do
+              if [ -d "$d" ]; then
+                dname=$(basename "$d")
+                echo "Copying folder $dname into package..."
+                cp -r "$d" "$LINUX_PKG/"
+              fi
+            done
+            for f in games/shrek2/original/*; do
+              if [ -f "$f" ]; then
+                fname=$(basename "$f")
+                if [ "$fname" != "Game.exe" ]; then
+                  cp "$f" "$LINUX_PKG/"
+                fi
+              fi
+            done
+          fi
+
+          cat << 'EOF' > "$LINUX_PKG/start-shrek2.sh"
+#!/usr/bin/env bash
+cd "$(dirname "$0")"
+exec ./Shrek2Recomp "$@"
+EOF
+          chmod +x "$LINUX_PKG/start-shrek2.sh"
+          chmod +x "$LINUX_PKG/Shrek2Recomp"
+
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          (cd build/package && tar -czf "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz" Shrek2Recomp)
+          echo "Created Linux archive: $RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz"
+          ls -lh "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz"
+
+      - name: Upload Linux Artifact
+        if: ${{ inputs.target_platform == 'linux' || inputs.target_platform == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shrek2Recomp-PC-Linux
+          path: ${{ runner.temp }}/artifacts/Shrek2Recomp-PC-Linux.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build Summary
+        run: |
+          echo "### 🎮 Shrek 2 PC Build Completed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Platform:** \`${{ inputs.target_platform }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Mode:** \`${{ inputs.build_mode }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bundled Game Assets:** \`${{ inputs.bundle_game_files }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Instructions for playing on PC:" >> $GITHUB_STEP_SUMMARY
+          echo "##### Windows (10 / 11 x64):" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the artifact **\`Shrek2Recomp-PC-Windows\`**." >> $GITHUB_STEP_SUMMARY
+          echo "2. Unpack the ZIP archive to any folder (e.g. \`C:\\Games\\Shrek2Recomp\`)." >> $GITHUB_STEP_SUMMARY
+          echo "3. Double-click **\`Play-Shrek2.bat\`** or **\`Shrek2Recomp.exe\`** to run the game!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "##### Linux (x86_64):" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the artifact **\`Shrek2Recomp-PC-Linux\`**." >> $GITHUB_STEP_SUMMARY
+          echo "2. Extract the archive: \`tar -xzf Shrek2Recomp-PC-Linux.tar.gz\`." >> $GITHUB_STEP_SUMMARY
+          echo "3. Run: \`./Shrek2Recomp/start-shrek2.sh\`." >> $GITHUB_STEP_SUMMARY

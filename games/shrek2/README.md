@@ -48,12 +48,36 @@ games/shrek2/original/
 
 ---
 
-## 🚀 One-Click GitHub Actions Workflow (Сборка в 1 клик)
+## 🚀 One-Click GitHub Actions Workflows (Сборка в 1 клик)
 
-В репозитории настроен автоматический Workflow:  
-📂 `.github/workflows/port-shrek2-android.yml`
+В репозитории настроены автоматические Workflows:  
+- 📂 `.github/workflows/port-shrek2-android.yml` — Сборка порта на **Android** (`.apk`)
+- 📂 `.github/workflows/port-shrek2-pc.yml` — Сборка порта на **ПК** (**Windows** `.zip` и **Linux** `.tar.gz`)
 
-### Как запустить в 1 клик:
+---
+
+### Сборка версии для ПК (Windows & Linux) в 1 клик:
+1. Перейдите во вкладку **Actions** в репозитории на GitHub.
+2. В левой колонке выберите **«Port Shrek 2 to PC (Windows & Linux)»**.
+3. Нажмите кнопку **«Run workflow»** (справа вверху).
+4. Выберите параметры:
+   - **`game_files_url`**: Прямая ссылка на скачивание ZIP-архива с файлами игры (если вы не загружали их напрямую в репозиторий).
+   - **`target_platform`**:
+     - `windows` (по умолчанию) — автономный ZIP-пакет для Windows 10/11 x64 с `Shrek2Recomp.exe`.
+     - `linux` — архив для Linux x86_64 (`.tar.gz`).
+     - `both` — собрать версии сразу и для Windows, и для Linux.
+   - **`bundle_game_files`**: `true` — автоматически упакует папки игры (`System`, `Maps`, `Textures`, `Sounds` и др.) внутрь готового архива. В результате получится автономный релиз, готовый к запуску сразу после распаковки («распакуй и играй»).
+   - **`build_mode`**: 
+     - `full` — полная компиляция игры.
+     - `stub` — быстрый тестовый билд для проверки работоспособности.
+5. Нажмите зелёную кнопку **«Run workflow»**.
+6. По завершении скачайте готовый артефакт:
+   - **`Shrek2Recomp-PC-Windows`** (для Windows): распакуйте ZIP в любую папку и запустите `Play-Shrek2.bat` или `Shrek2Recomp.exe`!
+   - **`Shrek2Recomp-PC-Linux`** (для Linux): распакуйте архив и запустите `./start-shrek2.sh`.
+
+---
+
+### Сборка версии для Android в 1 клик:
 1. Перейдите во вкладку **Actions** в вашем репозитории на GitHub.
 2. В левой колонке выберите **«Port Shrek 2 to Android»**.
 3. Нажмите кнопку **«Run workflow»** (справа вверху).

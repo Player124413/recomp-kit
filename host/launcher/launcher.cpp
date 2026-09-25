@@ -1235,6 +1235,8 @@ std::vector<std::string> detect_installs(const Spec &spec) {
         for (const std::string &v : children(media + user))
             bases.push_back(join(media + user, v));
 #endif
+    bases.push_back(".");
+    bases.push_back("game");
     return detect_under(spec, bases);
 }
 
