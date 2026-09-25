@@ -1,4 +1,4 @@
-name: Port Shrek 2 to PC (Windows & Linux)
+name: "Port Shrek 2 to PC (Windows & Linux)"
 
 on:
   workflow_dispatch:
@@ -212,11 +212,7 @@ jobs:
           fi
 
           # Create convenient launcher script
-          cat << 'EOF' > "$WIN_PKG/Play-Shrek2.bat"
-@echo off
-cd /d "%~dp0"
-start "" "Shrek2Recomp.exe"
-EOF
+          printf '@echo off\r\ncd /d "%%~dp0"\r\nstart "" "Shrek2Recomp.exe"\r\n' > "$WIN_PKG/Play-Shrek2.bat"
 
           mkdir -p "$RUNNER_TEMP/artifacts"
           (cd build/windows/package && zip -r -9 "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip" Shrek2Recomp)
@@ -281,11 +277,7 @@ EOF
             done
           fi
 
-          cat << 'EOF' > "$LINUX_PKG/start-shrek2.sh"
-#!/usr/bin/env bash
-cd "$(dirname "$0")"
-exec ./Shrek2Recomp "$@"
-EOF
+          printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexec ./Shrek2Recomp "$@"\n' > "$LINUX_PKG/start-shrek2.sh"
           chmod +x "$LINUX_PKG/start-shrek2.sh"
           chmod +x "$LINUX_PKG/Shrek2Recomp"
 
