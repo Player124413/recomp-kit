@@ -521,7 +521,27 @@ static LONG WINAPI fault_filter(EXCEPTION_POINTERS *info) {
     if (g_fault_fn)
         g_fault_fn(rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ? "access violation"
                                                                     : "exception");
+    char crash_msg[512];
+    snprintf(crash_msg, sizeof(crash_msg),
+             "Crash detected!\n\nException: 0x%08lx at address 0x%016llx.\n"
+             "Detailed crash log has been written to 'logs.txt'.",
+             (unsigned long)rec->ExceptionCode, (unsigned long long)at);
+    MessageBoxA(nullptr, crash_msg, "Shrek 2 Recomp Error", MB_OK | MB_ICONERROR);
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static FILE *g_os_win32_log_file = nullptr;
+
+void os_log_set_file(const char *path) {
+    if (g_os_win32_log_file) {
+        fclose(g_os_win32_log_file);
+        g_os_win32_log_file = nullptr;
+    }
+    if (path && *path) {
+        g_os_win32_log_file = fopen(path, "a");
+        if (g_os_win32_log_file)
+            setvbuf(g_os_win32_log_file, nullptr, _IONBF, 0);
+    }
 }
 
 int os_install_fault_handlers(OsFaultFn fn) {
@@ -532,6 +552,10 @@ int os_install_fault_handlers(OsFaultFn fn) {
 void os_write_stderr_raw(const char *s, size_t n) {
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), s, (DWORD)n, &written, nullptr);
+    if (g_os_win32_log_file) {
+        fwrite(s, 1, n, g_os_win32_log_file);
+        fflush(g_os_win32_log_file);
+    }
 }
 void os_exit_immediately(int code) {
     _exit(code);

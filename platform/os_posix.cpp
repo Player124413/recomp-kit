@@ -325,6 +325,20 @@ static void fault_trampoline(int sig) {
                                         : "a fatal signal";
     g_fault_fn(what);
 }
+static FILE *g_os_posix_log_file = nullptr;
+
+void os_log_set_file(const char *path) {
+    if (g_os_posix_log_file) {
+        fclose(g_os_posix_log_file);
+        g_os_posix_log_file = nullptr;
+    }
+    if (path && *path) {
+        g_os_posix_log_file = fopen(path, "a");
+        if (g_os_posix_log_file)
+            setvbuf(g_os_posix_log_file, nullptr, _IONBF, 0);
+    }
+}
+
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
     signal(SIGSEGV, fault_trampoline);
@@ -336,6 +350,10 @@ int os_install_fault_handlers(OsFaultFn fn) {
 void os_write_stderr_raw(const char *s, size_t n) {
     ssize_t ignored = write(2, s, n);
     (void)ignored;
+    if (g_os_posix_log_file) {
+        fwrite(s, 1, n, g_os_posix_log_file);
+        fflush(g_os_posix_log_file);
+    }
 }
 void os_exit_immediately(int code) {
     _exit(code);

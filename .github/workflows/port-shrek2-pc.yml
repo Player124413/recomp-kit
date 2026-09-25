@@ -189,34 +189,20 @@ jobs:
             exit 1
           fi
 
-          # Bundle game assets if requested and available
-          if [ "${{ inputs.bundle_game_files }}" = "true" ] && [ -d "games/shrek2/original" ]; then
-            echo "Bundling game assets into Windows package..."
-            # Copy all game folders (System, Maps, Textures, Sounds, Music, Animations, etc.)
-            for d in games/shrek2/original/*/; do
-              if [ -d "$d" ]; then
-                dname=$(basename "$d")
-                echo "Copying folder $dname into package..."
-                cp -r "$d" "$WIN_PKG/"
-              fi
-            done
-            # Also copy loose files from original (excluding duplicate Game.exe if Shrek2Recomp.exe is primary)
-            for f in games/shrek2/original/*; do
-              if [ -f "$f" ]; then
-                fname=$(basename "$f")
-                if [ "$fname" != "Game.exe" ]; then
-                  cp "$f" "$WIN_PKG/"
-                fi
-              fi
-            done
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          BUNDLE_FLAG=""
+          if [ "${{ inputs.bundle_game_files }}" = "true" ]; then
+            BUNDLE_FLAG="--bundle-assets"
           fi
 
-          # Create convenient launcher script
-          printf '@echo off\r\ncd /d "%%~dp0"\r\nstart "" "Shrek2Recomp.exe"\r\n' > "$WIN_PKG/Play-Shrek2.bat"
+          python3 tools/create_pc_package.py \
+            --platform windows \
+            --pkg-dir "$WIN_PKG" \
+            --game-dir games/shrek2 \
+            $BUNDLE_FLAG \
+            --out-archive "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip"
 
-          mkdir -p "$RUNNER_TEMP/artifacts"
-          (cd build/windows/package && zip -r -9 "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip" Shrek2Recomp)
-          echo "Created Windows archive: $RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip"
+          echo "Windows artifact ready at: $RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip"
           ls -lh "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Windows.zip"
 
       - name: Upload Windows Artifact
@@ -258,32 +244,20 @@ jobs:
             exit 1
           fi
 
-          if [ "${{ inputs.bundle_game_files }}" = "true" ] && [ -d "games/shrek2/original" ]; then
-            echo "Bundling game assets into Linux package..."
-            for d in games/shrek2/original/*/; do
-              if [ -d "$d" ]; then
-                dname=$(basename "$d")
-                echo "Copying folder $dname into package..."
-                cp -r "$d" "$LINUX_PKG/"
-              fi
-            done
-            for f in games/shrek2/original/*; do
-              if [ -f "$f" ]; then
-                fname=$(basename "$f")
-                if [ "$fname" != "Game.exe" ]; then
-                  cp "$f" "$LINUX_PKG/"
-                fi
-              fi
-            done
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          BUNDLE_FLAG=""
+          if [ "${{ inputs.bundle_game_files }}" = "true" ]; then
+            BUNDLE_FLAG="--bundle-assets"
           fi
 
-          printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexec ./Shrek2Recomp "$@"\n' > "$LINUX_PKG/start-shrek2.sh"
-          chmod +x "$LINUX_PKG/start-shrek2.sh"
-          chmod +x "$LINUX_PKG/Shrek2Recomp"
+          python3 tools/create_pc_package.py \
+            --platform linux \
+            --pkg-dir "$LINUX_PKG" \
+            --game-dir games/shrek2 \
+            $BUNDLE_FLAG \
+            --out-archive "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz"
 
-          mkdir -p "$RUNNER_TEMP/artifacts"
-          (cd build/package && tar -czf "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz" Shrek2Recomp)
-          echo "Created Linux archive: $RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz"
+          echo "Linux artifact ready at: $RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz"
           ls -lh "$RUNNER_TEMP/artifacts/Shrek2Recomp-PC-Linux.tar.gz"
 
       - name: Upload Linux Artifact

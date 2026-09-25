@@ -1717,6 +1717,17 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+    os_log_set_file("logs.txt");
+#if defined(_WIN32)
+    freopen("logs.txt", "a", stdout);
+    freopen("logs.txt", "a", stderr);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+#endif
+    fprintf(stderr, "=== %s %s (%s) ===\n", RECOMP_APP_NAME, POP_RECOMP_VERSION,
+            gpu::default_backend_name());
+    fflush(stderr);
+
     std::string game_error;
 #ifdef __ANDROID__
     platform_ui_init_hints(); // stdout and stderr reach logcat from here on

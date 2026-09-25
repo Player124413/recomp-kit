@@ -109,5 +109,26 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
         }
         fclose(f);
     }
+    if (g.exe.empty()) {
+        char exepath[4096] = {0};
+        if (os_exe_path(exepath, sizeof exepath) == 0) {
+            std::string exe_str = exepath;
+            size_t last_slash = exe_str.find_last_of("/\\");
+            std::string exe_dir =
+                last_slash != std::string::npos ? exe_str.substr(0, last_slash) : ".";
+            for (const char *sub : {"/System/" RECOMP_EXECUTABLE, "/" RECOMP_EXECUTABLE,
+                                    "/game/System/" RECOMP_EXECUTABLE, "/game/" RECOMP_EXECUTABLE}) {
+                std::string try_path = exe_dir + sub;
+                OsStat st_exe;
+                if (os_stat(try_path.c_str(), &st_exe) == 0 && st_exe.is_regular) {
+                    if (game_path_is_supported(try_path, nullptr)) {
+                        g.exe = try_path;
+                        g.source = GamePathSource::Saved;
+                        return g;
+                    }
+                }
+            }
+        }
+    }
     return g;
 }
