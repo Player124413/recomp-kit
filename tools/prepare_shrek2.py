@@ -204,11 +204,12 @@ def check_drm(sections):
     return drm_warnings
 
 
-def update_game_toml(toml_path: Path, exe_name: str, sha256: str, image_base: int, entry_point: int, guest_size: int):
+def update_game_toml(toml_path: Path, exe_name: str, sha256: str, image_base: int, entry_point: int, guest_size: int, heap_base: int = None):
     """Update game.toml fields in-place while preserving comments and structure."""
     text = toml_path.read_text(encoding="utf-8")
     lines = text.splitlines()
     new_lines = []
+    has_heap_base = any(line.strip().startswith("heap_base =") for line in lines)
 
     for line in lines:
         stripped = line.strip()
@@ -222,8 +223,13 @@ def update_game_toml(toml_path: Path, exe_name: str, sha256: str, image_base: in
             new_lines.append(f"entry_point = 0x{entry_point:08x}")
         elif stripped.startswith("developer_exe ="):
             new_lines.append(f'developer_exe = "original/{exe_name}"')
+        elif stripped.startswith("heap_base ="):
+            if heap_base is not None:
+                new_lines.append(f"heap_base = 0x{heap_base:08x}")
         else:
             new_lines.append(line)
+            if stripped == "[game]" and heap_base is not None and not has_heap_base:
+                new_lines.append(f"heap_base = 0x{heap_base:08x}")
 
     toml_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
@@ -314,6 +320,15 @@ def main():
     # Round to page boundary (0x1000)
     guest_size = (guest_size + 0xFFF) & ~0xFFF
 
+    # Calculate heap_base if image is loaded in the lower space (< 0x0e000000) and ends above 16MB (0x01000000)
+    heap_base = None
+    image_end = pe["image_base"] + pe["size_of_image"]
+    if pe["image_base"] < 0x0E000000 and image_end > 0x01000000:
+        cand_heap = (image_end + 0xFFFF) & ~0xFFFF
+        if cand_heap < 0x0E000000:
+            heap_base = cand_heap
+            print(f"Raising heap_base to 0x{heap_base:08x} to accommodate image ending at 0x{image_end:08x}")
+
     update_game_toml(
         toml_path,
         exe_name=canonical_name,
@@ -321,6 +336,7 @@ def main():
         image_base=pe["image_base"],
         entry_point=pe["entry_point"],
         guest_size=guest_size,
+        heap_base=heap_base,
     )
     print(f"Successfully updated {toml_path} with executable metadata!")
 

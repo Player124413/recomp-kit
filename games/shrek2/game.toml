@@ -8,8 +8,8 @@ bundle_id = "dev.recompkit.shrek2"
 executable = "Game.exe"
 # Replace with the SHA-256 hash of your decrypted / No-CD Game.exe
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-image_base = 0x00400000
-entry_point = 0x00401000
+image_base = 0x10000000
+entry_point = 0x10001000
 guest_root = 'C:\Shrek2'
 developer_exe = "original/Game.exe"
 windows_version = "5.1"

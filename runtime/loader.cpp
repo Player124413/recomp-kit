@@ -606,13 +606,32 @@ bool loader_load(const char *exe_path) {
         g_error = buf;
         return false;
     }
-    if ((uint64_t)image_base + size_image > HEAP_BASE) {
-        char buf[128];
-        snprintf(buf, sizeof buf,
-                 "image ends at %08x, above the heap arena start %08x; raise [game] heap_base",
-                 image_base + size_image, HEAP_BASE);
-        g_error = buf;
-        return false;
+    if (image_base < HEAP_LIMIT) {
+        if ((uint64_t)image_base + size_image > HEAP_BASE) {
+            char buf[128];
+            snprintf(buf, sizeof buf,
+                     "image ends at %08x, above the heap arena start %08x; raise [game] heap_base",
+                     image_base + size_image, HEAP_BASE);
+            g_error = buf;
+            return false;
+        }
+    } else {
+        if (image_base < GUEST_SHIM_END) {
+            char buf[128];
+            snprintf(buf, sizeof buf,
+                     "image base %08x overlaps stack/shim arena (must be >= %08x)",
+                     image_base, GUEST_SHIM_END);
+            g_error = buf;
+            return false;
+        }
+        if ((uint64_t)image_base + size_image > GUEST_SIZE) {
+            char buf[128];
+            snprintf(buf, sizeof buf,
+                     "image ends at %08x, above the guest arena limit %08x; raise [game] guest_size",
+                     image_base + size_image, GUEST_SIZE);
+            g_error = buf;
+            return false;
+        }
     }
 
     mem_init();

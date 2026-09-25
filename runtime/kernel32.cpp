@@ -1368,8 +1368,8 @@ void k_GetSystemInfo(X86 *c) {
     memset(g_mem + p, 0, 36);
     wr32(p + 0, 0);           // wProcessorArchitecture = INTEL, wReserved
     wr32(p + 4, 4096);        // dwPageSize
-    wr32(p + 8, IMAGE_BASE);  // lpMinimumApplicationAddress
-    wr32(p + 12, HEAP_LIMIT); // lpMaximumApplicationAddress
+    wr32(p + 8, IMAGE_BASE < HEAP_LIMIT ? IMAGE_BASE : 0x00010000u);  // lpMinimumApplicationAddress
+    wr32(p + 12, IMAGE_BASE < HEAP_LIMIT ? HEAP_LIMIT : GUEST_SIZE - 1); // lpMaximumApplicationAddress
     wr32(p + 16, 1);          // dwActiveProcessorMask
     wr32(p + 20, 1);          // dwNumberOfProcessors
     wr32(p + 24, 586);        // dwProcessorType = PROCESSOR_INTEL_PENTIUM
