@@ -32,6 +32,15 @@ static std::string g_exe_sha;
 
 const char *const LOADER_EXPECTED_SHA256 = RECOMP_EXE_SHA256;
 
+std::string dirname_of(const std::string &p) {
+    size_t s = p.find_last_of("\\/");
+    if (s == std::string::npos)
+        return ".";
+    if (s == 0)
+        return "/";
+    return p.substr(0, s);
+}
+
 namespace {
 
 std::string g_error;
@@ -160,15 +169,6 @@ bool read_file(const char *path, std::vector<uint8_t> &out) {
     size_t got = fread(out.data(), 1, (size_t)n, f);
     fclose(f);
     return got == (size_t)n;
-}
-
-std::string dirname_of(const std::string &p) {
-    size_t s = p.find_last_of("\\/");
-    if (s == std::string::npos)
-        return ".";
-    if (s == 0)
-        return "/";
-    return p.substr(0, s);
 }
 
 template <typename T> T rd(const std::vector<uint8_t> &d, size_t off) {
