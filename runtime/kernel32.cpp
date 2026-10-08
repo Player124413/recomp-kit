@@ -531,10 +531,21 @@ uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
     return block;
 }
 
+static bool g_exe_has_system_sub = false;
+
 void win32_init(const std::string &game_dir) {
     kernel32_wide_reset();
-    g_game_dir = game_dir.empty() ? std::string(".") : game_dir;
-    g_cur_dir = RECOMP_GUEST_ROOT;
+    std::string base_dir = game_dir;
+    g_exe_has_system_sub = false;
+    if (base_dir.size() >= 7) {
+        std::string tail = base_dir.substr(base_dir.size() - 7);
+        if (tail == "/System" || tail == "\\System" || tail == "/system" || tail == "\\system") {
+            base_dir = base_dir.substr(0, base_dir.size() - 7);
+            g_exe_has_system_sub = true;
+        }
+    }
+    g_game_dir = base_dir.empty() ? std::string(".") : base_dir;
+    g_cur_dir = g_exe_has_system_sub ? std::string(RECOMP_GUEST_ROOT) + "\\System" : RECOMP_GUEST_ROOT;
     g_last_error = 0;
     g_exited = false;
     g_exit_code = 0;
@@ -1057,11 +1068,15 @@ void k_SetCurrentDirectoryA(X86 *c) {
 
 // Both encodings expose the same guest path, never a host filesystem path.
 std::string module_file_name(uint32_t hmod) {
-    std::string path = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+    std::string path = g_exe_has_system_sub
+                           ? (std::string(RECOMP_GUEST_ROOT) + "\\System\\" RECOMP_EXECUTABLE)
+                           : (std::string(RECOMP_GUEST_ROOT) + "\\" RECOMP_EXECUTABLE);
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
             if (kv.second == hmod) {
-                path = RECOMP_GUEST_ROOT "\\" + kv.first;
+                path = g_exe_has_system_sub
+                           ? (std::string(RECOMP_GUEST_ROOT) + "\\System\\" + kv.first)
+                           : (std::string(RECOMP_GUEST_ROOT) + "\\" + kv.first);
                 break;
             }
     }
@@ -1176,6 +1191,22 @@ void load_library_named(X86 *c, const std::string &module_name) {
         }
         set_eax(c, m->base);
         return;
+    }
+    std::string cand_path = win32_host_path(name);
+    if (cand_path.empty())
+        cand_path = win32_host_path("System\\" + name);
+    if (cand_path.empty())
+        cand_path = dirname_of(loader_exe_path()) + "/" + name;
+    OsStat st_cand;
+    if (os_stat(cand_path.c_str(), &st_cand) == 0 && st_cand.is_regular) {
+        if (LoaderModule *m = loader_load_dll_from_file(name.c_str(), cand_path.c_str())) {
+            m->attached = true;
+            m->load_refs = 1;
+            call_dll_entry(c, *m, 1); // DLL_PROCESS_ATTACH
+            modules()[name] = m->base;
+            set_eax(c, m->base);
+            return;
+        }
     }
     if (!runtime_serves_module(name)) {
         log_once(("loadlib:" + name).c_str(),
@@ -4556,7 +4587,7 @@ void open_mutex_named(X86 *c, const std::string &name) {
 
 void get_command_line(X86 *c) {
     if (!g_cmdline_addr) {
-        std::string line = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+        std::string line = module_file_name(IMAGE_BASE);
         if (const char *extra = recomp_env("GUEST_ARGS"); extra && *extra)
             line += std::string(" ") + extra;
         g_cmdline_addr = guest_strdup(line.c_str());

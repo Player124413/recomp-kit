@@ -58,6 +58,9 @@ const LoaderModule *loader_module(uint32_t i);
 // Count/index enumerate auxiliary modules; name/address lookups include the EXE.
 LoaderModule *loader_module_named(const char *name); // case-insensitive, nullptr when unknown
 const LoaderModule *loader_module_containing(uint32_t addr);
+// Dynamically load and map a PE DLL from host file path into guest memory.
+LoaderModule *loader_load_dll_from_file(const char *name, const char *path);
+std::string dirname_of(const std::string &p);
 // The guest address of a named export, 0 when the module has none by that name.
 uint32_t loader_module_export(const LoaderModule &m, const char *name);
 uint32_t loader_module_export_ordinal(const LoaderModule &m, uint32_t ordinal);

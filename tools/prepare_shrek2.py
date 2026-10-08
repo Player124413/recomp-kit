@@ -315,8 +315,23 @@ def main():
         except OSError:
             shutil.copy2(system_exe if system_exe.is_file() else exe_path, root_exe)
 
-    # Ensure guest_size is at least 512MB for UE2 games with modules
-    guest_size = max(0x20000000, pe["image_base"] + pe["size_of_image"] + 0x10000000)
+    # Calculate maximum virtual address across executable and all auxiliary modules
+    max_addr = pe["image_base"] + pe["size_of_image"]
+    if system_dir.is_dir():
+        for f in system_dir.iterdir():
+            if f.is_file() and f.suffix.lower() == ".dll":
+                try:
+                    dbytes = f.read_bytes()
+                    dpe = parse_pe32(dbytes)
+                    if dpe:
+                        mod_end = dpe["image_base"] + dpe["size_of_image"]
+                        if mod_end > max_addr:
+                            max_addr = mod_end
+                except Exception:
+                    pass
+
+    # Ensure guest_size is at least 768MB (0x30000000) for UE2 games with modules
+    guest_size = max(0x30000000, max_addr + 0x08000000)
     # Round to page boundary (0x1000)
     guest_size = (guest_size + 0xFFF) & ~0xFFF
 

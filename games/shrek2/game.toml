@@ -13,7 +13,7 @@ entry_point = 0x10001000
 guest_root = 'C:\Shrek2'
 developer_exe = "original/Game.exe"
 windows_version = "5.1"
-guest_size = 0x20000000
+guest_size = 0x30000000
 
 [translate]
 function_alignment = 16

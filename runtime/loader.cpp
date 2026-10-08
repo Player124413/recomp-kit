@@ -271,6 +271,20 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
                 ++g_iat_patched;
                 continue;
             }
+            std::string ondisk = dirname_of(g_exe_path) + "/" + dll;
+            OsStat st_ondisk;
+            if (os_stat(ondisk.c_str(), &st_ondisk) == 0 && st_ondisk.is_regular) {
+                if (LoaderModule *module = loader_load_dll_from_file(dll.c_str(), ondisk.c_str())) {
+                    uint32_t address = (t & 0x80000000u)
+                                           ? loader_module_export_ordinal(*module, t & 0xffff)
+                                           : loader_module_export(*module, namebuf);
+                    if (address) {
+                        wr32(slot, address);
+                        ++g_iat_patched;
+                        continue;
+                    }
+                }
+            }
             uint32_t data = imports_alloc_data(dll.c_str(), namebuf);
             if (data) {
                 // An imported variable, not a function: the slot holds the
@@ -460,6 +474,125 @@ const LoaderModule *loader_module_containing(uint32_t addr) {
         if (addr >= m.base && addr < m.base + m.size)
             return &m;
     return nullptr;
+}
+
+LoaderModule *loader_load_dll_from_file(const char *name, const char *path) {
+    if (!name || !path)
+        return nullptr;
+    if (LoaderModule *existing = loader_module_named(name))
+        return existing;
+    std::vector<uint8_t> file;
+    if (!read_file(path, file))
+        return nullptr;
+    if (file.size() < 0x40 || rd<uint16_t>(file, 0) != 0x5a4d)
+        return nullptr;
+    uint32_t pe_off = rd<uint32_t>(file, 0x3c);
+    if (pe_off + 24 > file.size() || rd<uint32_t>(file, pe_off) != 0x00004550)
+        return nullptr;
+    size_t fh_off = pe_off + 4;
+    uint16_t nsections = rd<uint16_t>(file, fh_off + 2);
+    uint16_t opt_size = rd<uint16_t>(file, fh_off + 16);
+    size_t opt_off = fh_off + 20;
+    uint16_t opt_magic = rd<uint16_t>(file, opt_off);
+    if (opt_magic != 0x10b || opt_size < 96)
+        return nullptr;
+    size_t sh_off = opt_off + opt_size;
+    if (nsections == 0 || sh_off + 40ull * nsections > file.size())
+        return nullptr;
+    uint32_t entry_rva = rd<uint32_t>(file, opt_off + 16);
+    uint32_t image_base = rd<uint32_t>(file, opt_off + 28);
+    uint32_t size_image = rd<uint32_t>(file, opt_off + 56);
+    uint32_t size_hdrs = rd<uint32_t>(file, opt_off + 60);
+
+    // Determine target base in high guest arena (>= GUEST_SHIM_END)
+    uint32_t target_base = image_base;
+    bool overlaps = (target_base < GUEST_SHIM_END) ||
+                    (g_main.base && target_base < g_main.base + g_main.size &&
+                     g_main.base < target_base + size_image);
+    for (const LoaderModule &other : g_aux) {
+        if (target_base < other.base + other.size && other.base < target_base + size_image)
+            overlaps = true;
+    }
+    if (overlaps || (uint64_t)target_base + size_image > GUEST_SIZE) {
+        target_base = (g_main.base + g_main.size + 0xFFFF) & ~0xFFFF;
+        if (target_base < GUEST_SHIM_END)
+            target_base = GUEST_SHIM_END;
+        bool found = false;
+        while ((uint64_t)target_base + size_image <= GUEST_SIZE) {
+            bool hit = (g_main.base && target_base < g_main.base + g_main.size &&
+                        g_main.base < target_base + size_image);
+            for (const LoaderModule &other : g_aux) {
+                if (target_base < other.base + other.size && other.base < target_base + size_image)
+                    hit = true;
+            }
+            if (!hit) {
+                found = true;
+                break;
+            }
+            target_base = (target_base + size_image + 0xFFFF) & ~0xFFFF;
+        }
+        if (!found)
+            return nullptr;
+    }
+
+    LoaderModule m;
+    m.name = name;
+    m.path = path;
+    m.base = target_base;
+    m.size = size_image;
+    m.entry = entry_rva ? target_base + entry_rva : 0;
+    m.attached = false;
+    m.export_rva = rd<uint32_t>(file, opt_off + 96);
+    m.export_size = rd<uint32_t>(file, opt_off + 100);
+
+    size_t hdr_copy = size_hdrs < file.size() ? size_hdrs : file.size();
+    memcpy(g_mem + target_base, file.data(), hdr_copy);
+    for (uint16_t i = 0; i < nsections; ++i) {
+        size_t s = sh_off + 40 * i;
+        char nm[9] = {0};
+        memcpy(nm, file.data() + s, 8);
+        uint32_t vsize = rd<uint32_t>(file, s + 8);
+        uint32_t va = target_base + rd<uint32_t>(file, s + 12);
+        uint32_t raw_size = rd<uint32_t>(file, s + 16);
+        uint32_t raw_ptr = rd<uint32_t>(file, s + 20);
+        uint32_t copy = (vsize && raw_size > vsize) ? vsize : raw_size;
+        if (raw_ptr && copy && (uint64_t)raw_ptr + copy <= file.size())
+            memcpy(g_mem + va, file.data() + raw_ptr, copy);
+        m.sections.push_back({nm, va, vsize, raw_size, raw_ptr, rd<uint32_t>(file, s + 36)});
+    }
+
+    int64_t delta = (int64_t)target_base - (int64_t)image_base;
+    if (delta != 0 && opt_size >= 112 && rd<uint32_t>(file, opt_off + 92) > 5) {
+        uint32_t reloc_rva = rd<uint32_t>(file, opt_off + 96 + 5 * 8);
+        uint32_t reloc_size = rd<uint32_t>(file, opt_off + 96 + 5 * 8 + 4);
+        if (reloc_rva && reloc_size) {
+            uint32_t cur = 0;
+            while (cur + 8 <= reloc_size) {
+                uint32_t page_rva = rd32(target_base + reloc_rva + cur);
+                uint32_t block_size = rd32(target_base + reloc_rva + cur + 4);
+                if (block_size < 8 || cur + block_size > reloc_size)
+                    break;
+                uint32_t entries = (block_size - 8) / 2;
+                for (uint32_t e = 0; e < entries; ++e) {
+                    uint16_t item = rd16(target_base + reloc_rva + cur + 8 + 2 * e);
+                    uint16_t type = item >> 12;
+                    uint16_t offset = item & 0xFFF;
+                    if (type == 3) {
+                        uint32_t target_va = target_base + page_rva + offset;
+                        if (target_va + 4 <= GUEST_SIZE)
+                            wr32(target_va, (uint32_t)(rd32(target_va) + delta));
+                    }
+                }
+                cur += block_size;
+            }
+        }
+    }
+
+    patch_iat(file, opt_off, opt_magic, target_base, size_image);
+    m.initial_image.assign(g_mem + target_base, g_mem + target_base + m.size);
+    g_aux.push_back(m);
+    LOGV("dynamically loaded module %s at %08x (size %08x)", name, target_base, size_image);
+    return &g_aux.back();
 }
 bool loader_in_image(uint32_t addr) {
     return (addr >= g_base && addr < g_base + g_size) || loader_module_containing(addr) != nullptr;
