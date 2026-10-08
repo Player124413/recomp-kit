@@ -7,12 +7,12 @@
 extern "C" {
 extern const uint32_t recomp_operand_redirect_pairs[];
 extern const uint32_t recomp_operand_redirect_count;
-__attribute__((weak)) const uint32_t recomp_operand_redirect_pairs[2] = {0, 0};
-__attribute__((weak)) const uint32_t recomp_operand_redirect_count = 0;
+__attribute__((weak)) extern const uint32_t recomp_operand_redirect_pairs[2] = {0, 0};
+__attribute__((weak)) extern const uint32_t recomp_operand_redirect_count = 0;
 extern const uint32_t recomp_data_seed_pairs[];
 extern const uint32_t recomp_data_seed_count;
-__attribute__((weak)) const uint32_t recomp_data_seed_pairs[2] = {0, 0};
-__attribute__((weak)) const uint32_t recomp_data_seed_count = 0;
+__attribute__((weak)) extern const uint32_t recomp_data_seed_pairs[2] = {0, 0};
+__attribute__((weak)) extern const uint32_t recomp_data_seed_count = 0;
 }
 #include "memory.h"
 #include "imports.h"
@@ -264,8 +264,14 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
                                        ? loader_module_export_ordinal(*module, t & 0xffff)
                                        : loader_module_export(*module, namebuf);
                 if (!address) {
-                    g_error = "missing mapped export " + dll + "!" + namebuf;
-                    return false;
+                    LOGW("missing mapped export %s!%s: creating fallback stub trampoline",
+                         dll.c_str(), namebuf);
+                    uint32_t tramp = imports_alloc_trampoline(dll.c_str(), namebuf, nullptr, ARGC_UNKNOWN);
+                    if (!tramp) {
+                        g_error = "ran out of import trampolines";
+                        return false;
+                    }
+                    address = tramp;
                 }
                 wr32(slot, address);
                 ++g_iat_patched;
@@ -278,6 +284,11 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
                     uint32_t address = (t & 0x80000000u)
                                            ? loader_module_export_ordinal(*module, t & 0xffff)
                                            : loader_module_export(*module, namebuf);
+                    if (!address) {
+                        LOGW("missing mapped export %s!%s: creating fallback stub trampoline",
+                             dll.c_str(), namebuf);
+                        address = imports_alloc_trampoline(dll.c_str(), namebuf, nullptr, ARGC_UNKNOWN);
+                    }
                     if (address) {
                         wr32(slot, address);
                         ++g_iat_patched;
@@ -555,9 +566,11 @@ LoaderModule *loader_load_dll_from_file(const char *name, const char *path) {
         uint32_t va = target_base + rd<uint32_t>(file, s + 12);
         uint32_t raw_size = rd<uint32_t>(file, s + 16);
         uint32_t raw_ptr = rd<uint32_t>(file, s + 20);
-        uint32_t copy = (vsize && raw_size > vsize) ? vsize : raw_size;
-        if (raw_ptr && copy && (uint64_t)raw_ptr + copy <= file.size())
-            memcpy(g_mem + va, file.data() + raw_ptr, copy);
+        uint32_t copy = raw_size;
+        if (raw_ptr && copy && (uint64_t)raw_ptr + copy <= file.size()) {
+            if ((uint64_t)va + copy <= GUEST_SIZE)
+                memcpy(g_mem + va, file.data() + raw_ptr, copy);
+        }
         m.sections.push_back({nm, va, vsize, raw_size, raw_ptr, rd<uint32_t>(file, s + 36)});
     }
 
@@ -588,14 +601,42 @@ LoaderModule *loader_load_dll_from_file(const char *name, const char *path) {
         }
     }
 
-    patch_iat(file, opt_off, opt_magic, target_base, size_image);
-    m.initial_image.assign(g_mem + target_base, g_mem + target_base + m.size);
     g_aux.push_back(m);
-    LOGV("dynamically loaded module %s at %08x (size %08x)", name, target_base, size_image);
-    return &g_aux.back();
+    patch_iat(file, opt_off, opt_magic, target_base, size_image);
+    if (LoaderModule *found = loader_module_named(name)) {
+        found->initial_image.assign(g_mem + target_base, g_mem + target_base + size_image);
+        LOGV("dynamically loaded module %s at %08x (size %08x)", name, target_base, size_image);
+        return found;
+    }
+    return nullptr;
 }
 bool loader_in_image(uint32_t addr) {
     return (addr >= g_base && addr < g_base + g_size) || loader_module_containing(addr) != nullptr;
+}
+
+static uint32_t resolve_forwarded_export(const std::string &fwd, int depth = 0) {
+    if (depth > 8)
+        return 0;
+    size_t dot = fwd.find('.');
+    if (dot == std::string::npos)
+        return 0;
+    std::string mod_name = fwd.substr(0, dot);
+    std::string target_name = fwd.substr(dot + 1);
+    if (mod_name.find('.') == std::string::npos)
+        mod_name += ".dll";
+    const LoaderModule *fwd_mod = loader_module_named(mod_name.c_str());
+    if (!fwd_mod) {
+        std::string ondisk = dirname_of(g_exe_path) + "/" + mod_name;
+        fwd_mod = loader_load_dll_from_file(mod_name.c_str(), ondisk.c_str());
+    }
+    if (fwd_mod) {
+        if (!target_name.empty() && target_name[0] == '#') {
+            uint32_t ord = (uint32_t)strtoul(target_name.c_str() + 1, nullptr, 10);
+            return loader_module_export_ordinal(*fwd_mod, ord);
+        }
+        return loader_module_export(*fwd_mod, target_name.c_str());
+    }
+    return 0;
 }
 
 // The PE export directory read from guest memory, so a lookup sees the mapped
@@ -619,9 +660,12 @@ uint32_t loader_module_export(const LoaderModule &m, const char *name) {
         if (ordinal >= nfuncs)
             return 0;
         uint32_t rva = rd32(m.base + funcs + 4 * ordinal);
-        // A forwarder (an RVA inside the export directory) is not served.
-        if (!rva || !in(rva, 1) || rva_in(m.export_size, rva - m.export_rva, 1))
+        if (!rva || !in(rva, 1))
             return 0;
+        if (rva_in(m.export_size, rva - m.export_rva, 1)) {
+            std::string fwd = gm_str(m.base + rva, 260);
+            return resolve_forwarded_export(fwd);
+        }
         return m.base + rva;
     }
     return 0;
@@ -638,8 +682,12 @@ uint32_t loader_module_export_ordinal(const LoaderModule &m, uint32_t ordinal) {
         !rva_in(m.size, table, 4 * count))
         return 0;
     uint32_t rva = rd32(m.base + table + 4 * (ordinal - first));
-    if (!rva || !rva_in(m.size, rva, 1) || rva_in(m.export_size, rva - m.export_rva, 1))
+    if (!rva || !rva_in(m.size, rva, 1))
         return 0;
+    if (rva_in(m.export_size, rva - m.export_rva, 1)) {
+        std::string fwd = gm_str(m.base + rva, 260);
+        return resolve_forwarded_export(fwd);
+    }
     return m.base + rva;
 }
 
