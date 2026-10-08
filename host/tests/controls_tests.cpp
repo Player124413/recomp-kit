@@ -656,6 +656,44 @@ static void center(const Layout &l, int group, int control, const Screen &s, dou
     *y = r.y + r.h / 2.0;
 }
 
+// Tablet keyboard tabs must remain in the touchable safe area even when both
+// halves are collapsed, then reveal keys that can receive a complete press.
+static void test_tablet_keyboard_safe_area() {
+    for (const char *name : {"keys", "pad+keys"}) {
+        Layout l;
+        std::string error;
+        CHECK(parse_layout(builtin_layout(name, Form::Tablet), &l, &error));
+        Screen s = screen(2420, 1668, 2.0);
+        s.safe = {24, 48, 2372, 1572};
+        Router r;
+        Rec rec;
+        r.set_layout(&l, rec);
+        r.set_screen(s);
+        l.groups[0].visible = l.groups[1].visible = false;
+        for (int side = 0; side < 2; ++side) {
+            const Rect tab = control_rect(l, 2, side, s);
+            CHECK(tab.x >= s.safe.x && tab.y >= s.safe.y);
+            CHECK(tab.x + tab.w <= s.safe.x + s.safe.w);
+            CHECK(tab.y + tab.h <= s.safe.y + s.safe.h);
+            CHECK(r.finger_down(1, tab.x + tab.w / 2., tab.y + tab.h / 2., 0, rec));
+            CHECK(r.finger_up(1, 1, rec));
+            CHECK(l.groups[side].visible);
+            for (int c = 0; c < int(l.groups[side].controls.size()); ++c) {
+                const Rect key = control_rect(l, side, c, s);
+                CHECK(key.x >= s.safe.x && key.y >= s.safe.y);
+                CHECK(key.x + key.w <= s.safe.x + s.safe.w);
+                CHECK(key.y + key.h <= s.safe.y + s.safe.h);
+            }
+        }
+        double x, y;
+        center(l, 1, find_key(l, 1, kScanReturn), s, &x, &y);
+        rec.calls.clear();
+        CHECK(r.finger_down(2, x, y, 2, rec));
+        CHECK(r.finger_up(2, 3, rec));
+        CHECK((rec.calls == std::vector<std::string>{"k40+", "tap", "k40-"}));
+    }
+}
+
 static void test_router_space_key() {
     Layout l = keys_layout();
     const Screen s = screen(1180, 820, 1.0);
@@ -1604,6 +1642,160 @@ static void test_binding_arrows_stick() {
     CHECK(out.size() == 1 && out[0].scancode == kScanUp && out[0].down);
 }
 
+// A racing diagonal steers without overriding separately held face buttons.
+static void test_binding_horizontal_arrows() {
+    MappedTable table;
+    std::string error;
+    CHECK(
+        parse_mapped("left_stick=horizontal_arrows;cross=key:Up;square=key:Down", &table, &error));
+    MappedTable copy;
+    CHECK(parse_mapped(write_mapped(table), &copy, &error));
+    CHECK(copy.left == StickMode::HorizontalArrows);
+    Binding binding;
+    binding.set_table(copy);
+    PadState pad;
+    std::vector<TouchAction> out;
+    std::vector<std::string> actions;
+    pad.ly = -1;
+    binding.tick(pad, 0, &out, &actions);
+    CHECK(out.empty()); // vertical motion cannot accelerate
+    pad.buttons = uint16_t(1u << int(PadButton::Cross));
+    binding.tick(pad, 1, &out, &actions);
+    CHECK(out.size() == 1 && out[0].scancode == kScanUp && out[0].down);
+    out.clear();
+    pad.lx = -1;
+    pad.ly = 1;
+    binding.tick(pad, 2, &out, &actions);
+    CHECK(out.size() == 1 && out[0].scancode == kScanLeft && out[0].down);
+    out.clear();
+    pad.lx = 0;
+    binding.tick(pad, 3, &out, &actions);
+    CHECK(out.size() == 1 && out[0].scancode == kScanLeft && !out[0].down);
+    out.clear();
+    pad.buttons = uint16_t(1u << int(PadButton::Square));
+    binding.tick(pad, 4, &out, &actions);
+    CHECK(out.size() == 2 && out[0].scancode == kScanUp && !out[0].down &&
+          out[1].scancode == kScanDown && out[1].down);
+    out.clear();
+    pad = {};
+    binding.tick(pad, 5, &out, &actions);
+    CHECK(out.size() == 1 && out[0].scancode == kScanDown && !out[0].down);
+}
+
+// Two fingers must survive the complete router -> mapped binding path, not
+// just work when a test constructs an already-combined PadState. Exercise
+// both press orders and both release orders on the shipped tablet layouts.
+static void test_tablet_simultaneous_controls() {
+    struct HeldKeys : ControlsSink {
+        bool keys[512]{};
+        void key(int scancode, bool down) override {
+            CHECK(scancode > 0 && scancode < 512);
+            if (scancode > 0 && scancode < 512)
+                keys[scancode] = down;
+        }
+        void action(const std::string &) override {}
+        void switch_layout(const std::string &) override {}
+        void group_visibility_changed() override {}
+        void tap() override {}
+    };
+    struct Input {
+        Kind kind;
+        int id;
+        int key;
+        int direction = 0; // stick x, in full travel radii
+    };
+    struct Pair {
+        const char *layout;
+        Input inputs[2];
+    };
+    const Pair pairs[] = {
+        {"keys", {{Kind::Key, kScanUp, kScanUp}, {Kind::Key, kScanLeft, kScanLeft}}},
+        {"keys", {{Kind::Key, kScanW, kScanW}, {Kind::Key, kScanA, kScanA}}},
+        {"keys", {{Kind::Key, kScanLShift, kScanLShift}, {Kind::Key, kScanA, kScanA}}},
+        {"pad",
+         {{Kind::Button, int(PadButton::Cross), kScanUp},
+          {Kind::Button, int(PadButton::Square), kScanDown}}},
+        {"pad",
+         {{Kind::Button, int(PadButton::Cross), kScanUp},
+          {Kind::Button, int(PadButton::Circle), kScanSpace}}},
+        {"pad", {{Kind::Button, int(PadButton::Cross), kScanUp}, {Kind::Stick, 0, kScanLeft, -1}}},
+        {"pad", {{Kind::Button, int(PadButton::Cross), kScanUp}, {Kind::Stick, 0, kScanRight, 1}}},
+        {"pad",
+         {{Kind::Button, int(PadButton::Square), kScanDown}, {Kind::Stick, 0, kScanLeft, -1}}},
+    };
+    const Screen s = screen(2420, 1668, 2.0);
+    for (const Pair &pair : pairs)
+        for (int first_down : {0, 1})
+            for (int first_up : {0, 1}) {
+                Layout layout;
+                std::string error;
+                CHECK(parse_layout(builtin_layout(pair.layout, Form::Tablet), &layout, &error));
+                Router router;
+                HeldKeys sink;
+                router.set_layout(&layout, sink);
+                router.set_screen(s);
+                MappedTable table;
+                CHECK(parse_mapped("left_stick=horizontal_arrows;cross=key:Up;"
+                                   "square=key:Down;circle=key:Space",
+                                   &table, &error));
+                Binding binding;
+                binding.set_table(table);
+                uint64_t now = 0;
+                auto pump = [&] {
+                    std::vector<TouchAction> output;
+                    std::vector<std::string> actions;
+                    binding.tick(router.pad(), now, &output, &actions);
+                    for (const auto &a : output)
+                        if (a.kind == TouchAction::Key)
+                            sink.key(a.scancode, a.down);
+                    now += 10000000;
+                };
+                auto press = [&](int index) {
+                    const Input &input = pair.inputs[index];
+                    for (int g = 0; g < int(layout.groups.size()); ++g)
+                        for (int c = 0; c < int(layout.groups[g].controls.size()); ++c) {
+                            const Control &ctl = layout.groups[g].controls[c];
+                            if (ctl.kind != input.kind)
+                                continue;
+                            const int id = ctl.kind == Kind::Key      ? ctl.scancode
+                                           : ctl.kind == Kind::Button ? int(ctl.button)
+                                                                      : ctl.stick;
+                            if (id != input.id)
+                                continue;
+                            double x, y;
+                            center(layout, g, c, s, &x, &y);
+                            CHECK(router.finger_down(index + 1, x, y, now, sink));
+                            if (input.direction)
+                                CHECK(router.finger_motion(index + 1,
+                                                           x + input.direction * ctl.radius *
+                                                                   layout.scale * s.scale,
+                                                           y, now, sink));
+                            pump();
+                            return;
+                        }
+                    CHECK(false); // every requested control must exist in the built-in
+                };
+                press(first_down);
+                CHECK(sink.keys[pair.inputs[first_down].key]);
+                CHECK(!sink.keys[pair.inputs[1 - first_down].key]);
+                press(1 - first_down);
+                // Hold through many host pumps; neither input may cancel the other.
+                for (int i = 0; i < 60; ++i) {
+                    pump();
+                    CHECK(sink.keys[pair.inputs[0].key] && sink.keys[pair.inputs[1].key]);
+                }
+                CHECK(router.finger_up(first_up + 1, now, sink));
+                pump();
+                CHECK(!sink.keys[pair.inputs[first_up].key]);
+                CHECK(sink.keys[pair.inputs[1 - first_up].key]);
+                CHECK(router.finger_up(2 - first_up, now, sink));
+                pump();
+                for (bool held : sink.keys)
+                    CHECK(!held);
+                CHECK(router.pad() == PadState());
+            }
+}
+
 // l1 = wheel_up: one Wheel(+1) per press, nothing on release.
 static void test_binding_wheel_button() {
     MappedTable t;
@@ -2226,7 +2418,25 @@ static void test_a_hidden_group_survives_a_rotation() {
     CHECK(hidden_bits_for(land, 0x1) == 0x1 && hidden_bits_for(port, 0x1) == 0x1);
 }
 
-// A held stick's knob is its own quad, so moving it keeps the revision; a
+// Hiding the keyboard must not hide the sticks/buttons after cycling to pad:
+// the saved visibility bits are shared by layouts within each form factor.
+static void test_hidden_keyboard_does_not_hide_pad_after_switch() {
+    for (const Form form : {Form::Tablet, Form::PhoneLandscape, Form::PhonePortrait}) {
+        for (const char *name : {"keys", "pad+keys"}) {
+            Layout keyboard, pad;
+            std::string error;
+            CHECK(parse_layout(builtin_layout(name, form), &keyboard, &error));
+            CHECK(parse_layout(builtin_layout("pad", form), &pad, &error));
+            const uint32_t saved = toggle_reachable_bits(keyboard);
+            CHECK(saved != 0);
+            CHECK(hidden_bits_for(pad, saved) == 0);
+            // Cycling back still restores the player's hidden keyboard halves.
+            CHECK(hidden_bits_for(keyboard, saved) == saved);
+        }
+    }
+}
+
+// A held stick's knob is its own quad, so moving it keeps the layer revision; a
 // button press, the dpad's hat and a floating base's move are drawn, so
 // they change it. radius_px follows the layout and screen scale.
 static void test_make_view_pad_revision() {
@@ -2257,12 +2467,23 @@ static void test_make_view_pad_revision() {
     const uint64_t idle = v.revision;
 
     CHECK(r.finger_down(1, sr.x + 100, sr.y + 100, 0, rec));
-    const uint64_t held = make_view(l, r, s, 1.0).revision;
+    const ControlsView held_view = make_view(l, r, s, 1.0);
+    const uint64_t held = held_view.revision;
     CHECK(held != idle); // the base moved to the finger and lit
     CHECK(r.finger_motion(1, sr.x + 300, sr.y + 100, 1, rec));
     v = make_view(l, r, s, 1.0);
     CHECK(v.controls[stick].knob_x > 0.5);
-    CHECK(v.revision == held); // only the knob moved
+    CHECK(v.revision != held); // publish the moving knob to the presenter
+    CHECK(v.controls[stick].base_x == held_view.controls[stick].base_x);
+    CHECK(v.controls[stick].base_y == held_view.controls[stick].base_y);
+    CHECK(v.controls[stick].rect.x == sr.x && v.controls[stick].rect.y == sr.y);
+    for (size_t i = 0; i < v.layers.size(); ++i)
+        CHECK(v.layers[i].revision == held_view.layers[i].revision); // reuse every raster
+    const uint64_t moved = v.revision;
+    CHECK(r.finger_motion(1, sr.x + 300, sr.y + 200, 1, rec));
+    v = make_view(l, r, s, 1.0);
+    CHECK(v.revision != moved);                            // vertical motion must publish too
+    CHECK(make_view(l, r, s, 1.0).revision == v.revision); // stationary: no new view
     CHECK(r.finger_up(1, 2, rec));
     CHECK(make_view(l, r, s, 1.0).revision == idle);
 
@@ -2288,7 +2509,7 @@ static void test_make_view_pad_revision() {
 static void dump_form(const char *dir, Form form, const Screen &s) {
     const int dw = s.dw, dh = s.dh;
     for (const char *name : {"pad", "keys", "pad+keys"}) {
-        for (int held = 0; held < 2; ++held) {
+        for (int held = 0; held < 3; ++held) {
             Layout l;
             std::string err;
             if (!builtin_layout(name, form) || !parse_layout(builtin_layout(name, form), &l, &err))
@@ -2297,7 +2518,9 @@ static void dump_form(const char *dir, Form form, const Screen &s) {
             Rec rec;
             r.set_layout(&l, rec);
             r.set_screen(s);
-            if (held) {
+            if (held == 2) {
+                r.set_toggles_only(true, rec);
+            } else if (held) {
                 // Push the first stick up-right, press the first dpad down
                 // and every other L2/R2/cross.
                 int64_t id = 1;
@@ -2328,7 +2551,8 @@ static void dump_form(const char *dir, Form form, const Screen &s) {
                                d.base_y + d.knob_y * d.radius_px, knob_radius(d.radius_px), true);
             char tail[64];
             snprintf(tail, sizeof tail, ".%s.%dx%d.rgba", form_name(form), dw, dh);
-            std::string file = std::string(dir) + "/" + name + (held ? "-held" : "-idle") + tail;
+            const char *state = held == 2 ? "-auto-hidden" : held ? "-held" : "-idle";
+            std::string file = std::string(dir) + "/" + name + state + tail;
             for (char &ch : file)
                 if (ch == '+')
                     ch = '_';
@@ -2592,8 +2816,8 @@ static void test_layout_content() {
     CHECK(layout_content(tabs) == LayoutContent::Keys);
 }
 
-// A hidden layout keeps only its toggles: keys are not hit (the finger goes
-// to the game), a toggle still is, and make_view draws only the toggles.
+// Auto-hide leaves only the layout switch. Keys and their HIDE/KEYS tabs
+// pass through without changing saved visibility; disconnecting restores them.
 static void test_router_toggles_only() {
     Layout l = keys_layout();
     const Screen s = screen(1180, 820, 1.0);
@@ -2620,29 +2844,73 @@ static void test_router_toggles_only() {
     (void)left;
 
     center(l, 2, 0, s, &x, &y);
+    CHECK(!r.finger_down(4, x, y, 20, rec));
+    CHECK(rec.calls.empty());
+    CHECK(l.groups[0].visible && l.groups[1].visible);
+    center(l, 2, 2, s, &x, &y);
     CHECK(r.finger_down(4, x, y, 20, rec));
-    CHECK((rec.calls == std::vector<std::string>{"vis", "tap"}));
+    CHECK((rec.calls == std::vector<std::string>{"sw:next", "tap"}));
     CHECK(r.finger_up(4, 30, rec));
 
     ControlsView v = make_view(l, r, s, 1.0);
-    CHECK(v.controls.size() == 3); // two HIDE tabs and the layout-cycle tab
+    CHECK(v.controls.size() == 1); // only the layout-cycle tab
     CHECK(v.backdrops.empty());
     for (const DrawControl &d : v.controls)
-        CHECK(d.kind == Kind::Toggle);
+        CHECK(d.kind == Kind::Toggle && d.label == "PAD");
 
     // Portrait: the controls strip is not filled behind the lone tabs.
     Screen portrait = s;
     portrait.controls_area = Rect{0, 400, 1180, 420};
     CHECK(make_view(l, r, portrait, 1.0).controls_area.empty());
+    r.set_claim_area(portrait.controls_area);
+    CHECK(!r.finger_down(6, 590, 600, 30, rec));
     r.set_toggles_only(false, rec);
     CHECK(!make_view(l, r, portrait, 1.0).controls_area.empty());
+    CHECK(r.finger_down(6, 590, 600, 30, rec));
+    CHECK(r.finger_up(6, 31, rec));
     r.set_toggles_only(true, rec);
 
     r.set_toggles_only(false, rec);
     center(l, 1, find_key(l, 1, kScanSpace), s, &x, &y);
     CHECK(r.finger_down(5, x, y, 40, rec));
     v = make_view(l, r, s, 1.0);
-    CHECK(v.controls.size() > 2);
+    CHECK(count_kind(v, Kind::Key) == 77);
+    CHECK(count_kind(v, Kind::Toggle) == 3);
+}
+
+// Every built-in form has a usable layout switch while auto-hidden, with
+// neither HIDE nor KEYS tabs for individual keyboard halves left behind.
+static void test_auto_hidden_layouts_keep_only_layout_switches() {
+    for (Form form : {Form::Tablet, Form::PhoneLandscape, Form::PhonePortrait}) {
+        const Screen s = form == Form::Tablet           ? screen(2360, 1640, 2.0)
+                         : form == Form::PhoneLandscape ? screen(2532, 1170, 3.0)
+                                                        : screen(1170, 2532, 3.0);
+        for (const char *name : {"pad", "keys", "pad+keys"}) {
+            Layout l;
+            std::string error;
+            CHECK(parse_layout(builtin_layout(name, form), &l, &error));
+            Router r;
+            Rec rec;
+            r.set_layout(&l, rec);
+            r.set_screen(s);
+            // A previously hidden group remains hidden across auto-hide.
+            l.groups[0].visible = false;
+            const std::string saved = write_layout(l);
+            r.set_toggles_only(true, rec);
+            const ControlsView v = make_view(l, r, s, 1.0);
+            CHECK(v.controls.size() == 1);
+            CHECK(v.backdrops.empty());
+            if (v.controls.size() == 1) {
+                const Rect box = v.controls[0].rect;
+                CHECK(r.finger_down(1, box.x + box.w / 2.0, box.y + box.h / 2.0, 0, rec));
+                CHECK((rec.calls == std::vector<std::string>{"sw:next", "tap"}));
+                CHECK(r.finger_up(1, 1, rec));
+            }
+            r.set_toggles_only(false, rec);
+            CHECK(write_layout(l) == saved);
+            CHECK(make_view(l, r, s, 1.0).controls.size() > 1);
+        }
+    }
 }
 
 // Trigger edges carry the trigger's 0..32767 value, never a signed one: the
@@ -3925,6 +4193,7 @@ int main(int argc, char **argv) {
     test_raster_text();
     test_raster_matches_legacy_keypad_pixels();
     test_router_space_key();
+    test_tablet_keyboard_safe_area();
     test_router_latched_shift();
     test_router_left_tab_toggle();
     test_router_gap_is_claimed_silently();
@@ -3957,6 +4226,8 @@ int main(int argc, char **argv) {
     test_binding_button_mouse();
     test_binding_cursor_stick();
     test_binding_arrows_stick();
+    test_binding_horizontal_arrows();
+    test_tablet_simultaneous_controls();
     test_binding_wheel_button();
     test_binding_action_button();
     test_binding_scroll_stick();
@@ -3976,6 +4247,7 @@ int main(int argc, char **argv) {
     test_phone_builtin_layouts_fit_and_do_not_overlap();
     test_hidden_bits_are_clamped_to_the_group_count();
     test_a_hidden_group_survives_a_rotation();
+    test_hidden_keyboard_does_not_hide_pad_after_switch();
     test_make_view_pad_revision();
     test_layer_revisions_are_per_group();
     test_small_key_label_fits();
@@ -3983,6 +4255,7 @@ int main(int argc, char **argv) {
     test_layout_wanted_truth_table();
     test_layout_content();
     test_router_toggles_only();
+    test_auto_hidden_layouts_keep_only_layout_switches();
     test_vpad_trigger_edges();
     test_rumble_router_controller_refresh();
     test_rumble_router_device_refresh();

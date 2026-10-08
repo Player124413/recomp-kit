@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Allow native game adapters to place their own cursors at absolute touch
+  positions in logical game pixels. Placement can discard pending DirectInput
+  X/Y movement without losing button, wheel or keyboard input.
+
+- Notify exclusive DirectDraw windows when the display mode is set, including
+  a return to the same size after a movie, so their menu presentation bounds
+  are refreshed instead of leaving the screen black.
+
+- Find hash-pinned auxiliary DLLs in their configured installation subfolders
+  after moving a game directory to a mobile device or another computer.
+
+- Initialize settings-page input in the smoke host on its first presented frame,
+  matching the app so automated F10 and native Options checks can open the page.
+
+- Update held on-screen stick knobs independently of their bases and touch
+  zones. Stick motion now reaches the presenter without rebuilding the cached
+  control backgrounds.
+
+- Keep touch and mouse coordinates in the game's logical resolution when
+  Direct3D 9 renders at a higher resolution. Supersampling no longer moves
+  clicks and cursors beyond the game's window.
+
+- Mapped pads support horizontal-only arrow sticks for steering without
+  accidental throttle or braking. Smoke pad scripts exercise the production
+  mapped binding as well as the native controller adapters.
+
+- Convert host mouse and touch positions from client to screen coordinates
+  for GetCursorPos and MSG.pt, fixing click offsets in games whose window
+  starts away from the desktop origin.
+
+- Smoke scripts can drive native virtual-pad buttons, dpad, sticks and
+  triggers through the same DirectInput/XInput adapters as the app.
+
+- Switching from a collapsed keyboard to the pad no longer hides its sticks
+  and buttons. Saved hidden bits apply only to groups with a reveal tab.
+
+- Keep tablet keyboard halves and their KEYS tabs inside the system safe area,
+  including the combined pad-and-keys layout. Controls tracing now records
+  touch routing and keyboard press/release events for device diagnostics.
+
+- Preserve GPU frame color formats when staging them for display. BGRA
+  backbuffers no longer have red and blue exchanged by an RGBA staging texture,
+  including when a pooled frame switches between GPU and CPU pixel uploads.
+
+- Auto-hidden touch controls no longer leave HIDE/KEYS buttons on screen
+  when a hardware keyboard or controller suppresses the layout. The layout
+  switch stays available, touches through hidden controls reach the game,
+  and disconnecting restores the player's saved keyboard visibility.
+
 - Windows cross-builds enable FFmpeg movie and file-backed music decoding,
   use the POSIX host's shell/make with llvm-mingw tools, and bundle the media DLLs.
   CI cross-builds the Windows app and decodes a generated Ogg track under Wine.

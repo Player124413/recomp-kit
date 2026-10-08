@@ -59,6 +59,9 @@ uint32_t get_last_error();
 extern "C" bool ddraw_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
 // Selected DirectDraw mode, otherwise the host virtual desktop.
 void win32_display_mode(uint32_t *w, uint32_t *h, uint32_t *bpp);
+// Notify an exclusive DirectDraw window after the accepted mode is published,
+// including transitions back to an unchanged size after video playback.
+void win32_refresh_display_window(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h, uint32_t bpp);
 // A fullscreen swap chain's output window is sized to the mode it put the
 // display in, and gets its bounds back when the chain leaves fullscreen.
 void win32_cover_display(X86 *c, uint32_t hwnd, uint32_t w, uint32_t h);
@@ -343,6 +346,8 @@ void host_note_cadence(const char *kind);
 void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lparam);
 // Queue host mouse input in virtual-screen coordinates, on the guest baton.
 void host_post_mouse_message(uint32_t msg, uint32_t mk, int32_t x, int32_t y);
+// The same routed event, starting in a specific window's client pixels.
+void host_post_client_mouse_message(uint32_t hwnd, uint32_t msg, uint32_t mk, int32_t x, int32_t y);
 // Post a keyboard message to the window that has the focus, which is where
 // Windows sends one. Not the same as host_main_window: in a VCL application
 // that is the invisible application window.
@@ -351,6 +356,8 @@ uint32_t host_main_window();              // first created top-level HWND, or 0
 uint32_t host_window_proc(uint32_t hwnd); // guest WNDPROC address, or 0
 bool host_window_rect(uint32_t hwnd, int32_t *x, int32_t *y, int32_t *w, int32_t *h);
 void host_set_client_size(uint32_t hwnd, int32_t w, int32_t h);
+// Host input is in client pixels; GetCursorPos/MSG.pt are screen pixels.
+void host_set_client_cursor_pos(uint32_t hwnd, int32_t x, int32_t y);
 void host_set_key_state(int vk, bool down); // feeds GetAsyncKeyState
 void host_set_cursor_pos(int32_t x, int32_t y);
 // Installs the host's event-loop pump. GetMessageA calls it each time round

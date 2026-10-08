@@ -1,6 +1,7 @@
 #include "game_config.h"
 #include "../texture_pack.h"
 #include "../../runtime/display_seam.h"
+#include "../../runtime/native_seam.h"
 #include "../../dx/passes.h"
 // host_tests.mm - headless tests for the macOS host.
 //
@@ -27,6 +28,8 @@
 #include "test_frame_builder.h"
 #include "../page_overlay.h"
 #include "../performance_overlay.h"
+#include "../controls/overlay.h"
+#include "../controls/router.h"
 #include "../../runtime/frame_deadline.h"
 #include "../audio_capture.h"
 #include "../midi.h"
@@ -541,7 +544,30 @@ static void test_script_parsing() {
     CHECK_EQ(steps[0].y, 8);
     CHECK_EQ(steps[1].at_ms, 2000);
     CHECK_EQ(steps[1].x, 510);
-    for (const char *bad : {"tap 1\n", "tap x 2\n", "tap -1 2\n", "tap 1 2 extra\n"})
+    CHECK_EQ(host_script_parse("tap_drawable 1210 834\n", steps, 64, err, sizeof err), 1);
+    CHECK_EQ(steps[0].op, HOST_SCRIPT_TAP_DRAWABLE);
+    CHECK_EQ(steps[0].x, 1210);
+    CHECK_EQ(steps[0].y, 834);
+    for (const char *bad : {"tap 1\n", "tap x 2\n", "tap -1 2\n", "tap 1 2 extra\n",
+                            "tap_drawable -1 2\n", "tap_drawable 1210\n"})
+        CHECK_EQ(host_script_parse(bad, steps, 64, err, sizeof err), -1);
+
+    CHECK_EQ(host_script_parse("pad cross down\nwait 200\npad cross up\npad left_x -32767\n"
+                               "pad right_trigger 32767\npad right down\n",
+                               steps, 64, err, sizeof err),
+             5);
+    CHECK_EQ(steps[0].op, HOST_SCRIPT_PAD);
+    CHECK_EQ(steps[0].button, 0);
+    CHECK_EQ(steps[0].x, 1);
+    CHECK_EQ(steps[1].x, 0);
+    CHECK_EQ(steps[1].at_ms, 200);
+    CHECK_EQ(steps[2].button, 17);
+    CHECK_EQ(steps[2].x, -32767);
+    CHECK_EQ(steps[3].button, 22);
+    CHECK_EQ(steps[4].button, 14);
+    for (const char *bad :
+         {"pad cross\n", "pad cross 1\n", "pad missing down\n", "pad left_x -32768\n",
+          "pad right_trigger -1\n", "pad left_y 32768\n", "pad cross up extra\n"})
         CHECK_EQ(host_script_parse(bad, steps, 64, err, sizeof err), -1);
 
     const char *good = "# a comment, and a blank line follow\n"
@@ -5692,6 +5718,93 @@ static void test_presenter_real_offscreen(D3DRenderer *renderer) {
     host_present_stop();
 }
 
+// GPU copies preserve their source byte order, including when a pooled frame
+// switches between Direct3D's BGRA and the CPU/2D paths' RGBA pixels.
+static void test_presenter_gpu_color_order(D3DRenderer *) {
+    host_present_start_offscreen(2, 2);
+    const uint8_t rgba[16] = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 207, 193, 51, 255};
+    uint8_t bgra[16];
+    for (int i = 0; i < 4; ++i) {
+        bgra[i * 4] = rgba[i * 4 + 2];
+        bgra[i * 4 + 1] = rgba[i * 4 + 1];
+        bgra[i * 4 + 2] = rgba[i * 4];
+        bgra[i * 4 + 3] = 255;
+    }
+    // Four frames per path exercise every slot, then reuse them at the same
+    // dimensions with a different format (a resize alone cannot catch this).
+    for (uint64_t id = 1; id <= 16; ++id) {
+        const unsigned path = unsigned((id - 1) / 4);
+        gpu::Texture source{};
+        if (path == 3) {
+            host_present_stage_rgba(rgba, 2, 2);
+        } else {
+            const auto format = path == 1 ? gpu::Format::RGBA8 : gpu::Format::BGRA8;
+            source = g_gpu->create_texture({2, 2, format, gpu::UsageSampled | gpu::UsageCpu});
+            CHECK(bool(source));
+            CHECK(g_gpu->upload(source, {0, 0, 2, 2}, path == 1 ? rgba : bgra, 8));
+            auto cb = g_gpu->begin();
+            CHECK(host_present_stage_texture(source, 2, 2, 2, 2, cb));
+            g_gpu->commit(cb);
+            g_gpu->wait(cb);
+        }
+        const uint64_t before = host_present_unique_completed();
+        host_present_test_seal(id, HOST_SCREEN_MENU, false);
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (host_present_unique_completed() == before &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        CHECK_EQ(host_present_unique_completed(), before + 1);
+        uint8_t shown[16]{};
+        CHECK(host_present_test_read_rgba(shown, sizeof shown));
+        for (int i = 0; i < 16; ++i)
+            CHECK_EQ(shown[i], rgba[i]);
+        if (source)
+            g_gpu->destroy(source);
+    }
+    host_present_stop();
+}
+
+// Supersampling changes texture storage, not mouse coordinates. Use the
+// tablet's drawable and fractional render scale that previously put its
+// centre at guest (1520,855), outside a 1280x720 client area.
+static void test_presenter_gpu_logical_coordinates(D3DRenderer *) {
+    host_gate_reset();
+    host_present_start_offscreen(2420, 1668);
+    for (uint64_t id = 1; id <= 2; ++id) {
+        const int w = id == 1 ? 3040 : 1280, h = id == 1 ? 1710 : 720;
+        auto source =
+            g_gpu->create_texture({w, h, gpu::Format::BGRA8, gpu::UsageSampled | gpu::UsageCpu});
+        CHECK(bool(source));
+        std::vector<uint8_t> pixels(size_t(w) * h * 4, 0xff);
+        CHECK(g_gpu->upload(source, {0, 0, w, h}, pixels.data(), w * 4));
+        auto cb = g_gpu->begin();
+        CHECK(host_present_stage_texture(source, w, h, 1280, 720, cb));
+        g_gpu->commit(cb);
+        g_gpu->wait(cb);
+        const auto before = host_present_unique_completed();
+        host_present_test_seal(id, HOST_SCREEN_MENU, false);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (host_present_unique_completed() == before &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        CHECK_EQ(host_present_unique_completed(), before + 1);
+        LayoutSnapshot layout;
+        CHECK(host_present_copy_layout(&layout));
+        CHECK_EQ(layout.guest_w, 1280);
+        CHECK_EQ(layout.guest_h, 720);
+        // Input follows the published frame, including the letterbox offset.
+        auto centre = host_gate_hit_test(nullptr, 1210, 834);
+        CHECK_EQ(centre.gx, 640);
+        CHECK_EQ(centre.gy, 360);
+        auto corner = host_gate_hit_test(nullptr, 2419, 1513);
+        CHECK(corner.gx >= 1278 && corner.gx < 1280);
+        CHECK(corner.gy >= 718 && corner.gy < 720);
+        g_gpu->destroy(source);
+    }
+    host_present_stop();
+    host_gate_reset();
+}
+
 // The Direct3D 11 hardware path's host side on the real device: a texture
 // drawn a texel a pixel into a cleared target, then blended; read back, and
 // published through the presenter as a window frame.
@@ -8154,6 +8267,56 @@ static void test_t9_guest_pointer_resolution() {
 // A layout rescale must never leave the virtual pointer off the frame, and an
 // off-frame pointer must not be corrected from: both produced a target at the
 // bottom-right corner, which is what the user saw as the cursor snapping away.
+static bool native_place_enabled;
+static int native_place_calls, native_place_x, native_place_y, native_place_w, native_place_h;
+extern "C" int recomp_pointer_place(int32_t x, int32_t y, int32_t w, int32_t h) {
+    if (!native_place_enabled)
+        return 0;
+    ++native_place_calls;
+    native_place_x = x;
+    native_place_y = y;
+    native_place_w = w;
+    native_place_h = h;
+    return 1;
+}
+
+static void test_native_touch_placement() {
+    host_gate_reset();
+    host_input_reset();
+    host_pointer_set_mode(1280, 720);
+    host_gate_fallback_layout(2560, 1600); // 80-pixel top/bottom letterbox
+    native_place_enabled = true;
+    native_place_calls = 0;
+    host_input_motion(900, 180, 300, -50);
+    host_input_button(0, true);
+    host_input_key(0x00, true); // A
+    host_input_wheel(120);
+    CHECK(host_gate_pointer_place(1800, 440));
+    CHECK_EQ(native_place_calls, 1);
+    CHECK_EQ(native_place_x, 900);
+    CHECK_EQ(native_place_y, 180);
+    CHECK_EQ(native_place_w, 1280);
+    CHECK_EQ(native_place_h, 720);
+    HostInputState state{};
+    host_input_state(&state);
+    CHECK_EQ(state.mouse_dx, 0);
+    CHECK_EQ(state.mouse_dy, 0);
+    CHECK_EQ(state.mouse_dz, 120);
+    CHECK_EQ(state.mouse_buttons[0], 0x80);
+    CHECK_EQ(state.keys[0x1e], 0x80);
+    g_page_draws = true;
+    CHECK(!host_gate_pointer_place(300, 300));
+    g_page_draws = false;
+    CHECK(!host_gate_pointer_place(-100, 300));
+    CHECK_EQ(native_place_calls, 1);
+    HitResult hit;
+    host_gate_window_motion(1600, 600, 0, 0, &hit);
+    CHECK_EQ(native_place_calls, 1); // Physical motion stays relative.
+    native_place_enabled = false;
+    host_gate_reset();
+    host_input_reset();
+}
+
 static void test_t9_pointer_survives_layout_rescale() {
     constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     uint8_t saved[0x48];
@@ -9227,6 +9390,86 @@ static void test_pointer_reaches_scrolling_edges() {
     test_scene_width = 0;
     memcpy(gm_ptr(base), saved, sizeof saved);
 }
+// Match the host's revision-gated publication, then check the actual GPU
+// output: dragging moves only the knob, keeping the base and touch zone put.
+static void test_native_stick_motion_pixels() {
+    struct Sink : controls::ControlsSink {
+        void key(int, bool) override {}
+        void action(const std::string &) override {}
+        void switch_layout(const std::string &) override {}
+        void group_visibility_changed() override {}
+        void tap() override {}
+    } sink;
+    auto device = gpu::create_default_device();
+    CHECK(device != nullptr);
+    if (!device)
+        return;
+    constexpr int w = 640, h = 480;
+    gpu::Texture target = device->create_texture(
+        {w, h, gpu::Format::RGBA8, gpu::UsageRenderTarget | gpu::UsageSampled | gpu::UsageCpu, 1});
+    const controls::Screen screen{w, h, 1.0, {0, 0, w, h}, {}};
+    for (bool floating : {false, true}) {
+        controls::Layout layout;
+        controls::Control stick;
+        stick.kind = controls::Kind::Stick;
+        stick.anchor = controls::Anchor::TopLeft;
+        stick.x = 100;
+        stick.y = 100;
+        stick.w = stick.h = 280;
+        stick.radius = 70;
+        stick.floating = floating;
+        controls::Group group;
+        group.controls.push_back(stick);
+        layout.groups.push_back(group);
+        controls::Router router;
+        router.set_layout(&layout, sink);
+        router.set_screen(screen);
+        CHECK(router.finger_down(1, 240, 240, 0, sink));
+        controls::ControlsView published;
+        controls::Overlay overlay;
+        auto render = [&] {
+            const auto next = controls::make_view(layout, router, screen, 1.0);
+            if (next.revision != published.revision)
+                published = next;
+            std::vector<uint8_t> pixels(w * h * 4, 40);
+            device->upload(target, {0, 0, w, h}, pixels.data(), w * 4);
+            auto cb = device->begin();
+            overlay.draw(device.get(), cb, target, w, h, published);
+            device->commit(cb);
+            device->wait(cb);
+            CHECK(device->status(cb) == gpu::CommandStatus::Completed);
+            device->readback(target, {0, 0, w, h}, pixels.data(), w * 4);
+            return pixels;
+        };
+        auto before = render();
+        CHECK(router.finger_motion(1, 310, 240, 1, sink));
+        auto after = render();
+        int changed = 0, outside_knobs = 0;
+        // The knob radius is 0.45 * travel. Give antialiasing two pixels;
+        // everything outside the old/new knob bounds must remain identical.
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const size_t i = (y * w + x) * 4;
+                if (memcmp(&before[i], &after[i], 4) == 0)
+                    continue;
+                ++changed;
+                if (y < 206 || y > 274 || x < 206 || x > 344)
+                    ++outside_knobs;
+            }
+        CHECK(changed > 1000);
+        CHECK_EQ(outside_knobs, 0);
+        CHECK(published.controls[0].knob_x == 1.0);
+        CHECK(published.controls[0].base_x == 240);
+        CHECK(published.controls[0].base_y == 240);
+        CHECK_EQ(published.controls[0].rect.x, 100);
+        CHECK_EQ(published.controls[0].rect.y, 100);
+        CHECK(router.finger_up(1, 2, sink));
+        auto released = render();
+        CHECK(released != after);
+    }
+    device->destroy(target);
+}
+
 static void test_native_overlay_pixels() {
     auto device = gpu::create_default_device();
     CHECK(device != nullptr);
@@ -9580,6 +9823,7 @@ int main(int argc, char **argv) {
     test_wide_cursor_bound();
     test_pointer_reaches_scrolling_edges();
     test_native_overlay_pixels();
+    test_native_stick_motion_pixels();
     // Focused headless validation when the sandbox cannot create audio/Metal
     // services. The default suite still runs every test and reports failures.
     if (argc == 2 && !strcmp(argv[1], "--script-only")) {
@@ -9594,6 +9838,7 @@ int main(int argc, char **argv) {
         return g_failures ? 1 : 0;
     }
     if (argc == 2 && strcmp(argv[1], "--t9-input") == 0) {
+        test_native_touch_placement();
         test_t9_guest_pointer_resolution();
         test_t9_hits_and_drag();
         test_t9_snapshot_capture_edges_cursor();
@@ -9643,6 +9888,7 @@ int main(int argc, char **argv) {
         {"T9 hits and drag", test_t9_hits_and_drag},
         {"T9 capture edges cursor", test_t9_snapshot_capture_edges_cursor},
         {"T9 relative and mailbox", test_t9_relative_crossing_and_layout_mailbox},
+        {"native touch placement", test_native_touch_placement},
         {"T9 guest pointer resolution", test_t9_guest_pointer_resolution},
         {"T9 pointer closed loop", test_t9_pointer_closed_loop},
         {"T9 window motion round1", test_t9_window_motion_round1},
@@ -9708,6 +9954,8 @@ int main(int argc, char **argv) {
             void (*fn)(D3DRenderer *);
         } gpu[] = {
             {"offscreen presenter", test_presenter_real_offscreen},
+            {"presenter GPU color order", test_presenter_gpu_color_order},
+            {"presenter GPU logical coordinates", test_presenter_gpu_logical_coordinates},
             {"Direct3D 11 hardware path", test_gpu2d_pixels},
             {"presenter world and overlay", test_presenter_incremental_world_and_overlay},
             {"wide scene clipping", test_wide_scene_pixels},

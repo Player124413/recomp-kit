@@ -27,6 +27,9 @@
 #include "game_config.h"
 #include "script.h"
 #include "script_touch.h"
+#include "controls/vpad.h"
+#include "controls/binding.h"
+#include "sdl/keymap.h"
 #include "smoke_dumpat.h"
 #include "landmark.h"
 #include "fixture_view.h"
@@ -693,7 +696,8 @@ void post(uint32_t msg, uint32_t wparam, uint32_t lparam) {
         return;
     }
     if (msg >= 0x200 && msg <= 0x209) {
-        host_post_mouse_message(msg, wparam, int16_t(lparam), int16_t(lparam >> 16));
+        host_post_client_mouse_message(host_main_window(), msg, wparam, int16_t(lparam),
+                                       int16_t(lparam >> 16));
         return;
     }
     uint32_t hwnd = host_main_window();
@@ -811,7 +815,19 @@ void deliver_touch_actions(const std::vector<TouchAction> &actions) {
     for (const TouchAction &a : actions) {
         const int x = (int)std::lround(a.x), y = (int)std::lround(a.y);
         host_gate_fallback_layout(g_touch_drawable_w, g_touch_drawable_h);
-        if (a.kind == TouchAction::Motion) {
+        if (a.kind == TouchAction::Key) {
+            const uint16_t code = host_keycode_from_scancode(a.scancode);
+            if (code == 0xffff || host_gate_key(code, a.down))
+                continue;
+            const HostKeyMapping m = host_key_mapping(code);
+            host_input_key(code, a.down);
+            post(a.down ? WM_KEYDOWN_ : WM_KEYUP_, m.vk,
+                 host_key_lparam(m, a.down, false, !a.down));
+            printf("[smoke-pad-key] scancode %d %s\n", a.scancode, a.down ? "down" : "up");
+        } else if (a.kind == TouchAction::Wheel) {
+            if (!host_gate_wheel(a.wheel * 120))
+                host_input_wheel(a.wheel * 120);
+        } else if (a.kind == TouchAction::Motion) {
             HitResult hit;
             if (host_gate_window_motion(x, y, 0, 0, &hit)) {
                 g_pointer_x = hit.gx;
@@ -859,16 +875,45 @@ void deliver_touch_actions(const std::vector<TouchAction> &actions) {
     }
 }
 
+// Drive the production mapped binding every heartbeat, including held cursor
+// sticks. The pad script feeds the same merged state as the touch router.
+void tick_pad_binding() {
+#if RECOMP_CONTROLS_PAD == 1
+    static controls::Binding binding;
+    static const bool initialized = [&] {
+        controls::MappedTable table;
+        std::string error;
+        if (!controls::parse_mapped(RECOMP_CONTROLS_MAPPED, &table, &error)) {
+            fprintf(stderr, "[smoke-pad] bad binding: %s\n", error.c_str());
+            exit(2);
+        }
+        binding.set_table(table);
+        return true;
+    }();
+    (void)initialized;
+    binding.set_bounds(g_touch_drawable_w, g_touch_drawable_h);
+    std::vector<TouchAction> actions;
+    std::vector<std::string> names;
+    binding.tick(controls::vpad().state(), uint64_t(boot_guest_millis()) * 1000000ull, &actions,
+                 &names);
+    deliver_touch_actions(actions);
+    for (const auto &name : names)
+        fprintf(stderr, "[smoke-pad] host action not available headlessly: %s\n", name.c_str());
+#endif
+}
+
 void start_touch(const HostScriptStep &step) {
     LayoutSnapshot layout;
     const bool published =
         host_present_copy_layout(&layout) && layout.scene.scale_x > 0 && layout.scene.scale_y > 0;
     const double scale = std::min(double(g_touch_drawable_w) / std::max(1, g_mode_w),
                                   double(g_touch_drawable_h) / std::max(1, g_mode_h));
-    const double x = published
+    const double x = step.op == HOST_SCRIPT_TAP_DRAWABLE ? step.x
+                     : published
                          ? (step.x + .5) * layout.scene.scale_x + layout.scene.offset_x
                          : (step.x + .5) * scale + (g_touch_drawable_w - g_mode_w * scale) / 2;
-    const double y = published
+    const double y = step.op == HOST_SCRIPT_TAP_DRAWABLE ? step.y
+                     : published
                          ? (step.y + .5) * layout.scene.scale_y + layout.scene.offset_y
                          : (step.y + .5) * scale + (g_touch_drawable_h - g_mode_h * scale) / 2;
     std::vector<TouchAction> actions;
@@ -1349,6 +1394,7 @@ void run_step(const HostScriptStep &step) {
         g_press_at_ms = boot_guest_millis();
         break;
     case HOST_SCRIPT_TAP:
+    case HOST_SCRIPT_TAP_DRAWABLE:
         start_touch(step);
         break;
     case HOST_SCRIPT_BUTTON:
@@ -1372,6 +1418,29 @@ void run_step(const HostScriptStep &step) {
         // exactly as it would from a real keyboard.
         uint32_t lparam = host_key_lparam(m, step.down != 0, false, step.down == 0);
         post(step.down ? WM_KEYDOWN_ : WM_KEYUP_, m.vk, lparam);
+        break;
+    }
+    case HOST_SCRIPT_PAD: {
+        static controls::PadState pad;
+        const int index = step.button;
+        if (index < 13) {
+            const uint16_t bit = uint16_t(1u << index);
+            pad.buttons = step.x ? pad.buttons | bit : pad.buttons & ~bit;
+            if (index == 6)
+                pad.l2 = float(step.x);
+            if (index == 7)
+                pad.r2 = float(step.x);
+        } else if (index < 17) {
+            const uint8_t bit = uint8_t(1u << (index - 13));
+            pad.hat = step.x ? pad.hat | bit : pad.hat & ~bit;
+        } else {
+            float *axes[] = {&pad.lx, &pad.ly, &pad.rx, &pad.ry, &pad.l2, &pad.r2};
+            *axes[index - 17] = step.x / 32767.0f;
+        }
+        controls::vpad().set_source(controls::kPadSourceTouch, pad);
+        tick_pad_binding();
+        printf("[smoke-pad] control %d value %d packet %u\n", index, step.x,
+               controls::vpad().packet());
         break;
     }
     case HOST_SCRIPT_FOCUS:
@@ -1613,6 +1682,7 @@ void tick() {
         g_script_started = true;
         g_script_start_ms = boot_guest_millis();
     }
+    tick_pad_binding();
     if (g_touch.active()) {
         std::vector<TouchAction> actions;
         g_touch.tick(uint64_t(boot_guest_millis()) * 1000000ull, g_presents, &actions);
@@ -2043,6 +2113,9 @@ extern "C" void host_set_display_mode(int w, int h, int bpp) {
 // Capture and UI instrumentation operate on copies, preserving the game surface.
 extern "C" void host_present(const void *pixels, int w, int h, int bpp, const uint32_t *palette,
                              int pitch) {
+    // Match the app's first-present initialization so scripted F10 presses
+    // reach the settings page even when the scene has no CPU pixels.
+    host_page_overlay(nullptr, 0, 0, 0, 0, nullptr);
     if (bpp == 8 || bpp == 16)
         boot_note_primary_present();
     ++g_presents;

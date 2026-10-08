@@ -105,7 +105,8 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
     v.dh = s.dh;
     v.opacity = opacity;
     const bool toggles_only = r.toggles_only();
-    // An auto-hidden layout draws its tabs and nothing else: the portrait
+    // An auto-hidden layout draws only its layout switch: group HIDE/KEYS
+    // tabs cannot reveal controls while hardware keeps them hidden. The portrait
     // controls strip has no controls left to sit under.
     if (!toggles_only)
         v.controls_area = s.controls_area;
@@ -118,7 +119,8 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
         for (int c = 0; c < int(grp.controls.size()); ++c) {
             const Control &ctl = grp.controls[c];
             // A toggle's tab is drawn even while its own group is hidden.
-            if ((!grp.visible || toggles_only) && ctl.kind != Kind::Toggle)
+            if ((!grp.visible && ctl.kind != Kind::Toggle) ||
+                (toggles_only && (ctl.kind != Kind::Toggle || group_named(l, ctl.target) >= 0)))
                 continue;
             const ControlState &st = r.state(g, c);
             DrawControl d;
@@ -174,6 +176,17 @@ ControlsView make_view(const Layout &l, const Router &r, const Screen &s, double
         hashes[i].rect(v.layers[i].rect);
         v.layers[i].revision = hashes[i].h;
         h.num(int64_t(hashes[i].h));
+    }
+    // Knobs are separate GPU quads, so motion must publish a fresh view even
+    // though every cached layer raster stays valid. Otherwise controls_host
+    // drops the moved view and the presenter keeps the finger-down position.
+    for (size_t i = 0; i < v.controls.size(); ++i) {
+        const DrawControl &d = v.controls[i];
+        if (d.kind == Kind::Stick && d.pressed) {
+            h.num(int64_t(i));
+            h.real(d.knob_x);
+            h.real(d.knob_y);
+        }
     }
     v.revision = h.h;
     return v;
