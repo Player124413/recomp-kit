@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package Shrek 2 PC release artifacts for Windows or Linux.
+"""Package PC release artifacts for Windows or Linux (universal across any game).
 
 Usage:
     python3 tools/create_pc_package.py --platform windows --pkg-dir build/windows/package/Shrek2Recomp --game-dir games/shrek2 --bundle-assets --out-archive Shrek2Recomp-PC-Windows.zip
@@ -8,37 +8,91 @@ Usage:
 import argparse
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tarfile
 import zipfile
 
-BATCH_SCRIPT = """@echo off
+
+def parse_game_toml(game_dir: Path) -> dict:
+    info = {
+        "title": "Shrek 2: The Game",
+        "slug": "shrek2",
+        "executable": "Game.exe",
+    }
+    toml_path = game_dir / "game.toml"
+    if not toml_path.is_file():
+        return info
+    text = toml_path.read_text(encoding="utf-8", errors="ignore")
+    for key in ("title", "slug", "executable"):
+        m = re.search(rf'^\s*{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if m:
+            info[key] = m.group(1)
+    return info
+
+
+def detect_recomp_binary(pkg_dir: Path, platform: str) -> str:
+    if platform == "windows":
+        exes = sorted(
+            p.name
+            for p in pkg_dir.iterdir()
+            if p.is_file() and p.name.lower().endswith("recomp.exe")
+        )
+        if exes:
+            return exes[0]
+        return "Shrek2Recomp.exe"
+    else:
+        bins = sorted(
+            p.name
+            for p in pkg_dir.iterdir()
+            if p.is_file()
+            and not p.name.endswith((".sh", ".txt", ".spv", ".so", ".dll", ".exe", ".ini"))
+        )
+        if bins:
+            return bins[0]
+        return "Shrek2Recomp"
+
+
+def build_batch_script(title: str, recomp_exe: str, game_exe: str) -> str:
+    return f"""@echo off
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-title Shrek 2 Recomp
+title {title} (PC Recomp)
 
 echo ========================================================
-echo   Starting Shrek 2: The Game (PC Recomp)
+echo   Starting {title} (PC Recomp)
 echo ========================================================
 
 set "EXE_PATH="
-if exist "%~dp0System\\Game.exe" (
-    set "EXE_PATH=%~dp0System\\Game.exe"
-) else if exist "%~dp0Game.exe" (
-    set "EXE_PATH=%~dp0Game.exe"
-) else if exist "%~dp0game\\System\\Game.exe" (
-    set "EXE_PATH=%~dp0game\\System\\Game.exe"
-) else if exist "%~dp0game\\Game.exe" (
-    set "EXE_PATH=%~dp0game\\Game.exe"
+if exist "%~dp0System\\{game_exe}" (
+    set "EXE_PATH=%~dp0System\\{game_exe}"
+) else if exist "%~dp0Binaries\\{game_exe}" (
+    set "EXE_PATH=%~dp0Binaries\\{game_exe}"
+) else if exist "%~dp0Binaries\\Win32\\{game_exe}" (
+    set "EXE_PATH=%~dp0Binaries\\Win32\\{game_exe}"
+) else if exist "%~dp0Bin32\\{game_exe}" (
+    set "EXE_PATH=%~dp0Bin32\\{game_exe}"
+) else if exist "%~dp0bin\\{game_exe}" (
+    set "EXE_PATH=%~dp0bin\\{game_exe}"
+) else if exist "%~dp0{game_exe}" (
+    set "EXE_PATH=%~dp0{game_exe}"
+) else if exist "%~dp0game\\System\\{game_exe}" (
+    set "EXE_PATH=%~dp0game\\System\\{game_exe}"
+) else if exist "%~dp0game\\Binaries\\{game_exe}" (
+    set "EXE_PATH=%~dp0game\\Binaries\\{game_exe}"
+) else if exist "%~dp0game\\Binaries\\Win32\\{game_exe}" (
+    set "EXE_PATH=%~dp0game\\Binaries\\Win32\\{game_exe}"
+) else if exist "%~dp0game\\{game_exe}" (
+    set "EXE_PATH=%~dp0game\\{game_exe}"
 )
 
 if defined EXE_PATH (
     echo [INFO] Detected game files at: !EXE_PATH!
     set "EXE_ARG=--exe "!EXE_PATH!""
 ) else (
-    echo [INFO] No Game.exe detected in current folder.
+    echo [INFO] No {game_exe} detected in current folder.
     echo [INFO] Opening launcher / file picker...
     set "EXE_ARG="
 )
@@ -46,7 +100,7 @@ if defined EXE_PATH (
 echo [INFO] Output and errors are logged to: logs.txt
 echo.
 
-"%~dp0Shrek2Recomp.exe" !EXE_ARG! %*
+"%~dp0{recomp_exe}" !EXE_ARG! %*
 set EXIT_CODE=!errorlevel!
 
 if !EXIT_CODE! neq 0 (
@@ -67,20 +121,29 @@ if !EXIT_CODE! neq 0 (
 )
 """
 
-SHELL_SCRIPT = """#!/usr/bin/env bash
+
+def build_shell_script(recomp_bin: str, game_exe: str) -> str:
+    return f"""#!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")"
 
 EXE_PATH=""
-if [ -f "System/Game.exe" ]; then
-    EXE_PATH="System/Game.exe"
-elif [ -f "Game.exe" ]; then
-    EXE_PATH="Game.exe"
-elif [ -f "game/System/Game.exe" ]; then
-    EXE_PATH="game/System/Game.exe"
-elif [ -f "game/Game.exe" ]; then
-    EXE_PATH="game/Game.exe"
-fi
+for candidate in \\
+    "System/{game_exe}" \\
+    "Binaries/{game_exe}" \\
+    "Binaries/Win32/{game_exe}" \\
+    "Bin32/{game_exe}" \\
+    "bin/{game_exe}" \\
+    "{game_exe}" \\
+    "game/System/{game_exe}" \\
+    "game/Binaries/{game_exe}" \\
+    "game/Binaries/Win32/{game_exe}" \\
+    "game/{game_exe}"; do
+    if [ -f "$candidate" ]; then
+        EXE_PATH="$candidate"
+        break
+    fi
+done
 
 EXE_ARG=""
 if [ -n "$EXE_PATH" ]; then
@@ -89,8 +152,8 @@ if [ -n "$EXE_PATH" ]; then
 fi
 
 set +e
-./Shrek2Recomp $EXE_ARG "$@" 2>&1 | tee -a logs.txt
-EXIT_CODE=${PIPESTATUS[0]}
+./{recomp_bin} $EXE_ARG "$@" 2>&1 | tee -a logs.txt
+EXIT_CODE=${{PIPESTATUS[0]}}
 
 if [ "$EXIT_CODE" -ne 0 ]; then
     echo "[ERROR] Exited with code $EXIT_CODE. See logs.txt for details."
@@ -117,6 +180,12 @@ def main():
         print(f"Error: Package directory does not exist: {pkg_dir}", file=sys.stderr)
         return 1
 
+    info = parse_game_toml(game_dir)
+    game_exe = info["executable"]
+    game_title = info["title"]
+    game_slug = info["slug"]
+    recomp_bin = detect_recomp_binary(pkg_dir, args.platform)
+
     # Bundle game assets if requested
     if args.bundle_assets and original_dir.is_dir():
         print(f"Bundling game assets from {original_dir} into {pkg_dir}...")
@@ -133,29 +202,38 @@ def main():
                 print(f"  Copying file {item.name}...")
                 shutil.copy2(item, dest)
 
-    # Pre-configure profile/game-path.txt if System/Game.exe or Game.exe exists in package
+    # Pre-configure profile/game-path.txt if executable exists in package
     profile_dir = pkg_dir / "profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
     game_path_file = profile_dir / "game-path.txt"
 
-    if (pkg_dir / "System" / "Game.exe").is_file():
-        game_path_file.write_text("System/Game.exe\n", encoding="utf-8")
-        print("Configured profile/game-path.txt -> System/Game.exe")
-    elif (pkg_dir / "Game.exe").is_file():
-        game_path_file.write_text("Game.exe\n", encoding="utf-8")
-        print("Configured profile/game-path.txt -> Game.exe")
+    for rel_cand in (
+        f"System/{game_exe}",
+        f"Binaries/{game_exe}",
+        f"Binaries/Win32/{game_exe}",
+        f"Bin32/{game_exe}",
+        f"bin/{game_exe}",
+        game_exe,
+    ):
+        if (pkg_dir / rel_cand).is_file():
+            game_path_file.write_text(f"{rel_cand}\n", encoding="utf-8")
+            print(f"Configured profile/game-path.txt -> {rel_cand}")
+            break
 
     # Add launcher scripts
     if args.platform == "windows":
-        bat_file = pkg_dir / "Play-Shrek2.bat"
-        # Write batch file with CRLF line endings
-        bat_file.write_bytes(BATCH_SCRIPT.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+        bat_name = "Play-Shrek2.bat" if game_slug == "shrek2" else f"Play-{pkg_dir.name}.bat"
+        bat_file = pkg_dir / bat_name
+        batch_script = build_batch_script(game_title, recomp_bin, game_exe)
+        bat_file.write_bytes(batch_script.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
         print(f"Created launcher script: {bat_file}")
     elif args.platform == "linux":
-        sh_file = pkg_dir / "start-shrek2.sh"
-        sh_file.write_text(SHELL_SCRIPT, encoding="utf-8")
+        sh_name = "start-shrek2.sh" if game_slug == "shrek2" else f"start-{game_slug}.sh"
+        sh_file = pkg_dir / sh_name
+        shell_script = build_shell_script(recomp_bin, game_exe)
+        sh_file.write_text(shell_script, encoding="utf-8")
         sh_file.chmod(0o755)
-        binary = pkg_dir / "Shrek2Recomp"
+        binary = pkg_dir / recomp_bin
         if binary.is_file():
             binary.chmod(0o755)
         print(f"Created launcher script: {sh_file}")

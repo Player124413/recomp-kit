@@ -46,18 +46,21 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
     // A mobile host owns its data location. Missing files must not fall back
     // to a developer path baked into a build made on another machine.
     if (data_root) {
-        std::string candidate = std::string(data_root) + "/game/" RECOMP_EXECUTABLE;
-        OsStat st;
-        if (*data_root && os_stat(candidate.c_str(), &st) == 0 && st.is_regular) {
-            g.exe = candidate;
-            g.source = GamePathSource::DataRoot;
-            return g;
-        }
-        candidate = std::string(data_root) + "/game/System/" RECOMP_EXECUTABLE;
-        if (*data_root && os_stat(candidate.c_str(), &st) == 0 && st.is_regular) {
-            g.exe = candidate;
-            g.source = GamePathSource::DataRoot;
-            return g;
+        for (const char *sub : {
+                 "/game/" RECOMP_EXECUTABLE,
+                 "/game/System/" RECOMP_EXECUTABLE,
+                 "/game/Binaries/" RECOMP_EXECUTABLE,
+                 "/game/Binaries/Win32/" RECOMP_EXECUTABLE,
+                 "/game/Bin32/" RECOMP_EXECUTABLE,
+                 "/game/bin/" RECOMP_EXECUTABLE,
+             }) {
+            std::string candidate = std::string(data_root) + sub;
+            OsStat st;
+            if (*data_root && os_stat(candidate.c_str(), &st) == 0 && st.is_regular) {
+                g.exe = candidate;
+                g.source = GamePathSource::DataRoot;
+                return g;
+            }
         }
         return g;
     }
@@ -89,11 +92,14 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
         const std::string parent = slash == std::string::npos ? "" : candidate.substr(0, slash);
         const std::string name =
             slash == std::string::npos ? candidate : candidate.substr(slash + 1);
-        const std::string sub = (parent.empty() ? "System" : parent + "/System") + "/" + name;
-        if (os_stat(sub.c_str(), &st) == 0) {
-            g.exe = sub;
-            g.source = GamePathSource::Checkout;
-            return g;
+        for (const char *sub_dir : {"System", "Binaries", "Binaries/Win32", "Bin32", "bin"}) {
+            const std::string sub =
+                (parent.empty() ? std::string(sub_dir) : parent + "/" + sub_dir) + "/" + name;
+            if (os_stat(sub.c_str(), &st) == 0) {
+                g.exe = sub;
+                g.source = GamePathSource::Checkout;
+                return g;
+            }
         }
     }
     if (FILE *f = fopen(saved_file().c_str(), "rb")) {
@@ -116,8 +122,20 @@ GamePath game_path_resolve(const char *flag, const char *data_root) {
             size_t last_slash = exe_str.find_last_of("/\\");
             std::string exe_dir =
                 last_slash != std::string::npos ? exe_str.substr(0, last_slash) : ".";
-            for (const char *sub : {"/System/" RECOMP_EXECUTABLE, "/" RECOMP_EXECUTABLE,
-                                    "/game/System/" RECOMP_EXECUTABLE, "/game/" RECOMP_EXECUTABLE}) {
+            for (const char *sub : {
+                     "/System/" RECOMP_EXECUTABLE,
+                     "/Binaries/" RECOMP_EXECUTABLE,
+                     "/Binaries/Win32/" RECOMP_EXECUTABLE,
+                     "/Bin32/" RECOMP_EXECUTABLE,
+                     "/bin/" RECOMP_EXECUTABLE,
+                     "/" RECOMP_EXECUTABLE,
+                     "/game/System/" RECOMP_EXECUTABLE,
+                     "/game/Binaries/" RECOMP_EXECUTABLE,
+                     "/game/Binaries/Win32/" RECOMP_EXECUTABLE,
+                     "/game/Bin32/" RECOMP_EXECUTABLE,
+                     "/game/bin/" RECOMP_EXECUTABLE,
+                     "/game/" RECOMP_EXECUTABLE,
+                 }) {
                 std::string try_path = exe_dir + sub;
                 OsStat st_exe;
                 if (os_stat(try_path.c_str(), &st_exe) == 0 && st_exe.is_regular) {

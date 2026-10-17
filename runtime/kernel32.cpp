@@ -386,7 +386,7 @@ std::string normalised_relative(const std::string &guest_path) {
 }
 
 // The case-insensitive walk through the game directory, unchanged.
-static std::string resolve_in_game_dir(const std::vector<std::string> &norm, bool for_create) {
+static std::string resolve_in_game_dir_once(const std::vector<std::string> &norm, bool for_create) {
     std::string host = g_game_dir;
     for (size_t i = 0; i < norm.size(); ++i) {
         std::string next = host + "/" + norm[i];
@@ -406,6 +406,30 @@ static std::string resolve_in_game_dir(const std::vector<std::string> &norm, boo
         return std::string();
     }
     return host;
+}
+
+static std::string g_exe_sub_dir;
+
+static std::string resolve_in_game_dir(const std::vector<std::string> &norm, bool for_create) {
+    std::string found = resolve_in_game_dir_once(norm, for_create);
+    if (!found.empty() || for_create || norm.empty() || g_exe_sub_dir.empty())
+        return found;
+    // Fallback when exe/DLLs were placed flat in the game root rather than inside g_exe_sub_dir.
+    std::vector<std::string> sub_parts = split_path(g_exe_sub_dir);
+    if (norm.size() > sub_parts.size()) {
+        bool match = true;
+        for (size_t i = 0; i < sub_parts.size(); ++i) {
+            if (lower(norm[i]) != lower(sub_parts[i])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            std::vector<std::string> stripped(norm.begin() + (long)sub_parts.size(), norm.end());
+            return resolve_in_game_dir_once(stripped, false);
+        }
+    }
+    return std::string();
 }
 
 std::string win32_host_path_op(const std::string &guest_path, int op) {
@@ -531,8 +555,6 @@ uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
     return block;
 }
 
-static std::string g_exe_sub_dir;
-
 void win32_init(const std::string &game_dir) {
     kernel32_wide_reset();
     std::string base_dir = game_dir;
@@ -557,6 +579,19 @@ void win32_init(const std::string &game_dir) {
         }
     }
     g_game_dir = base_dir.empty() ? std::string(".") : base_dir;
+    if (g_exe_sub_dir.empty()) {
+        // If exe+DLLs were placed directly in the root of an Unreal Engine 3 or 2
+        // install, preserve the expected logical working subdirectory so relative
+        // paths like ..\WGame\Config\... or ..\Animations\... still resolve to root.
+        OsStat st_eng;
+        if (os_stat((g_game_dir + "/Engine/Config").c_str(), &st_eng) == 0 ||
+            os_stat((g_game_dir + "/Engine/Shaders").c_str(), &st_eng) == 0) {
+            g_exe_sub_dir = "Binaries";
+        } else if (os_stat((g_game_dir + "/System/Core.u").c_str(), &st_eng) == 0 ||
+                   os_stat((g_game_dir + "/System/Engine.u").c_str(), &st_eng) == 0) {
+            g_exe_sub_dir = "System";
+        }
+    }
     g_cur_dir = g_exe_sub_dir.empty() ? RECOMP_GUEST_ROOT
                                       : std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir;
     g_last_error = 0;
