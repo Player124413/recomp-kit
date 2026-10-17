@@ -266,7 +266,8 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
                 if (!address) {
                     LOGW("missing mapped export %s!%s: creating fallback stub trampoline",
                          dll.c_str(), namebuf);
-                    uint32_t tramp = imports_alloc_trampoline(dll.c_str(), namebuf, nullptr, ARGC_UNKNOWN);
+                    uint32_t tramp =
+                        imports_alloc_trampoline(dll.c_str(), namebuf, nullptr, ARGC_UNKNOWN);
                     if (!tramp) {
                         g_error = "ran out of import trampolines";
                         return false;
@@ -287,7 +288,8 @@ bool patch_iat(const std::vector<uint8_t> &file, size_t opt_off, uint16_t opt_ma
                     if (!address) {
                         LOGW("missing mapped export %s!%s: creating fallback stub trampoline",
                              dll.c_str(), namebuf);
-                        address = imports_alloc_trampoline(dll.c_str(), namebuf, nullptr, ARGC_UNKNOWN);
+                        address =
+                            imports_alloc_trampoline(dll.c_str(), namebuf, nullptr, ARGC_UNKNOWN);
                     }
                     if (address) {
                         wr32(slot, address);
@@ -517,9 +519,9 @@ LoaderModule *loader_load_dll_from_file(const char *name, const char *path) {
 
     // Determine target base in high guest arena (>= GUEST_SHIM_END)
     uint32_t target_base = image_base;
-    bool overlaps = (target_base < GUEST_SHIM_END) ||
-                    (g_main.base && target_base < g_main.base + g_main.size &&
-                     g_main.base < target_base + size_image);
+    bool overlaps =
+        (target_base < GUEST_SHIM_END) || (g_main.base && target_base < g_main.base + g_main.size &&
+                                           g_main.base < target_base + size_image);
     for (const LoaderModule &other : g_aux) {
         if (target_base < other.base + other.size && other.base < target_base + size_image)
             overlaps = true;
@@ -809,17 +811,17 @@ bool loader_load(const char *exe_path) {
     } else {
         if (image_base < GUEST_SHIM_END) {
             char buf[128];
-            snprintf(buf, sizeof buf,
-                     "image base %08x overlaps stack/shim arena (must be >= %08x)",
+            snprintf(buf, sizeof buf, "image base %08x overlaps stack/shim arena (must be >= %08x)",
                      image_base, GUEST_SHIM_END);
             g_error = buf;
             return false;
         }
         if ((uint64_t)image_base + size_image > GUEST_SIZE) {
             char buf[128];
-            snprintf(buf, sizeof buf,
-                     "image ends at %08x, above the guest arena limit %08x; raise [game] guest_size",
-                     image_base + size_image, GUEST_SIZE);
+            snprintf(
+                buf, sizeof buf,
+                "image ends at %08x, above the guest arena limit %08x; raise [game] guest_size",
+                image_base + size_image, GUEST_SIZE);
             g_error = buf;
             return false;
         }

@@ -66,7 +66,7 @@ on:
         description: "Translator: allow table gaps (passed to --allow-table-gaps if jump tables have gaps)"
         required: false
         type: string
-        default: ""
+        default: "jump table gaps in game code"
 
 permissions:
   contents: write
@@ -335,7 +335,7 @@ jobs:
       - name: Build Android App (Full or Stub Mode)
         if: ${{ inputs.target_platform == 'android' || inputs.target_platform == 'all' }}
         run: |
-          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --preset android-arm64 --target android"
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --target android --no-install"
           if [ "${{ inputs.build_mode }}" = "full" ]; then
             BUILD_CMD="$BUILD_CMD --regenerate"
             if [ -n "${{ inputs.allow_unmodelled }}" ]; then
@@ -350,13 +350,10 @@ jobs:
           echo "Running: $BUILD_CMD"
           eval $BUILD_CMD
 
-          # Package APK using Gradle
-          cd build/android
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
-          cd ../..
-
-          APK_PATH=$(find build/android -name "*.apk" | head -n 1)
+          APK_PATH=$(find build -name "*app-debug.apk" -type f | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            APK_PATH=$(find build -name "*.apk" -type f | head -n 1)
+          fi
           if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
             echo "Error: Android APK not found!"
             exit 1

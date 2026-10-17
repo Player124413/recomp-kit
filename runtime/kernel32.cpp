@@ -559,8 +559,9 @@ void win32_init(const std::string &game_dir) {
     kernel32_wide_reset();
     std::string base_dir = game_dir;
     g_exe_sub_dir.clear();
-    for (const char *sub : {"Binaries/Win32", "Binaries\\Win32", "binaries/win32", "binaries\\win32",
-                            "Binaries", "binaries", "System", "system", "Bin32", "bin32", "bin", "Bin"}) {
+    for (const char *sub :
+         {"Binaries/Win32", "Binaries\\Win32", "binaries/win32", "binaries\\win32", "Binaries",
+          "binaries", "System", "system", "Bin32", "bin32", "bin", "Bin"}) {
         size_t sub_len = strlen(sub);
         if (base_dir.size() > sub_len) {
             char sep = base_dir[base_dir.size() - sub_len - 1];
@@ -1116,15 +1117,17 @@ void k_SetCurrentDirectoryA(X86 *c) {
 
 // Both encodings expose the same guest path, never a host filesystem path.
 std::string module_file_name(uint32_t hmod) {
-    std::string path = g_exe_sub_dir.empty()
-                           ? (std::string(RECOMP_GUEST_ROOT) + "\\" RECOMP_EXECUTABLE)
-                           : (std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir + "\\" RECOMP_EXECUTABLE);
+    std::string path =
+        g_exe_sub_dir.empty()
+            ? (std::string(RECOMP_GUEST_ROOT) + "\\" RECOMP_EXECUTABLE)
+            : (std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir + "\\" RECOMP_EXECUTABLE);
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
             if (kv.second == hmod) {
-                path = g_exe_sub_dir.empty()
-                           ? (std::string(RECOMP_GUEST_ROOT) + "\\" + kv.first)
-                           : (std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir + "\\" + kv.first);
+                path =
+                    g_exe_sub_dir.empty()
+                        ? (std::string(RECOMP_GUEST_ROOT) + "\\" + kv.first)
+                        : (std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir + "\\" + kv.first);
                 break;
             }
     }
@@ -1454,14 +1457,15 @@ void k_GetSystemInfo(X86 *c) {
         return;
     }
     memset(g_mem + p, 0, 36);
-    wr32(p + 0, 0);           // wProcessorArchitecture = INTEL, wReserved
-    wr32(p + 4, 4096);        // dwPageSize
-    wr32(p + 8, IMAGE_BASE < HEAP_LIMIT ? IMAGE_BASE : 0x00010000u);  // lpMinimumApplicationAddress
-    wr32(p + 12, IMAGE_BASE < HEAP_LIMIT ? HEAP_LIMIT : GUEST_SIZE - 1); // lpMaximumApplicationAddress
-    wr32(p + 16, 1);          // dwActiveProcessorMask
-    wr32(p + 20, 1);          // dwNumberOfProcessors
-    wr32(p + 24, 586);        // dwProcessorType = PROCESSOR_INTEL_PENTIUM
-    wr32(p + 28, 4096);       // dwAllocationGranularity is 65536 on Win32
+    wr32(p + 0, 0);    // wProcessorArchitecture = INTEL, wReserved
+    wr32(p + 4, 4096); // dwPageSize
+    wr32(p + 8, IMAGE_BASE < HEAP_LIMIT ? IMAGE_BASE : 0x00010000u); // lpMinimumApplicationAddress
+    wr32(p + 12,
+         IMAGE_BASE < HEAP_LIMIT ? HEAP_LIMIT : GUEST_SIZE - 1); // lpMaximumApplicationAddress
+    wr32(p + 16, 1);                                             // dwActiveProcessorMask
+    wr32(p + 20, 1);                                             // dwNumberOfProcessors
+    wr32(p + 24, 586);  // dwProcessorType = PROCESSOR_INTEL_PENTIUM
+    wr32(p + 28, 4096); // dwAllocationGranularity is 65536 on Win32
     wr32(p + 28, 65536);
     wr32(p + 32, (5 << 8) | 6); // wProcessorLevel / wProcessorRevision
     set_eax(c, 0);

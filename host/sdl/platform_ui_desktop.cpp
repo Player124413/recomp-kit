@@ -350,7 +350,7 @@ void platform_ui_show_fatal_error(const char *title, const char *message) {
     env->DeleteLocalRef(jm);
     jni_failed(env, "[error] CallStaticVoidMethod(showFatalError) failed", &logged_call);
 #else
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title ? title : "Error",
-                             message ? message : "", nullptr);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title ? title : "Error", message ? message : "",
+                             nullptr);
 #endif
 }

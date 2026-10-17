@@ -44,7 +44,7 @@ on:
         description: "Translator: allow table gaps (passed to --allow-table-gaps if jump tables have gaps)"
         required: false
         type: string
-        default: ""
+        default: "jump table gaps in game code"
 
 permissions:
   contents: write

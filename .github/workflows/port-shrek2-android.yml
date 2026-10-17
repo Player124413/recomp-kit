@@ -30,7 +30,7 @@ on:
         description: "Translator: allow table gaps (passed to --allow-table-gaps if jump tables have gaps)"
         required: false
         type: string
-        default: ""
+        default: "jump table gaps in game code"
       turnip_driver_url:
         description: "Optional URL to Turnip Vulkan driver ZIP (e.g. Mesa Turnip / AdrenoTools zip for Adreno GPUs). If provided, it is bundled into the APK."
         required: false
