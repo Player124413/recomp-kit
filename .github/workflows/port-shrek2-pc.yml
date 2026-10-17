@@ -269,6 +269,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Package Recompiled C++ Source Code & Metadata
+        if: ${{ inputs.build_mode == 'full' && always() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          SRC_ZIP="$RUNNER_TEMP/artifacts/Shrek2-Recompiled-Source.zip"
+          echo "Packaging recompiled C++ sources, Ghidra analysis, and game configs..."
+          7z a "$SRC_ZIP" \
+            build/recomp/gen \
+            build/recomp/symbols.json \
+            games/shrek2/analysis \
+            games/shrek2/game.toml \
+            games/shrek2/globals.toml \
+            games/shrek2/patches.toml 2>/dev/null || true
+          if [ -f "$SRC_ZIP" ]; then
+            echo "Source archive ready: $SRC_ZIP"
+            ls -lh "$SRC_ZIP"
+          fi
+
+      - name: Upload Recompiled C++ Source Code Artifact
+        if: ${{ inputs.build_mode == 'full' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shrek2-Recompiled-Source
+          path: ${{ runner.temp }}/artifacts/Shrek2-Recompiled-Source.zip
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Build Summary
         run: |
           echo "### 🎮 Shrek 2 PC Build Completed!" >> $GITHUB_STEP_SUMMARY
