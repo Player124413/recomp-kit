@@ -494,7 +494,9 @@ def main():
     print(f"  - Guest arena size: 0x{guest_size:08x} ({guest_size // (1024 * 1024)} MB)")
     print(f"  - Heap base:        0x{heap_base:08x}")
 
-    # Step 4: Stage executable in games/<slug>/original/ so both original/<rel> and original/<exe_name> exist
+    # Step 4: Stage executable in games/<slug>/original/ with exact canonical filename
+    # Use a real file copy (not a symlink to a lowercase filename) so .resolve() preserves
+    # the exact filename casing expected by Ghidra ExportProgram.java and listings_path.
     stage_orig = game_dir / "original"
     stage_orig.mkdir(parents=True, exist_ok=True)
     target_staged_exe = stage_orig / chosen["rel"]
@@ -502,24 +504,18 @@ def main():
     if chosen["path"].resolve() != target_staged_exe.resolve():
         shutil.copy2(chosen["path"], target_staged_exe)
 
-    # Also ensure original/<exe_name> exists at root of original/ so developer_exe = "original/<exe_name>"
-    # always resolves cleanly in tools/setup.py and tools/build.py
     root_exe = stage_orig / exe_name
-    if not root_exe.is_file():
-        try:
-            rel_link = os.path.relpath(target_staged_exe, stage_orig)
-            root_exe.symlink_to(rel_link)
-        except OSError:
-            shutil.copy2(target_staged_exe, root_exe)
+    if root_exe.is_symlink():
+        root_exe.unlink()
+    if not root_exe.is_file() or root_exe.resolve() != root_exe:
+        shutil.copy2(target_staged_exe, root_exe)
 
-    # If the executable is inside System/ with lowercase filename, create canonical symlink there too
     if target_staged_exe.parent != stage_orig:
         canonical_in_sub = target_staged_exe.parent / exe_name
+        if canonical_in_sub.is_symlink():
+            canonical_in_sub.unlink()
         if not canonical_in_sub.is_file():
-            try:
-                canonical_in_sub.symlink_to(target_staged_exe.name)
-            except OSError:
-                shutil.copy2(target_staged_exe, canonical_in_sub)
+            shutil.copy2(target_staged_exe, canonical_in_sub)
 
     developer_exe_rel = f"original/{exe_name}"
 
@@ -561,9 +557,10 @@ def main():
             developer_exe_rel=developer_exe_rel,
         )
 
-    # Step 7: Ensure analysis directory exists
+    # Step 7: Clean up any empty analysis/<exe_name> directory so Ghidra / setup.py can populate or link it cleanly
     analysis_dir = game_dir / "analysis" / exe_name
-    analysis_dir.mkdir(parents=True, exist_ok=True)
+    if analysis_dir.is_dir() and not analysis_dir.is_symlink() and not (analysis_dir / "functions.tsv").is_file():
+        shutil.rmtree(analysis_dir, ignore_errors=True)
 
     # Step 8: Validate against tools/game_config.py so setup.py / build.py can never fail on schema errors
     cfg = game_config.load(game_dir)

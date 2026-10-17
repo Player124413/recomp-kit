@@ -143,14 +143,18 @@ def export_listings(ghidra, java_home, annotations, cfg):
     index = listings / "functions.tsv"
     if not index.is_file() and output.is_dir():
         for child in output.iterdir():
-            if child.is_dir() and child.name.lower() == listings.name.lower():
-                index = child / "functions.tsv"
+            if child.is_dir() and child.name.lower() == listings.name.lower() and (child / "functions.tsv").is_file():
+                if listings.is_dir() and not listings.is_symlink():
+                    import shutil
+                    shutil.rmtree(listings, ignore_errors=True)
                 if not listings.exists():
                     try:
                         listings.symlink_to(child.name)
                     except OSError:
-                        pass
-                listings = child
+                        child.rename(listings)
+                index = listings / "functions.tsv"
+                if not index.is_file():
+                    index = child / "functions.tsv"
                 break
     if not index.is_file() or len(index.read_text().splitlines()) < 2:
         raise ValueError("Ghidra did not export a function index; inspect its error output")
