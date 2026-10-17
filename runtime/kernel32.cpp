@@ -531,21 +531,34 @@ uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
     return block;
 }
 
-static bool g_exe_has_system_sub = false;
+static std::string g_exe_sub_dir;
 
 void win32_init(const std::string &game_dir) {
     kernel32_wide_reset();
     std::string base_dir = game_dir;
-    g_exe_has_system_sub = false;
-    if (base_dir.size() >= 7) {
-        std::string tail = base_dir.substr(base_dir.size() - 7);
-        if (tail == "/System" || tail == "\\System" || tail == "/system" || tail == "\\system") {
-            base_dir = base_dir.substr(0, base_dir.size() - 7);
-            g_exe_has_system_sub = true;
+    g_exe_sub_dir.clear();
+    for (const char *sub : {"Binaries/Win32", "Binaries\\Win32", "binaries/win32", "binaries\\win32",
+                            "Binaries", "binaries", "System", "system", "Bin32", "bin32", "bin", "Bin"}) {
+        size_t sub_len = strlen(sub);
+        if (base_dir.size() > sub_len) {
+            char sep = base_dir[base_dir.size() - sub_len - 1];
+            if (sep == '/' || sep == '\\') {
+                std::string tail = base_dir.substr(base_dir.size() - sub_len);
+                if (os_strcasecmp(tail.c_str(), sub) == 0) {
+                    base_dir = base_dir.substr(0, base_dir.size() - sub_len - 1);
+                    std::string std_sub = sub;
+                    for (char &ch : std_sub)
+                        if (ch == '/')
+                            ch = '\\';
+                    g_exe_sub_dir = std_sub;
+                    break;
+                }
+            }
         }
     }
     g_game_dir = base_dir.empty() ? std::string(".") : base_dir;
-    g_cur_dir = g_exe_has_system_sub ? std::string(RECOMP_GUEST_ROOT) + "\\System" : RECOMP_GUEST_ROOT;
+    g_cur_dir = g_exe_sub_dir.empty() ? RECOMP_GUEST_ROOT
+                                      : std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir;
     g_last_error = 0;
     g_exited = false;
     g_exit_code = 0;
@@ -1068,15 +1081,15 @@ void k_SetCurrentDirectoryA(X86 *c) {
 
 // Both encodings expose the same guest path, never a host filesystem path.
 std::string module_file_name(uint32_t hmod) {
-    std::string path = g_exe_has_system_sub
-                           ? (std::string(RECOMP_GUEST_ROOT) + "\\System\\" RECOMP_EXECUTABLE)
-                           : (std::string(RECOMP_GUEST_ROOT) + "\\" RECOMP_EXECUTABLE);
+    std::string path = g_exe_sub_dir.empty()
+                           ? (std::string(RECOMP_GUEST_ROOT) + "\\" RECOMP_EXECUTABLE)
+                           : (std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir + "\\" RECOMP_EXECUTABLE);
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
             if (kv.second == hmod) {
-                path = g_exe_has_system_sub
-                           ? (std::string(RECOMP_GUEST_ROOT) + "\\System\\" + kv.first)
-                           : (std::string(RECOMP_GUEST_ROOT) + "\\" + kv.first);
+                path = g_exe_sub_dir.empty()
+                           ? (std::string(RECOMP_GUEST_ROOT) + "\\" + kv.first)
+                           : (std::string(RECOMP_GUEST_ROOT) + "\\" + g_exe_sub_dir + "\\" + kv.first);
                 break;
             }
     }
@@ -1192,9 +1205,18 @@ void load_library_named(X86 *c, const std::string &module_name) {
         set_eax(c, m->base);
         return;
     }
-    std::string cand_path = win32_host_path(name);
-    if (cand_path.empty())
-        cand_path = win32_host_path("System\\" + name);
+    std::string cand_path;
+    OsStat st_test;
+    if (!g_exe_sub_dir.empty()) {
+        std::string cand = win32_host_path(g_exe_sub_dir + "\\" + name);
+        if (os_stat(cand.c_str(), &st_test) == 0 && st_test.is_regular)
+            cand_path = cand;
+    }
+    if (cand_path.empty()) {
+        std::string cand = win32_host_path(name);
+        if (os_stat(cand.c_str(), &st_test) == 0 && st_test.is_regular)
+            cand_path = cand;
+    }
     if (cand_path.empty())
         cand_path = dirname_of(loader_exe_path()) + "/" + name;
     OsStat st_cand;
