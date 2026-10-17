@@ -1,0 +1,398 @@
+name: "Universal x86 Game Port (One-Click Auto-Tune & Test)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_title:
+        description: "Game Title (e.g. 'Sonic Adventure DX' or 'Shrek 2: The Game')"
+        required: true
+        type: string
+        default: "Sonic Adventure DX"
+      game_slug:
+        description: "Game Folder Slug (e.g. 'sonic-dx' or 'shrek2')"
+        required: true
+        type: string
+        default: "sonic-dx"
+      game_files_url:
+        description: "Direct URL to ZIP/7Z archive with PC game files (optional if already committed to games/<slug>/original)"
+        required: false
+        type: string
+        default: ""
+      exe_name:
+        description: "Executable name (e.g. 'sonic.exe' or 'Game.exe' — leave empty to AUTO-DETECT)"
+        required: false
+        type: string
+        default: ""
+      target_platform:
+        description: "Target platform to build"
+        required: true
+        type: choice
+        options:
+          - windows
+          - linux
+          - both
+          - android
+          - all
+        default: "windows"
+      build_mode:
+        description: "Build mode: 'full' (translate & compile game) or 'stub' (quick test build)"
+        required: true
+        type: choice
+        options:
+          - full
+          - stub
+        default: "full"
+      run_self_test:
+        description: "Self-test & auto-diagnose executable inside GitHub Actions (Xvfb + Vulkan/Wine)"
+        required: false
+        type: boolean
+        default: true
+      bundle_game_files:
+        description: "Bundle game files directly into the release package (portable standalone game)"
+        required: false
+        type: boolean
+        default: true
+      skip_ghidra:
+        description: "Skip Ghidra analysis (enable if analysis is already committed in games/<slug>/analysis)"
+        required: false
+        type: boolean
+        default: false
+      allow_unmodelled:
+        description: "Translator: allow unmodelled instructions reason (passed to --allow-unmodelled)"
+        required: false
+        type: string
+        default: "unmodelled instructions in game code"
+      allow_table_gaps:
+        description: "Translator: allow table gaps (passed to --allow-table-gaps if jump tables have gaps)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recomp-universal-${{ github.ref }}-${{ inputs.game_slug }}
+  cancel-in-progress: true
+
+jobs:
+  port-and-build:
+    name: Port ${{ inputs.game_title }} (${{ inputs.target_platform }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java 21 (JDK for Ghidra 12.1.3)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential pkg-config libvulkan-dev glslc ffmpeg wine64 wine xvfb mesa-vulkan-drivers mesa-utils p7zip-full curl wget unzip zip
+
+      - name: Install Python dependencies (CMake, Ninja, translator tooling)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-dev.txt
+
+      - name: Install llvm-mingw toolchain (Windows cross-compilation)
+        if: ${{ inputs.target_platform == 'windows' || inputs.target_platform == 'both' || inputs.target_platform == 'all' }}
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" \
+            https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-ubuntu-22.04-x86_64.tar.xz
+          echo "2258c745e3155870c80793f3e8c80b28fbde11b9ff73c4c78783635b3440b092  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "LLVM_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Android SDK & NDK 27c
+        if: ${{ inputs.target_platform == 'android' || inputs.target_platform == 'all' }}
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - name: Cache Ghidra 12.1.3
+        id: cache-ghidra
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        uses: actions/cache@v4
+        with:
+          path: /opt/ghidra_12.1.3_PUBLIC
+          key: ghidra-12.1.3-public
+
+      - name: Download & Install Ghidra 12.1.3
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra && steps.cache-ghidra.outputs.cache-hit != 'true' }}
+        run: |
+          echo "Downloading Ghidra 12.1.3..."
+          curl -fL --retry 3 -o "$RUNNER_TEMP/ghidra.zip" \
+            "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.3_build/ghidra_12.1.3_PUBLIC_20260817.zip"
+          unzip -q "$RUNNER_TEMP/ghidra.zip" -d /opt
+          rm "$RUNNER_TEMP/ghidra.zip"
+          echo "Ghidra extracted to /opt/ghidra_12.1.3_PUBLIC"
+
+      - name: Set Ghidra environment
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        run: |
+          echo "GHIDRA_HOME=/opt/ghidra_12.1.3_PUBLIC" >> "$GITHUB_ENV"
+
+      - name: Download & Extract Game Files
+        id: fetch-game
+        run: |
+          GAME_ORIG="games/${{ inputs.game_slug }}/original"
+          mkdir -p "$GAME_ORIG"
+
+          if [ -n "${{ inputs.game_files_url }}" ]; then
+            echo "Downloading game archive from URL: ${{ inputs.game_files_url }}"
+            curl -fL --retry 3 -o "$RUNNER_TEMP/game_archive" "${{ inputs.game_files_url }}"
+            7z x -y "$RUNNER_TEMP/game_archive" -o"$GAME_ORIG/" || unzip -q -o "$RUNNER_TEMP/game_archive" -d "$GAME_ORIG/"
+            rm "$RUNNER_TEMP/game_archive"
+          fi
+
+          # Unpack any committed archives inside original/
+          for arch in "$GAME_ORIG"/*.zip "$GAME_ORIG"/*.rar "$GAME_ORIG"/*.7z; do
+            if [ -f "$arch" ]; then
+              echo "Extracting nested archive: $arch"
+              7z x -y "$arch" -o"$GAME_ORIG/" || unzip -q -o "$arch" -d "$GAME_ORIG/"
+              rm -f "$arch"
+            fi
+          done
+
+      - name: Universal Game Preparation & PE Auto-Tuning
+        id: prep-game
+        run: |
+          PREP_CMD="python3 tools/prepare_game.py \
+            --game-dir games/${{ inputs.game_slug }} \
+            --install games/${{ inputs.game_slug }}/original \
+            --slug ${{ inputs.game_slug }} \
+            --title '${{ inputs.game_title }}'"
+
+          if [ -n "${{ inputs.exe_name }}" ]; then
+            PREP_CMD="$PREP_CMD --exe '${{ inputs.exe_name }}'"
+          fi
+
+          echo "Running: $PREP_CMD"
+          eval $PREP_CMD
+
+      - name: Export assembly listings with Ghidra
+        if: ${{ inputs.build_mode == 'full' && !inputs.skip_ghidra }}
+        run: |
+          echo "Running Ghidra headless analysis via tools/setup.py..."
+          python3 tools/setup.py \
+            --game-dir "games/${{ inputs.game_slug }}" \
+            --install "games/${{ inputs.game_slug }}/original" \
+            --ghidra-home "$GHIDRA_HOME" \
+            --java-home "$JAVA_HOME"
+
+      # --------------------------- WINDOWS BUILD ---------------------------
+      - name: Build Windows App (Full Mode)
+        if: ${{ (inputs.target_platform == 'windows' || inputs.target_platform == 'both' || inputs.target_platform == 'all') && inputs.build_mode == 'full' }}
+        run: |
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --preset windows-cross --target app --regenerate"
+          if [ -n "${{ inputs.allow_unmodelled }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-unmodelled '${{ inputs.allow_unmodelled }}'"
+          fi
+          if [ -n "${{ inputs.allow_table_gaps }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-table-gaps '${{ inputs.allow_table_gaps }}'"
+          fi
+          echo "Running: $BUILD_CMD"
+          eval $BUILD_CMD
+
+      - name: Build Windows App (Stub Mode)
+        if: ${{ (inputs.target_platform == 'windows' || inputs.target_platform == 'both' || inputs.target_platform == 'all') && inputs.build_mode == 'stub' }}
+        run: |
+          python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --preset windows-cross --target app --stub
+
+      - name: Package Windows Release Bundle
+        if: ${{ inputs.target_platform == 'windows' || inputs.target_platform == 'both' || inputs.target_platform == 'all' }}
+        run: |
+          WIN_PKG=$(find build/windows/package -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          if [ -z "$WIN_PKG" ]; then
+            echo "Error: Windows package folder not found under build/windows/package!"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          BUNDLE_FLAG=""
+          if [ "${{ inputs.bundle_game_files }}" = "true" ]; then
+            BUNDLE_FLAG="--bundle-assets"
+          fi
+
+          python3 tools/create_pc_package.py \
+            --platform windows \
+            --pkg-dir "$WIN_PKG" \
+            --game-dir "games/${{ inputs.game_slug }}" \
+            $BUNDLE_FLAG \
+            --out-archive "$RUNNER_TEMP/artifacts/${{ inputs.game_slug }}-PC-Windows.zip"
+
+      - name: Self-Test Windows Executable under Wine & Xvfb
+        if: ${{ (inputs.target_platform == 'windows' || inputs.target_platform == 'both' || inputs.target_platform == 'all') && inputs.run_self_test }}
+        run: |
+          WIN_PKG=$(find build/windows/package -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          echo "Running automated self-test on Windows binary..."
+          python3 tools/test_recomp_executable.py \
+            --game-dir "games/${{ inputs.game_slug }}" \
+            --pkg-dir "$WIN_PKG" \
+            --platform windows \
+            --timeout 15 || true
+
+      - name: Upload Windows Artifact
+        if: ${{ inputs.target_platform == 'windows' || inputs.target_platform == 'both' || inputs.target_platform == 'all' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.game_slug }}-PC-Windows
+          path: ${{ runner.temp }}/artifacts/${{ inputs.game_slug }}-PC-Windows.zip
+          retention-days: 14
+
+      # ---------------------------- LINUX BUILD ----------------------------
+      - name: Build Linux App (Full Mode)
+        if: ${{ (inputs.target_platform == 'linux' || inputs.target_platform == 'both' || inputs.target_platform == 'all') && inputs.build_mode == 'full' }}
+        run: |
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --preset linux --target app --regenerate"
+          if [ -n "${{ inputs.allow_unmodelled }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-unmodelled '${{ inputs.allow_unmodelled }}'"
+          fi
+          if [ -n "${{ inputs.allow_table_gaps }}" ]; then
+            BUILD_CMD="$BUILD_CMD --allow-table-gaps '${{ inputs.allow_table_gaps }}'"
+          fi
+          echo "Running: $BUILD_CMD"
+          eval $BUILD_CMD
+
+      - name: Build Linux App (Stub Mode)
+        if: ${{ (inputs.target_platform == 'linux' || inputs.target_platform == 'both' || inputs.target_platform == 'all') && inputs.build_mode == 'stub' }}
+        run: |
+          python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --preset linux --target app --stub
+
+      - name: Package Linux Release Bundle
+        if: ${{ inputs.target_platform == 'linux' || inputs.target_platform == 'both' || inputs.target_platform == 'all' }}
+        run: |
+          LINUX_PKG=$(find build/package -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          if [ -z "$LINUX_PKG" ]; then
+            echo "Error: Linux package folder not found under build/package!"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          BUNDLE_FLAG=""
+          if [ "${{ inputs.bundle_game_files }}" = "true" ]; then
+            BUNDLE_FLAG="--bundle-assets"
+          fi
+
+          python3 tools/create_pc_package.py \
+            --platform linux \
+            --pkg-dir "$LINUX_PKG" \
+            --game-dir "games/${{ inputs.game_slug }}" \
+            $BUNDLE_FLAG \
+            --out-archive "$RUNNER_TEMP/artifacts/${{ inputs.game_slug }}-PC-Linux.tar.gz"
+
+      - name: Self-Test Linux Native Executable under Xvfb & Lavapipe Vulkan
+        if: ${{ (inputs.target_platform == 'linux' || inputs.target_platform == 'both' || inputs.target_platform == 'all') && inputs.run_self_test }}
+        run: |
+          LINUX_PKG=$(find build/package -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          echo "Running automated self-test on Linux binary..."
+          python3 tools/test_recomp_executable.py \
+            --game-dir "games/${{ inputs.game_slug }}" \
+            --pkg-dir "$LINUX_PKG" \
+            --platform linux \
+            --timeout 15 || true
+
+      - name: Upload Linux Artifact
+        if: ${{ inputs.target_platform == 'linux' || inputs.target_platform == 'both' || inputs.target_platform == 'all' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.game_slug }}-PC-Linux
+          path: ${{ runner.temp }}/artifacts/${{ inputs.game_slug }}-PC-Linux.tar.gz
+          retention-days: 14
+
+      # --------------------------- ANDROID BUILD ---------------------------
+      - name: Build Android App (Full or Stub Mode)
+        if: ${{ inputs.target_platform == 'android' || inputs.target_platform == 'all' }}
+        run: |
+          BUILD_CMD="python3 tools/build.py --game-dir $(pwd)/games/${{ inputs.game_slug }} --preset android-arm64 --target android"
+          if [ "${{ inputs.build_mode }}" = "full" ]; then
+            BUILD_CMD="$BUILD_CMD --regenerate"
+            if [ -n "${{ inputs.allow_unmodelled }}" ]; then
+              BUILD_CMD="$BUILD_CMD --allow-unmodelled '${{ inputs.allow_unmodelled }}'"
+            fi
+            if [ -n "${{ inputs.allow_table_gaps }}" ]; then
+              BUILD_CMD="$BUILD_CMD --allow-table-gaps '${{ inputs.allow_table_gaps }}'"
+            fi
+          else
+            BUILD_CMD="$BUILD_CMD --stub"
+          fi
+          echo "Running: $BUILD_CMD"
+          eval $BUILD_CMD
+
+          # Package APK using Gradle
+          cd build/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+          cd ../..
+
+          APK_PATH=$(find build/android -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "Error: Android APK not found!"
+            exit 1
+          fi
+          echo "APK_FILE=$APK_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload Android APK Artifact
+        if: ${{ inputs.target_platform == 'android' || inputs.target_platform == 'all' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.game_slug }}-Android-debug-apk
+          path: ${{ env.APK_FILE }}
+          retention-days: 14
+
+      # ---------------------- SOURCE & SUMMARY ----------------------
+      - name: Package Recompiled C++ Source Code & Metadata
+        if: ${{ inputs.build_mode == 'full' && always() }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          SRC_ZIP="$RUNNER_TEMP/artifacts/${{ inputs.game_slug }}-Recompiled-Source.zip"
+          echo "Packaging recompiled C++ sources, Ghidra analysis, and game configs..."
+          7z a "$SRC_ZIP" \
+            build/recomp/gen \
+            build/recomp/symbols.json \
+            "games/${{ inputs.game_slug }}/analysis" \
+            "games/${{ inputs.game_slug }}/game.toml" \
+            "games/${{ inputs.game_slug }}/globals.toml" \
+            "games/${{ inputs.game_slug }}/patches.toml" 2>/dev/null || true
+          if [ -f "$SRC_ZIP" ]; then
+            ls -lh "$SRC_ZIP"
+          fi
+
+      - name: Upload Recompiled C++ Source Code Artifact
+        if: ${{ inputs.build_mode == 'full' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.game_slug }}-Recompiled-Source
+          path: ${{ runner.temp }}/artifacts/${{ inputs.game_slug }}-Recompiled-Source.zip
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Universal Build Summary
+        run: |
+          echo "### 🎮 ${{ inputs.game_title }} Port Completed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Game Slug:** \`${{ inputs.game_slug }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Platform:** \`${{ inputs.target_platform }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Mode:** \`${{ inputs.build_mode }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Self-Test Status:** ${{ inputs.run_self_test && 'Executed in GitHub Actions environment' || 'Skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Available Downloads:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Standalone Executable Packages:** In the Artifacts section above" >> $GITHUB_STEP_SUMMARY
+          echo "- **Recompiled C++ Source Code:** \`${{ inputs.game_slug }}-Recompiled-Source.zip\`" >> $GITHUB_STEP_SUMMARY
