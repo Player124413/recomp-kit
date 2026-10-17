@@ -1515,6 +1515,74 @@ void k_GetSystemDirectoryA(X86 *c) {
     set_eax(c, len);
 }
 
+void k_GetWindowsDirectoryA(X86 *c) {
+    static const char dir[] = "C:\\Windows";
+    uint32_t buf = arg(c, 0), size = arg(c, 1);
+    uint32_t len = sizeof dir - 1;
+    if (size <= len) {
+        set_eax(c, len + 1);
+        return;
+    }
+    memcpy(g_mem + buf, dir, len + 1);
+    set_eax(c, len);
+}
+
+void k_GetTempPathA(X86 *c) {
+    uint32_t len = arg(c, 0);
+    uint32_t buf = arg(c, 1);
+    static const char path[] = "C:\\Temp\\";
+    uint32_t needed = sizeof path - 1;
+    if (len <= needed) {
+        set_eax(c, needed + 1);
+        return;
+    }
+    std::string host_temp = win32_host_path("C:\\Temp");
+    os_mkdir(host_temp.c_str());
+    if (buf && buf + sizeof path <= GUEST_SIZE)
+        memcpy(g_mem + buf, path, sizeof path);
+    set_eax(c, needed);
+}
+
+void k_GetTempPathW(X86 *c) {
+    uint32_t len = arg(c, 0);
+    uint32_t buf = arg(c, 1);
+    static const wchar_t path[] = L"C:\\Temp\\";
+    uint32_t needed = (sizeof path / 2) - 1;
+    if (len <= needed) {
+        set_eax(c, needed + 1);
+        return;
+    }
+    std::string host_temp = win32_host_path("C:\\Temp");
+    os_mkdir(host_temp.c_str());
+    if (buf && buf + sizeof path <= GUEST_SIZE)
+        memcpy(g_mem + buf, path, sizeof path);
+    set_eax(c, needed);
+}
+
+static uint32_t g_temp_counter = 1;
+
+void k_GetTempFileNameA(X86 *c) {
+    uint32_t path_p = arg(c, 0);
+    uint32_t prefix_p = arg(c, 1);
+    uint32_t unique = arg(c, 2);
+    uint32_t buf = arg(c, 3);
+    std::string path = gm_str(path_p);
+    std::string prefix = gm_str(prefix_p, 3);
+    if (prefix.empty())
+        prefix = "tmp";
+    if (unique == 0)
+        unique = ++g_temp_counter;
+    char fname[64];
+    snprintf(fname, sizeof fname, "%s%x.tmp", prefix.c_str(), unique);
+    std::string full = path;
+    if (!full.empty() && full.back() != '\\' && full.back() != '/')
+        full += "\\";
+    full += fname;
+    if (buf && buf + full.size() < GUEST_SIZE)
+        memcpy(g_mem + buf, full.c_str(), full.size() + 1);
+    set_eax(c, unique);
+}
+
 void k_GetLogicalDriveStringsA(X86 *c) {
     logical_drive_strings(c, false);
 }
@@ -4808,6 +4876,10 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "GetVolumeInformationA", 8, k_GetVolumeInformationA},
     {"KERNEL32.dll", "GetDiskFreeSpaceA", 5, k_GetDiskFreeSpaceA},
     {"KERNEL32.dll", "GetSystemDirectoryA", 2, k_GetSystemDirectoryA},
+    {"KERNEL32.dll", "GetWindowsDirectoryA", 2, k_GetWindowsDirectoryA},
+    {"KERNEL32.dll", "GetTempPathA", 2, k_GetTempPathA},
+    {"KERNEL32.dll", "GetTempPathW", 2, k_GetTempPathW},
+    {"KERNEL32.dll", "GetTempFileNameA", 4, k_GetTempFileNameA},
     {"KERNEL32.dll", "GetLogicalDriveStringsA", 2, k_GetLogicalDriveStringsA},
     {"KERNEL32.dll", "GetDriveTypeA", 1, k_GetDriveTypeA},
     // modules and process state
