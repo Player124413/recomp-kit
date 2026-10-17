@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Package PC release artifacts for Windows or Linux (universal across any game).
 
+Automatically bundles full game files when original/ is <= 5.5 GB, and switches to
+lightweight binaries/configs-only bundling (.exe, .dll, .ini, etc.) when > 5.5 GB.
+
 Usage:
     python3 tools/create_pc_package.py --platform windows --pkg-dir build/windows/package/Shrek2Recomp --game-dir games/shrek2 --bundle-assets --out-archive Shrek2Recomp-PC-Windows.zip
 """
@@ -13,6 +16,27 @@ import shutil
 import sys
 import tarfile
 import zipfile
+
+LIGHTWEIGHT_EXTENSIONS = {
+    ".exe",
+    ".dll",
+    ".ini",
+    ".cfg",
+    ".int",
+    ".def",
+    ".u",
+    ".asi",
+    ".flt",
+    ".manifest",
+    ".xml",
+    ".json",
+    ".txt",
+    ".lua",
+    ".bat",
+    ".sh",
+}
+
+MAX_LIGHTWEIGHT_FILE_BYTES = 64 * 1024 * 1024  # 64 MB
 
 
 def parse_game_toml(game_dir: Path) -> dict:
@@ -52,6 +76,43 @@ def detect_recomp_binary(pkg_dir: Path, platform: str) -> str:
         if bins:
             return bins[0]
         return "Shrek2Recomp"
+
+
+def compute_dir_size(directory: Path) -> int:
+    total = 0
+    if not directory.is_dir():
+        return 0
+    for root, _, files in os.walk(str(directory)):
+        for f in files:
+            if f.startswith("."):
+                continue
+            fp = Path(root) / f
+            try:
+                total += fp.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def copy_lightweight_files(src_dir: Path, dst_dir: Path) -> int:
+    copied = 0
+    for root, _, files in os.walk(str(src_dir)):
+        for f in files:
+            if f.startswith("."):
+                continue
+            src_file = Path(root) / f
+            ext = src_file.suffix.lower()
+            try:
+                fsize = src_file.stat().st_size
+            except OSError:
+                continue
+            if ext in LIGHTWEIGHT_EXTENSIONS and fsize <= MAX_LIGHTWEIGHT_FILE_BYTES:
+                rel = src_file.relative_to(src_dir)
+                dest_file = dst_dir / rel
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, dest_file)
+                copied += 1
+    return copied
 
 
 def build_batch_script(title: str, recomp_exe: str, game_exe: str) -> str:
@@ -168,6 +229,12 @@ def main():
     parser.add_argument("--pkg-dir", type=Path, required=True)
     parser.add_argument("--game-dir", type=Path, default=Path("games/shrek2"))
     parser.add_argument("--bundle-assets", action="store_true")
+    parser.add_argument(
+        "--max-full-bundle-gb",
+        type=float,
+        default=5.5,
+        help="Max size in GB to bundle all assets; above this (6 GB+), only .exe/.dll/.ini are bundled.",
+    )
     parser.add_argument("--out-archive", type=Path, required=True)
     args = parser.parse_args()
 
@@ -188,19 +255,34 @@ def main():
 
     # Bundle game assets if requested
     if args.bundle_assets and original_dir.is_dir():
-        print(f"Bundling game assets from {original_dir} into {pkg_dir}...")
-        for item in original_dir.iterdir():
-            if item.name.startswith("."):
-                continue
-            dest = pkg_dir / item.name
-            if item.is_dir():
-                print(f"  Copying directory {item.name}/...")
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(item, dest, dirs_exist_ok=True)
-            elif item.is_file():
-                print(f"  Copying file {item.name}...")
-                shutil.copy2(item, dest)
+        orig_bytes = compute_dir_size(original_dir)
+        orig_gb = orig_bytes / (1024 ** 3)
+        max_bytes = int(args.max_full_bundle_gb * (1024 ** 3))
+
+        if orig_bytes <= max_bytes:
+            print(
+                f"Game files size is {orig_gb:.2f} GB (<= {args.max_full_bundle_gb:.1f} GB limit). "
+                f"Bundling full game from {original_dir} into {pkg_dir}..."
+            )
+            for item in original_dir.iterdir():
+                if item.name.startswith("."):
+                    continue
+                dest = pkg_dir / item.name
+                if item.is_dir():
+                    print(f"  Copying directory {item.name}/...")
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                elif item.is_file():
+                    print(f"  Copying file {item.name}...")
+                    shutil.copy2(item, dest)
+        else:
+            print(
+                f"Game files size is {orig_gb:.2f} GB (> {args.max_full_bundle_gb:.1f} GB limit). "
+                f"Bundling ONLY lightweight binaries & configs (.exe, .dll, .ini, etc.)..."
+            )
+            copied = copy_lightweight_files(original_dir, pkg_dir)
+            print(f"  Copied {copied} lightweight binary/config files (skipped heavy assets).")
 
     # Pre-configure profile/game-path.txt if executable exists in package
     profile_dir = pkg_dir / "profile"
@@ -244,17 +326,23 @@ def main():
         out_archive.unlink()
 
     arcname_root = pkg_dir.name
-    print(f"Creating archive: {out_archive} containing {arcname_root}/ ...")
+    pkg_bytes = compute_dir_size(pkg_dir)
+    # Use fast compression for large multi-GB bundles (> 500 MB) so 1-5 GB games archive quickly
+    zip_level = 1 if pkg_bytes > 500 * 1024 * 1024 else 6
+    print(
+        f"Creating archive: {out_archive} containing {arcname_root}/ "
+        f"({pkg_bytes / (1024 ** 2):.1f} MB, compresslevel={zip_level}) ..."
+    )
 
     if args.platform == "windows" or out_archive.suffix.lower() == ".zip":
-        with zipfile.ZipFile(out_archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        with zipfile.ZipFile(out_archive, "w", zipfile.ZIP_DEFLATED, compresslevel=zip_level) as zf:
             for root, dirs, files in os.walk(str(pkg_dir)):
                 for file in files:
                     file_path = Path(root) / file
                     rel = file_path.relative_to(pkg_dir)
                     zf.write(file_path, arcname=f"{arcname_root}/{rel.as_posix()}")
     else:
-        with tarfile.open(out_archive, "w:gz") as tf:
+        with tarfile.open(out_archive, "w:gz", compresslevel=zip_level) as tf:
             tf.add(pkg_dir, arcname=arcname_root)
 
     print(f"Successfully created archive: {out_archive} ({out_archive.stat().st_size} bytes)")

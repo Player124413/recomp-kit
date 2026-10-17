@@ -152,6 +152,10 @@ jobs:
       - name: Download & Extract Game Files
         id: fetch-game
         run: |
+          # Free unused runner preinstalled toolchains (~15 GB) so 5 GB full-game builds have plenty of disk space
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          df -h
+
           GAME_ORIG="games/${{ inputs.game_slug }}/original"
           mkdir -p "$GAME_ORIG"
 
@@ -159,7 +163,7 @@ jobs:
             echo "Downloading game archive from URL: ${{ inputs.game_files_url }}"
             curl -fL --retry 3 -o "$RUNNER_TEMP/game_archive" "${{ inputs.game_files_url }}"
             7z x -y "$RUNNER_TEMP/game_archive" -o"$GAME_ORIG/" || unzip -q -o "$RUNNER_TEMP/game_archive" -d "$GAME_ORIG/"
-            rm "$RUNNER_TEMP/game_archive"
+            rm -f "$RUNNER_TEMP/game_archive"
           fi
 
           # Unpack any committed archives inside original/
@@ -170,6 +174,16 @@ jobs:
               rm -f "$arch"
             fi
           done
+
+          # Check extracted size: up to 5.5 GB keep full game; 6 GB+ keep only .exe, .dll, and lightweight configs
+          ORIG_KB=$(du -sk "$GAME_ORIG" | cut -f1)
+          MAX_FULL_KB=$((5632 * 1024)) # 5.5 GB
+          if [ "$ORIG_KB" -gt "$MAX_FULL_KB" ]; then
+            echo "Game folder is $((ORIG_KB / 1024)) MB (> 5.5 GB). Pruning heavy non-binary asset files (> 64 MB) and keeping all .exe/.dll/configs..."
+            find "$GAME_ORIG" -type f -size +64M ! -iname "*.exe" ! -iname "*.dll" -delete
+          else
+            echo "Game folder is $((ORIG_KB / 1024)) MB (<= 5.5 GB). Keeping 100% of full game files!"
+          fi
 
       - name: Universal Game Preparation & PE Auto-Tuning
         id: prep-game
